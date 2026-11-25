@@ -1,72 +1,66 @@
-// Source readers participate in file exclusion without changing source SQLite state.
+// Native source readers run in an isolated child or an already-drained owner.
 import type { DatabaseSync } from "node:sqlite";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-} from "./sqlite-coordinator.js";
-import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
+  assertStateDatabaseAccessAllowed,
+  withStateDatabaseColdAdmission,
+} from "./gateway-state-owner.js";
+import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 
-// A failed native close cannot let GC retire its admission before child exit.
-const unclosedSourceReads = new Set<{
-  database: DatabaseSync;
-  lease: { release: () => void };
-}>();
+// A failed native close remains owned until the reader process exits.
+const unclosedSourceReads = new Set<DatabaseSync>();
 
-export function withSqliteSourceHandle<T>(pathname: string, operation: () => T): T {
-  return runWithSqliteCoordinator(
-    acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 }),
-    "SQLite source read",
-    operation,
-  );
+function closeSourceRead(database: DatabaseSync): void {
+  try {
+    database.close();
+  } finally {
+    if (database.isOpen) {
+      unclosedSourceReads.add(database);
+    }
+  }
 }
 
-/** Execute only in a child or a drained source scope: native close can release
- * another connection's process-wide POSIX locks. Failed close retains admission. */
+/** Closing a source in its writer's process can release that writer's POSIX locks. */
 export function withSqliteSourceReadDatabase<T>(
   pathname: string,
+  inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
+  options: (
+    | { timeout?: number; waitForAdmission?: false }
+    | {
+        timeout: number;
+        waitForAdmission: true;
+      }
+  ) & { readOnlyShm?: boolean } = {},
 ): T {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  let database: DatabaseSync | undefined;
+  const openAdmitted = (timeout: number | undefined) => {
+    const database = withSqliteInspectionOperation(inspectionOperation, () =>
+      openNodeSqliteDatabase(
+        options.readOnlyShm ? resolveReadOnlyShmSqliteFileUri(pathname) : pathname,
+        { readOnly: true, timeout },
+      ),
+    );
+    try {
+      assertStateDatabaseAccessAllowed(pathname);
+      return database;
+    } catch (error) {
+      closeSourceRead(database);
+      throw error;
+    }
+  };
+
+  if (!options.waitForAdmission) {
+    assertStateDatabaseAccessAllowed(pathname);
+  }
+  const database = options.waitForAdmission
+    ? withStateDatabaseColdAdmission(
+        { databasePath: pathname, busyTimeoutMs: options.timeout },
+        (remaining) => openAdmitted(remaining()),
+      )
+    : openAdmitted(options.timeout);
   try {
-    database = openNodeSqliteDatabase(pathname, { readOnly: true });
     return operation(database);
   } finally {
-    try {
-      database?.close();
-    } finally {
-      // If SQLite still owns a native handle, only process exit can release it.
-      if (!database?.isOpen) {
-        lease.release();
-      } else {
-        unclosedSourceReads.add({ database, lease });
-      }
-    }
+    closeSourceRead(database);
   }
-}
-
-/** The executing source-copy child holds its own lease, including after parent loss. */
-export async function withSqliteSourceHandleAsync<T>(
-  pathname: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  let result: T;
-  try {
-    result = await operation();
-  } catch (error) {
-    try {
-      lease.release();
-    } catch (releaseError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, releaseError],
-        "SQLite source read and handle release both failed",
-        error,
-      );
-    }
-    throw error;
-  }
-  lease.release();
-  return result;
 }

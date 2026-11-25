@@ -4,11 +4,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveSandboxAgentId } from "./shared.js";
 import type { SandboxScope } from "./types.js";
 
-function formatSandboxRecreateHint(params: {
-  scope: SandboxScope;
-  sessionKey: string;
-  browser?: boolean;
-}) {
+function formatSandboxRecreateHint(params: Parameters<typeof handleHotSandboxConfigMismatch>[0]) {
   const command = `openclaw sandbox recreate${params.browser ? " --browser" : ""}`;
   if (params.scope === "session") {
     return formatCliCommand(`${command} --session ${params.sessionKey}`);
@@ -31,7 +27,7 @@ export function handleHotSandboxConfigMismatch(params: {
   const hint = formatSandboxRecreateHint(params);
   if (params.mountsChanged) {
     throw new Error(
-      `Sandbox mounts changed for ${params.containerName}; the running container was preserved but cannot be reused with different workspace or skill sources. Recreate first: ${hint}`,
+      `Sandbox mounts changed for ${params.containerName}; the running container was preserved but cannot be reused with different filesystem sources or access modes. Recreate first: ${hint}`,
     );
   }
   if (params.requireCurrentConfig) {

@@ -6,6 +6,7 @@ const sessionProperties = {
   name: Type.Optional(Type.String()),
 };
 const inputProperties = {
+  followUp: Type.Optional(Type.String()),
   stdinWritable: Type.Boolean(),
   waitingForInput: Type.Boolean(),
   idleMs: Type.Number(),
@@ -17,6 +18,7 @@ const exitProperties = {
   exitReason: Type.Optional(Type.String()),
   timedOut: Type.Optional(Type.Boolean()),
   noOutputTimedOut: Type.Optional(Type.Boolean()),
+  finalizationFailed: Type.Optional(Type.Literal(true)),
 };
 const terminalStatus = Type.Union([Type.Literal("completed"), Type.Literal("failed")]);
 const sessionListProperties = {
@@ -107,9 +109,35 @@ const ProcessInputOutputSchema = Type.Union([
   ProcessFailureSchema,
   Type.Object({ status: Type.Literal("running"), ...sessionProperties }, closed),
 ]);
+const ProcessControlCompletedSchema = Type.Object(
+  { status: Type.Literal("completed"), name: Type.Optional(Type.String()) },
+  closed,
+);
+const cancellationProperties = {
+  status: Type.Literal("completed"),
+  ...sessionProperties,
+  cancellationRequested: Type.Literal(true),
+  terminationConfirmed: Type.Literal(false),
+};
+const ProcessKillOutputSchema = Type.Union([
+  ProcessFailureSchema,
+  Type.Object({ status: terminalStatus, ...sessionProperties, ...exitProperties }, closed),
+  Type.Object(
+    {
+      ...cancellationProperties,
+      followUp: Type.Object({ action: Type.Literal("poll"), sessionId: Type.String() }, closed),
+    },
+    closed,
+  ),
+]);
+const ProcessRemoveOutputSchema = Type.Union([
+  ProcessFailureSchema,
+  ProcessControlCompletedSchema,
+  Type.Object(cancellationProperties, closed),
+]);
 const ProcessControlOutputSchema = Type.Union([
   ProcessFailureSchema,
-  Type.Object({ status: Type.Literal("completed"), name: Type.Optional(Type.String()) }, closed),
+  ProcessControlCompletedSchema,
 ]);
 
 /** Structured process details, shared by eager and lazy tool construction. */
@@ -123,8 +151,8 @@ export const ProcessToolOutputSchema = defineToolOutputSchema({
     "send-keys": ProcessInputOutputSchema,
     submit: ProcessInputOutputSchema,
     paste: ProcessInputOutputSchema,
-    kill: ProcessControlOutputSchema,
+    kill: ProcessKillOutputSchema,
     clear: ProcessControlOutputSchema,
-    remove: ProcessControlOutputSchema,
+    remove: ProcessRemoveOutputSchema,
   },
 });

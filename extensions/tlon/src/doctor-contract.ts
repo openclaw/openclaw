@@ -1,4 +1,3 @@
-// Tlon plugin module implements doctor contract behavior.
 import { createLegacyPrivateNetworkDoctorContract } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 
 const contract = createLegacyPrivateNetworkDoctorContract({

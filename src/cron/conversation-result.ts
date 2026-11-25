@@ -1,0 +1,60 @@
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { commitBackgroundPayloadsToSession } from "../sessions/background-result-payloads.js";
+import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
+import { createCronExecutionId } from "./run-id.js";
+import type { CronRunDiagnostics } from "./types.js";
+
+export type CronConversationResultParams = {
+  config: OpenClawConfig;
+  agentId: string;
+  jobId: string;
+  runStartedAt: number;
+  /** Defaults to the run's completion key; other notices about the same run need their own. */
+  idempotencyKey?: string;
+  conversation: { sessionKey: string };
+  /** The cron turn ran in this conversation; see `commitBackgroundResultToSession`. */
+  displayOnly?: true;
+  payloads: ReplyPayload[];
+  signal?: AbortSignal;
+  deliveryAttemptFence: CronCompletionDeliveryFence | null;
+};
+
+/** Commits an internal-channel result; external deliveries are recorded by outbound delivery. */
+export async function commitCronConversationResult(
+  params: CronConversationResultParams,
+): Promise<
+  { ok: true; skipped?: true; diagnostics?: CronRunDiagnostics } | { ok: false; reason: string }
+> {
+  const runId = createCronExecutionId(params.jobId, params.runStartedAt);
+  await params.deliveryAttemptFence?.beforeAttempt();
+  const committed = await commitBackgroundPayloadsToSession({
+    agentId: params.agentId,
+    sessionKey: params.conversation.sessionKey,
+    payloads: params.payloads,
+    idempotencyKey: params.idempotencyKey ?? `cron-current-completion:${runId}`,
+    provenance: { kind: "cron", jobId: params.jobId, runId },
+    displayOnly: params.displayOnly,
+    config: params.config,
+    signal: params.signal,
+    assertCurrent: () => {
+      params.signal?.throwIfAborted();
+      params.deliveryAttemptFence?.assertCurrent();
+    },
+  });
+  if (!committed.ok) {
+    return committed;
+  }
+  return {
+    ok: true,
+    ...(committed.skipped ? { skipped: true as const } : {}),
+    ...(committed.diagnostics
+      ? {
+          diagnostics: createCronRunDiagnosticsFromError("delivery", committed.diagnostics, {
+            severity: "warn",
+          }),
+        }
+      : {}),
+  };
+}

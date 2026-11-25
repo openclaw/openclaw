@@ -16,6 +16,17 @@ Remove the service and selected local data first, then [any remaining CLI instal
 
 The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
 
+On Linux hosts without a service manager, service removal is a no-op only when
+OpenClaw can verify that no service or installed definition exists. Selected
+state and workspace cleanup can then proceed. A missing or inaccessible user
+bus alone is not proof of absence. A running Gateway or other live state owner
+still blocks data removal; stop it through its supervisor or terminal first.
+
+Before uninstalling, run `openclaw doctor --fix`. It reclaims retained updater
+runtimes (`openclaw-update-runtime-*` directories in the system temporary
+directory or beside the installation); `openclaw uninstall` has no scope for
+them.
+
 ```bash
 openclaw uninstall
 ```
@@ -24,6 +35,13 @@ The interactive prompt preselects only the Gateway service. For complete local
 removal, also select state, workspace, and app in the prompt, or run
 `openclaw uninstall --all`. State removal preserves configured workspace
 directories unless you also select `--workspace`.
+
+State removal also removes literal completion-cache registrations for that
+state directory before deleting the cache. Registrations for other profiles,
+user-managed portable hooks, unrelated shell settings, and shared PATH entries
+remain intact. If a shell profile cannot be updated, or a concurrent edit is
+detected before replacement, state deletion stops. Resolve the reported profile
+error and retry.
 
 Preview what will be removed (safe):
 
@@ -138,20 +156,26 @@ If you used a profile, delete the matching task name and the `gateway.cmd` /
 
 Remove the Gateway service **before** deleting a checkout, launcher, or prefix. Inspect the resolved command and its target first; if ownership is unclear, leave it in place. Check [Installer internals](/install/installer) for custom checkout and prefix options.
 
-| Installation method                               | CLI owner and removal                                                                                                                                                                                                        |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Global npm (`install.sh` / `install.ps1` default) | Run `npm rm -g openclaw` with the npm/prefix that owns this install.                                                                                                                                                         |
-| Global pnpm or Bun                                | Run only the matching command: `pnpm remove -g openclaw` or `bun remove -g openclaw`.                                                                                                                                        |
-| `install.sh --install-method git`                 | Inspect `~/.local/bin/openclaw`; remove that launcher only if it points to the intended checkout, then remove that checkout.                                                                                                 |
-| `install.ps1 -InstallMethod git`                  | Inspect `%USERPROFILE%\.local\bin\openclaw.cmd`; remove that launcher only if it points to the intended checkout, then remove that checkout.                                                                                 |
-| `install-cli.sh` (npm or Git)                     | Inspect `<prefix>/bin/openclaw`. The prefix defaults to `~/.openclaw`; `--prefix` / `OPENCLAW_PREFIX` overrides it. Remove a dedicated prefix only after preserving data; Git mode also needs its separate checkout removed. |
-| Direct source checkout                            | Remove only your own wrapper/symlink, then the checkout. Keep shims owned by other installations.                                                                                                                            |
+| Installation method                               | CLI owner and removal                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Global npm (`install.sh` / `install.ps1` default) | Run `npm rm -g openclaw` with the npm/prefix that owns this install.                                                                                                                                                                                                                                                                |
+| Global pnpm or Bun                                | Run only the matching command: `pnpm remove -g openclaw` or `bun remove -g openclaw`. For a Bun-only shell launcher, first inspect `$(bun pm bin -g)/openclaw` for its `OpenClaw Bun launcher` header and intended package path, then remove that launcher after removing the package; Bun can leave regular launcher files behind. |
+| `install.sh --install-method git`                 | Inspect `~/.local/bin/openclaw`; remove that launcher only if it points to the intended checkout, then remove that checkout.                                                                                                                                                                                                        |
+| `install.ps1 -InstallMethod git`                  | Inspect `%USERPROFILE%\.local\bin\openclaw.cmd`; remove that launcher only if it points to the intended checkout, then remove that checkout.                                                                                                                                                                                        |
+| `install-cli.sh` (npm or Git)                     | Inspect `<prefix>/bin/openclaw`. The prefix defaults to `~/.openclaw`; `--prefix` / `OPENCLAW_PREFIX` overrides it. Remove a dedicated prefix only after preserving data; Git mode also needs its separate checkout removed.                                                                                                        |
+| Direct source checkout                            | Remove only your own wrapper/symlink, then the checkout. Keep shims owned by other installations.                                                                                                                                                                                                                                   |
 
 Git checkouts default to `~/openclaw` (`%USERPROFILE%\openclaw` on Windows); use the actual target of the launcher, including custom `--git-dir` / `-GitDir` or `OPENCLAW_GIT_DIR`. On POSIX, `OPENCLAW_HOME` can change the default checkout. Remove state/workspaces only as selected above.
 
 Before deleting a prefix, move any state, configuration, and workspaces you want to keep outside it. **Never delete a shared prefix wholesale**: remove only verified OpenClaw files, preserving shared Node runtimes, packages, and tools.
 
-If completion was installed, remove only its `# OpenClaw Completion` block and OpenClaw source line from the [selected shell profile](/cli/completion#install-flow). Remove a legacy `openclaw completion` source/eval line only if it contains no other command; preserve surrounding content.
+If an `openclaw-update-runtime-*` directory remains after the CLI is gone, inspect it before removing it. It mirrors the full installation path, so on Windows its entries can exceed 260 characters, which plain `Remove-Item` in Windows PowerShell 5.1 cannot delete. Use the extended-length prefix with the full drive path (for a network path `\\server\share\...`, use `\\?\UNC\server\share\...` instead):
+
+```powershell
+Remove-Item -LiteralPath "\\?\$env:TEMP\openclaw-update-runtime-XXXXXX" -Recurse -Force
+```
+
+If completion remains after manual state deletion or CLI-only removal, remove only its `# OpenClaw Completion` block and OpenClaw source line from the [selected shell profile](/cli/completion#install-flow). `openclaw uninstall --state` already removes literal registrations for the state it deletes. Remove a legacy `openclaw completion` source/eval line only if it contains no other command; preserve surrounding content.
 
 Remove an installer-added PATH entry only when no other command uses it. Keep shared bin directories such as `~/.local/bin`. On Windows, the same rule applies to portable Node/MinGit and their PATH entries under `%LOCALAPPDATA%\OpenClaw\deps`.
 

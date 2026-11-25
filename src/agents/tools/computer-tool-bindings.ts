@@ -1,15 +1,15 @@
 import crypto from "node:crypto";
+import {
+  getActiveAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
 import { isEligibleComputerNode } from "../computer-use-node-capabilities.js";
-import {
-  bindGatewayComputerCleanup,
-  loadGatewayComputerStatus,
-  type GatewayComputerStatus,
-} from "./computer-tool-gateway.js";
+import { loadGatewayComputerStatus, type GatewayComputerStatus } from "./computer-tool-gateway.js";
 import type { ComputerHost, ComputerToolTransport } from "./computer-tool-shared.js";
 import { COMPUTER_ACT_COMMAND, SCREEN_SNAPSHOT_COMMAND } from "./computer-tool-shared.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -18,7 +18,8 @@ import {
   shouldUseInProcessGatewayTool,
   type GatewayCallOptions,
 } from "./gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
+import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
   host: ComputerHost;
@@ -45,48 +46,94 @@ const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .join(", ")}`,
 };
 
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    params.gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
-}
-
 export async function resolveComputerBinding(params: {
   executionId: string;
   sessionTransport?: ComputerToolTransport;
   gatewayStatus?: GatewayComputerStatus;
   target?: "gateway" | "node";
   node?: string;
+  environmentId?: string;
   gatewayOpts: GatewayCallOptions;
   signal?: AbortSignal;
 }): Promise<ComputerBinding> {
+  if (params.environmentId !== undefined) {
+    const caller = getGatewayToolCallerIdentity();
+    const resolveContext = () => getInProcessGatewayToolContext(caller?.gatewayContextResolver);
+    const context = resolveContext();
+    const service = context?.workerEnvironmentService;
+    const run = caller?.operationalRunInstance;
+    const runAuthority = run ? getActiveAgentRunDelegatedAuthority(run) : undefined;
+    if (!caller || !run || !runAuthority || !service?.prepareAttachedComputer) {
+      throw new Error("Attached computer control requires an admitted agent run on its Gateway");
+    }
+    params.signal?.throwIfAborted();
+    const attachment = service.findSessionAttachment(caller);
+    if (!attachment || attachment.environmentId !== params.environmentId) {
+      throw new Error("Computer environment is not attached to this conversation");
+    }
+    const assertCurrent = () => {
+      if (!validateAgentRunDelegatedAuthority(runAuthority) || resolveContext() !== context) {
+        throw new Error("Attached computer Gateway owner changed");
+      }
+      service.assertSessionAttachment(attachment);
+    };
+    await service.touchSessionAttachment(attachment);
+    params.signal?.throwIfAborted();
+    assertCurrent();
+    const prepared = await service.prepareAttachedComputer({
+      ...attachment,
+      runId: run.runId,
+      assertCurrent,
+    });
+    try {
+      params.signal?.throwIfAborted();
+      assertCurrent();
+      if (!prepared) {
+        throw new Error(
+          "Attached environment has no available computer provider; use a desktop-enabled profile",
+        );
+      }
+      const transport = prepared.bind(run);
+      const node = await transport.resolveNode(undefined, params.signal);
+      params.signal?.throwIfAborted();
+      assertCurrent();
+      return {
+        host: { host: "node", nodeId: node.nodeId, environmentId: attachment.environmentId },
+        gatewayOpts: {},
+        capabilities: node.computerUse,
+        invoke: async (request) => {
+          if (
+            request.command === COMPUTER_ACT_COMMAND &&
+            request.commandParams.action === "__close_execution"
+          ) {
+            await prepared.close("execution-complete");
+            return { ok: true };
+          }
+          const invokingCaller = getGatewayToolCallerIdentity();
+          if (
+            invokingCaller?.operationalRunInstance !== run ||
+            invokingCaller.agentId !== attachment.agentId ||
+            invokingCaller.sessionKey !== attachment.sessionKey
+          ) {
+            throw new Error("Attached computer invocation lost its admitted caller");
+          }
+          request.signal?.throwIfAborted();
+          await service.touchSessionAttachment(attachment);
+          request.signal?.throwIfAborted();
+          assertCurrent();
+          const result = await transport.invoke({ ...request, nodeId: node.nodeId });
+          request.signal?.throwIfAborted();
+          await service.touchSessionAttachment(attachment);
+          request.signal?.throwIfAborted();
+          assertCurrent();
+          return result;
+        },
+      };
+    } catch (error) {
+      await prepared?.close("prepare-failed");
+      throw error;
+    }
+  }
   const sessionTransport = params.sessionTransport;
   if (sessionTransport) {
     const node = await sessionTransport.resolveNode(params.node, params.signal);
@@ -125,29 +172,22 @@ export async function resolveComputerBinding(params: {
       (prepared?.configured === false && params.target !== "gateway");
     const gateway =
       (usePrepared ? prepared : undefined) ??
-      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
-      const close = await bindGatewayComputerCleanup({
-        options: params.gatewayOpts,
-        generation: gateway.computerUse.provider.generation,
-        executionId: params.executionId,
-      });
       return {
         host: { host: "gateway" },
         gatewayOpts: params.gatewayOpts,
         capabilities: gateway.computerUse,
         invoke: async (request) => {
+          // The Gateway retires an ended run's execution itself (revokeRunAuthority on run
+          // closure), and an ended run cannot start new Gateway requests.
           if (
-            close &&
             request.command === COMPUTER_ACT_COMMAND &&
-            request.commandParams.action === "__close_execution"
+            request.commandParams.action === "__close_execution" &&
+            request.commandParams.reason === "run-ended"
           ) {
-            return await close(
-              typeof request.commandParams.reason === "string"
-                ? request.commandParams.reason
-                : "completed",
-            );
+            return { ok: true };
           }
           const raw = await callGatewayTool<{ payload: unknown }>(
             "computer.invoke",
@@ -167,17 +207,24 @@ export async function resolveComputerBinding(params: {
     }
     if (gateway.configured || params.target === "gateway") {
       throw new Error(
-        (gateway.configured ? gateway.error : undefined) ??
-          "Gateway computer is unavailable; enable its computer provider and desktop session",
+        gateway.configured
+          ? (gateway.error ??
+              "Gateway computer is unavailable; enable its computer provider and desktop session")
+          : "Gateway computer is not configured on this host. Omit target, or use target: node, to select a paired computer-capable node.",
       );
     }
   }
-  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  const node = resolveEligibleNodeFromList(
+    await listNodes(params.gatewayOpts, params.signal),
+    params.node,
+    isEligibleComputerNode,
+    COMPUTER_NODE_MESSAGES,
+  );
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,
     capabilities: node.computerUse,
     invoke: (request) =>
-      invokeNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+      invokeAgentNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
   };
 }

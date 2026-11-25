@@ -5,7 +5,7 @@ import {
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
   readQaScenarioById,
-} from "../../extensions/qa-lab/api.js";
+} from "../../extensions/qa-lab/test-api.js";
 import { createQaScriptEvidenceWriter } from "../../test/e2e/qa-lab/runtime/script-evidence.js";
 
 const args = process.argv.slice(2);

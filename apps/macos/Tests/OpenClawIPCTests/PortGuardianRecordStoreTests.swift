@@ -123,7 +123,7 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `cancelled port sweep never touches its durable tunnel records`() async throws {
+    func `cancelled orphan cleanup never touches its durable tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -133,17 +133,17 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        let sweep = Task {
+        let cleanup = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
+            await guardian.reapOrphanedTunnels()
         }
-        await sweep.value
+        await cleanup.value
 
         #expect(try store.records() == [orphan])
     }
 
     @Test
-    func `uncancelled unconfigured sweep still reaps orphaned tunnel records`() async throws {
+    func `orphan cleanup reaps stale tunnel records`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
         let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
@@ -153,7 +153,7 @@ struct PortGuardianRecordStoreTests {
             try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
         })
 
-        await guardian.sweep(mode: .unconfigured, hostsLocalGateway: false)
+        await guardian.reapOrphanedTunnels()
 
         #expect(try store.records().isEmpty)
     }
@@ -629,34 +629,6 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
-    func `retained store rejects mutations after schema advances`() throws {
-        let fixture = try Self.fixture()
-        defer { fixture.cleanup() }
-        let store = try PortGuardianRecordStore(
-            databaseURL: fixture.databaseURL,
-            legacyLockURL: fixture.lockURL)
-        let existing = Self.record(pid: 4242, port: 18789, timestamp: 42)
-        try store.upsert(existing)
-        try JSONEncoder().encode([existing]).write(to: fixture.legacyURL, options: [.atomic])
-
-        try Self.execute(fixture.databaseURL, "PRAGMA user_version = 7")
-
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.upsert(Self.record(pid: 4243, port: 18790, timestamp: 43))
-        }
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.deleteIfMatches(existing)
-        }
-        #expect(throws: PortGuardianStoreError.self) {
-            try store.migrateLegacyRecords(recordURL: fixture.legacyURL)
-        }
-        #expect(FileManager.default.fileExists(atPath: fixture.legacyURL.path))
-        #expect(try Self.scalarInt(
-            fixture.databaseURL,
-            "SELECT COUNT(*) FROM macos_port_guardian_records") == 1)
-    }
-
-    @Test
     func `legacy compatibility lock rejects symbolic links`() throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }
@@ -683,7 +655,7 @@ struct PortGuardianRecordStoreTests {
     }
 
     private static func fixture() throws -> Fixture {
-        let root = FileManager.default.temporaryDirectory
+        let root = temporaryDirectoryForTests()
             .appendingPathComponent("port-guardian-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return Fixture(

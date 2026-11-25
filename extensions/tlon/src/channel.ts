@@ -1,13 +1,16 @@
-// Tlon plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  buildChannelOutboundSessionRoute,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -19,7 +22,6 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
-import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
@@ -31,29 +33,40 @@ import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
+function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+  const parsed = parseTlonTarget(params.target);
+  if (!parsed) {
+    return null;
+  }
+  const isGroup = parsed.kind !== "dm";
+  const peerId =
+    parsed.kind === "dm"
+      ? parsed.ship
+      : parsed.kind === "club"
+        ? `club:${parsed.clubId}`
+        : parsed.nest;
+
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "tlon",
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
+    chatType: isGroup ? "group" : "direct",
+    from: parsed.kind === "group" ? `tlon:group:${peerId}` : `tlon:${peerId}`,
+    to: `tlon:${peerId}`,
+  });
+}
+
 const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
-const tlonSetupWizardProxy = createTlonSetupWizardBase({
-  resolveConfigured: async ({ cfg, accountId }) =>
-    await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.status.resolveConfigured({
-      cfg,
-      accountId,
-    }),
-  resolveStatusLines: async ({ cfg, accountId, configured }) =>
-    (await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.status.resolveStatusLines?.({
-      cfg,
-      accountId,
-      configured,
-    })) ?? [],
-  finalize: async (params) =>
-    await (
-      await loadTlonChannelRuntime()
-    ).tlonSetupWizard.finalize!(params),
-}) satisfies NonNullable<ChannelPlugin["setupWizard"]>;
+const tlonSetupWizardProxy = createTlonSetupWizardBase(
+  async (params) => await (await loadTlonChannelRuntime()).tlonSetupWizard.finalize!(params),
+);
 
 const tlonConfigAdapter = createHybridChannelConfigAdapter({
   sectionKey: TLON_CHANNEL_ID,
@@ -95,7 +108,12 @@ const tlonMessageAdapter = createChannelMessageAdapterFromOutbound({
   outbound: tlonChannelOutbound,
 });
 
-export const tlonPlugin = createChatChannelPlugin({
+export const tlonPlugin = createChatChannelPlugin<
+  ReturnType<typeof resolveTlonAccount>,
+  unknown,
+  unknown,
+  2
+>({
   base: {
     id: TLON_CHANNEL_ID,
     meta: {
@@ -142,6 +160,9 @@ export const tlonPlugin = createChatChannelPlugin({
         if (parsed.kind === "dm") {
           return parsed.ship;
         }
+        if (parsed.kind === "club") {
+          return `club:${parsed.clubId}`;
+        }
         return parsed.nest;
       },
       inferTargetChatType: ({ to }) => {
@@ -152,7 +173,7 @@ export const tlonPlugin = createChatChannelPlugin({
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),
         hint: formatTargetHint(),
       },
-      resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
+      resolveOutboundSessionRoute: resolveTlonOutboundSessionRoute,
     },
     message: tlonMessageAdapter,
     status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
@@ -198,6 +219,7 @@ export const tlonPlugin = createChatChannelPlugin({
       }),
     }),
     gateway: {
+      apiVersion: 2,
       startAccount: async (ctx) =>
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },

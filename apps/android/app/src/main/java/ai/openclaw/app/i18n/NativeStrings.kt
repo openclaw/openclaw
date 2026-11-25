@@ -206,12 +206,7 @@ internal object NativeStringResources {
           localizedContext
             ?: context
               .localizedContext(
-                applicationLocaleMode
-                  ?.locales
-                  ?: LocaleManagerCompat
-                    .getApplicationLocales(context)
-                    .takeUnless { it.isEmpty }
-                  ?: context.readStoredAppLocales(),
+                checkNotNull(applicationLocaleMode).locales,
               ).also { localizedContext = it }
         }
     return localized.nativeString(source, *formatArgs)

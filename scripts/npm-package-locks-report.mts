@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   generateNpmPackageLocks,
   listManagedNpmLockPackageDirs,
+  parseLockPackagePath,
   resolveNpmLockJobs,
 } from "./generate-npm-package-lock.mts";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
@@ -54,6 +55,27 @@ async function readPackage(rootDir: string, packageDir: string) {
   };
 }
 
+function isPortableLockEntry(metadata: unknown): metadata is Record<string, unknown> {
+  return (
+    isRecord(metadata) &&
+    metadata.dev !== true &&
+    metadata.link !== true &&
+    !(
+      typeof metadata.resolved === "string" &&
+      /^(?:file:|workspace:|git\+|git:|ssh:|https:\/\/github\.com\/)/iu.test(metadata.resolved)
+    )
+  );
+}
+
+function hasTarball(metadata: Record<string, unknown>) {
+  return (
+    typeof metadata.resolved === "string" &&
+    metadata.resolved.length > 0 &&
+    typeof metadata.integrity === "string" &&
+    metadata.integrity.length > 0
+  );
+}
+
 function validateLock(text: string, entry: Awaited<ReturnType<typeof readPackage>>) {
   const lock: unknown = JSON.parse(text);
   if (
@@ -78,25 +100,66 @@ function validateLock(text: string, entry: Awaited<ReturnType<typeof readPackage
       );
     }
   }
+  const bundledDependencies: Array<{
+    path: string;
+    name: string;
+    version: string;
+    parent: string;
+  }> = [];
+  // Check carriers first so an incomplete parent names the affected bundle too.
+  for (const [lockPath, metadata] of Object.entries(lock.packages)) {
+    if (!isRecord(metadata) || metadata.inBundle !== true) {
+      continue;
+    }
+    const ancestors = parseLockPackagePath(lockPath);
+    const dependency = ancestors.pop();
+    if (
+      !dependency ||
+      dependency.path !== lockPath ||
+      !isPortableLockEntry(metadata) ||
+      typeof metadata.version !== "string" ||
+      !metadata.version
+    ) {
+      throw new Error(`${entry.packageDir}: unsupported npm lock entry ${lockPath || "<root>"}`);
+    }
+    let parent: string;
+    while (true) {
+      parent = ancestors.pop()?.path ?? "";
+      const carrier = lock.packages[parent];
+      if (
+        !parent ||
+        !isPortableLockEntry(carrier) ||
+        (carrier.inBundle !== true && !hasTarball(carrier))
+      ) {
+        throw new Error(
+          `${entry.packageDir}: bundled npm lock entry ${lockPath || "<root>"} has unverifiable carrier ${parent || "<root>"}`,
+        );
+      }
+      if (carrier.inBundle !== true) {
+        break;
+      }
+    }
+    bundledDependencies.push({
+      path: lockPath,
+      name: typeof metadata.name === "string" ? metadata.name : dependency.name,
+      version: metadata.version,
+      parent,
+    });
+  }
   for (const [lockPath, metadata] of Object.entries(lock.packages)) {
     if (
-      !isRecord(metadata) ||
-      metadata.dev === true ||
-      metadata.link === true ||
-      (typeof metadata.resolved === "string" &&
-        /^(?:file:|workspace:|git\+|git:|ssh:|https:\/\/github\.com\/)/iu.test(
-          metadata.resolved,
-        )) ||
-      (lockPath !== "" &&
-        (typeof metadata.resolved !== "string" ||
-          !metadata.resolved ||
-          typeof metadata.integrity !== "string" ||
-          !metadata.integrity))
+      !isPortableLockEntry(metadata) ||
+      (lockPath !== "" && metadata.inBundle !== true && !hasTarball(metadata))
     ) {
       throw new Error(`${entry.packageDir}: unsupported npm lock entry ${lockPath || "<root>"}`);
     }
   }
-  return lock;
+  return {
+    lock,
+    bundledDependencies: bundledDependencies.toSorted((left, right) =>
+      left.path.localeCompare(right.path),
+    ),
+  };
 }
 
 export async function generateNpmPackageLocksReport({
@@ -136,8 +199,9 @@ export async function generateNpmPackageLocksReport({
       (entry) => entry.omittedWorkspaceDependencies.length > 0,
     ).length,
     packages: entries.map((entry, index) => {
-      const lock = validateLock(locks[index]!, entry);
+      const { lock, bundledDependencies } = validateLock(locks[index]!, entry);
       return Object.assign(entry, {
+        bundledDependencies,
         lockSha256: sha256(`${JSON.stringify(lock, null, 2)}\n`),
         lock,
       });
@@ -155,6 +219,7 @@ function renderMarkdown(report: NpmPackageLocksReport) {
     `pnpm lock SHA-256: \`${report.pnpmLockSha256}\`.`,
     "",
     `Total packages: ${report.packages.length}`,
+    `Total bundled dependencies: ${report.packages.reduce((total, entry) => total + entry.bundledDependencies.length, 0)}`,
     `Lockless packages (bundleRuntimeDependencies=false): ${report.packages.filter((entry) => !entry.bundleRuntimeDependencies).length}`,
     `Partial locks (omitted workspace dependencies): ${report.packagesWithOmittedWorkspaceDependencies}`,
     "",
@@ -163,11 +228,11 @@ function renderMarkdown(report: NpmPackageLocksReport) {
     "Verify dependency-evidence-manifest.json releaseSha equals sourceSha and the OpenClaw commit you pin.",
     "These generated locks are release evidence only and are never included in npm tarballs.",
     "",
-    "| Package directory | Name | Version | Bundles runtime dependencies | Dependencies | Optional dependencies | Omitted workspace dependencies |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Package directory | Name | Version | Bundles runtime dependencies | Dependencies | Optional dependencies | Omitted workspace dependencies | Bundled dependencies |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...report.packages.map(
       (entry) =>
-        `| ${entry.packageDir} | ${entry.name} | ${entry.version} | ${entry.bundleRuntimeDependencies} | ${entry.dependencyCount} | ${entry.optionalDependencyCount} | ${entry.omittedWorkspaceDependencies.length > 0 ? `Partial: ${entry.omittedWorkspaceDependencies.join(", ")}` : "None"} |`,
+        `| ${entry.packageDir} | ${entry.name} | ${entry.version} | ${entry.bundleRuntimeDependencies} | ${entry.dependencyCount} | ${entry.optionalDependencyCount} | ${entry.omittedWorkspaceDependencies.length > 0 ? `Partial: ${entry.omittedWorkspaceDependencies.join(", ")}` : "None"} | ${entry.bundledDependencies.length} |`,
     ),
   ].join("\n")}\n`;
 }

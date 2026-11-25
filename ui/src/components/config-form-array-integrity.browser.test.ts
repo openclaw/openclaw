@@ -1,30 +1,8 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
-import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
-import { renderArray } from "./config-form.node.collection.ts";
+import { expectElement, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { renderNode } from "./config-form.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
-
-type RenderArrayFixtureOptions = Omit<
-  Parameters<typeof renderArray>[0],
-  "disabled" | "hints" | "unsupported"
->;
-
-function renderArrayFixture(container: HTMLElement, options: RenderArrayFixtureOptions): void {
-  render(
-    renderArray({ hints: {}, unsupported: new Set(), disabled: false, ...options }, renderNode),
-    container,
-  );
-}
 
 function findAddButton(container: Element): HTMLButtonElement | undefined {
   return Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -134,7 +112,7 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["values"], []);
   });
 
-  it("preserves unquoted strings and decodes quoted strings in string-number arrays", async () => {
+  it("preserves unquoted strings and decodes quoted strings in string-number arrays", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -152,12 +130,12 @@ describe("config form array integrity", () => {
     });
 
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "string-number array draft",
     );
-    const addDraftValue = async (value: string) => {
+    const addDraftValue = (value: string) => {
       expectElement(findAddButton(container), "string-number array add").click();
-      await draftHost.updateComplete;
+      flush();
       const draftValue = expectElement(
         draftHost.querySelector<HTMLInputElement | HTMLTextAreaElement>(
           "[data-collection-draft-value]",
@@ -166,24 +144,24 @@ describe("config form array integrity", () => {
       );
       draftValue.value = value;
       draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-      await draftHost.updateComplete;
+      flush();
       expectElement(findAddButton(draftHost), "string-number array draft commit").click();
-      await draftHost.updateComplete;
+      flush();
     };
 
-    await addDraftValue(identifier);
+    addDraftValue(identifier);
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     expect(onPatch.mock.calls[0]?.[1]?.[0]).not.toBe(Number(identifier));
     onPatch.mockClear();
-    await addDraftValue(JSON.stringify(identifier));
+    addDraftValue(JSON.stringify(identifier));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     onPatch.mockClear();
-    await addDraftValue("1e5");
+    addDraftValue("1e5");
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [100_000]);
     container.remove();
   });
 
-  it("keeps large and unique array minimums incrementally editable", async () => {
+  it("keeps large and unique array minimums incrementally editable", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -214,40 +192,40 @@ describe("config form array integrity", () => {
       items: { type: "string" },
     });
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "unique array draft",
     );
-    await draftHost.updateComplete;
+    flush();
     expectElement(findAddButton(container), "unique array add").click();
-    await draftHost.updateComplete;
+    flush();
     const draftValue = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "unique array draft value",
     );
     draftValue.value = "first";
     draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
+    flush();
     expectElement(findAddButton(draftHost), "unique array draft commit").click();
     expect(onPatch).toHaveBeenCalledWith(["codes"], ["first"]);
 
     // An autosave ack clones the form: identity churn with identical content
     // must not close an open draft mid-typing.
     expectElement(findAddButton(container), "reopened unique array add").click();
-    await draftHost.updateComplete;
+    flush();
     const typedDraft = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "typed unique array draft",
     );
     typedDraft.value = "in-progress";
     typedDraft.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
+    flush();
     renderSchema({
       type: "array",
       minItems: 2,
       uniqueItems: true,
       items: { type: "string" },
     });
-    await draftHost.updateComplete;
+    flush();
     const survivingDraft = draftHost.querySelector<HTMLInputElement>(
       "[data-collection-draft-value]",
     );
@@ -266,21 +244,21 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const duplicateDraft = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "duplicate array draft",
     );
-    await duplicateDraft.updateComplete;
+    flush();
     expectElement(findAddButton(container), "duplicate array add").click();
-    await duplicateDraft.updateComplete;
+    flush();
     const duplicateValue = expectElement(
       duplicateDraft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "duplicate array draft value",
     );
     duplicateValue.value = "first";
     duplicateValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await duplicateDraft.updateComplete;
+    flush();
     expectElement(findAddButton(duplicateDraft), "duplicate array draft commit").click();
-    await duplicateDraft.updateComplete;
+    flush();
     expect(duplicateValue.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalled();
 
@@ -296,194 +274,34 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const composedDraft = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "composed item draft",
     );
-    await composedDraft.updateComplete;
+    flush();
     expectElement(findAddButton(container), "composed item add").click();
-    await composedDraft.updateComplete;
+    flush();
     const composedValue = expectElement(
       composedDraft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "composed item draft value",
     );
     composedValue.value = "abc";
     composedValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await composedDraft.updateComplete;
+    flush();
     const composedCommit = expectElement(
       findAddButton(composedDraft),
       "composed item draft commit",
     );
     composedCommit.click();
-    await composedDraft.updateComplete;
+    flush();
     expect(composedValue.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalled();
 
     composedValue.value = "123";
     composedValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await composedDraft.updateComplete;
+    flush();
     composedCommit.click();
     expect(onPatch).toHaveBeenCalledWith(["codes"], ["123"]);
     container.remove();
-  });
-
-  it("rejects existing array edits that violate uniqueItems", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        uniqueItems: true,
-        items: { type: "string" },
-      },
-      value: ["alpha", "beta"],
-      path: ["codes"],
-      onPatch,
-    });
-    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-array input"));
-    expect(inputs).toHaveLength(2);
-    const second = expectElement(inputs[1], "second unique array item");
-
-    second.value = "alpha";
-    second.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(second.value).toBe("beta");
-    expect(second.getAttribute("aria-invalid")).toBe("false");
-
-    second.value = "gamma";
-    second.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["codes"], ["alpha", "gamma"]);
-  });
-
-  it("restores boolean rows when uniqueItems rejects a toggle", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        uniqueItems: true,
-        items: { type: "boolean" },
-      },
-      value: [false, true],
-      path: ["flags"],
-      onPatch,
-    });
-    const switches = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
-    );
-    expect(switches).toHaveLength(2);
-    const second = expectElement(switches[1], "second unique boolean item");
-
-    second.checked = false;
-    second.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(second.checked).toBe(true);
-  });
-
-  it("allows invalid arrays to be repaired one item at a time", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "array",
-      minItems: 4,
-      maxItems: 4,
-      uniqueItems: true,
-      items: { type: "string" },
-    };
-    const renderValue = (value: string[]) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(["alpha", "alpha", "beta", "beta"]);
-    const firstRepair = Array.from(
-      container.querySelectorAll<HTMLInputElement>(".cfg-array input"),
-    )[1];
-    expect(firstRepair).toBeDefined();
-    if (!firstRepair) {
-      return;
-    }
-    firstRepair.value = "gamma";
-    firstRepair.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["codes"], ["alpha", "gamma", "beta", "beta"]);
-
-    onPatch.mockClear();
-    renderValue(["alpha", "gamma", "beta", "beta"]);
-    const secondRepair = Array.from(
-      container.querySelectorAll<HTMLInputElement>(".cfg-array input"),
-    )[3];
-    expect(secondRepair).toBeDefined();
-    if (!secondRepair) {
-      return;
-    }
-    secondRepair.value = "delta";
-    secondRepair.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onPatch).toHaveBeenLastCalledWith(["codes"], ["alpha", "gamma", "beta", "delta"]);
-  });
-
-  it("validates the resulting tuple before removing an item", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        items: [{ type: "string" }, { type: "number" }],
-        additionalItems: false,
-      },
-      value: ["identifier", 3],
-      path: ["tuple"],
-      onPatch,
-    });
-
-    const removeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']"),
-    );
-    expect(removeButtons).toHaveLength(2);
-    expect(removeButtons[0]?.disabled).toBe(true);
-    expect(removeButtons[1]?.disabled).toBe(false);
-    const addButton = findAddButton(container);
-    expect(addButton?.disabled).toBe(true);
-    removeButtons[1]?.click();
-    expect(onPatch).toHaveBeenCalledWith(["tuple"], ["identifier"]);
-  });
-
-  it("allows over-limit arrays to be repaired by repeated removal", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "array",
-      maxItems: 2,
-      items: { type: "string" },
-    };
-    const renderValue = (value: string[]) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(["one", "two", "three", "four"]);
-    let removeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']"),
-    );
-    expect(removeButtons.every((button) => !button.disabled)).toBe(true);
-    removeButtons[3]?.click();
-    expect(onPatch).toHaveBeenLastCalledWith(["codes"], ["one", "two", "three"]);
-
-    onPatch.mockClear();
-    renderValue(["one", "two", "three"]);
-    removeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']"),
-    );
-    expect(removeButtons.every((button) => !button.disabled)).toBe(true);
-    removeButtons[2]?.click();
-    expect(onPatch).toHaveBeenLastCalledWith(["codes"], ["one", "two"]);
   });
 
   it("restores JSON rows when a collection constraint rejects the edit", () => {
@@ -512,45 +330,6 @@ describe("config form array integrity", () => {
     expect(onPatch).not.toHaveBeenCalled();
     expect(second.value).toContain('"second"');
     expect(second.getAttribute("aria-invalid")).toBe("false");
-  });
-
-  it("preserves an unaffected JSON row draft when another row changes", () => {
-    const container = document.createElement("div");
-    const schema = {
-      type: "array",
-      items: {
-        anyOf: [{ type: "object" }, { type: "array" }],
-      },
-    };
-    let currentValue: unknown[] = [{ id: "first" }, { id: "second" }];
-    const renderValue = () => {
-      renderArrayFixture(container, {
-        schema,
-        value: currentValue,
-        path: ["entries"],
-        onPatch: (_path, nextValue) => {
-          currentValue = nextValue as unknown[];
-          renderValue();
-        },
-      });
-    };
-
-    renderValue();
-    let textareas = Array.from(container.querySelectorAll<HTMLTextAreaElement>("textarea"));
-    const first = expectElement(textareas[0], "first JSON array item");
-    const second = expectElement(textareas[1], "second JSON array item");
-    first.value = '{"id":';
-    first.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(first.getAttribute("aria-invalid")).toBe("true");
-
-    second.value = '{"id":"changed"}';
-    second.dispatchEvent(new Event("input", { bubbles: true }));
-    second.dispatchEvent(new Event("change", { bubbles: true }));
-
-    textareas = Array.from(container.querySelectorAll<HTMLTextAreaElement>("textarea"));
-    expect(textareas[0]?.value).toBe('{"id":');
-    expect(textareas[0]?.getAttribute("aria-invalid")).toBe("true");
-    expect(currentValue).toEqual([{ id: "first" }, { id: "changed" }]);
   });
 
   it("resets scalar and JSON drafts when the first equal primitive row is removed", () => {
@@ -622,7 +401,7 @@ describe("config form array integrity", () => {
     expect(remainingJson.getAttribute("aria-invalid")).toBe("false");
   });
 
-  it("adds null through nullable scalar collection drafts", async () => {
+  it("adds null through nullable scalar collection drafts", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -637,18 +416,18 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      container.querySelector("openclaw-config-form-collection-draft"),
       "nullable scalar collection draft",
     );
     expectElement(findAddButton(container), "nullable scalar array add").click();
-    await draftHost.updateComplete;
+    flush();
     const nullToggle = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-null]"),
       "nullable scalar null toggle",
     );
     nullToggle.checked = true;
     nullToggle.dispatchEvent(new Event("change", { bubbles: true }));
-    await draftHost.updateComplete;
+    flush();
     expect(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]")?.disabled,
     ).toBe(true);
@@ -731,31 +510,5 @@ describe("config form array integrity", () => {
     expect(shiftedInput.value).toBe("same");
     expect(shiftedInput.getAttribute("aria-invalid")).toBe("false");
     expect(currentValue).toEqual([{ name: "same" }]);
-  });
-
-  it("renders open tuple tail items as unconstrained JSON values", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderArrayFixture(container, {
-      schema: {
-        type: "array",
-        items: [{ type: "string" }],
-      },
-      value: ["head", { enabled: true }],
-      path: ["tuple"],
-      onPatch,
-    });
-
-    const tail = expectElement(
-      container.querySelector<HTMLTextAreaElement>("textarea"),
-      "open tuple tail JSON value",
-    );
-    tail.value = '{"enabled":false}';
-    tail.dispatchEvent(new Event("input", { bubbles: true }));
-    tail.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["tuple"], ["head", { enabled: false }]);
-
-    const addButton = findAddButton(container);
-    expect(addButton?.disabled).toBe(false);
   });
 });

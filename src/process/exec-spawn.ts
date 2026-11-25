@@ -1,26 +1,200 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
 import process from "node:process";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
-import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { execa, type Options as ExecaOptions } from "execa";
+import { withNodeRuntimePath } from "../../node-runtime-env.mjs";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { ensureOpenClawExecMarkerOnProcess } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { assertAppContainerSpawnSupported } from "../infra/windows-appcontainer-spawn.js";
+import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
+import { sleep } from "../utils/sleep.js";
+import {
+  isChildProcessTreeAlive,
+  isChildProcessTreeAliveAsync,
+  isProcessGroupGoneByKernel,
+} from "./child-process-tree.js";
+import type { CommandProcessCustody } from "./command-process-custody.types.js";
+import { readCommandProcessStartTime } from "./command-process-identity.js";
+import type { CommandStdinFile } from "./command-stdin-file.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  type SpawnResult,
+} from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { prepareAgentCoreDumpLimit } from "./linux-core-dump.js";
+import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
+import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
+import { BrokerChild } from "./spawn-broker/child.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import {
+  brokerExecaOptions,
+  restoreExecaResult,
+  type BrokerExecaOptions,
+} from "./spawn-broker/execa-protocol.js";
+import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
+import type { SpawnBrokerHost } from "./spawn-broker/host.js";
+import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
+function spawnBrokerCommand(
+  host: SpawnBrokerHost,
+  argv: string[],
+  options: ExecaOptions,
+  prepared: BrokerExecaOptions,
+  executionIntent: ProcessExecutionIntent,
+  executionScopeKey?: string,
+) {
+  const remote = host.spawnExeca(
+    argv,
+    prepared,
+    executionIntent === "agent-tool" ? getAgentExecCgroup(executionScopeKey) : undefined,
+  );
+  const child = remote.child;
+  const closed = child.waitForClose();
+  const onAbort = () => {
+    child.killed = true;
+    remote.cancel();
+  };
+  options.cancelSignal?.addEventListener("abort", onAbort, { once: true });
+  if (options.cancelSignal?.aborted) {
+    onAbort();
+  }
+  const promise = remote.result
+    .then(async (result) => {
+      if (result.timedOut) {
+        child.killed = true;
+      }
+      // Result IPC can overtake the last bytes on separately transferred sockets.
+      await closed;
+      const restored = restoreExecaResult(result);
+      // Broker admission refusals remain exceptions even for reject:false.
+      if (
+        restored instanceof Error &&
+        (options.reject !== false || restored.code === "ERR_SPAWN_BROKER_UNAVAILABLE")
+      ) {
+        throw restored;
+      }
+      return restored;
+    })
+    .finally(() => options.cancelSignal?.removeEventListener("abort", onAbort));
+  void promise.catch(() => {});
+  void once(child, "spawn").then(
+    () => {
+      setImmediate(() => {
+        for (const stream of [child.stdout, child.stderr]) {
+          if (stream?.readableFlowing === null) {
+            stream.resume();
+          }
+        }
+      });
+    },
+    () => {},
+  );
+  const properties = {
+    nodeChildProcess: child,
+    get pid() {
+      return child.pid;
+    },
+    get stdin() {
+      return child.stdin;
+    },
+    get stdout() {
+      return child.stdout;
+    },
+    get stderr() {
+      return child.stderr;
+    },
+    kill: (signal?: NodeJS.Signals | number) => child.kill(signal ?? options.killSignal),
+  };
+  const command = Object.assign(promise, properties);
+  // Restore the accessors: child handles arrive after the promise is constructed.
+  return Object.defineProperties(command, Object.getOwnPropertyDescriptors(properties));
+}
+
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+/**
+ * Post-SIGKILL teardown and orphan reaping, not cooperative grace. macOS reports
+ * EPERM, not ESRCH, while only unreaped zombies remain, and loaded hosts have
+ * exceeded 300 ms. Polling ends at extinction, so only surviving groups wait.
+ */
+export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
+
+/** The single owner for confirming that a force-killed command group is gone. */
+export async function waitForCommandProcessGroupExit(
+  pid: number,
+  isOriginalProcess: () => boolean | Promise<boolean>,
+): Promise<"exited" | "replaced" | "alive"> {
+  const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
+  while (await isChildProcessTreeAliveAsync({ pid })) {
+    if (!(await isOriginalProcess())) {
+      return "replaced";
+    }
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      return (await isChildProcessTreeAliveAsync({ pid })) ? "alive" : "exited";
+    }
+    await sleep(Math.min(25, remaining));
+  }
+  return "exited";
+}
+
+const commandAdmissions = new WeakMap<ChildProcess, Promise<number | null>>();
+
+/** Remote PID and pipes arrive together before admission or stream subscription. */
+export async function waitForCommandSpawn(
+  child: { nodeChildProcess: ChildProcess } & PromiseLike<unknown>,
+  captureStartTime = false,
+): Promise<number | null | void> {
+  if (child.nodeChildProcess instanceof BrokerChild) {
+    try {
+      await child.nodeChildProcess.ready();
+    } catch {
+      // Execa owns launch-error metadata even when native spawn produced no PID.
+      await child;
+    }
+  }
+  const admission = commandAdmissions.get(child.nodeChildProcess);
+  if (admission) {
+    return await admission;
+  }
+  const nativeChild = child.nodeChildProcess;
+  if (captureStartTime && nativeChild.pid !== undefined && process.platform !== "win32") {
+    return await readCommandProcessStartTime(nativeChild.pid, { child: nativeChild });
+  }
+}
+
+type ScopedCommand = {
+  stop: () => void;
+  settle: () => Promise<void>;
+};
 
 type CommandProcessScope = {
   signal: AbortSignal;
-  children: Set<() => void>;
+  children: Set<ScopedCommand>;
+  cleanups: Set<Promise<void>>;
+  failure?: { error: unknown };
+  custody?: CommandProcessCustody;
 };
 
 const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
+/** Reserve custody before an existing spawn owner starts its asynchronous admission. */
+export function reserveCommandProcessCustody(argv: readonly string[]) {
+  const scope = commandProcessScope.getStore();
+  if (scope?.signal.aborted) {
+    throw new Error("Command process scope is closed");
+  }
+  return scope?.custody?.reserve(argv);
+}
+
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
-  return inherited ? AbortSignal.any(signal ? [inherited, signal] : [inherited]) : signal;
+  return inherited && signal ? AbortSignal.any([inherited, signal]) : (inherited ?? signal);
 }
 
 /** Cleanup helpers must outlive cancellation of the commands they are settling. */
@@ -28,70 +202,311 @@ export function runOutsideCommandProcessScope<T>(run: () => T): T {
   return commandProcessScope.exit(run);
 }
 
-/** Terminal command deadlines stop their children before the caller permits rollback. */
+/** Join the command owner's cleanup separately from its bounded caller result. */
+export function retainCommandProcessCleanup(cleanup: Promise<SpawnResult["cleanup"] | void>): void {
+  const scope = commandProcessScope.getStore();
+  if (!scope) {
+    return;
+  }
+  const settled = cleanup.then(
+    (result) => {
+      if (result === "uncertain") {
+        scope.failure ??= { error: new CommandProcessCleanupError() };
+      }
+    },
+    (error: unknown) => {
+      scope.failure ??= { error };
+    },
+  );
+  scope.cleanups.add(settled);
+  void settled.then(() => scope.cleanups.delete(settled));
+}
+
+/** Terminal command deadlines stop and join children before the caller permits rollback. */
 export async function withCommandProcessScope<T>(
   run: (stop: () => void) => Promise<T>,
   signal?: AbortSignal,
+  custody?: CommandProcessCustody,
 ): Promise<T> {
+  const parent = commandProcessScope.getStore();
   const controller = new AbortController();
   const inherited = resolveCommandProcessSignal(signal);
   const scope: CommandProcessScope = {
     signal: inherited ? AbortSignal.any([inherited, controller.signal]) : controller.signal,
     children: new Set(),
+    cleanups: new Set(),
+    custody: custody ?? parent?.custody,
   };
   const stop = () => {
     controller.abort();
-    for (const stopChild of scope.children) {
-      stopChild();
+    for (const child of scope.children) {
+      try {
+        child.stop();
+      } catch (error) {
+        scope.failure ??= { error };
+      }
     }
-    scope.children.clear();
   };
-  return await commandProcessScope.run(scope, async () => {
-    try {
-      return await run(stop);
-    } finally {
-      stop();
+  let settlement: Promise<void> | undefined;
+  const settle = () => (settlement ??= settleCommands());
+  async function settleCommands() {
+    stop();
+    await Promise.all(
+      [...scope.children].map(async (child) => {
+        try {
+          await child.settle();
+        } catch (error) {
+          scope.failure ??= { error };
+        }
+      }),
+    );
+    while (scope.cleanups.size > 0) {
+      await Promise.all(scope.cleanups);
     }
+  }
+  const nested: ScopedCommand = {
+    stop,
+    async settle() {
+      await settle();
+      if (scope.failure) {
+        throw new CommandProcessCleanupError({ cause: scope.failure.error });
+      }
+    },
+  };
+  // Parent settlement follows admitted commands and declared cleanup even when
+  // the callback ignores cancellation. Closed scopes refuse new commands.
+  parent?.children.add(nested);
+  const completion = commandProcessScope.run(scope, async () => {
+    let outcome: { result: T } | { error: unknown };
+    try {
+      outcome = { result: await run(stop) };
+    } catch (error) {
+      outcome = { error };
+      if (parent && hasCommandProcessCleanupError(error)) {
+        parent.failure ??= { error };
+      }
+    }
+    await settle();
+    if (scope.failure) {
+      const cause =
+        "error" in outcome
+          ? outcome.error === scope.failure.error
+            ? outcome.error
+            : new AggregateError(
+                [outcome.error, scope.failure.error],
+                "Command and cleanup failed",
+                { cause: outcome.error },
+              )
+          : scope.failure.error;
+      throw new CommandProcessCleanupError({ cause });
+    }
+    if ("error" in outcome) {
+      throw outcome.error;
+    }
+    return outcome.result;
   });
+  void completion.then(
+    () => parent?.children.delete(nested),
+    (error: unknown) => {
+      if (parent && hasCommandProcessCleanupError(error)) {
+        parent.failure ??= { error };
+      }
+      parent?.children.delete(nested);
+    },
+  );
+  return await completion;
 }
 
-function retainCommandProcess<OptionsType extends ExecaOptions>(
+function retainCommandProcess(
   scope: CommandProcessScope,
-  child: ResultPromise<OptionsType>,
+  child: { pid?: number; nodeChildProcess: ChildProcess } & PromiseLike<unknown>,
+  inheritScopeCancellation: boolean,
+  reservation?: ReturnType<CommandProcessCustody["reserve"]>,
 ): void {
-  const pid = child.pid;
-  // Windows executable finalizers retain a Job until process exit; dead launcher
-  // PIDs cannot safely identify their surviving descendants through taskkill.
-  if (pid === undefined || process.platform === "win32") {
-    return;
-  }
-  const startedAt = getFileLockProcessStartTime(pid);
-  const stop = () => {
-    const nativeChild = child.nodeChildProcess;
-    // A live direct child holds PID custody even when its optional timestamp probe failed.
-    if (nativeChild.exitCode !== null || nativeChild.signalCode !== null) {
-      const currentStart = getFileLockProcessStartTime(pid);
-      if (currentStart !== null && currentStart !== startedAt) {
-        return;
-      }
-    }
-    killProcessTree(pid, { detached: true, force: true });
-  };
-  scope.children.add(stop);
-  const release = () => {
-    try {
-      // A direct child can exit while descendants retain its pipes or mutate
-      // installed files. Keep that group owned until it actually disappears.
-      process.kill(-pid, 0);
+  let pid: number | undefined;
+  let startedAt: number | null = null;
+  let stopped = false;
+  let stopRequested = false;
+  let stopping: Promise<void> | undefined;
+  let groupExtinct = false;
+  let settlementFailed = false;
+  let custodySettled = false;
+  const settleCustody = () => {
+    if (!reservation || settlementFailed || custodySettled) {
       return;
+    }
+    try {
+      reservation.settled();
+      custodySettled = true;
     } catch (error) {
-      if (extractErrorCode(error) !== "ESRCH") {
+      settlementFailed = true;
+      throw error;
+    }
+  };
+  const nativeChild = child.nodeChildProcess;
+  let observedExit = nativeChild.exitCode != null || nativeChild.signalCode != null;
+  const onExit = () => {
+    observedExit = true;
+  };
+  nativeChild.once("exit", onExit);
+  const closed = nativeChild instanceof BrokerChild ? nativeChild.waitForClose() : undefined;
+  const stop = () => {
+    stopRequested = true;
+    if (stopped || pid === undefined || process.platform === "win32") {
+      return;
+    }
+    stopped = true;
+    const childPid = pid;
+    const signalOwnedGroup = () => {
+      killProcessTree(childPid, { detached: true, force: true });
+      scheduleAdoptedChildZombieReapAfterExit(nativeChild, true);
+    };
+    // A live direct child retains PID custody even while optional birth preparation waits.
+    if (nativeChild.exitCode === null && nativeChild.signalCode === null) {
+      signalOwnedGroup();
+      return;
+    }
+    const verifyAndSignal = (currentStart: number | null) => {
+      if (currentStart !== null && currentStart !== startedAt) {
+        throw new CommandProcessCleanupError();
+      }
+      // A completed identity read does not retain authority over an already retired group.
+      if (isProcessGroupGoneByKernel(childPid)) {
+        groupExtinct = true;
         return;
       }
+      signalOwnedGroup();
+    };
+    if (process.platform === "linux" || process.platform === "android") {
+      stopping = readiness
+        .catch(() => null)
+        .then(async () => {
+          if (!(await isChildProcessTreeAliveAsync({ pid: childPid }))) {
+            groupExtinct = true;
+            return;
+          }
+          verifyAndSignal(await readCommandProcessStartTime(childPid));
+        })
+        .catch((error: unknown) => {
+          scope.failure ??= { error };
+        });
+    } else {
+      if (!isChildProcessTreeAlive({ pid: childPid })) {
+        groupExtinct = true;
+        return;
+      }
+      verifyAndSignal(getFileLockProcessStartTime(childPid));
     }
-    scope.children.delete(stop);
   };
-  void child.then(release, release);
+  const initialize = (): number | null | Promise<number | null> => {
+    pid = child.pid;
+    if (pid === undefined) {
+      return null;
+    }
+    const childPid = pid;
+    const bind = (observed: number | null) => {
+      startedAt = observed;
+      reservation?.spawned({
+        pid: childPid,
+        startedAt:
+          process.platform === "linux" || process.platform === "android"
+            ? startedAt
+            : getProcessInstanceStartTime(childPid),
+      });
+      if (stopRequested || (inheritScopeCancellation && scope.signal.aborted)) {
+        stop();
+      }
+      return startedAt;
+    };
+    const observed =
+      process.platform === "win32"
+        ? null
+        : readCommandProcessStartTime(childPid, { child: nativeChild });
+    return observed instanceof Promise ? observed.then(bind) : bind(observed);
+  };
+  let bindingError: { error: unknown } | undefined;
+  let readiness: Promise<number | null>;
+  if (nativeChild instanceof BrokerChild && child.pid === undefined) {
+    readiness = nativeChild.ready().then(initialize);
+  } else {
+    try {
+      readiness = Promise.resolve(initialize());
+    } catch (error) {
+      bindingError = { error };
+      readiness = Promise.reject(toErrorObject(error, "Command process custody admission failed"));
+    }
+  }
+  commandAdmissions.set(nativeChild, readiness);
+  // Admission is retained before remote readiness, and rejection is observed immediately.
+  const completed = Promise.resolve(child)
+    .catch(() => {})
+    .then(async () => {
+      await closed;
+      nativeChild.removeListener("exit", onExit);
+    });
+  const initialized = readiness.catch((error: unknown) => {
+    if (!(nativeChild instanceof BrokerChild && nativeChild.notStarted)) {
+      scope.failure ??= { error };
+      try {
+        stop();
+      } catch (stopError) {
+        scope.failure ??= { error: stopError };
+      }
+    }
+  });
+  const owned: ScopedCommand = {
+    stop,
+    async settle() {
+      await initialized;
+      await completed;
+      await stopping;
+      if (pid === undefined) {
+        if (nativeChild instanceof BrokerChild && !nativeChild.notStarted) {
+          throw new CommandProcessCleanupError();
+        }
+      } else if (process.platform === "win32") {
+        // Windows executable finalizers retain a Job until process exit.
+        if (!observedExit) {
+          throw new CommandProcessCleanupError();
+        }
+      } else if (!groupExtinct) {
+        // POSIX pipe closure is not extinction: observe this exact group after its stop.
+        const groupPid = pid;
+        const exit = await waitForCommandProcessGroupExit(groupPid, async () => {
+          const current = await readCommandProcessStartTime(groupPid);
+          return current === null || current === startedAt;
+        });
+        if (exit !== "exited") {
+          throw new CommandProcessCleanupError();
+        }
+      }
+      settleCustody();
+    },
+  };
+  scope.children.add(owned);
+  void completed.then(async () => {
+    await initialized;
+    await stopping;
+    // Failed launches must retire before a later command can strand the enclosing scope.
+    const neverStarted =
+      pid === undefined && (!(nativeChild instanceof BrokerChild) || nativeChild.notStarted);
+    if (
+      neverStarted ||
+      (pid !== undefined &&
+        process.platform !== "win32" &&
+        !(await isChildProcessTreeAliveAsync({ pid })))
+    ) {
+      try {
+        settleCustody();
+        scope.children.delete(owned);
+      } catch (error) {
+        scope.failure ??= { error };
+      }
+    }
+  });
+  if (bindingError) {
+    throw bindingError.error;
+  }
 }
 
 export function shouldSpawnWithShell(params: {
@@ -107,11 +522,55 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-type SpawnCommandOptions = ExecaOptions & {
+type SpawnCommandOptions = CommandSpawnOptions & {
+  stdinFile?: CommandStdinFile;
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv; no ambient environment is merged again. */
+  preparedEnv?: NodeJS.ProcessEnv;
+  executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
 };
+
+function commandCreatesChildPipes(
+  options: Pick<
+    ExecaOptions,
+    | "ipc"
+    | "node"
+    | "ipcInput"
+    | "gracefulCancel"
+    | "input"
+    | "inputFile"
+    | "stdio"
+    | "stdin"
+    | "stdout"
+    | "stderr"
+  >,
+): boolean {
+  // Execa defaults IPC on for Node children, IPC input, and graceful cancellation.
+  const ipc =
+    options.ipc ??
+    (options.node === true || options.ipcInput !== undefined || options.gracefulCancel === true);
+  if (ipc || options.input !== undefined || options.inputFile !== undefined) {
+    return true;
+  }
+  const stdio =
+    typeof options.stdio === "string" || options.stdio === undefined
+      ? [options.stdio, options.stdio, options.stdio]
+      : options.stdio;
+  const descriptors = [
+    options.stdin ?? stdio[0],
+    options.stdout ?? stdio[1],
+    options.stderr ?? stdio[2],
+    ...stdio.slice(3).filter((entry) => entry !== undefined),
+  ];
+  return descriptors.some(
+    (entry) =>
+      entry !== "ignore" && entry !== "inherit" && !(typeof entry === "number" && entry >= 0),
+  );
+}
 
 export function spawnCommandWithInvocation<
   OptionsType extends SpawnCommandOptions = SpawnCommandOptions,
@@ -119,9 +578,21 @@ export function spawnCommandWithInvocation<
   argv: string[],
   options: OptionsType = {} as OptionsType,
 ): {
-  child: ResultPromise<OptionsType>;
+  child: CommandSubprocess<OptionsType>;
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
+  if (
+    options.stdinFile &&
+    (options.input !== undefined || options.stdin !== undefined || options.stdio !== undefined)
+  ) {
+    throw new TypeError("Command stdin file cannot be combined with input, stdin, or stdio");
+  }
+  if (
+    process.platform === "win32" &&
+    commandCreatesChildPipes(options.stdinFile ? { ...options, stdin: 0 } : options)
+  ) {
+    assertAppContainerSpawnSupported();
+  }
   const scope = commandProcessScope.getStore();
   if (scope?.signal.aborted) {
     throw new Error("Command process scope is closed");
@@ -129,19 +600,24 @@ export function spawnCommandWithInvocation<
   const {
     baseEnv,
     env,
+    preparedEnv,
     windowsVerbatimArguments,
     cancelSignal,
+    executionTimeoutMs,
     inheritScopeCancellation = true,
+    executionIntent = "gateway-internal",
+    executionScopeKey,
+    stdinFile,
     ...execaOptions
-  } = options;
-  const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
+  }: SpawnCommandOptions = options;
+  const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
   const invocation = resolveSafeChildProcessInvocation({
     argv,
     cwd: execaOptions.cwd,
     env: commandEnv,
     windowsVerbatimArguments,
   });
-  const child = execa(invocation.command, invocation.args, {
+  const commandOptions: CommandSpawnOptions = {
     ...execaOptions,
     cancelSignal: inheritScopeCancellation
       ? resolveCommandProcessSignal(cancelSignal)
@@ -152,18 +628,63 @@ export function spawnCommandWithInvocation<
     shell: false,
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  } as ExecaOptions) as unknown as ResultPromise<OptionsType>;
-  if (scope) {
-    retainCommandProcess(scope, child);
+  };
+  const broker = getSpawnBroker();
+  // CLI and other platforms have no broker scope. Independent applications and
+  // native descriptors retain their explicitly selected in-process transport.
+  const prepared = broker ? brokerExecaOptions(commandOptions) : "no-broker";
+  const remoteOptions = typeof prepared === "string" ? undefined : prepared;
+  if (stdinFile && broker) {
+    if (!remoteOptions) {
+      throw new TypeError("Command stdin file requires broker-compatible process options");
+    }
+    remoteOptions.stdinFile = stdinFile.source;
   }
-  return { child, invocation };
+  if (remoteOptions && executionTimeoutMs !== undefined) {
+    // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
+    remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
+  }
+  const limited = prepareAgentCoreDumpLimit(invocation.command, invocation.args, executionIntent);
+  const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
+  const child: CommandSubprocess<CommandSpawnOptions> =
+    broker && remoteOptions
+      ? spawnBrokerCommand(
+          broker,
+          [limited.command, ...limited.args],
+          commandOptions,
+          remoteOptions,
+          executionIntent,
+          executionScopeKey,
+        )
+      : runWithMainThreadTask(
+          "process:spawn",
+          () =>
+            execa(
+              limited.command,
+              limited.args,
+              // SAFETY: Execa passes numeric descriptors through to Node despite its fd-0 type.
+              stdinFile ? { ...commandOptions, stdin: stdinFile.fd as 0 } : commandOptions,
+            ),
+          "command",
+        );
+  recordChildProcessSpawn(
+    invocation.command,
+    child.nodeChildProcess,
+    undefined,
+    invocation.args,
+    typeof prepared === "string" ? `native.${prepared}` : "broker",
+  );
+  if (scope) {
+    retainCommandProcess(scope, child, inheritScopeCancellation, reservation);
+  }
+  return { child: child as CommandSubprocess<OptionsType>, invocation };
 }
 
 /** Spawn through the canonical argv, environment, and Windows safety boundary. */
 export function spawnCommand<OptionsType extends SpawnCommandOptions = SpawnCommandOptions>(
   argv: string[],
   options: OptionsType = {} as OptionsType,
-): ResultPromise<OptionsType> {
+): CommandSubprocess<OptionsType> {
   return spawnCommandWithInvocation(argv, options).child;
 }
 
@@ -175,27 +696,26 @@ export function resolveCommandEnv(params: {
 }): NodeJS.ProcessEnv {
   const baseEnv = params.baseEnv ?? process.env;
   const platform = params.platform ?? process.platform;
-  const argv = params.argv;
-  const shouldSuppressNpmFund = (() => {
-    const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
-      return true;
-    }
-    if (cmd === "node" || cmd === "node.exe") {
-      const script = argv[1] ?? "";
-      return script.includes("npm-cli.js");
-    }
-    return false;
-  })();
+  const cmd = path.basename(params.argv[0] ?? "");
+  const shouldSuppressNpmFund =
+    cmd === "npm" ||
+    cmd === "npm.cmd" ||
+    cmd === "npm.exe" ||
+    ((cmd === "node" || cmd === "node.exe") && (params.argv[1] ?? "").includes("npm-cli.js"));
 
-  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const runtime = params.argv[0] ?? "";
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  const explicitPackageManager =
+    paths.isAbsolute(runtime) &&
+    /^(?:node|node\.exe)$/iu.test(paths.basename(runtime)) &&
+    /^(?:npm-cli\.js|npx-cli\.js|pnpm\.(?:cjs|js))$/iu.test(paths.basename(params.argv[1] ?? ""));
+  const mergedEnv = mergeProcessEnv([baseEnv, params.env], platform);
+  const resolvedEnv = explicitPackageManager
+    ? withNodeRuntimePath(mergedEnv, runtime, platform)
+    : mergedEnv;
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) {
-      resolvedEnv.NPM_CONFIG_FUND = "false";
-    }
-    if (resolvedEnv.npm_config_fund == null) {
-      resolvedEnv.npm_config_fund = "false";
-    }
+    resolvedEnv.NPM_CONFIG_FUND ??= "false";
+    resolvedEnv.npm_config_fund ??= "false";
   }
-  return markOpenClawExecEnv(resolvedEnv);
+  return ensureOpenClawExecMarkerOnProcess(resolvedEnv);
 }

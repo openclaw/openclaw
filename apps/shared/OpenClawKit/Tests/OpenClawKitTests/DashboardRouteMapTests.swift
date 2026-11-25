@@ -5,12 +5,14 @@ import Testing
 struct DashboardRouteMapTests {
     @Test func `route constants match Control UI paths`() {
         #expect(DashboardRouteMap.settingsPath == "/settings")
+        #expect(DashboardRouteMap.appearanceSettingsPath == "/settings/appearance")
         #expect(DashboardRouteMap.deviceSettingsPath == "/settings/device")
         #expect(DashboardRouteMap.devicePermissionsSettingsPath == "/settings/device/permissions")
         #expect(DashboardRouteMap.channelsSettingsPath == "/settings/channels")
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
         #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
+        #expect(DashboardRouteMap.systemsPagePath == "/systems")
         #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
     }
 
@@ -20,6 +22,7 @@ struct DashboardRouteMapTests {
         DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
         DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
         DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
+        DashboardRouteMap.systemsPagePath,
     ])
     func `same-app path validation accepts rooted paths`(_ path: String) {
         #expect(DashboardRouteMap.isValidSameAppPath(path))
@@ -48,6 +51,7 @@ struct DashboardRouteMapTests {
 
     @Test(arguments: [
         DashboardRouteMap.settingsPath,
+        DashboardRouteMap.appearanceSettingsPath,
         DashboardRouteMap.deviceSettingsPath,
         DashboardRouteMap.devicePermissionsSettingsPath,
         DashboardRouteMap.activityPagePath,

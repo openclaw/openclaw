@@ -1,13 +1,17 @@
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
+  rmdirSync,
   statSync,
 } from "node:fs";
 import { cpus, totalmem } from "node:os";
@@ -15,14 +19,17 @@ import path from "node:path";
 import { inspectManagedProcessGroup, runManagedCommand } from "./managed-child-process.mts";
 import {
   analyzeBenchmark,
+  analyzeNodeCacheBenchmark,
   assertEquivalentInventories,
   assertExecutionDigest,
   assertExactSha,
   assertInventoryAvailable,
   buildBenchmarkSchedule,
+  buildNodeCacheSchedule,
   parseVitestExecutionReport,
   sha256,
   writeJsonAtomic,
+  withTerminalManifest,
   type BenchmarkExecutionSummary,
   type BenchmarkLane,
   type BenchmarkManifest,
@@ -30,29 +37,13 @@ import {
   type BenchmarkRunRecord,
   type BenchmarkSide,
   type PackageManagerIdentity,
-} from "./vitest-pair-benchmark-contract.mts";
-
-export {
-  analyzeBenchmark,
-  assertEquivalentInventories,
-  assertExecutionDigest,
-  assertInventoryAvailable,
-  assertSingleWorkflowAttempt,
-  buildBenchmarkSchedule,
-  loadBenchmarkManifest,
-  parseVitestExecutionReport,
-  validateBenchmarkManifest,
-  withTerminalManifest,
-  writeJsonAtomic,
-} from "./vitest-pair-benchmark-contract.mts";
-export type {
-  BenchmarkManifest,
-  BenchmarkRunRecord,
-  PackageManagerIdentity,
+  type NodeCacheManifest,
+  type NodeCacheMeasurement,
+  type NodeCacheTreatment,
 } from "./vitest-pair-benchmark-contract.mts";
 
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
-export const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
+const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
 
 type RunCommandOptions = {
   bin: string;
@@ -228,6 +219,7 @@ export function buildBenchmarkCommandEnv(
   cacheRoot: string,
   packageManager: PackageManagerIdentity,
   ambientEnv: NodeJS.ProcessEnv = process.env,
+  treatment?: { kind: NodeCacheTreatment; nodeCache: string },
 ): NodeJS.ProcessEnv {
   mkdirSync(home, { recursive: true });
   mkdirSync(cacheRoot, { recursive: true });
@@ -245,7 +237,15 @@ export function buildBenchmarkCommandEnv(
     HOME: home,
     LANG: "C.UTF-8",
     LC_ALL: "C.UTF-8",
-    NODE_COMPILE_CACHE: path.join(cacheRoot, "node-compile"),
+    NODE_COMPILE_CACHE: treatment?.nodeCache ?? path.join(cacheRoot, "node-compile"),
+    ...(treatment
+      ? {
+          OPENCLAW_VITEST_RUNTIME: "node",
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
+          OPENCLAW_VITEST_WORKER_CACHE: "0",
+          ...(treatment.kind === "disabled" ? { NODE_DISABLE_COMPILE_CACHE: "1" } : {}),
+        }
+      : {}),
     PNPM_HOME: pnpmHome,
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(cacheRoot, "vitest-fs"),
     OPENCLAW_VITEST_MAX_WORKERS: "1",
@@ -253,6 +253,9 @@ export function buildBenchmarkCommandEnv(
     PATH: ambientEnv.PATH,
     TMPDIR: path.join(cacheRoot, "tmp"),
     npm_config_cache: npmCache,
+    // Both source cuts must use the benchmark's selected pnpm, even when their
+    // packageManager fields name older releases.
+    pnpm_config_pm_on_fail: treatment ? "error" : "ignore",
     npm_execpath: packageManager.executable,
   };
 }
@@ -261,27 +264,14 @@ function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
   if (!path.isAbsolute(reportFile)) {
     throw new Error("Vitest JSON report path must be absolute");
   }
-  if (lane.config) {
-    return [
-      "scripts/run-vitest.mjs",
-      "run",
-      "--config",
-      lane.config,
-      "--reporter=json",
-      "--includeTaskLocation",
-      "--outputFile",
-      reportFile,
-      ...lane.files,
-    ];
-  }
   return [
     "scripts/run-vitest.mjs",
-    ...lane.files,
-    "--",
+    ...(lane.config ? ["run", "--config", lane.config] : [...lane.files, "--"]),
     "--reporter=json",
     "--includeTaskLocation",
     "--outputFile",
     reportFile,
+    ...(lane.config ? lane.files : []),
   ];
 }
 
@@ -319,6 +309,18 @@ async function runBenchmarkCommand(
   let result: RunCommandResult | undefined;
   let timing: ReturnType<typeof parseGnuTime> | undefined;
   let execution: BenchmarkExecutionSummary | null = null;
+  const createRecord = (): BenchmarkRunRecord => ({
+    ...plan,
+    lane: plan.lane.id,
+    command,
+    packageManager,
+    startedAt,
+    durationMs: result?.durationMs ?? 0,
+    userCpuMs: timing?.userCpuMs ?? 0,
+    systemCpuMs: timing?.systemCpuMs ?? 0,
+    execution,
+    exitCode: result?.exitCode ?? null,
+  });
   try {
     result = await runOwnedCommand({
       bin: command[0]!,
@@ -336,42 +338,12 @@ async function runBenchmarkCommand(
     if (expectedExecutionDigest !== undefined) {
       assertExecutionDigest(execution, expectedExecutionDigest, plan.id);
     }
-    const record: BenchmarkRunRecord = {
-      id: plan.id,
-      phase: plan.phase,
-      side: plan.side,
-      lane: plan.lane.id,
-      round: plan.round,
-      pair: plan.pair,
-      cacheMode: plan.cacheMode,
-      command,
-      packageManager,
-      startedAt,
-      durationMs: result.durationMs,
-      userCpuMs: timing.userCpuMs,
-      systemCpuMs: timing.systemCpuMs,
-      execution,
-      exitCode: result.exitCode,
-    };
+    const record = createRecord();
     writeJsonAtomic(path.join(runRoot, "record.json"), record);
     return record;
   } catch (error) {
     const record: BenchmarkRunRecord = {
-      id: plan.id,
-      phase: plan.phase,
-      side: plan.side,
-      lane: plan.lane.id,
-      round: plan.round,
-      pair: plan.pair,
-      cacheMode: plan.cacheMode,
-      command,
-      packageManager,
-      startedAt,
-      durationMs: result?.durationMs ?? 0,
-      userCpuMs: timing?.userCpuMs ?? 0,
-      systemCpuMs: timing?.systemCpuMs ?? 0,
-      execution,
-      exitCode: result?.exitCode ?? null,
+      ...createRecord(),
       error: error instanceof Error ? error.message : String(error),
     };
     const recordPath = path.join(runRoot, "record.json");
@@ -460,6 +432,341 @@ function collectArtifactHashes(root: string) {
   return entries;
 }
 
+type NodeCacheContext = {
+  workloadDir: string;
+  seedDir: string;
+  outputDir: string;
+  scratchDir: string;
+  pnpmBin: string;
+  manifest: NodeCacheManifest;
+};
+
+export function readNodeCacheSeed(root: string): NodeCacheManifest["seed"]["files"] {
+  const files: NodeCacheManifest["seed"]["files"] = [];
+  const visit = (dir: string) => {
+    if (!lstatSync(dir).isDirectory() || lstatSync(dir).isSymbolicLink()) {
+      throw new Error("Node cache seed must contain only regular directories and files");
+    }
+    for (const name of readdirSync(dir).toSorted()) {
+      const file = path.join(dir, name);
+      const stat = lstatSync(file);
+      if (stat.isDirectory()) {
+        visit(file);
+      } else if (stat.isFile()) {
+        files.push({
+          path: path.relative(root, file).split(path.sep).join("/"),
+          bytes: stat.size,
+          sha256: sha256(readFileSync(file)),
+        });
+      } else {
+        throw new Error("Node cache seed must contain only regular directories and files");
+      }
+    }
+  };
+  visit(root);
+  return files;
+}
+
+function assertSeed(context: NodeCacheContext) {
+  const actual = readNodeCacheSeed(context.seedDir);
+  const key = (files: typeof actual) =>
+    JSON.stringify(
+      files
+        .toSorted((a, b) => a.path.localeCompare(b.path))
+        .map(({ path: filePath, bytes, sha256: digest }) => [filePath, bytes, digest]),
+    );
+  if (key(actual) !== key(context.manifest.seed.files)) {
+    throw new Error("Node cache seed identity differs");
+  }
+}
+
+export function restoreNodeCacheSeed(seed: string, destination: string) {
+  const expected = readNodeCacheSeed(seed);
+  cpSync(seed, destination, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    dereference: false,
+  });
+  const makeWritable = (dir: string) => {
+    chmodSync(dir, 0o700);
+    for (const name of readdirSync(dir)) {
+      const file = path.join(dir, name);
+      const stat = lstatSync(file);
+      if (stat.isDirectory()) {
+        makeWritable(file);
+      } else if (stat.isFile()) {
+        chmodSync(file, 0o600);
+      } else {
+        throw new Error("Restored Node cache contains a non-regular entry");
+      }
+    }
+  };
+  makeWritable(destination);
+  if (JSON.stringify(readNodeCacheSeed(destination)) !== JSON.stringify(expected)) {
+    throw new Error("Restored Node cache bytes differ");
+  }
+}
+
+function assertPreparedInputs(context: NodeCacheContext) {
+  for (const entry of context.manifest.inputs) {
+    const file = realpathSync(path.join(context.workloadDir, entry.path));
+    if (
+      !file.startsWith(`${context.workloadDir}${path.sep}`) ||
+      !statSync(file).isFile() ||
+      statSync(file).size !== entry.bytes ||
+      sha256(readFileSync(file)) !== entry.sha256
+    ) {
+      throw new Error(`Prepared input identity differs: ${entry.path}`);
+    }
+  }
+}
+
+function ownedDirectory(dir: string) {
+  mkdirSync(dir, { mode: 0o700 });
+  const identity = lstatSync(dir);
+  return () => {
+    const current = lstatSync(dir);
+    if (
+      !current.isDirectory() ||
+      current.isSymbolicLink() ||
+      current.dev !== identity.dev ||
+      current.ino !== identity.ino
+    ) {
+      throw new Error("Benchmark directory ownership changed; retaining state");
+    }
+  };
+}
+
+export async function runNodeCacheBenchmark(input: NodeCacheContext): Promise<void> {
+  const workload = realpathSync(input.workloadDir);
+  const seed = path.resolve(input.seedDir);
+  const output = path.resolve(input.outputDir);
+  const scratch = path.resolve(input.scratchDir);
+  const roots = [workload, seed, output, scratch];
+  if (
+    roots.some((root, i) =>
+      roots.some((other, j) => i !== j && (root === other || root.startsWith(other + path.sep))),
+    )
+  ) {
+    throw new Error("Workload, seed, output and scratch must be disjoint");
+  }
+  for (const dir of [seed, output, scratch]) {
+    if (realpathSync(path.dirname(dir)) !== path.dirname(dir)) {
+      throw new Error("Benchmark paths must have physical parents");
+    }
+  }
+  const pnpm = realpathSync(input.pnpmBin);
+  const runtime = input.manifest.runtime;
+  const context = {
+    ...input,
+    pnpmBin: pnpm,
+    workloadDir: workload,
+    seedDir: seed,
+    outputDir: output,
+    scratchDir: scratch,
+  };
+  const assertInputs = () => {
+    if (
+      process.version !== runtime.node ||
+      process.versions.v8 !== runtime.v8 ||
+      process.platform !== runtime.platform ||
+      process.arch !== runtime.architecture ||
+      sha256(readFileSync(process.execPath)) !== runtime.executableSha256 ||
+      sha256(readFileSync(pnpm)) !== context.manifest.pnpmSha256
+    ) {
+      throw new Error("Prepared benchmark runtime identity differs");
+    }
+    if (gitOutput(workload, ["rev-parse", "HEAD"]) !== context.manifest.workloadSha) {
+      throw new Error("Prepared workload SHA differs");
+    }
+    assertPreparedInputs(context);
+    assertSeed(context);
+    if (gitOutput(workload, ["status", "--porcelain=v1", "--untracked-files=all"])) {
+      throw new Error("Prepared workload must have clean tracked and untracked state");
+    }
+  };
+  assertInputs();
+  const checkOutput = ownedDirectory(output);
+  await withTerminalManifest(
+    output,
+    async () => {
+      const checkScratch = ownedDirectory(scratch);
+      const packageManager = {
+        executable: pnpm,
+        resolvedExecutable: pnpm,
+        version: "unprobed; executable digest-bound",
+      };
+      const schedule = buildNodeCacheSchedule();
+      writeJsonAtomic(path.join(output, "environment.json"), {
+        version: 2,
+        mode: "node-compile-cache",
+        runtime,
+        pnpmSha256: context.manifest.pnpmSha256,
+        workloadSha: context.manifest.workloadSha,
+        manifestSha256: sha256(JSON.stringify(context.manifest)),
+        inputs: context.manifest.inputs,
+        seed: context.manifest.seed,
+        schedule,
+        tsxCachePolicy:
+          "Ordinary tooling shims disable TSX disk caching; non-tooling Vitest children use fresh owned namespaces with within-invocation reuse and joined cleanup. Namespace paths are randomized and may be relocated; this is not universal TSX enablement.",
+        workerCachePolicy:
+          "Retained compiled-worker reuse is disabled; fresh compiled-worker generations may still be created.",
+        limitations:
+          "Workload/dependency completeness, seed preparation and effective prepared-config policies require separate external qualification; this controller only checks declared identities. launchEnv records initial launcher inputs, including a one-worker request, not enforced descendant settings. No native cache-acceptance claim.",
+        timingBoundary:
+          "Active preparation, child exit/cache persistence and tree join, oracle and owned cleanup included; final record serialization excluded.",
+        resourceScope:
+          "GNU time child CPU only; parent restore/admission/cleanup CPU and RSS unavailable",
+      });
+      let allSettled = true;
+      let failure: Error | undefined;
+      const records: NodeCacheMeasurement[] = [];
+      try {
+        await withVitestPairDeadline(async (deadline) => {
+          for (const plan of schedule) {
+            const id = "pair-" + plan.pair + "-" + plan.treatment;
+            const active = path.join(scratch, "active");
+            const runRoot = path.join(output, id);
+            const nodeCache = path.join(active, "node-compile");
+            const reportPath = path.join(runRoot, "vitest-report.json");
+            const timePath = path.join(runRoot, "gnu-time.txt");
+            const command = [
+              "/usr/bin/time",
+              "-v",
+              "-o",
+              timePath,
+              process.execPath,
+              ...runVitestArgs(context.manifest.lane, reportPath),
+            ];
+            const phases: Record<string, number | null> = {
+              prepareMs: null,
+              executePersistAndJoinMs: null,
+              validateMs: null,
+              cleanupMs: null,
+            };
+            let checkActive: (() => void) | undefined;
+            let env: NodeJS.ProcessEnv | null = null;
+            let settled = true;
+            let cleaned = false;
+            let caseFailure: Error | undefined;
+            let result: RunCommandResult | undefined;
+            let execution: BenchmarkExecutionSummary | null = null;
+            let cpu: ReturnType<typeof parseGnuTime> | null = null;
+            const started = process.hrtime.bigint();
+            const elapsed = () => Number(process.hrtime.bigint() - started) / 1_000_000;
+            try {
+              deadline.throwIfExpired();
+              checkOutput();
+              checkScratch();
+              checkActive = ownedDirectory(active);
+              mkdirSync(runRoot);
+              if (plan.treatment === "seeded") {
+                restoreNodeCacheSeed(seed, nodeCache);
+              } else {
+                mkdirSync(nodeCache);
+              }
+              env = buildBenchmarkCommandEnv(
+                path.join(active, "home"),
+                path.join(active, "state"),
+                packageManager,
+                process.env,
+                { kind: plan.treatment, nodeCache },
+              );
+              phases.prepareMs = elapsed();
+              settled = false;
+              result = await runOwnedCommand({
+                bin: command[0]!,
+                args: command.slice(1),
+                cwd: workload,
+                env,
+                logPath: path.join(runRoot, "command.log"),
+                deadline,
+              });
+              settled = true;
+              phases.executePersistAndJoinMs = elapsed() - phases.prepareMs;
+              if (result.exitCode !== 0) {
+                throw new Error(id + " exited with status " + result.exitCode);
+              }
+              cpu = parseGnuTime(timePath);
+              execution = parseVitestExecutionReport(
+                reportPath,
+                workload,
+                context.manifest.lane,
+                context.manifest.expected,
+              );
+              phases.validateMs = elapsed() - phases.prepareMs - phases.executePersistAndJoinMs;
+            } catch (error) {
+              caseFailure = normalizeError(error);
+            } finally {
+              allSettled &&= settled;
+              if (checkActive && settled) {
+                const cleanupStart = elapsed();
+                try {
+                  checkScratch();
+                  checkActive();
+                  rmSync(active, { recursive: true });
+                  cleaned = true;
+                  phases.cleanupMs = elapsed() - cleanupStart;
+                } catch (error) {
+                  caseFailure ??= normalizeError(error);
+                }
+              }
+            }
+            const record = {
+              ...plan,
+              id,
+              status: caseFailure ? ("failure" as const) : ("success" as const),
+              inclusiveMs: cleaned ? elapsed() : null,
+              phases,
+              command,
+              launchEnv: env,
+              execution,
+              exitCode: result?.exitCode ?? null,
+              userCpuMs: cpu?.userCpuMs ?? null,
+              systemCpuMs: cpu?.systemCpuMs ?? null,
+              processTreeSettled: settled,
+              cleanup: cleaned ? "removed-owned-active" : "retained-or-not-created",
+              ...(caseFailure ? { error: caseFailure.message } : {}),
+            };
+            // The summary cannot time its own serialization. A failed write aborts
+            // the experiment rather than admitting an unrecorded pair.
+            checkOutput();
+            writeJsonAtomic(path.join(output, id + ".json"), record);
+            if (caseFailure) {
+              throw caseFailure;
+            }
+            records.push(record);
+          }
+        });
+      } catch (error) {
+        failure = normalizeError(error);
+      } finally {
+        // Do not inspect or remove a workload while an uncertain child may own it.
+        if (allSettled) {
+          try {
+            assertInputs();
+          } catch (error) {
+            failure ??= normalizeError(error);
+          }
+        }
+      }
+      if (failure) {
+        throw failure;
+      }
+      writeJsonAtomic(path.join(output, "analysis.json"), analyzeNodeCacheBenchmark(records));
+      checkScratch();
+      rmdirSync(scratch);
+      checkOutput();
+      writeJsonAtomic(path.join(output, "artifact-manifest.json"), {
+        version: 2,
+        files: collectArtifactHashes(output),
+      });
+    },
+    checkOutput,
+  );
+}
+
 export async function runVitestPairBenchmark(context: BenchmarkContext): Promise<void> {
   await withVitestPairDeadline(async (deadline) => {
     await runVitestPairBenchmarkBeforeDeadline(context, deadline);
@@ -484,8 +791,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
   if (gitOutput(candidateDir, ["rev-parse", "HEAD"], deadline) !== context.candidateSha) {
     throw new Error("candidate checkout does not match the requested SHA");
   }
-  if (process.version !== "v24.19.0") {
-    throw new Error(`vitest-pair benchmark requires Node v24.19.0, got ${process.version}`);
+  if (process.version !== "v24.22.1") {
+    throw new Error(`vitest-pair benchmark requires Node v24.22.1, got ${process.version}`);
   }
   mkdirSync(context.outputDir, { recursive: true });
   mkdirSync(context.scratchDir, { recursive: true });
@@ -496,8 +803,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
     deadline,
   );
   deadline.throwIfExpired();
-  if (packageManager.version !== "12.3.4") {
-    throw new Error(`vitest-pair benchmark requires pnpm 12.3.4, got ${packageManager.version}`);
+  if (packageManager.version !== "12.15.0") {
+    throw new Error(`vitest-pair benchmark requires pnpm 12.15.0, got ${packageManager.version}`);
   }
   const baselineInventory = assertInventoryAvailable(baselineDir, context.manifest);
   const candidateInventory = assertInventoryAvailable(candidateDir, context.manifest);

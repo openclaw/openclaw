@@ -1,4 +1,4 @@
-// Process supervisor barrel exposes the supervised process API.
+import { PluginRuntimeCloseRetainedError } from "../../plugins/runtime-close-error.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { ProcessSupervisor } from "./types.js";
@@ -17,11 +17,17 @@ const holder = resolveGlobalSingleton(
 
 /** Return the process-wide supervisor used by runtime code that does not inject one. */
 export function getProcessSupervisor(): ProcessSupervisor {
-  if (holder.current) {
-    return holder.current;
+  return (holder.current ??= createProcessSupervisor());
+}
+
+/** Process shutdown owns idle background commands even when another runtime stays retained. */
+export async function shutdownProcessSupervisor(): Promise<void> {
+  try {
+    await holder.current?.shutdown();
+  } catch (error) {
+    // Failed extinction fences runtime reuse, but does not fail an external stop.
+    throw new PluginRuntimeCloseRetainedError(error);
   }
-  holder.current = createProcessSupervisor();
-  return holder.current;
 }
 
 export type { ManagedRun, ProcessSupervisor } from "./types.js";

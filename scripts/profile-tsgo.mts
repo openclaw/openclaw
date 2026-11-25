@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { applyLocalTsgoPolicy, resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -51,14 +52,7 @@ const DEFAULT_GRAPHS = [
   ...TSGO_CORE_TEST_SHARDS.map((shard) => `core-test-${shard.name}` as CoreTestGraphName),
   "extensions-test",
 ] satisfies GraphName[];
-type ProfileOptions = {
-  all: boolean;
-  deep: boolean;
-  explain: boolean;
-  json: boolean;
-  reuse: boolean;
-  outDir: string;
-};
+type ProfileOptions = ReturnType<typeof parseArgs>["options"];
 type Diagnostics = Record<string, number>;
 type ProfileGraphResult = ReturnType<typeof profileGraph>;
 type ProfileReport = {
@@ -90,9 +84,9 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: GraphName[] } {
+function parseArgs(argv: string[]) {
   const graphNames: GraphName[] = [];
-  const options: ProfileOptions = {
+  const options = {
     all: false,
     deep: false,
     explain: false,
@@ -105,31 +99,22 @@ function parseArgs(argv: string[]): { options: ProfileOptions; selectedGraphs: G
     if (arg === "--help" || arg === "-h") {
       throw new Error(usage());
     }
-    if (arg === "--all") {
-      options.all = true;
-      continue;
-    }
-    if (arg === "--deep") {
-      options.deep = true;
-      continue;
-    }
-    if (arg === "--explain") {
-      options.explain = true;
-      continue;
-    }
-    if (arg === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (arg === "--reuse") {
-      options.reuse = true;
+    const flag = arg.startsWith("--") ? arg.slice(2) : undefined;
+    if (
+      flag === "all" ||
+      flag === "deep" ||
+      flag === "explain" ||
+      flag === "json" ||
+      flag === "reuse"
+    ) {
+      options[flag] = true;
       continue;
     }
     if (arg.startsWith("--out=")) {
       options.outDir = path.resolve(repoRoot, arg.slice("--out=".length));
       continue;
     }
-    if (!(arg in GRAPH_DEFINITIONS)) {
+    if (!Object.hasOwn(GRAPH_DEFINITIONS, arg)) {
       throw new Error(`Unknown graph: ${arg}\n\n${usage()}`);
     }
     graphNames.push(arg as GraphName);
@@ -149,20 +134,13 @@ function ensureDirs(outDir: string): void {
   fs.mkdirSync(path.join(outDir, "cache"), { recursive: true });
 }
 
-function removeIfFreshMode(filePath: string, reuse: boolean): void {
-  if (!reuse) {
-    fs.rmSync(filePath, { force: true });
-  }
-}
-
 function runTsgo(
   label: string,
   args: string[],
   params: { maxBuffer?: number } = {},
 ): { elapsedMs: number; stdout: string; stderr: string } {
   const { args: finalArgs, env } = applyLocalTsgoPolicy(args, process.env, {
-    logicalCpuCount:
-      typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    logicalCpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),
   });
   const startedAt = Date.now();
@@ -234,20 +212,8 @@ function classifyFile(relativePath: string): string {
     const nodeModulesIndex = parts.indexOf("node_modules");
     return `node_modules/${packageNameFromNodeModule(parts, nodeModulesIndex)}`;
   }
-  if (first === "extensions") {
-    return `extensions/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "packages") {
-    return `packages/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "src") {
-    return `src/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "ui") {
-    return `ui/${parts[1] ?? "(root)"}`;
-  }
-  if (first === "test") {
-    return `test/${parts[1] ?? "(root)"}`;
+  if (first && ["extensions", "packages", "src", "ui", "test"].includes(first)) {
+    return `${first}/${parts[1] ?? "(root)"}`;
   }
   if (first?.startsWith("/") || (first !== undefined && /^[A-Za-z]:/u.test(first))) {
     return "(external)";
@@ -361,8 +327,11 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
   const noCheckBuildInfo = path.join(graphCacheRoot, `${name}-nocheck.tsbuildinfo`);
   const configPath = graph.config;
 
-  removeIfFreshMode(checkBuildInfo, options.reuse);
-  removeIfFreshMode(noCheckBuildInfo, options.reuse);
+  if (!options.reuse) {
+    for (const filePath of [checkBuildInfo, noCheckBuildInfo]) {
+      fs.rmSync(filePath, { force: true });
+    }
+  }
 
   const baseArgs = ["-p", configPath, "--pretty", "false"];
   const listFiles = runTsgo(`${name}:listFilesOnly`, [...baseArgs, "--listFilesOnly"], {
@@ -443,6 +412,7 @@ function profileGraph(name: GraphName, options: ProfileOptions) {
 
 async function main(argv: string[]): Promise<void> {
   const { options, selectedGraphs } = parseArgs(argv);
+  await ensureKyselyTypes(repoRoot);
   ensureDirs(options.outDir);
   const report: ProfileReport = {
     generatedAt: new Date().toISOString(),
@@ -474,19 +444,13 @@ async function main(argv: string[]): Promise<void> {
     text: path.relative(repoRoot, textPath),
   };
 
-  fs.writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  fs.writeFileSync(textPath, renderTextReport(report));
-  fs.writeFileSync(
-    path.join(options.outDir, "latest.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-  );
-  fs.writeFileSync(path.join(options.outDir, "latest.md"), renderTextReport(report));
-
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  } else {
-    process.stdout.write(renderTextReport(report));
-  }
+  const json = `${JSON.stringify(report, null, 2)}\n`;
+  const text = renderTextReport(report);
+  fs.writeFileSync(jsonPath, json);
+  fs.writeFileSync(textPath, text);
+  fs.writeFileSync(path.join(options.outDir, "latest.json"), json);
+  fs.writeFileSync(path.join(options.outDir, "latest.md"), text);
+  process.stdout.write(options.json ? json : text);
 }
 
 try {

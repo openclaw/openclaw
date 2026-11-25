@@ -46,6 +46,27 @@ describe("readChatSessionActionAccess", () => {
     expect(Object.values(admin).every((access) => access.allowed)).toBe(true);
   });
 
+  it("permits message forks only for owned sessions with a session write grant", () => {
+    for (const sharingRole of ["owner", "admin", "member", "viewer", undefined] as const) {
+      const access = readChatSessionActionAccess(
+        snapshot({ methods, scopes: ["operator.sessions.write"] }),
+        false,
+        { session: { sharingRole } },
+      );
+      expect(access.fork.allowed).toBe(sharingRole === "owner" || sharingRole === "admin");
+      expect(access.rewind.allowed).toBe(false);
+      expect(access.reset.allowed).toBe(false);
+      expect(access.branchSwitch.allowed).toBe(false);
+    }
+    expect(
+      readChatSessionActionAccess(
+        snapshot({ methods, scopes: ["operator.sessions.read"] }),
+        false,
+        { session: { sharingRole: "owner" } },
+      ).fork,
+    ).toMatchObject({ allowed: false, cause: "missing-scope" });
+  });
+
   it("selects the active-run abort method and rejects explicit method absence", () => {
     expect(
       readChatSessionActionAccess(

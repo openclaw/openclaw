@@ -8,11 +8,15 @@ import {
   WizardStartResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/io.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { WizardSession } from "../../wizard/session.js";
 import { readSetupConfigFileSnapshot } from "../../wizard/setup.shared.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
@@ -43,6 +47,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     resetCommandQueueStateForTest();
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
@@ -50,14 +55,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 const validateResult = Compile(WizardNextResultSchema);
 const validateStart = Compile(WizardStartResultSchema);
-const model = (id: string): ModelDefinitionConfig => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  maxTokens: 1024,
-});
+const model = (id: string): ModelDefinitionConfig =>
+  modelDefinition(id, { reasoning: false, maxTokens: 1024 });
 const connection = { baseUrl: "http://127.0.0.1:11434", models: [model("existing")] };
 let configPath: string;
 const writeConfig = (config: OpenClawConfig) =>

@@ -8,7 +8,7 @@ import {
   QA_EVIDENCE_FILENAME,
   splitQaModelRef,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import {
   parsePlatformList,
   resolveParallelsProviderAuth,

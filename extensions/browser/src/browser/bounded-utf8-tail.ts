@@ -9,14 +9,6 @@ function decodeUtf8Tail(buffer: Buffer): string {
   return new StringDecoder("utf8").write(buffer.subarray(start));
 }
 
-export function decodeBoundedUtf8Tail(buffer: Buffer, maxBytes: number): string {
-  if (maxBytes <= 0 || buffer.length === 0) {
-    return "";
-  }
-  const tail = buffer.length > maxBytes ? buffer.subarray(buffer.length - maxBytes) : buffer;
-  return decodeUtf8Tail(tail);
-}
-
 export function createBoundedUtf8Tail(maxBytes: number) {
   const storage = Buffer.allocUnsafe(Math.max(0, maxBytes));
   let totalBytes = 0;

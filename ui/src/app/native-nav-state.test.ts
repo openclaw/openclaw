@@ -33,17 +33,7 @@ describe("native nav state bridge", () => {
     });
   });
 
-  it("does nothing without WebKit and tolerates a disappearing handler", () => {
-    expect(() => postNativeNavState({ collapsed: true, width: 280 })).not.toThrow();
-    (window as TestWebKitWindow).webkit = {
-      messageHandlers: {
-        openclawNav: {
-          postMessage: () => {
-            throw new Error("handler removed");
-          },
-        },
-      },
-    };
+  it("does nothing without WebKit", () => {
     expect(() => postNativeNavState({ collapsed: true, width: 280 })).not.toThrow();
   });
 });

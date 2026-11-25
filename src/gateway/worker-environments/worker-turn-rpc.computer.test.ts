@@ -15,7 +15,7 @@ describe("worker computer RPC authority", () => {
     const executeComputer = vi
       .fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeComputer"]>>()
       .mockResolvedValue(result);
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "computer-authority",
       "computer-session",
       { executeComputer, liveEvents: support.sequencedLiveEvents().liveEvents },
@@ -47,7 +47,7 @@ describe("worker computer RPC authority", () => {
     async (revoked) => {
       const executeComputer =
         vi.fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeComputer"]>>();
-      const { identity, placementStore, workerService } = support.placementHarness(
+      const { identity, placementStore, workerService } = await support.placementHarness(
         `computer-${revoked}`,
         `session-${revoked}`,
         { executeComputer },
@@ -73,7 +73,7 @@ describe("worker computer RPC authority", () => {
   it("rejects noncanonical parameters without invoking a desktop command", async () => {
     const executeComputer =
       vi.fn<NonNullable<support.WorkerEnvironmentServiceOptions["executeComputer"]>>();
-    const { identity, workerService } = support.placementHarness(
+    const { identity, workerService } = await support.placementHarness(
       "computer-invalid",
       "session-invalid",
       { executeComputer },

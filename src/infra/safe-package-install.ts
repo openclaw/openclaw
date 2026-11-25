@@ -1,6 +1,5 @@
-// Builds script-disabled npm install commands and env.
 import type { NpmProjectInstallEnvOptions } from "./npm-install-env.js";
-import { createNpmProjectInstallEnv } from "./npm-install-env.js";
+import { createNpmProjectInstallEnv, findExplicitNpmConfigKeys } from "./npm-install-env.js";
 
 type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
   ignoreWorkspaces?: boolean;
@@ -12,10 +11,8 @@ type SafeNpmInstallEnvOptions = NpmProjectInstallEnvOptions & {
 type SafeNpmInstallArgsOptions = {
   ignoreWorkspaces?: boolean;
   legacyPeerDeps?: boolean;
-  loglevel?: "error" | "silent";
   noAudit?: boolean;
   noFund?: boolean;
-  omitDev?: boolean;
   omitPeer?: boolean;
 };
 
@@ -48,20 +45,25 @@ export function createSafeNpmInstallEnv(
       npm_config_yes: "true",
     });
   }
+  // npm 12 changed these defaults from all to none. Preserve npm 11 behavior
+  // only when the operator has not set a policy through env or npmrc.
+  const sourcePolicies = findExplicitNpmConfigKeys(nextEnv, ["allow-git", "allow-remote"], options);
+  if (!sourcePolicies.has("allow-git")) {
+    nextEnv.npm_config_allow_git = "all";
+  }
+  if (!sourcePolicies.has("allow-remote")) {
+    nextEnv.npm_config_allow_remote = "all";
+  }
   return nextEnv;
 }
 
-/**
- * Builds npm install argv that mirrors the safe environment defaults.
- * Callers opt into dependency omission, legacy peer resolution, and quiet flags.
- */
 export function createSafeNpmInstallArgs(options: SafeNpmInstallArgsOptions = {}): string[] {
   return [
     "install",
-    ...(options.omitDev ? ["--omit=dev"] : []),
+    "--omit=dev",
     ...(options.omitPeer ? ["--omit=peer"] : []),
     ...(options.legacyPeerDeps ? ["--legacy-peer-deps"] : []),
-    ...(options.loglevel ? [`--loglevel=${options.loglevel}`] : []),
+    "--loglevel=error",
     "--ignore-scripts",
     ...(options.ignoreWorkspaces ? ["--workspaces=false"] : []),
     ...(options.noAudit ? ["--no-audit"] : []),

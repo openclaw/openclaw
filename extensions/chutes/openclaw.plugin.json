@@ -38,6 +38,7 @@
       "method": "oauth",
       "choiceId": "chutes",
       "appGuidedAuth": "oauth",
+      "credentialOnly": true,
       "choiceLabel": "Chutes (OAuth)",
       "choiceHint": "Browser sign-in",
       "groupId": "chutes",
@@ -104,22 +105,6 @@
             }
           },
           {
-            "id": "moonshotai/Kimi-K2.5-TEE",
-            "name": "moonshotai/Kimi-K2.5-TEE",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 65535,
-            "cost": {
-              "input": 0.44,
-              "output": 2,
-              "cacheRead": 0.22,
-              "cacheWrite": 0
-            },
-            "status": "deprecated",
-            "replacedBy": "moonshotai/Kimi-K2.6-TEE"
-          },
-          {
             "id": "zai-org/GLM-5.2-TEE",
             "name": "zai-org/GLM-5.2-TEE",
             "reasoning": true,
@@ -130,20 +115,6 @@
               "input": 1.25,
               "output": 3.95,
               "cacheRead": 0.12499999999999997,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "MiniMaxAI/MiniMax-M2.5-TEE",
-            "name": "MiniMaxAI/MiniMax-M2.5-TEE",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 196608,
-            "maxTokens": 65536,
-            "cost": {
-              "input": 0.15,
-              "output": 1.2,
-              "cacheRead": 0.075,
               "cacheWrite": 0
             }
           },

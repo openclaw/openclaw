@@ -25,7 +25,7 @@ ancestor declaration. A path with no declared ancestor is advanced by default.
 
 Dedicated deep references:
 
-- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and dreaming config under `plugins.entries.memory-core.config.dreaming`.
+- [Memory configuration reference](/reference/memory-config) for `memory.search.*`, `memory.citations`, and the Gateway-selected memory-slot owner's dreaming config (with `plugins.entries.memory-core.config.dreaming` retained for Memory CLI).
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog.
 - Owning channel/plugin pages for channel-specific command surfaces.
 
@@ -38,6 +38,8 @@ Dedicated deep references:
 - [Configuration — browser, UI, and desktop](/gateway/config-browser-ui-desktop) — browser automation, Control UI presentation, and desktop or paired-node config.
 - [Configuration — gateway](/gateway/config-gateway) — gateway config: bind, auth, roles, Control UI, terminal, remote, nodes, TLS, and reload.
 - [Configuration — cloud worker environments](/gateway/config-cloud-workers) — cloud worker profiles under `cloudWorkers`, including Crabbox and static SSH development.
+- [Storage locations](/concepts/storage-locations) — named storage destinations under `storage.locations`, initialization, and encryption.
+- [Database engines](/reference/database-engines) — SQLite defaults and PostgreSQL selection under `database`, connection SecretRefs, and store support.
 - [Configuration — hooks](/gateway/config-hooks) — hook config: HTTP contract, agent payload, session policy, mapping, retries, and Gmail.
 - [Configuration — environment, secrets, and includes](/gateway/config-secrets-env) — environment variables, secret providers, auth storage, and `$include` config splitting.
 - [Configuration — audit, logging, diagnostics, and telemetry](/gateway/config-observability) — observability config: audit, logging, diagnostics, and telemetry keys.
@@ -56,7 +58,7 @@ Per-channel config keys live in [Configuration - channels](/gateway/config-chann
 
 See [Configuration - agents](/gateway/config-agents) for:
 
-- `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
+- `agents.defaults.*` (workspace, model, thinking, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
 - `session.*` (session lifecycle, compaction, pruning)
 - `messages.*` (message delivery, TTS, markdown rendering)
@@ -69,13 +71,22 @@ See [Configuration - agents](/gateway/config-agents) for:
 
 ## `worktreeRoot`
 
-Moved to [Configuration — runtime basics](/gateway/config-runtime).
+Worktree storage (`worktreeRoot`), filesystem acceleration (`worktreeAcceleration`), and the live-checkout cap (`worktreeMaxCount`) are documented in [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup live in
 [Configuration - tools and custom providers](/gateway/config-tools).
+
+`agents.entries.<id>.tools.github.allowInSandbox` is an optional boolean,
+defaulting to `false`. Set it on an agent's managed GitHub identity to expose
+that identity to the agent's own Docker or Podman sandbox, including a
+role-required sandbox. The profile is mounted read-only at `/openclaw/github`;
+effective shared scope refuses injection. This setting is not accepted under
+global `tools.github`, and security audit warns for every opted-in agent.
+See [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for
+setup, credential exposure, and backend requirements.
 
 ## Models
 
@@ -111,7 +122,7 @@ Moved to [Configuration — browser, UI, and desktop](/gateway/config-browser-ui
 
 ## Gateway
 
-Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`.
+Moved to [Configuration — gateway](/gateway/config-gateway). Sections: OpenAI-compatible endpoints, Multi-instance isolation, `gateway.tls`, `gateway.reload`, [`gateway.resources.profile`](/gateway/config-gateway#gateway.resources.profile) (`auto` | `standard` | `lean`).
 
 <a id="gateway-field-details"></a>
 <a id="openai-compatible-endpoints"></a>
@@ -208,7 +219,7 @@ Moved to [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Automations (`cron`)
 
-Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.failureAlert`.
+Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.delivery`, `cron.agents`, and `cron.creators`, `cron.failureAlert`.
 
 <a id="cronfailurealert"></a>
 
@@ -227,3 +238,29 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Doctor](/gateway/doctor)
 - [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure
 - [`openclaw configure`](/cli/configure) — interactive prompts that edit these settings without hand-editing the file
+
+### Publication reader opt-in
+
+`gateway.sessionControl.publicationReadEnabled` permits restricted publication-reader
+connections only when set to `true`. It defaults to off and does not supply device
+or source-publication permissions. Each connection and read request checks the
+opt-in when it starts. Disabling denies new reads but does not revoke an admitted
+request; it may finish. Existing connections can read again after re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).
+
+### Active steering opt-in
+
+`gateway.sessionControl.steeringEnabled` permits authenticated people to steer an
+existing run only when set to `true`. It defaults to off, independently of
+publication reader access. Each request checks the opt-in when it starts.
+Disabling it denies new requests without revoking one already admitted, including
+across an off/on transition. Retries still require admission and must keep the
+original message ID; disabling the feature never makes uncertain delivery safe
+to repeat. It does not start idle sessions.
+
+### Publication writer opt-in
+
+`gateway.sessionControl.publicationWriteEnabled` permits restricted writer
+requests only when set to `true`. It defaults to off independently of
+publication reads and host steering. The switch is checked at each request's
+admission; disabling denies new requests but does not revoke admitted work.
+A source plugin must also enable its writer capability and admit the device.

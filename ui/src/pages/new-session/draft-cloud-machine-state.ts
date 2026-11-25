@@ -1,4 +1,9 @@
-import { cloudMachinesForOs, defaultCloudOs, type DraftCloudProfile } from "./discovery.ts";
+import {
+  cloudMachinesForOs,
+  defaultCloudMachine,
+  defaultCloudOs,
+  type DraftCloudProfile,
+} from "./discovery.ts";
 
 type CloudOverride = { os?: string; machineClass?: string };
 
@@ -25,8 +30,15 @@ export class DraftCloudMachineState {
     return this.overrides.get(profileId)?.os ?? "";
   }
 
-  selection(profileId: string) {
-    return { machineClass: this.resolve(profileId), os: this.resolveOs(profileId) } as const;
+  selection(profileId: string, profiles: readonly DraftCloudProfile[]) {
+    const profile = profiles.find((candidate) => candidate.id === profileId);
+    const os = this.resolveOs(profileId) || (profile && defaultCloudOs(profile)) || "";
+    // Submit the choice shown by the picker, not a potentially different backend default.
+    return {
+      machineClass:
+        this.resolve(profileId) || (profile && defaultCloudMachine(profile, os)?.id) || "",
+      os,
+    } as const;
   }
 
   selectedOs(profile: DraftCloudProfile): string {
@@ -55,7 +67,7 @@ export class DraftCloudMachineState {
       cloudMachinesForOs(profile, os.id).some((machine) => machine.id === machineClass)
         ? machineClass
         : undefined,
-      os.id === defaultCloudOs(profile) ? undefined : os.id,
+      os.id,
     );
     onChange?.();
     return true;
@@ -74,11 +86,7 @@ export class DraftCloudMachineState {
     if (disabled || !machine) {
       return false;
     }
-    this.applyPending(
-      profileId,
-      machine.default === true ? undefined : machine.id,
-      this.resolveOs(profileId),
-    );
+    this.applyPending(profileId, machine.id, this.selectedOs(profile));
     onChange?.();
     return true;
   }

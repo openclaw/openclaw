@@ -1,0 +1,30 @@
+.sidebar-outbox-row__meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-outbox-row .sidebar-issues-panel__entity {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.sidebar-outbox-row__meta .sidebar-issues-panel__state {
+  flex: 0 1 auto;
+}
+
+.sidebar-outbox-row__offline {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--sidebar-issues-text-meta);
+  line-height: var(--sidebar-issues-line-meta);
+  white-space: nowrap;
+}
+
+.sidebar-outbox-row__review {
+  flex: none;
+  white-space: nowrap;
+}

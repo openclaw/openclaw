@@ -1,10 +1,19 @@
 // Doctor contract API fast-path tests cover lightweight channel doctor contract loading.
 import { describe, expect, it, vi } from "vitest";
 
-const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
-    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
-      if (dirName === "discord" && artifactBasename === "doctor-contract-api.js") {
+const { loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock } = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock: vi.fn(
+    ({
+      artifactCandidates,
+      dirName,
+    }: {
+      artifactCandidates: readonly string[];
+      dirName: string;
+    }) => {
+      if (!artifactCandidates.includes("doctor-contract-api.js")) {
+        return null;
+      }
+      if (dirName === "discord") {
         return {
           legacyConfigRules: [
             {
@@ -14,30 +23,19 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      if (dirName === "whatsapp" && artifactBasename === "doctor-contract-api.js") {
+      if (dirName === "whatsapp") {
         return {
           legacyConfigRules: [],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "doctor-contract-api.js") {
-        return {
-          legacyConfigRules: [
-            {
-              path: ["channels", "telegram", "groupMentionsOnly"],
-              message: "legacy telegram rule",
-            },
-          ],
-        };
-      }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
-      );
+      return null;
     },
   ),
 }));
 
 vi.mock("../../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync:
+    loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock,
 }));
 
 import { loadBundledChannelDoctorContractApi } from "./doctor-contract-api.js";
@@ -52,9 +50,9 @@ describe("channel doctor contract api fast path", () => {
         message: "legacy discord rule",
       },
     ]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
       dirName: "discord",
-      artifactBasename: "doctor-contract-api.js",
+      artifactCandidates: ["doctor-contract-api.js"],
     });
   });
 
@@ -62,32 +60,13 @@ describe("channel doctor contract api fast path", () => {
     const api = loadBundledChannelDoctorContractApi("whatsapp");
 
     expect(api?.legacyConfigRules).toStrictEqual([]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
-      artifactBasename: "doctor-contract-api.js",
+      artifactCandidates: ["doctor-contract-api.js"],
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).not.toHaveBeenCalledWith({
       dirName: "whatsapp",
-      artifactBasename: "contract-api.js",
-    });
-  });
-
-  it("uses the explicit Telegram doctor contract artifact", () => {
-    const api = loadBundledChannelDoctorContractApi("telegram");
-
-    expect(api?.legacyConfigRules).toEqual([
-      {
-        path: ["channels", "telegram", "groupMentionsOnly"],
-        message: "legacy telegram rule",
-      },
-    ]);
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "telegram",
-      artifactBasename: "doctor-contract-api.js",
-    });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
-      dirName: "telegram",
-      artifactBasename: "contract-api.js",
+      artifactCandidates: ["contract-api.js"],
     });
   });
 
@@ -95,13 +74,13 @@ describe("channel doctor contract api fast path", () => {
     const api = loadBundledChannelDoctorContractApi("missing");
 
     expect(api).toBeUndefined();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).toHaveBeenCalledWith({
       dirName: "missing",
-      artifactBasename: "doctor-contract-api.js",
+      artifactCandidates: ["doctor-contract-api.js"],
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock).not.toHaveBeenCalledWith({
       dirName: "missing",
-      artifactBasename: "contract-api.js",
+      artifactCandidates: ["contract-api.js"],
     });
   });
 });

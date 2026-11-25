@@ -1,9 +1,11 @@
 // Whatsapp tests cover the source-safe channel runtime loading boundary.
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrictSync } from "openclaw/plugin-sdk/file-access-runtime";
+import * as ts from "typescript/ast";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
 import {
   loadWhatsAppChannelRuntime,
   readWhatsAppAccountLinkState,
@@ -25,20 +27,19 @@ vi.mock("./channel.runtime.js", () => {
 });
 
 const sourceDir = fileURLToPath(new URL(".", import.meta.url));
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 function listChannelRuntimeImportOwners(): string[] {
   const owners: string[] = [];
-  for (const relativePath of readdirSync(sourceDir, { encoding: "utf8", recursive: true })) {
+  for (const relativePath of listDirectoryTreeStrictSync(sourceDir).map(
+    (walkEntry) => walkEntry.relativePath,
+  )) {
     if (!relativePath.endsWith(".ts") || relativePath.includes(".test")) {
       continue;
     }
     const filePath = path.join(sourceDir, relativePath);
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      readFileSync(filePath, "utf8"),
-      ts.ScriptTarget.Latest,
-      true,
-    );
+    const sourceFile = parser.parseSourceFile(filePath, readFileSync(filePath, "utf8"));
     const visit = (node: ts.Node) => {
       if (
         ts.isCallExpression(node) &&
@@ -50,7 +51,7 @@ function listChannelRuntimeImportOwners(): string[] {
       ) {
         owners.push(relativePath);
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
     visit(sourceFile);
   }

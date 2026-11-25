@@ -13,8 +13,8 @@ FUNCTIONAL_IMAGE="$(docker_e2e_resolve_image \
   "openclaw-sandbox-browser-sidecar-functional:local" \
   OPENCLAW_SANDBOX_BROWSER_SIDECAR_FUNCTIONAL_IMAGE)"
 RUNNER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_SIDECAR_RUNNER_IMAGE:-openclaw-sandbox-browser-sidecar-e2e:${OPENCLAW_DOCKER_ALL_LANE_NAME:-local}}"
-SANDBOX_IMAGE="${OPENCLAW_SANDBOX_IMAGE:-openclaw-sandbox:bookworm-slim}"
-BROWSER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_IMAGE:-openclaw-sandbox-browser:bookworm-slim}"
+SANDBOX_IMAGE="${OPENCLAW_SANDBOX_IMAGE:-openclaw-sandbox:trixie-slim}"
+BROWSER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_IMAGE:-openclaw-sandbox-browser:trixie-slim}"
 RUN_ID="$$-$(date +%s)"
 SANDBOX_PREFIX="openclaw-e2e-sbx-${RUN_ID}-"
 BROWSER_PREFIX="openclaw-e2e-browser-${RUN_ID}-"
@@ -67,8 +67,7 @@ fi
 # Deliberately distinct host/Gateway paths expose Docker-outside-Docker mistakes.
 # The nested workspace bind also proves longest-prefix mapping instead of relying
 # on the state directory's broader bind.
-mkdir -p "$SCENARIO_ROOT/agent workspace" "$SCENARIO_ROOT/nested data"
-chmod 0777 "$SCENARIO_ROOT" "$SCENARIO_ROOT/agent workspace" "$SCENARIO_ROOT/nested data"
+chmod 0777 "$SCENARIO_ROOT"
 
 docker_e2e_build_or_reuse \
   "$FUNCTIONAL_IMAGE" \
@@ -92,7 +91,7 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends docker.io \
+ && apt-get install -y --no-install-recommends docker.io docker-cli \
  && rm -rf /var/lib/apt/lists/*
 USER appuser
 EOF
@@ -102,6 +101,13 @@ docker_build_run sandbox-browser-sidecar-runner-build \
   -t "$RUNNER_IMAGE" \
   -f "$BUILD_DIR/Dockerfile" \
   "$BUILD_DIR"
+
+# Default sandbox user inference follows workspace ownership. Create bind sources
+# as the Gateway image user so private sandbox writes stay readable by that user.
+DOCKER_COMMAND_TIMEOUT=60s docker_e2e_docker_cmd run --rm --network none \
+  -v "$SCENARIO_ROOT:/fixture" \
+  "$RUNNER_IMAGE" \
+  sh -c 'umask 022; mkdir -- "/fixture/agent workspace" "/fixture/nested data"'
 
 SOCKET_GID="$(docker_socket_gid)"
 

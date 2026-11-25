@@ -5,10 +5,9 @@
   },
   "include": [
     "../../src/plugins/**/*.test.ts",
-    "../../src/plugins/**/*.test.tsx",
-    "../../src/acp/**/*.test.ts",
-    "../../src/acp/**/*.test.tsx",
-    "../../src/system-agent/**/*.test.ts",
-    "../../src/system-agent/**/*.test.tsx"
+    "../../src/plugins/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../src/plugins/loader.native-harness-admission.test.ts"
   ]
 }

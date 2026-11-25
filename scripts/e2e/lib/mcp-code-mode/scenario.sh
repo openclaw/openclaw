@@ -42,11 +42,15 @@ dump_debug_logs() {
     "$log_prefix-seed.log" \
     "$log_prefix-plugin-install.log" \
     "$log_prefix-plugin-registry/server.log" \
-    /tmp/mcp-code-mode-mock-openai.log
+    /tmp/mcp-code-mode-mock-openai.log \
+    "$log_prefix-client.log"
 }
 openclaw_e2e_enable_failure_diagnostics
 
 if [ "$mode" = mock ]; then
+  # Keep provider requests private; the client prints only matched result facts.
+  export MOCK_REQUEST_LOG="$log_prefix-requests.jsonl"
+  (umask 077; : >"$MOCK_REQUEST_LOG")
   mock_pid="$(openclaw_e2e_start_mock_openai "$mock_port" /tmp/mcp-code-mode-mock-openai.log)"
   openclaw_e2e_wait_mock_openai "$mock_port"
 fi
@@ -65,4 +69,7 @@ openclaw_e2e_fixture_plugin_command openclaw_e2e_run_command node "$entry" -- \
 
 gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$port" "$log_prefix-gateway.log")"
 openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_prefix-gateway.log" 480 "$port"
-tsx scripts/e2e/mcp-code-mode-gateway-client.ts
+# Keep the client exception last so the outer runner's tail retains it.
+(umask 077; : >"$log_prefix-client.log")
+tsx scripts/e2e/mcp-code-mode-gateway-client.ts >"$log_prefix-client.log" 2>&1
+openclaw_e2e_print_log "$log_prefix-client.log"

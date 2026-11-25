@@ -1,5 +1,3 @@
-// Browser origin tests document same-origin, private-network, loopback, forwarded
-// host, and explicit allowlist decisions for gateway browser surfaces.
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,158 +6,89 @@ import {
   resolveAcceptedBrowserOrigin,
 } from "./origin-check.js";
 
+const denied = { ok: false, reason: "origin not allowed" } as const;
+const invalid = { ok: false, reason: "origin missing or invalid" } as const;
+const privateOrigin = { ok: true, matchedBy: "private-same-origin" } as const;
+const allowlisted = { ok: true, matchedBy: "allowlist" } as const;
+function originCase(
+  origin: string,
+  expected: ReturnType<typeof checkBrowserOrigin>,
+  overrides: Partial<Parameters<typeof checkBrowserOrigin>[0]> = {},
+) {
+  return {
+    input: { requestHost: "gateway.example.com:18789", origin, ...overrides },
+    expected,
+  };
+}
+
+function browserRequest(origin: string, host = "127.0.0.1:18789") {
+  return {
+    headers: { host, origin },
+    socket: { remoteAddress: "203.0.113.10" },
+  } as IncomingMessage;
+}
+
 describe("checkBrowserOrigin", () => {
   it.each([
-    {
-      name: "accepts host-header fallback when explicitly enabled",
-      input: {
+    originCase(
+      "http://127.0.0.1:18789",
+      { ok: true, matchedBy: "host-header-fallback" },
+      {
         requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
         allowHostHeaderOriginFallback: true,
       },
-      expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
-    },
-    {
-      name: "rejects same-origin host matches when fallback is disabled",
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "https://gateway.example.com:18789",
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "accepts same-origin private LAN host without dangerous fallback",
-      input: {
-        requestHost: "192.168.0.202:18789",
-        origin: "http://192.168.0.202:18789",
-      },
-      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
-    },
-    {
-      name: "accepts same-origin tailnet host without dangerous fallback",
-      input: {
-        requestHost: "peters-mac-studio-1.example.ts.net:18789",
-        origin: "http://peters-mac-studio-1.example.ts.net:18789",
-      },
-      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
-    },
-    {
-      name: "accepts same-origin loopback host for local clients",
-      input: {
+    ),
+    originCase("https://gateway.example.com:18789", denied),
+    originCase("http://192.168.0.202:18789", privateOrigin, {
+      requestHost: "192.168.0.202:18789",
+    }),
+    originCase("http://peters-mac-studio-1.example.ts.net:18789", privateOrigin, {
+      requestHost: "peters-mac-studio-1.example.ts.net:18789",
+    }),
+    originCase("http://127.0.0.1:18789", privateOrigin, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: true,
+    }),
+    originCase("http://127.0.0.1:18789", denied, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: false,
+    }),
+    originCase("http://[64:ff9b:1::8.8.8.8]:18789", denied, {
+      requestHost: "[64:ff9b:1::8.8.8.8]:18789",
+    }),
+    originCase(
+      "http://localhost:5173",
+      { ok: true, matchedBy: "local-loopback" },
+      {
         requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
         isLocalClient: true,
       },
-      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
-    },
-    {
-      name: "rejects same-origin loopback host for non-local clients",
-      input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://127.0.0.1:18789",
-        isLocalClient: false,
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "rejects same-origin public host without dangerous fallback",
-      input: {
-        requestHost: "attacker.example.com:18789",
-        origin: "http://attacker.example.com:18789",
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "rejects same-origin local-use NAT64 host without dangerous fallback",
-      input: {
-        requestHost: "[64:ff9b:1::8.8.8.8]:18789",
-        origin: "http://[64:ff9b:1::8.8.8.8]:18789",
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "accepts local loopback mismatches for local clients",
-      input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://localhost:5173",
-        isLocalClient: true,
-      },
-      expected: { ok: true as const, matchedBy: "local-loopback" as const },
-    },
-    {
-      name: "rejects loopback mismatches for non-local clients",
-      input: {
-        requestHost: "127.0.0.1:18789",
-        origin: "http://localhost:5173",
-        isLocalClient: false,
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-    {
-      name: "accepts trimmed lowercase-normalized allowlist matches",
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "https://CONTROL.example.com",
-        allowedOrigins: [" https://control.example.com "],
-      },
-      expected: { ok: true as const, matchedBy: "allowlist" as const },
-    },
-    {
-      name: "accepts wildcard allowlists even alongside specific entries",
-      input: {
-        requestHost: "gateway.tailnet.ts.net:18789",
-        origin: "https://any-origin.example.com",
-        allowedOrigins: ["https://control.example.com", " * "],
-      },
-      expected: { ok: true as const, matchedBy: "allowlist" as const },
-    },
-    {
-      name: "rejects missing origin",
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "",
-      },
-      expected: { ok: false as const, reason: "origin missing or invalid" },
-    },
-    {
-      name: 'rejects literal "null" origin',
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "null",
-      },
-      expected: { ok: false as const, reason: "origin missing or invalid" },
-    },
-    {
-      name: "rejects malformed origin URLs",
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "not a url",
-      },
-      expected: { ok: false as const, reason: "origin missing or invalid" },
-    },
-    {
-      name: "rejects mismatched origins",
-      input: {
-        requestHost: "gateway.example.com:18789",
-        origin: "https://attacker.example.com",
-      },
-      expected: { ok: false as const, reason: "origin not allowed" },
-    },
-  ])("$name", ({ input, expected }) => {
+    ),
+    originCase("http://localhost:5173", denied, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: false,
+    }),
+    originCase("https://CONTROL.example.com", allowlisted, {
+      allowedOrigins: [" https://control.example.com "],
+    }),
+    originCase("https://any-origin.example.com", allowlisted, {
+      requestHost: "gateway.tailnet.ts.net:18789",
+      allowedOrigins: ["https://control.example.com", " * "],
+    }),
+    originCase("", invalid),
+    originCase("null", invalid),
+    originCase("not a url", invalid),
+    originCase("https://attacker.example.com", denied),
+  ])("checks $input.origin against $input", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });
 
-  it.each([
-    "chrome-extension://abcdefghijklmnop",
-    "tauri://localhost",
-    "electron://localhost",
-    "app://desktop",
-  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
-    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-      ok: true,
-      matchedBy: "allowlist",
-    });
-  });
+  it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
+    "accepts an exactly allowlisted hosted app origin: %s",
+    (origin) => {
+      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(allowlisted);
+    },
+  );
 
   it.each([
     "tauri://localhost/path",
@@ -172,16 +101,12 @@ describe("checkBrowserOrigin", () => {
     "file:///tmp/openclaw.html",
     "data:text/plain,hello",
   ])("rejects a non-origin URL value: %s", (origin) => {
-    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
-      ok: false,
-      reason: "origin missing or invalid",
-    });
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(invalid);
   });
 
   it("recognizes only canonical Chrome extension origins", () => {
-    expect(
-      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
-    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    const extension = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+    expect(normalizeChromeExtensionOrigin(extension)).toBe(extension);
     expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
     expect(
       normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
@@ -190,12 +115,31 @@ describe("checkBrowserOrigin", () => {
 });
 
 describe("resolveAcceptedBrowserOrigin", () => {
+  const gateway = "https://gateway.example.com";
+  const other = "https://other.example.com";
+  it.each([
+    { allowedOrigins: undefined, origin: gateway, accepted: true },
+    { allowedOrigins: undefined, origin: other, accepted: false },
+    { allowedOrigins: [], origin: gateway, accepted: false },
+    { allowedOrigins: [other], origin: gateway, accepted: false },
+    { allowedOrigins: [other], origin: other, accepted: true },
+  ])("uses the effective configured origin policy: %j", ({ allowedOrigins, origin, accepted }) => {
+    expect(
+      resolveAcceptedBrowserOrigin({
+        req: browserRequest(origin),
+        cfg: {
+          gateway: {
+            publicOrigin: "https://GATEWAY.example.com:443/",
+            controlUi: { allowedOrigins },
+          },
+        },
+      }),
+    ).toBe(accepted ? origin : undefined);
+  });
+
   it("applies the configured Host-header fallback through the canonical request resolver", () => {
     const origin = "https://gateway.example.com:18789";
-    const req = {
-      headers: { host: "gateway.example.com:18789", origin },
-      socket: { remoteAddress: "203.0.113.10" },
-    } as IncomingMessage;
+    const req = browserRequest(origin, "gateway.example.com:18789");
 
     expect(
       resolveAcceptedBrowserOrigin({

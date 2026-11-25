@@ -17,6 +17,13 @@ await withOpenClawStateLease(
     leaseMs: 300_000,
     waitMs: 0,
     heartbeat,
+    processBound: process.argv[5] === "process-bound",
   },
-  async () => process.exit(23),
+  async () => {
+    if (process.argv[4] === "SIGKILL") {
+      process.kill(process.pid, "SIGKILL");
+    } else {
+      process.exit(23);
+    }
+  },
 );

@@ -1,6 +1,7 @@
 ---
 summary: "Code Mode implementation layout, the validation checklist, and the E2E test plan"
 title: "Code Mode maintainer notes"
+doc-schema-version: 1
 read_when:
   - You are changing Code Mode source and need the file layout
   - You are validating a Code Mode change before landing it
@@ -12,28 +13,50 @@ read_when:
 - config contract: `tools.codeMode`
 - catalog builder: effective tools to compact entries and id map
 - model-surface adapter: replace visible tools with control/direct tools
-- QuickJS-WASI runtime adapter: load, eval, snapshot, restore, dispose
+- executor contract: evaluate, continue, dispose
+- Node executor: worker and VM context retained across waits
+- QuickJS executor: WASM loading, evaluation, snapshot, restore, dispose
 - worker supervisor: timeout, abort, crash isolation
 - bridge adapter: JSON-safe host callbacks and result delivery
-- TypeScript transform adapter
-- snapshot store: TTL, size caps, run/session scoping
+- continuation owner: TTL, capacity, run/session scoping, executor pinning
 - trajectory projection for nested tool calls
 - telemetry counters and diagnostics
 
-The implementation reuses catalog and executor concepts from Tool Search, but
-does not use a `node:vm` child as the sandbox.
+The shared catalog and tool bridge retain policy ownership. Executors
+own JavaScript execution and continuation state. Node's `node:vm` is trusted
+execution, not a sandbox security boundary.
+
+Rebuilding `before_tool_call` hooks must retain the surrounding execution
+wrappers in their original order. Caller authority, cancellation, activity, and
+run-lifetime checks enclose preparation and result finalization as well as the
+tool body. Execution wrappers register their rebuild function when copying tool
+metadata; schema-only copies preserve that registration.
+
+Tool Search treats each published catalog entries array as an immutable descriptor
+snapshot. Registration, restriction, and executor rebinding replace that array;
+publish schema or description changes through the catalog owner. Search text is
+rendered lazily once per snapshot, and warm searches reuse the content-addressed
+lexical index. Visibility is checked on every search, including mutable permission
+sets, and BM25 statistics use only that effective inventory. Cached lexical data
+contains no tool executors.
 
 ## Validation checklist
 
 Code mode coverage should prove:
 
 - disabled config without an enabling override leaves existing tool exposure unchanged
-- omitted `enabled`, including object config that sets other fields, stays
-  disabled unless an agent or model override enables it
+- omitted `tools.codeMode` activates automatically for preferred catalog models
+  on eligible runs without overrides, and remains direct for capable or unflagged models
+- an authored global options object without `enabled` stays disabled unless an
+  agent or model override enables it
 - per-model `true`, `false`, and unset values preserve activation precedence,
   fallback-model selection, and limits from the enclosing options
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
+- omitted executor selects Node; explicit QuickJS selects the bundled plugin,
+  and unavailable executors fail without fallback
+- explicit legacy `runtime: "quickjs-wasi"` migrates to `executor: "quickjs"`
+- global and per-agent executor selection stays fixed through every `wait`
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger
   code-mode payload enforcement
 - every catalog-eligible effective non-MCP name has one callable winner
@@ -55,20 +78,23 @@ Code mode coverage should prove:
 - shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code
-- TypeScript input is transformed and evaluated without loading TypeScript on
-  disabled or JavaScript-only paths
-- `import`, `require`, filesystem, network, and environment access fail
+- executable cells accept plain JavaScript while typed discovery remains available
+- TypeScript-only syntax and retired `language`/`typecheck` arguments fail before
+  any nested tool dispatch
+- intended guest APIs omit `import`, `require`, filesystem, network, and
+  environment access; QuickJS isolation is tested separately from Node's
+  programming constraints
 - infinite loops time out and cannot block the Gateway
-- memory cap failures terminate the guest VM
-- output and snapshot caps are enforced for completed and suspended calls
-- `wait` resumes a suspended snapshot and returns the final value
+- executor memory failures terminate execution
+- output caps apply to both executors; serialized snapshot caps apply to QuickJS
+- `wait` resumes the executor continuation and returns the final value
 - expired, aborted, wrong-session, and unknown `runId` values fail
 - transcript replay and persistence preserve code-mode control calls
 - transcript and telemetry show nested tool calls clearly
 
 ## E2E test plan
 
-Run these as integration or end-to-end tests when changing the runtime:
+Run these against both executors when changing the runtime:
 
 1. Start a Gateway with `tools.codeMode.enabled: false`.
 2. Send an agent turn with a small direct tool set.
@@ -90,10 +116,27 @@ Run these as integration or end-to-end tests when changing the runtime:
     `catalog.all()` must remain native after search.
 11. Assert denied tools are absent and cannot be called by guessed id.
 12. Start a nested tool call that resolves after `exec` returns `waiting`.
-13. Call `wait` and assert the restored VM receives the tool result.
-14. Assert the final answer contains output produced after restore.
-15. Assert timeout, abort, and snapshot expiry clean up runtime state.
+13. Call `wait` and assert the continued context receives the tool result.
+14. Assert the final answer contains output produced after resume without replay.
+15. Assert timeout, abort, and continuation expiry clean up runtime state.
 16. Export trajectory and assert nested calls are visible under the parent
     code-mode call.
 
 Docs-only changes to this page should still run `pnpm check:docs`.
+
+## Engine performance qualification
+
+Use the opt-in `src/agents/code-mode-engine-owner.perf.test.ts` probe for executor
+comparisons. It follows the public execution owner with deterministic external
+I/O and binds a scheduler/resource host so warm Node workers are actually reused.
+The plugin's `bench/engine-attribution.ts` separates controller initialization,
+guest computation, snapshots and restore. The investigation and measured source
+identities live beside it in `extensions/code-mode-quickjs/bench/README.md`.
+
+Alternate at least five independent processes per comparison arm. Keep source,
+runtime, effective resources, catalog size and workload fixed; report cold and
+warm separately. Worker task duration includes asynchronous waits and is not
+CPU time. Source-worker startup and between-cell RSS samples do not establish
+packaged startup or peak Gateway memory. A ShellBench claim additionally needs
+matched model, tasks, retries and trace validity, with accuracy, total calls,
+tokens and end-to-end latency measured together.

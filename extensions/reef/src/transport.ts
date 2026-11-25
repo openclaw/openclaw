@@ -1,11 +1,13 @@
 import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import WebSocket from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
+import { redactReefRelayErrorMessage } from "./transport-errors.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
@@ -36,16 +38,6 @@ const REEF_INBOX_KEEPALIVE_MS = 45_000;
 // Cover headers and body consumption. A relay that accepts the request but
 // stops producing bytes must not pin inbox recovery forever.
 const REEF_RELAY_REQUEST_TIMEOUT_MS = 15_000;
-
-function redactReefRelayErrorMessage(message: string, secrets: readonly string[]): string {
-  let redacted = message;
-  for (const secret of secrets) {
-    if (secret.length > 0) {
-      redacted = redacted.replaceAll(secret, "<redacted>");
-    }
-  }
-  return redactSensitiveText(redacted, { mode: "tools" });
-}
 
 export class ReefRelayError extends Error {
   constructor(
@@ -196,29 +188,23 @@ export class ReefTransportClient {
     try {
       result = await this.signed("POST", "/v1/friends/respond", request, signal);
     } catch (error) {
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 400 &&
-        error.code === "invalid_request"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          400,
-          error.code,
-          "reef-relay",
-          "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
-        );
-      }
-      if (
-        error instanceof ReefRelayError &&
-        error.status === 409 &&
-        error.code === "client_upgrade_required"
-      ) {
-        throw new ReefProtocolCompatibilityError(
-          409,
-          error.code,
-          "openclaw-client",
-          "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
-        );
+      if (error instanceof ReefRelayError) {
+        if (error.status === 400 && error.code === "invalid_request") {
+          throw new ReefProtocolCompatibilityError(
+            400,
+            error.code,
+            "reef-relay",
+            "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+          );
+        }
+        if (error.status === 409 && error.code === "client_upgrade_required") {
+          throw new ReefProtocolCompatibilityError(
+            409,
+            error.code,
+            "openclaw-client",
+            "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+          );
+        }
       }
       throw error;
     }
@@ -238,8 +224,16 @@ export class ReefTransportClient {
     peer: string,
     envelope: Envelope,
     signal?: AbortSignal,
+    assertCurrent?: () => void,
   ): Promise<{ id: string; status: string }> {
-    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
+    return this.signed(
+      "POST",
+      `/v1/mail/${encodeURIComponent(peer)}`,
+      envelope,
+      signal,
+      [],
+      assertCurrent,
+    );
   }
   acknowledge(peer: string, id: string, receipt: SignedReceipt): Promise<{ result: string }> {
     return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}/ack`, { id, receipt });
@@ -265,6 +259,7 @@ export class ReefTransportClient {
     body?: unknown,
     signal?: AbortSignal,
     secrets: readonly string[] = [],
+    assertCurrent?: () => void,
   ): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : utf8(JSON.stringify(body));
     const auth = this.auth(path, bytes, method);
@@ -279,6 +274,7 @@ export class ReefTransportClient {
       },
       signal,
       [auth.signature, ...secrets],
+      assertCurrent,
     );
   }
 
@@ -315,7 +311,9 @@ export class ReefTransportClient {
     headers: Record<string, string>,
     signal?: AbortSignal,
     secrets: readonly string[] = [],
+    assertCurrent?: () => void,
   ): Promise<T> {
+    const effect = captureEffectAuthority();
     const url = new URL(path, this.relayUrl).toString();
     const timeout = buildTimeoutAbortSignal({
       timeoutMs: this.requestTimeoutMs,
@@ -325,14 +323,28 @@ export class ReefTransportClient {
     });
     try {
       let response: Response;
+      let initiated = false;
       try {
-        response = await this.fetcher(url, {
-          method,
-          headers: { ...headers, ...(bytes.length ? { "content-type": "application/json" } : {}) },
-          ...(bytes.length ? { body: bytes as BodyInit } : {}),
-          signal: timeout.signal,
-        });
+        const initiate = () => {
+          timeout.signal?.throwIfAborted();
+          // Host effect preparation may yield after the peer was last observed.
+          assertCurrent?.();
+          initiated = true;
+          return this.fetcher(url, {
+            method,
+            headers: {
+              ...headers,
+              ...(bytes.length ? { "content-type": "application/json" } : {}),
+            },
+            ...(bytes.length ? { body: bytes as BodyInit } : {}),
+            signal: timeout.signal,
+          });
+        };
+        response = await effect.initiate(initiate);
       } catch (error) {
+        if (!initiated) {
+          throw error;
+        }
         if (timeout.signal?.aborted) {
           throw timeout.signal.reason;
         }
@@ -383,6 +395,7 @@ export interface WebSocketLike {
   ): void;
   send(data: string): void;
   close(): void;
+  terminate(): void;
 }
 
 /**
@@ -400,7 +413,7 @@ export class ReefInboxEntryParkedError extends Error {
 
 interface ReefInboxConnectionOptions {
   initialCursor?: number;
-  persistCursor?: (cursor: number) => void;
+  persistCursor?: ((cursor: number) => void) | ((cursor: number) => Promise<void>);
   onState?: (state: "connected" | "disconnected") => void;
   onError?: (error: Error) => void;
 }
@@ -412,22 +425,6 @@ export function createReefWebSocket(
   return new WebSocket(url, {
     maxPayload: REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES,
     handshakeTimeout: options.handshakeTimeoutMs ?? REEF_WS_HANDSHAKE_MS,
-  });
-}
-
-export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(done, ms);
-    function done(): void {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", done);
-      resolve();
-    }
-    signal?.addEventListener("abort", done, { once: true });
   });
 }
 
@@ -479,7 +476,7 @@ export class ReefInboxConnection {
         });
       } catch (error) {
         this.options.onError?.(asError(error));
-        await abortableSleep(delay, signal);
+        await sleepWithAbort(delay, signal).catch(() => {});
         delay = Math.min(delay * 2, 30_000);
       }
     }
@@ -552,7 +549,7 @@ export class ReefInboxConnection {
       if (parked) {
         this.processedAboveCursor.add(entry.seq);
       } else {
-        this.advanceCursor(entry.seq);
+        await this.advanceCursor(entry.seq);
       }
     }
     if (cursor !== undefined) {
@@ -566,7 +563,7 @@ export class ReefInboxConnection {
       }
       if (fresh.length === 0) {
         // Empty pages may echo the old cursor after expiry/acknowledgment.
-        this.advanceCursor(this.reconciledThrough);
+        await this.advanceCursor(this.reconciledThrough);
       }
     }
     return parked;
@@ -584,11 +581,15 @@ export class ReefInboxConnection {
     await this.serialize(() => this.drain(signal));
   }
 
-  private advanceCursor(cursor: number): void {
+  private async advanceCursor(cursor: number): Promise<void> {
     if (cursor <= this.cursor) {
       return;
     }
-    this.options.persistCursor?.(cursor);
+    await this.options.persistCursor?.(cursor);
+    // A direct drain may publish a newer cursor while this persistence waits.
+    if (cursor <= this.cursor) {
+      return;
+    }
     this.cursor = cursor;
     for (const seq of this.processedAboveCursor) {
       if (seq <= cursor) {
@@ -610,6 +611,9 @@ export class ReefInboxConnection {
       const url = this.client.websocketUrl();
       const signature = new URL(url).searchParams.get("sig") ?? "";
       const socket = this.webSocketFactory(url);
+      const closed = new Promise<void>((done) => {
+        socket.addEventListener("close", () => done());
+      });
       const workAbort = new AbortController();
       // Emit each state transition at most once per socket and never after this
       // invocation settles, so late events from an abandoned socket cannot
@@ -629,7 +633,7 @@ export class ReefInboxConnection {
         }
         aborting = true;
         markDisconnected();
-        socket.close();
+        socket.terminate();
         // Older socket work can still own the shared serial tail. Waiting here
         // prevents a replacement channel from dispatching the same cursor range.
         void this.processing.then(
@@ -646,11 +650,8 @@ export class ReefInboxConnection {
           clearInterval(keepalive);
         }
         signal?.removeEventListener("abort", abortListener);
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
+        // A close handshake can retain TLS and its timeout after the account settles.
+        void closed.then(() => (error ? reject(error) : resolve()));
       };
       const markDisconnected = () => {
         if (disconnected) {
@@ -666,14 +667,13 @@ export class ReefInboxConnection {
           return;
         }
         markDisconnected();
-        // An abort waits for the class-wide serial tail. A close event emitted
-        // synchronously by socket.close() must not finish this invocation early.
+        // A synchronous close on terminate must still wait for the class-wide serial tail.
         if (aborting) {
           return;
         }
         finish(error);
         if (error) {
-          socket.close();
+          socket.terminate();
         }
       };
       const pump = () => {

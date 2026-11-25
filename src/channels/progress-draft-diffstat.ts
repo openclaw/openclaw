@@ -80,7 +80,7 @@ export function createProgressDraftDiffStatTracker(params: { canStage: () => boo
     }
     pendingMutationDiffs.delete(toolCallId);
     const status = payload.status?.trim().toLowerCase();
-    if (status === "failed" || status === "error") {
+    if (status !== "completed") {
       return;
     }
     hasCommittedDiff = true;

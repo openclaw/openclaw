@@ -1,10 +1,17 @@
 import {
   AGENT_RUN_ABORTED_STOP_REASON,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  AGENT_RUN_SUPERSEDED_STOP_REASON,
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { createAbortError } from "../infra/abort-signal.js";
+import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
+import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
+import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
   findErrorProperty,
@@ -13,19 +20,16 @@ import {
 } from "./failover/error.js";
 
 /**
- * Shared agent run termination constants.
  *
  * Runtime and stream consumers use these stable literals to recognize user or
  * controller aborts without matching free-form error text.
  */
-/** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export {
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
   AGENT_RUN_SUPERSEDED_STOP_REASON,
   isAbortedAgentStopReason,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/** Error text used for agent runs aborted by a gateway restart. */
 export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
 export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
 
@@ -38,37 +42,41 @@ export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
 const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
-export function createAgentRunDirectAbortError(): Error {
-  const error = new Error(AGENT_RUN_ABORTED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_DIRECT_ABORT_ERROR_CODE;
-  return error;
-}
-
-function hasAgentRunAbortCode(value: unknown, code: string): boolean {
-  try {
-    return value instanceof Error && "code" in value && value.code === code;
-  } catch {
-    return false;
-  }
+export function createAgentRunDirectAbortError(userInitiated?: boolean): Error {
+  return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
+    code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
+    ...(userInitiated ? { userInitiated: true } : {}),
+  });
 }
 
 export function isAgentRunDirectAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_DIRECT_ABORT_ERROR_CODE);
 }
 
+/** Presentation fact from an explicit Stop; it never grants cancellation authority. */
+export function isUserInitiatedAgentRunAbortReason(value: unknown): boolean {
+  return isAgentRunDirectAbortReason(value) && asOptionalRecord(value)?.userInitiated === true;
+}
+
+function directAbortStopReason(value: unknown): "stop" | "auth-revoked" | "aborted" {
+  const reason = asOptionalRecord(value)?.gatewayStopReason;
+  return reason === "auth-revoked"
+    ? "auth-revoked"
+    : reason === "rpc" || reason === "stop" || isUserInitiatedAgentRunAbortReason(value)
+      ? "stop"
+      : "aborted";
+}
+
 export function createAgentRunRestartAbortError(): Error {
-  const error = new Error(AGENT_RUN_RESTART_ABORT_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_RESTART_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_RESTART_ABORT_ERROR), {
+    code: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
+  });
 }
 
 export function createAgentRunSupersededAbortError(): Error {
-  const error = new Error(AGENT_RUN_SUPERSEDED_ERROR) as Error & { code: string };
-  error.name = "AbortError";
-  error.code = AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE;
-  return error;
+  return Object.assign(createAbortError(AGENT_RUN_SUPERSEDED_ERROR), {
+    code: AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE,
+  });
 }
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
@@ -76,7 +84,9 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {
-  return hasAgentRunAbortCode(value, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE);
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE),
+  );
 }
 
 export function throwAgentRunRestartAbortReason(value: unknown): void {
@@ -85,21 +95,46 @@ export function throwAgentRunRestartAbortReason(value: unknown): void {
   }
 }
 
+const SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE =
+  "SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED";
+
+/** Mark loss of the turn's settlement lifetime without asserting a successor exists. */
+export function createSessionPlacementSettlementClosedAbortError(): Error {
+  return Object.assign(createAbortError("session placement turn settlement is closed"), {
+    code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
+  });
+}
+
+/** Recognize the owner's typed marker through error wrappers, never display text. */
+export function isSessionPlacementSettlementClosedError(value: unknown): boolean {
+  return collectNestedErrorCandidates(value).some((candidate) =>
+    hasAgentRunAbortCode(candidate, SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE),
+  );
+}
+
 export function resolveAgentRunAbortLifecycleFields(signal: AbortSignal | undefined): {
   aborted?: true;
   stopReason?:
     | typeof AGENT_RUN_ABORTED_STOP_REASON
     | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
+    | typeof AGENT_RUN_SUPERSEDED_STOP_REASON
+    | "stop"
+    | "auth-revoked"
     | "timeout";
 } {
   if (!signal?.aborted) {
     return {};
   }
-  const stopReason = isAgentRunRestartAbortReason(signal.reason)
-    ? AGENT_RUN_RESTART_ABORT_STOP_REASON
-    : isSignalTimeoutReason(signal.reason)
-      ? "timeout"
-      : AGENT_RUN_ABORTED_STOP_REASON;
+  const stopReason =
+    isAgentRunRestartAbortReason(signal.reason) || isGatewayRestartDrainError(signal.reason)
+      ? AGENT_RUN_RESTART_ABORT_STOP_REASON
+      : isAgentRunSupersededAbortReason(signal.reason)
+        ? AGENT_RUN_SUPERSEDED_STOP_REASON
+        : isSignalTimeoutReason(signal.reason)
+          ? "timeout"
+          : isAgentRunDirectAbortReason(signal.reason)
+            ? directAbortStopReason(signal.reason)
+            : AGENT_RUN_ABORTED_STOP_REASON;
   return {
     aborted: true,
     stopReason,
@@ -110,13 +145,17 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
   try {
     // Retry categories include connection failures and HTTP 5xx. Only recorded
     // watchdog facts or an intentional TimeoutError establish a deadline.
-    const timeout = findErrorProperty(error, (candidate) =>
-      isFailoverError(candidate)
-        ? candidate.timeout
-        : isSignalTimeoutReason(candidate)
-          ? { timeoutPhase: "provider" as const }
-          : undefined,
-    );
+    const terminal = findAgentRunTerminalOutcome(error);
+    const timeout =
+      terminal?.status === "timeout"
+        ? terminal
+        : findErrorProperty(error, (candidate) =>
+            isFailoverError(candidate)
+              ? candidate.timeout
+              : isSignalTimeoutReason(candidate)
+                ? { timeoutPhase: "provider" as const }
+                : undefined,
+          );
     if (!timeout) {
       return undefined;
     }
@@ -137,12 +176,7 @@ function resolveRunErrorTimeout(error: unknown): FailoverError["timeout"] {
 export function resolveAgentRunErrorLifecycleFields(
   error: unknown,
   signal: AbortSignal | undefined,
-): {
-  aborted?: true;
-  stopReason?:
-    | typeof AGENT_RUN_ABORTED_STOP_REASON
-    | typeof AGENT_RUN_RESTART_ABORT_STOP_REASON
-    | "timeout";
+): ReturnType<typeof resolveAgentRunAbortLifecycleFields> & {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
 } {
@@ -152,13 +186,25 @@ export function resolveAgentRunErrorLifecycleFields(
   }
   // A run-owned controller can stop work without aborting its caller's signal.
   if (isAgentRunDirectAbortReason(error)) {
-    return { aborted: true, stopReason: "aborted" };
+    return { aborted: true, stopReason: directAbortStopReason(error) };
   }
   if (isAgentRunRestartAbortReason(error)) {
     return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
   }
+  if (isAgentRunSupersededAbortReason(error)) {
+    return { aborted: true, stopReason: AGENT_RUN_SUPERSEDED_STOP_REASON };
+  }
   const timeout = resolveRunErrorTimeout(error);
-  return timeout ? { stopReason: "timeout", ...timeout } : {};
+  if (timeout) {
+    return { stopReason: "timeout", ...timeout };
+  }
+  // Admission closes before shutdown aborts every active turn. A refusal from
+  // that live drain is an interruption too, not a terminal provider failure.
+  // Paused admission and stale refusal errors cannot create recovery custody.
+  if (collectNestedErrorCandidates(error).some(isGatewayRestartDrainError)) {
+    return { aborted: true, stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON };
+  }
+  return {};
 }
 
 /**

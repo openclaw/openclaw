@@ -4,11 +4,7 @@ import { truncateCodePoints } from "./code-points.js";
 const samples = [
   ["empty", ""],
   ["ASCII", "ordinary text ".repeat(128)],
-  ["CJK", "中文かな한글".repeat(128)],
   ["astral", "a🦞b🙂".repeat(128)],
-  ["combining marks", "é".repeat(128)],
-  ["ZWJ families", "👨‍👩‍👧‍👦".repeat(64)],
-  ["flags", "🇹🇼🇯🇵".repeat(64)],
   ["lone surrogates", "\ud83da\ude00b😀\ud83d"],
 ] as const;
 

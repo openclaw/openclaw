@@ -6,7 +6,7 @@ const runDeviceFlow = vi.hoisted(() => vi.fn<typeof runGitHubCopilotDeviceFlow>(
 
 vi.mock("./login.js", () => ({ runGitHubCopilotDeviceFlow: runDeviceFlow }));
 
-import { loginGithubCopilotOAuth } from "./oauth.js";
+import { formatGithubCopilotApiKey, loginGithubCopilotOAuth } from "./oauth.js";
 
 describe("github-copilot session OAuth adapter", () => {
   beforeEach(() => {
@@ -20,7 +20,7 @@ describe("github-copilot session OAuth adapter", () => {
         userCode: "ABCD-1234",
         expiresInMs: 60_000,
       });
-      return { status: "authorized", accessToken: "durable-github-token" };
+      return "durable-github-token";
     });
     const onAuth = vi.fn();
     const onProgress = vi.fn();
@@ -44,16 +44,17 @@ describe("github-copilot session OAuth adapter", () => {
     expect(onProgress).toHaveBeenCalledWith("Waiting for GitHub authorization...");
   });
 
-  it("preserves a validated enterprise tenant on the returned credential", async () => {
-    runDeviceFlow.mockResolvedValueOnce({
-      status: "authorized",
-      accessToken: "tenant-github-token",
-    });
+  it.each([
+    "https://acme.ghe.com",
+    " HTTPS://ACME.GHE.COM/ ",
+    "http://fixture-user@acme.ghe.com:443/path?q=1",
+  ])("preserves a validated enterprise tenant from %s", async (input) => {
+    runDeviceFlow.mockResolvedValueOnce("tenant-github-token");
 
     await expect(
       loginGithubCopilotOAuth({
         onAuth: vi.fn(),
-        onPrompt: vi.fn(async () => "https://acme.ghe.com"),
+        onPrompt: vi.fn(async () => input),
       }),
     ).resolves.toMatchObject({
       access: "tenant-github-token",
@@ -63,13 +64,33 @@ describe("github-copilot session OAuth adapter", () => {
     expect(runDeviceFlow).toHaveBeenCalledWith(expect.any(Object), "acme.ghe.com");
   });
 
-  it("rejects an unsafe enterprise origin before starting the device flow", async () => {
-    await expect(
-      loginGithubCopilotOAuth({
-        onAuth: vi.fn(),
-        onPrompt: vi.fn(async () => "https://attacker.example"),
-      }),
-    ).rejects.toThrow("Unsupported GitHub Enterprise domain");
-    expect(runDeviceFlow).not.toHaveBeenCalled();
-  });
+  it.each(["https://attacker.example", "https://[broken", "acme.ghe.com."])(
+    "rejects unsupported enterprise input %s before device flow",
+    async (input) => {
+      await expect(
+        loginGithubCopilotOAuth({
+          onAuth: vi.fn(),
+          onPrompt: vi.fn(async () => input),
+        }),
+      ).rejects.toThrow("Unsupported GitHub Enterprise domain");
+      expect(runDeviceFlow).not.toHaveBeenCalled();
+    },
+  );
+  it.each([undefined, ""])(
+    "treats absent or empty persisted metadata as public (%j)",
+    (enterpriseUrl) => {
+      expect(formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl })).toBe(
+        "fixture",
+      );
+    },
+  );
+
+  it.each(["  ", "\t\n"])(
+    "keeps whitespace-only persisted enterprise metadata invalid (%j)",
+    (enterpriseUrl) => {
+      expect(() =>
+        formatGithubCopilotApiKey({ type: "oauth", refresh: "fixture", enterpriseUrl }),
+      ).toThrow("Unsupported GitHub Enterprise domain");
+    },
+  );
 });

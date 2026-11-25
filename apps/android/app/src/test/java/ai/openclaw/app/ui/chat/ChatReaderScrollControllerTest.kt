@@ -92,8 +92,7 @@ class ChatReaderScrollControllerTest {
   @Test
   fun removedOptimisticPromptPreservesPositionWithoutOfferingJump() {
     val active =
-      buildChatTimeline(
-        messages = listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")),
+      prepareChatHistory(listOf(user("user-old"), assistant("assistant-old"), user("user-optimistic")), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 1,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -197,9 +196,10 @@ class ChatReaderScrollControllerTest {
         latestUserMessageId = "user-1",
         latestContentVersion = timeline.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(state) }
 
-    val restored = ChatReaderStateSaver.restore(requireNotNull(saved))
+    val restored = saver.restore(requireNotNull(saved))
 
     assertEquals(state, restored)
   }
@@ -212,7 +212,7 @@ class ChatReaderScrollControllerTest {
         initialized = true,
         followTarget = ChatScrollFollowTarget.LatestContent,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(state) }
+    val saved = with(createChatReaderStateSaver("session-old")) { SaverScope { true }.save(state) }
 
     val restored = createChatReaderStateSaver("session-new").restore(requireNotNull(saved))
 
@@ -234,8 +234,9 @@ class ChatReaderScrollControllerTest {
         latestUserMessageVersion = before.latestUserMessageVersion,
         latestContentVersion = before.latestContentVersion,
       )
-    val saved = with(ChatReaderStateSaver) { SaverScope { true }.save(savedState) }
-    val restored = requireNotNull(ChatReaderStateSaver.restore(requireNotNull(saved)))
+    val saver = createChatReaderStateSaver()
+    val saved = with(saver) { SaverScope { true }.save(savedState) }
+    val restored = requireNotNull(saver.restore(requireNotNull(saved)))
     val after =
       timeline(
         user("user-after", text = "rewritten prompt", timestampMs = 2000L, idempotencyKey = "run-1:user"),
@@ -467,8 +468,7 @@ class ChatReaderScrollControllerTest {
     }
 
   private fun timeline(vararg messages: ChatMessage): ChatTimeline =
-    buildChatTimeline(
-      messages = messages.toList(),
+    prepareChatHistory(messages.toList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -477,8 +477,7 @@ class ChatReaderScrollControllerTest {
   private fun emptyTimeline(): ChatTimeline = timeline()
 
   private fun questionTimeline(question: ChatQuestionPrompt): ChatTimeline =
-    buildChatTimeline(
-      messages = emptyList(),
+    prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 0,
       pendingToolCalls = emptyList(),
       streamingAssistantText = null,
@@ -489,8 +488,7 @@ class ChatReaderScrollControllerTest {
     message: ChatMessage,
     stream: String?,
   ): ChatTimeline =
-    buildChatTimeline(
-      messages = listOf(message),
+    prepareChatHistory(listOf(message), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
       pendingRunCount = 1,
       pendingToolCalls = emptyList(),
       streamingAssistantText = stream,

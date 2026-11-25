@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
 
 describe("security audit config include permissions", () => {
@@ -18,20 +18,12 @@ describe("security audit config include permissions", () => {
     fs.writeFileSync(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
     fs.chmodSync(includePath, 0o644);
 
-    const configSnapshot: ConfigFileSnapshot = {
+    const configSnapshot = createSnapshot({
       path: path.join(stateDir, "openclaw.json"),
-      exists: true,
       raw: `{ "$include": ${JSON.stringify(includePath)} }\n`,
       parsed: { $include: includePath },
-      sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
-      resolved: {} as ConfigFileSnapshot["resolved"],
-      valid: true,
-      runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
-      config: {} as ConfigFileSnapshot["config"],
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    };
+      sourceConfig: {},
+    });
 
     const findings = await collectIncludeFilePermFindings({
       configSnapshot,
@@ -59,20 +51,12 @@ describe("security audit config include permissions", () => {
       fs.writeFileSync(sharedIncludePath, "{}\n", "utf-8");
       fs.chmodSync(sharedIncludePath, 0o644);
 
-      const configSnapshot: ConfigFileSnapshot = {
+      const configSnapshot = createSnapshot({
         path: path.join(configDir, "openclaw.json"),
-        exists: true,
         raw: `{ "$include": ${JSON.stringify(sharedIncludePath)} }\n`,
         parsed: { $include: sharedIncludePath },
-        sourceConfig: {} as ConfigFileSnapshot["sourceConfig"],
-        resolved: {} as ConfigFileSnapshot["resolved"],
-        valid: true,
-        runtimeConfig: {} as ConfigFileSnapshot["runtimeConfig"],
-        config: {} as ConfigFileSnapshot["config"],
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      };
+        sourceConfig: {},
+      });
 
       const findings = await collectIncludeFilePermFindings({
         configSnapshot,

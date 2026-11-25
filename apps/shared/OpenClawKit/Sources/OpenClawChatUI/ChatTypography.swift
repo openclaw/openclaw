@@ -7,7 +7,19 @@ import UIKit
 #endif
 
 enum OpenClawChatTypography {
-    static let bodySize: CGFloat = 17
+    // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
+    // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
+    // sizes that would fall under 11 pt stop there. Dynamic Type still scales the result.
+    #if os(iOS)
+    static let scale: CGFloat = 13.5 / 17.0
+    #else
+    static let scale: CGFloat = 1
+    #endif
+    static let bodySize: CGFloat = 17 * scale
+
+    static func scaled(_ size: CGFloat) -> CGFloat {
+        max(size * self.scale, min(size, 11))
+    }
 
     static var headline: Font {
         display(size: 17, weight: .semibold, relativeTo: .headline)
@@ -35,7 +47,15 @@ enum OpenClawChatTypography {
     }
 
     static var body: Font {
-        body(size: self.bodySize, weight: .regular, relativeTo: .body)
+        body(size: 17, weight: .regular, relativeTo: .body)
+    }
+
+    static var formControl: Font {
+        #if os(macOS)
+        OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body)
+        #else
+        OpenClawChatTypography.body
+        #endif
     }
 
     #if os(iOS)
@@ -72,7 +92,7 @@ enum OpenClawChatTypography {
 
     static func body(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+        Font.custom(self.bodyPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -82,7 +102,7 @@ enum OpenClawChatTypography {
 
     static func display(size: CGFloat, weight: Font.Weight, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
-        Font.custom(self.displayPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+        Font.custom(self.displayPostScriptName, size: self.scaled(size), relativeTo: textStyle).weight(weight)
         #elseif os(macOS)
         Font.custom(self.macSystemFontName(size: size), size: size, relativeTo: textStyle).weight(weight)
         #else
@@ -93,7 +113,7 @@ enum OpenClawChatTypography {
     static func mono(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
         #if os(iOS)
         let name = weight == .semibold ? Self.monoSemiBoldPostScriptName : Self.monoPostScriptName
-        return Font.custom(name, size: size, relativeTo: textStyle)
+        return Font.custom(name, size: Self.scaled(size), relativeTo: textStyle)
         #elseif os(macOS)
         return Font.custom(self.macMonospacedSystemFontName(size: size), size: size, relativeTo: textStyle)
             .weight(weight)
@@ -108,6 +128,12 @@ enum OpenClawChatTypography {
     private static let monoSemiBoldPostScriptName = "JetBrainsMono-SemiBold"
 
     #if os(macOS)
+    /// Navigation badges retain the system constructor and contextual design.
+    /// Using body here would alter font resolution and text-style scaling.
+    static func navigationAvatar(size: CGFloat) -> Font {
+        Font.system(size: size, weight: .medium)
+    }
+
     private static func macSystemFontName(size: CGFloat) -> String {
         NSFont.systemFont(ofSize: size).fontName
     }
@@ -116,4 +142,16 @@ enum OpenClawChatTypography {
         NSFont.monospacedSystemFont(ofSize: size, weight: .regular).fontName
     }
     #endif
+}
+
+func chatActionLabel(_ title: Text, systemImage: String) -> some View {
+    Label {
+        title.font(OpenClawChatTypography.body)
+    } icon: {
+        Image(systemName: systemImage)
+    }
+}
+
+func chatActionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    chatActionLabel(Text(title), systemImage: systemImage)
 }

@@ -1,7 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
   "files": [
-    "../e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts"
+    "../e2e/qa-lab/plugins/feishu-crabline.real-gateway.candidate.e2e.test.mts",
+    "../e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts"
   ],
   "include": [
     "../../src/**/*.d.ts",

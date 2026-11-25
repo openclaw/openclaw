@@ -1,3 +1,5 @@
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+
 /** Stored bearer token metadata for one authorized device role. */
 export type DeviceAuthEntry = {
   token: string;
@@ -20,19 +22,7 @@ export function normalizeDeviceAuthRole(role: string): string {
 
 /** Normalize device-auth scopes, dedupe/sort them, and include implied operator scopes. */
 export function normalizeDeviceAuthScopes(scopes: readonly unknown[] | undefined): string[] {
-  if (!Array.isArray(scopes)) {
-    return [];
-  }
-  const out = new Set<string>();
-  for (const scope of scopes) {
-    if (typeof scope !== "string") {
-      continue;
-    }
-    const trimmed = scope.trim();
-    if (trimmed) {
-      out.add(trimmed);
-    }
-  }
+  const out = new Set(normalizeTrimmedStringList(scopes));
   // Operator scope implication keeps older approval checks working with broader grants.
   if (out.has("operator.admin")) {
     out.add("operator.read");

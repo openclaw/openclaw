@@ -23,7 +23,7 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
     mcp: false, // allow /mcp
     plugins: false, // allow /plugins
     debug: false, // allow /debug
-    restart: true, // allow /restart + external SIGUSR1 restart requests
+    restart: true, // allow /restart + external SIGUSR2 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
@@ -49,9 +49,10 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
 - `plugins: true` enables `/plugins` for plugin discovery, install, and enable/disable controls.
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
-- `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
+- `restart: false` disables `/restart` and external `SIGUSR2` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- A sender in `ownerAllowFrom` on a channel that verifies sender identity (Discord, Telegram, Google Chat, X, Slack when enabled) is the Gateway owner. Its turns get the same permissions as the owner's Control UI turns, including operator tools and pull request actions. On channels that only assert sender identity (for example Signal or WhatsApp), the listed sender keeps owner-only commands and tools but gets no operator permissions. A channel identity linked to a user profile with operator access keeps that profile's Control UI permissions instead.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives. Exception: Gateway clients admitted with `operator.admin` pass it, because they can edit `allowFrom` themselves.
 - When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)

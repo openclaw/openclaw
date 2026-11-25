@@ -1,73 +1,53 @@
-@import "./carapace-control-ui.css";
-
 /* Plugins and Skills presentation layered on the settings design language:
  * art tiles, row messages, catalog details, and install/consent dialogs.
  * Structural layout comes from .settings-page/.settings-row. */
 
 .plugins-hub-header .page-title {
   margin: 0;
+  font-size: 26px;
 }
 
-.content-header.hub-page-header.plugins-hub-header {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "tabs tabs"
-    "title actions";
-  align-items: end;
-  row-gap: var(--space-2);
-  width: 100%;
-  max-width: 1120px;
-  max-height: none;
-  margin-inline: auto;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.content-header.plugins-hub-header .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
+.plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
-}
-
-.plugins-hub-header .hub-tabs--sub wa-tab.hub-tab::part(base) {
-  padding-block: var(--space-2);
-}
-
-.content-header.plugins-hub-header .hub-page-header__title {
-  grid-area: title;
-}
-
-.content-header.plugins-hub-header .hub-page-header__actions {
-  grid-area: actions;
-}
-
-.plugins-hub-header + .settings-workspace {
-  /* The settings page already contributes the lower half of the tab rhythm. */
-  margin-top: 0;
 }
 
 .plugins-hub-header__secondary {
   flex: 0 0 auto;
 }
 
-@media (max-width: 1100px) {
-  .content-header.hub-page-header.plugins-hub-header {
-    grid-template-areas:
-      "tabs tabs"
-      "title actions";
-    justify-items: stretch;
-  }
-
-  .content-header.plugins-hub-header .hub-page-header__tabs,
-  .content-header.plugins-hub-header .hub-page-header__title {
-    justify-self: start;
-  }
-
-  .content-header.plugins-hub-header .hub-page-header__actions {
-    justify-self: end;
+@media (max-width: 768px) {
+  .plugins-hub-header .page-title {
+    font-size: 22px;
   }
 }
 
-/* ---------- Installed plugins ---------- */
+/* The settings gear shares the tabs row instead of spending a row of its own. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .content-header.hub-page-header--stacked.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title title"
+      "tabs actions";
+    align-items: center;
+    column-gap: var(--space-2);
+  }
+
+  .plugins-hub-header .hub-page-header__tabs {
+    min-width: 0;
+  }
+
+  .plugins-hub-header .hub-tabs {
+    box-shadow: none;
+  }
+
+  /* Without tabs, the subtitle and the gear share one row. */
+  .content-header.hub-page-header--untabbed.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+    align-items: center;
+    min-height: 32px;
+  }
+}
 
 .installed-plugins-card__head {
   display: grid;
@@ -76,43 +56,46 @@
   gap: var(--space-3);
 }
 
-.installed-plugins-card__art {
+.installed-plugins-card__art,
+.plugin-catalog-card__art,
+.plugins-tile {
   width: 40px;
   height: 40px;
   flex: 0 0 40px;
   display: grid;
   place-items: center;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
+}
+
+.installed-plugins-card__art {
   background: var(--bg);
 }
 
-.installed-plugins-card__art img {
+.installed-plugins-card__art img,
+.plugins-tile img,
+.plugin-catalog-detail__icon img,
+.plugin-capability__icon img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
-}
-
-.installed-plugins-card__art img.plugins-icon {
   object-fit: contain;
-  padding: 7px;
 }
 
 .installed-plugins-card__identity {
   min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: center;
   gap: 0;
 }
 
-.installed-plugins-card__identity h3,
+.installed-plugins-card__identity :is(h2, h3),
 .installed-plugins-card__summary {
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.installed-plugins-card__identity h3 {
+.installed-plugins-card__identity :is(h2, h3) {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
@@ -127,13 +110,12 @@
   gap: 6px;
 }
 
-.plugin-card-title-row h3 {
+.plugin-card-title-row :is(h2, h3),
+.plugin-catalog-card__head > .installed-plugins-card__head,
+.plugin-catalog-detail__heading,
+.plugin-catalog-detail__readme-section,
+.plugin-catalog-detail__panel {
   min-width: 0;
-}
-
-.installed-plugins-card__status-notice {
-  align-self: center;
-  margin-inline-start: auto;
 }
 
 .plugin-card-author {
@@ -150,6 +132,9 @@
   z-index: 3;
   width: max-content;
   max-width: 100%;
+  min-width: 24px;
+  min-height: 24px;
+  align-content: center;
   justify-self: start;
   text-decoration: none;
 }
@@ -160,21 +145,27 @@
   text-underline-offset: 2px;
 }
 
-.installed-plugins-card__summary {
+.installed-plugins-card__summary,
+.plugin-capabilities .settings-row__desc {
   display: -webkit-box;
-  min-height: calc(2 * 1.4em);
-  margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-  line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 
-/* ---------- Unified plugin catalog ---------- */
+/* A clamped line stays inside its row; the preview holds the full text. */
+.plugin-capabilities .settings-row__desc {
+  overflow: hidden;
+}
+
+.installed-plugins-card__summary {
+  min-height: calc(2 * 1.4em);
+  margin: 0;
+  line-height: 1.4;
+}
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
-  box-sizing: border-box;
   flex: 0 0 34px;
   width: 34px;
   min-width: 34px;
@@ -184,9 +175,10 @@
   max-height: 34px;
   aspect-ratio: 1;
   padding: 7px;
-  border-color: var(--border);
+  border-color: transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  box-shadow: none;
   color: var(--muted);
 }
 
@@ -212,16 +204,20 @@
   width: 100%;
 }
 
-.plugin-catalog-search > span {
+.plugin-catalog-search > span,
+.plugins-settings-search > span[aria-hidden="true"] {
   position: absolute;
   top: 50%;
-  left: 11px;
-  z-index: 1;
   display: inline-flex;
   width: 16px;
   color: var(--muted);
   pointer-events: none;
   transform: translateY(-50%);
+}
+
+.plugin-catalog-search > span {
+  left: 11px;
+  z-index: 1;
 }
 
 .plugin-catalog-search input {
@@ -230,23 +226,22 @@
   padding-left: 34px;
 }
 
-.plugin-catalog-results__empty {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.plugin-catalog-categories__error {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+/* The field radius runs tighter than the control radius in square themes. */
+.plugin-catalog-search input.settings-input {
+  border-radius: max(var(--field-radius), var(--radius-md));
 }
 
 .plugin-catalog-chips {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.plugin-catalog-chip--skeleton {
+  flex: 0 0 104px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 .plugin-catalog-chip {
@@ -268,15 +263,16 @@
     color var(--duration-fast) ease;
 }
 
-.plugin-catalog-chip:hover,
-.plugin-catalog-chip.is-active {
+.plugin-catalog-chip:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
 .plugin-catalog-chip.is-active {
-  background: var(--bg-elevated);
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .plugin-catalog-chip > span {
@@ -303,6 +299,13 @@
   display: grid;
   gap: var(--space-3);
   min-width: 0;
+}
+
+.plugin-catalog-section--expandable {
+  /* Overview shelves show at most two rows at every breakpoint. Remember their
+     height so offscreen cards skip layout without collapsing the scrollbar. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 280px;
 }
 
 .plugin-catalog-section__header {
@@ -339,11 +342,15 @@
   gap: var(--space-3);
 }
 
+.plugin-catalog-window-item {
+  display: grid;
+  min-width: 0;
+}
+
 .plugin-catalog-card {
   position: relative;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto;
   align-content: start;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -355,6 +362,12 @@
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.plugin-catalog-card__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
 }
 
 .plugin-catalog-card:hover {
@@ -375,27 +388,7 @@
   outline-offset: 2px;
 }
 
-.plugin-catalog-card__art {
-  border: 0;
-}
-
-.plugin-catalog-card__art img,
-.plugin-catalog-card__art img.plugins-icon {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  object-fit: cover;
-}
-
 .plugin-catalog-card__head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.plugin-catalog-card__head > .installed-plugins-card__head {
   min-width: 0;
 }
 
@@ -403,15 +396,14 @@
   position: relative;
   z-index: 3;
   display: flex;
-  min-height: 30px;
+  height: 1lh;
+  flex: 0 0 auto;
   align-items: center;
+  margin-inline-start: auto;
 }
 
 .plugin-catalog-card__install,
-.plugin-catalog-card__status {
-  flex: 0 0 auto;
-}
-
+.plugin-catalog-card__status,
 .plugins-settings-row__status {
   flex: 0 0 auto;
 }
@@ -420,7 +412,7 @@
    two summary lines), so the loaded cards land exactly where the placeholders were. */
 .plugin-catalog-card--skeleton {
   /* Lighter than the default skeleton fill: eight cards of solid bars read as a wall. */
-  --skeleton-base: color-mix(in srgb, var(--bg-muted) 55%, var(--bg-elevated));
+  --skeleton-base: color-mix(in srgb, var(--muted) 8%, transparent);
 
   pointer-events: none;
 }
@@ -428,7 +420,7 @@
 .plugin-catalog-card__skeleton-art {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .plugin-catalog-card__skeleton-title,
@@ -492,6 +484,30 @@
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+
+  .plugin-catalog-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A chip that runs past the row fades out, so it reads as more to scroll to. */
+  .plugin-catalog-chips[data-scrollable="true"][data-at-end="false"] {
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"] {
+    mask-image: linear-gradient(to right, transparent, black 32px);
+  }
+
+  .plugin-catalog-chips[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      black 32px,
+      black calc(100% - 32px),
+      transparent
+    );
   }
 
   .plugin-catalog-grid {
@@ -503,8 +519,6 @@
   }
 }
 
-/* ---------- toolbar ---------- */
-
 .plugins-toolbar {
   display: flex;
   align-items: center;
@@ -512,49 +526,16 @@
   flex-wrap: wrap;
 }
 
-/* Toolbars mixing labelled fields with buttons share one control-row baseline. */
-.plugins-toolbar--fields {
-  align-items: flex-end;
-}
-
-.plugins-toolbar--fields > .plugins-toolbar__hint {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--settings-control-height);
-}
-
-.plugins-toolbar--fields > .settings-segmented,
-.plugins-toolbar--fields > .btn,
-.skills-toolbar__agent .agent-select__trigger {
-  box-sizing: border-box;
+.plugins-toolbar--fields > .btn {
   height: var(--settings-control-height);
 }
 
-.plugins-toolbar--fields > .settings-segmented {
-  --wa-form-control-height: calc(var(--settings-control-height) - 6px);
+.skill-library-search {
+  display: contents;
 }
 
-.plugins-toolbar__hint {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-/* Labelled control in a toolbar (label text over a settings input/select). */
-.plugins-field {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.plugins-field > span {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-}
-
-.skills-toolbar__agent {
-  min-width: 180px;
+.skill-library-search__action {
+  display: none;
 }
 
 .skills-toolbar__search {
@@ -562,10 +543,31 @@
   min-width: 180px;
 }
 
-/* ---------- collapsible skill groups ---------- */
+/* The placeholder names the field; the label stays for assistive technology. */
+:is(.skills-toolbar__search, .skill-library-search > .field) > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
-/* <details> shell keeps the settings-section look while restoring the native
- * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
+.skills-toolbar__search > input {
+  width: 100%;
+}
+
+.skill-row-status {
+  display: inline-flex;
+}
+
+/* Selects size to the chosen option; a floor keeps the search edge from moving. */
+.plugins-toolbar > .skills-toolbar__status {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 160px;
+}
+
 .skills-group__summary {
   align-items: center;
   cursor: var(--cursor-action);
@@ -587,16 +589,12 @@
 .skills-group__chevron svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
 }
 
 .skills-group[open] > .skills-group__summary .skills-group__chevron {
   transform: rotate(90deg);
 }
-
-/* ---------- rows ---------- */
 
 /* Entity row inside a settings group: leading art tile, wrapping so
    row-local messages can break onto a full-width line below the controls. */
@@ -613,24 +611,6 @@
 
 .plugins-item--clickable:hover {
   background: var(--bg-hover);
-}
-
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .clawhub-skill-icon {
@@ -691,40 +671,19 @@
   font-weight: 400;
 }
 
-/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
- * shared classes own the look, so only the UA heading margin needs a reset. */
-h3.settings-row__title {
-  margin: 0;
-}
-
-/* ---------- art tiles ---------- */
-
 .plugins-tile {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 10px;
   background: var(--bg-elevated);
 }
 
-.plugins-tile img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+.plugins-tile--white {
+  background: var(--brand-logo-chip-bg);
 }
 
-.plugins-tile img.plugins-icon {
-  object-fit: contain;
-  padding: 6px;
+.plugins-tile--white img {
+  padding: 10%;
 }
 
 .plugins-tile--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
-  border-color: transparent;
   color: rgb(255 255 255 / 92%);
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
@@ -736,38 +695,57 @@ h3.settings-row__title {
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
-
-/* ---------- messages / empty / loading ---------- */
 
 .plugins-row-message {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--ok-subtle);
-  color: var(--ok);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Row-local message: full-width line under the row's text + controls. */
+.plugin-catalog-card__content > .plugins-row-message {
+  position: relative;
+  z-index: 3;
+}
+
 .plugins-item > .plugins-row-message {
   flex: 1 1 100%;
 }
 
-.plugins-row-message--error {
-  background: var(--danger-subtle);
-  color: var(--danger);
+.plugin-catalog-detail__panel > .plugins-row-message {
+  margin-bottom: var(--space-4);
+}
+
+.plugins-row-message--info {
+  display: block;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.plugins-row-message--info a {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.plugin-compatibility-apis {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.plugin-compatibility-apis dd {
+  margin: var(--space-1) 0 0;
 }
 
 .plugins-row-message--warning {
@@ -803,52 +781,21 @@ h3.settings-row__title {
   letter-spacing: -0.02em;
 }
 
-.plugins-detail__meta-row {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
-  gap: var(--space-3);
-  border-bottom: 1px solid var(--border);
-  padding: var(--space-2) 2px;
+/* Art beside the name, with version and meta aligned under it; close keeps the shell's spot. */
+.oc-dialog__header.plugins-consent__header {
+  grid-template-columns: auto minmax(0, 1fr) var(--overlay-modal-close-size);
+  column-gap: var(--space-3);
+  padding-block-start: var(--overlay-modal-padding);
 }
 
-.plugins-detail__meta-label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+.plugins-consent__header .oc-dialog__close {
+  align-self: start;
+  margin-block-start: calc(12px - var(--overlay-modal-padding));
 }
 
-.plugins-detail__meta-value {
+.plugins-consent__identity {
   min-width: 0;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
-  text-overflow: ellipsis;
-}
-
-.plugins-detail__meta-value code {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-}
-
-.plugins-consent {
-  display: grid;
-  max-height: min(85vh, 860px);
-  gap: var(--space-4);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-5);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
-}
-
-.plugins-consent__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.plugins-consent__header > div {
-  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .plugins-consent__section {
@@ -876,18 +823,13 @@ h3.settings-row__title {
   font-size: var(--control-ui-text-xs);
 }
 
-.plugins-consent__rows {
-  border-top: 1px solid var(--border);
-}
-
 .plugins-consent__items {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   overflow-wrap: anywhere;
 }
 
-.plugins-consent__row--warning .plugins-detail__meta-label,
-.plugins-consent__row--warning .plugins-detail__meta-value {
+.plugins-consent__row--warning {
   color: var(--warn);
 }
 
@@ -910,36 +852,12 @@ h3.settings-row__title {
   color: var(--muted);
 }
 
-.plugins-consent__error,
-.plugins-consent__actions {
+.plugins-consent__error {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
-}
-
-.plugins-consent__error {
   color: var(--danger);
-}
-
-.plugins-consent__actions {
-  justify-content: flex-end;
-}
-
-/* ---------- plugin settings ---------- */
-
-.plugins-settings-title {
-  margin: 0;
-  font: inherit;
-}
-
-/* The inventory header is already inside the padded settings page. Remove the
-   shared outer-header inset so its title aligns with this page's rows. */
-.settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
-  width: 100%;
-  max-width: none;
-  margin-inline: 0;
-  padding-inline: 0;
 }
 
 .plugins-settings-content {
@@ -953,7 +871,6 @@ h3.settings-row__title {
   width: max-content;
   max-width: 100%;
   align-self: flex-start;
-  --track-color: transparent;
   --indicator-color: transparent;
 }
 
@@ -964,17 +881,12 @@ h3.settings-row__title {
 }
 
 .plugins-settings-search > span[aria-hidden="true"] {
-  position: absolute;
-  top: 50%;
   left: var(--space-3);
-  display: inline-flex;
-  width: 16px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
 }
 
-.plugins-settings-search > span[aria-hidden="true"] svg {
+.plugins-settings-search > span[aria-hidden="true"] svg,
+.plugin-catalog-detail__back svg,
+.plugin-catalog-detail__actions svg {
   width: 16px;
   height: 16px;
 }
@@ -982,6 +894,49 @@ h3.settings-row__title {
 .plugins-settings-search .settings-input {
   width: 100%;
   padding-left: calc(var(--space-3) + 24px);
+  border-radius: max(var(--field-radius), var(--radius-md));
+}
+
+.plugins-settings-row {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 40px;
+}
+
+.plugins-settings-row__status {
+  display: flex;
+}
+
+/* On a phone the description keeps its width; the status reads below it. */
+@media (max-width: 640px) {
+  .settings-row.plugins-settings-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    row-gap: var(--space-2);
+    align-items: center;
+  }
+
+  .plugins-settings-row > :first-child {
+    grid-row: 1 / span 2;
+    align-self: start;
+  }
+
+  .plugins-settings-row > .settings-row__control {
+    display: contents;
+  }
+
+  .plugins-settings-row > .settings-row__text,
+  .plugins-settings-row__status {
+    grid-column: 2;
+  }
+
+  .plugins-settings-row .settings-row__chevron {
+    grid-row: 1 / span 2;
+    grid-column: 3;
+  }
+
+  .plugins-settings-row > .plugins-row-message {
+    grid-column: 1 / -1;
+  }
 }
 
 .plugins-settings-row__link {
@@ -992,6 +947,13 @@ h3.settings-row__title {
   color: inherit;
   text-align: left;
   text-decoration: none;
+}
+
+/* The phone header's Back already goes up a level. The settings editor keeps its
+   breadcrumb: nothing else there names the plugin. */
+.shell--settings.shell--floating-header
+  :is(.plugin-catalog-detail > .plugins-settings-breadcrumb, .plugins-settings-back) {
+  display: none;
 }
 
 .plugins-settings-breadcrumb {
@@ -1014,6 +976,10 @@ h3.settings-row__title {
   white-space: nowrap;
 }
 
+.plugins-settings-breadcrumb__parent {
+  flex: none;
+}
+
 .plugins-settings-breadcrumb__parent:hover {
   color: var(--text);
 }
@@ -1028,47 +994,29 @@ h3.settings-row__title {
   height: 13px;
 }
 
-.plugins-settings-detail-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  align-self: start;
-  margin-inline-start: auto;
-}
-
-.plugins-settings-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-/* ---------- catalog detail ---------- */
-
 .plugin-catalog-detail {
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-  grid-template-areas:
-    "breadcrumb breadcrumb"
-    "main sidebar"
-    "tabs sidebar"
-    "panel sidebar";
-  gap: var(--space-4) var(--space-8);
+  gap: var(--space-7);
+  min-width: 0;
 }
 
-.plugin-catalog-detail--no-sidebar {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas:
-    "breadcrumb"
-    "main"
-    "tabs"
-    "panel";
-}
-
+/* The breadcrumb belongs to the hero, so it sits closer to it than the hero sits to the body. */
 .plugin-catalog-detail > .plugins-settings-breadcrumb {
-  grid-area: breadcrumb;
+  margin-bottom: calc(var(--space-4) - var(--space-7));
+}
+
+.plugin-catalog-detail__content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 196px;
+  grid-template-areas: "main sidebar";
+  align-items: start;
+  gap: 32px;
+}
+
+.plugin-catalog-detail--no-sidebar .plugin-catalog-detail__content {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "main";
 }
 
 .plugin-catalog-detail__back {
@@ -1085,56 +1033,54 @@ h3.settings-row__title {
   color: var(--text-strong);
 }
 
-.plugin-catalog-detail__back svg {
-  width: 16px;
-  height: 16px;
-}
-
 .plugin-catalog-detail__hero {
-  display: contents;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
 }
 
-.plugin-installed-detail__configuration-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
+.plugin-catalog-detail__icon {
+  display: grid;
+  place-items: center;
+  width: 112px;
+  height: 112px;
+  overflow: hidden;
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  color: var(--accent);
 }
-
-.plugin-installed-detail__setup-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--warn);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 15%, transparent);
+.plugin-catalog-detail__icon > .plugins-tile {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  font-size: 36px;
 }
-
-.plugin-installed-detail__panel-head {
+.plugin-catalog-detail__icon svg {
+  width: 48px;
+  height: 48px;
+}
+.plugin-catalog-detail__actions {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-
-.plugin-installed-detail__panel-head p {
-  margin: 0;
-  color: var(--muted);
-}
-
-.plugin-catalog-detail__hero main {
-  grid-area: main;
-  min-width: 0;
-}
-
-.plugin-catalog-detail__title-row,
-.plugin-catalog-detail__row-title {
-  display: flex;
-  align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+  margin-top: var(--space-4);
 }
-
+.plugin-catalog-detail__actions .btn {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: var(--control-ui-text-sm);
+}
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action {
+  height: var(--settings-control-height);
+}
+.settings-page.oc-app-surface .plugin-catalog-detail__actions .btn.oc-action-icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding: 0;
+}
 .plugin-catalog-detail__title-row {
+  display: flex;
   align-items: flex-start;
   flex-wrap: nowrap;
   justify-content: space-between;
@@ -1146,14 +1092,14 @@ h3.settings-row__title {
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font-size: clamp(28px, 4vw, 42px);
+  font-size: clamp(24px, 3vw, 32px);
   line-height: 1.05;
   overflow-wrap: anywhere;
 }
 
 .plugin-catalog-detail__summary {
   max-width: 720px;
-  margin: var(--space-3) 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--muted);
   font-size: var(--control-ui-text-lg);
   line-height: 1.5;
@@ -1161,147 +1107,347 @@ h3.settings-row__title {
 
 .plugin-catalog-detail__publisher {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-5);
-}
-
-.plugin-catalog-detail__publisher-icon {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
-  place-items: center;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  color: var(--muted);
-}
-
-.plugin-catalog-detail__publisher-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.plugin-catalog-detail__publisher-icon svg {
-  width: 22px;
-  height: 22px;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--control-ui-text-lg);
+  line-height: 1.4;
 }
 
 .plugin-catalog-detail__publisher-name {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  max-width: 100%;
+  gap: var(--space-1);
   color: var(--text-strong);
+}
+
+.plugin-catalog-detail__publisher-name strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-catalog-detail__publisher .plugin-card-author {
+  font: inherit;
 }
 
 .plugin-catalog-detail__sidebar {
-  display: grid;
   grid-area: sidebar;
+  display: grid;
   align-content: start;
-  gap: var(--space-4);
+  gap: var(--space-6);
+  min-width: 0;
+  font-size: var(--control-ui-text-sm);
 }
-
-.plugin-catalog-detail__sidebar > dl,
-.plugin-catalog-detail__security {
+/* Facts stay in view beside a long list of tools, when the window is tall enough to hold them. */
+@media (min-height: 640px) {
+  .plugin-catalog-detail__sidebar {
+    position: sticky;
+    top: var(--space-6);
+  }
+}
+.plugin-metadata__facts,
+.plugin-metadata__section,
+.plugin-metadata__links {
   margin: 0;
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
+  padding: 0;
 }
-
-.plugin-catalog-detail__sidebar dl > div {
+.plugin-metadata__facts {
+  display: grid;
+  gap: var(--space-2);
+}
+/* A value too long for its row, such as a prerelease version, moves under its label whole. */
+.plugin-metadata__facts > div {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding-block: var(--space-2);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-3);
+  min-width: 0;
 }
-
-.plugin-catalog-detail__sidebar dt {
+/* Group labels use the shared section title, so the rail reads like the sections beside it. */
+.plugin-metadata__section h2,
+.plugin-catalog-detail__security h2 {
+  margin: 0;
+}
+.plugin-metadata__facts dt {
+  flex: none;
+  margin: 0;
   color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
-
-.plugin-catalog-detail__sidebar dd {
+.plugin-metadata__facts dd {
+  min-width: 0;
+  margin: 0 0 0 auto;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+.plugin-metadata__section h2 {
+  margin-bottom: var(--space-2);
+}
+.plugin-metadata__categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  text-transform: capitalize;
+}
+.plugin-metadata__links {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+}
+.plugin-metadata__links a {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: 0;
+  max-width: 100%;
   color: var(--text-strong);
-  text-align: right;
+  font-weight: 500;
+  text-decoration: none;
+  overflow-wrap: anywhere;
 }
-
-.plugin-catalog-detail__sidebar dd svg,
-.plugin-catalog-detail__security h2 svg {
-  width: 16px;
-  height: 16px;
+.plugin-metadata__links a:hover {
+  text-decoration: underline;
 }
-
-.plugin-catalog-detail__security h2,
-.plugin-catalog-detail__security p {
-  margin: 0;
+.plugin-metadata__links a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
-
-.plugin-catalog-detail__security h2 {
+.plugin-metadata__links svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.plugin-catalog-detail__security-heading {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-4);
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
+  margin-bottom: var(--space-1);
 }
+/* The shared icon button keeps its 28px target; the margin keeps the heading row's height. */
+.plugin-catalog-detail__security .oc-icon-button {
+  --icon-button-glyph: var(--control-ui-text-xs);
+  --icon-button-color: var(--muted-strong);
+  margin-block: -7px;
+}
+.plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
 
-.plugin-catalog-detail__security {
-  display: block;
+  display: grid;
+  grid-template-columns: 1fr repeat(3, 26px);
+  align-items: center;
+  gap: 6px;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 6px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
   color: inherit;
   text-decoration: none;
 }
-
-.plugin-catalog-detail__security:hover {
-  border-color: var(--border-strong);
-}
-
-.plugin-catalog-detail__security-score {
-  display: grid;
-  grid-template-columns: auto repeat(3, minmax(24px, 1fr));
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-strong);
-}
-
 .plugin-catalog-detail__security-score strong {
-  margin-right: var(--space-2);
+  font-size: var(--control-ui-text-sm);
   text-transform: capitalize;
 }
-
 .plugin-catalog-detail__security-score span {
   height: 6px;
   border-radius: 999px;
-  background: var(--muted);
+  background: var(--border);
 }
-
-.plugin-catalog-detail__security--pass .plugin-catalog-detail__security-score span {
+.plugin-catalog-detail__security--pass .is-filled {
   background: var(--ok);
 }
-
-.plugin-catalog-detail__security--warning .plugin-catalog-detail__security-score span {
+.plugin-catalog-detail__security--warning .is-filled {
   background: var(--warn);
 }
-
-.plugin-catalog-detail__security--danger .plugin-catalog-detail__security-score span {
+.plugin-catalog-detail__security--danger .is-filled {
   background: var(--danger);
 }
-
-.plugin-catalog-detail__clawhub {
-  width: 100%;
-  justify-content: center;
-  text-decoration: none;
+.plugin-catalog-detail__security-score[href]:hover {
+  background: var(--bg-elevated);
 }
 
-.plugin-catalog-detail--loading .skeleton {
+.plugin-capabilities {
+  margin-bottom: var(--space-8);
+}
+.plugin-catalog-detail__readme-section > h2 {
+  margin-bottom: var(--space-3);
+}
+.plugin-capability__disclosure > summary {
+  list-style: none;
+}
+.plugin-capability__disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+.plugin-capability__disclosure[open] .settings-row__chevron {
+  transform: rotate(90deg);
+}
+.plugin-capability__details {
+  padding: 0 var(--space-4) var(--space-4);
+  overflow-wrap: anywhere;
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-capability__details p {
+  margin: 0;
+  color: var(--muted);
+}
+.plugin-mcp-details {
+  display: grid;
+  grid-template-columns: minmax(112px, 1fr) minmax(0, 3fr);
+  gap: 8px 16px;
+  margin: 0;
+}
+.plugin-mcp-details + p {
+  margin-top: var(--space-3);
+}
+.plugin-mcp-details dt {
+  color: var(--muted);
+}
+.plugin-mcp-details dd {
+  margin: 0;
+}
+/* Each section keeps its own icon, in main's box, size and accent color. */
+.plugin-capability__icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+}
+.plugin-capability__icon svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+/* With the icon in the row, the shared narrow rule would drop the actions under the
+   icon; keep them at the row end and stack status over the button, as main did. */
+@media (max-width: 640px) {
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) {
+    flex-wrap: nowrap;
+  }
+  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    width: auto;
+    max-width: 50%;
+    justify-content: flex-end;
+  }
+}
+/* Only action rows (plain div rows) stack; a navigation row keeps its status on the
+   chevron's line. */
+@media (max-width: 560px) {
+  .plugin-capabilities div.settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+}
+.plugin-tool-dialog {
+  --openclaw-modal-width: 760px;
+}
+.plugin-tool-preview p {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.plugin-tool-preview__parameters + p {
+  margin-block-start: var(--space-2);
+}
+.plugin-tool-preview__parameters h3 {
+  margin: 0 0 12px;
+  font-size: var(--control-ui-text-md);
+}
+.plugin-tool-preview__parameters dl {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.plugin-tool-preview__parameters dt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.plugin-tool-preview__parameters dt span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+.plugin-tool-preview__parameters dd {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+@container (max-width: 768px) {
+  /* One column: facts come after what the plugin adds and before its README. */
+  .plugin-catalog-detail__content {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+    gap: var(--space-7);
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__main {
+    display: contents;
+  }
+  .plugin-catalog-detail__content > .plugin-catalog-detail__sidebar {
+    grid-area: auto;
+    position: static;
+    order: 1;
+  }
+  .plugin-catalog-detail__main > .plugin-catalog-detail__readme-section {
+    order: 2;
+  }
+  .plugin-catalog-detail__hero {
+    grid-template-columns: 80px minmax(0, 1fr);
+    gap: var(--space-4);
+  }
+  .plugin-catalog-detail__icon,
+  .plugin-catalog-detail__icon > span {
+    width: 80px;
+    height: 80px;
+  }
+}
+/* A phone keeps the art beside the name, and gives the summary and actions the full width. */
+@container (max-width: 480px) {
+  .plugin-catalog-detail__hero {
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: center;
+    gap: 0 var(--space-3);
+  }
+  .plugin-catalog-detail__icon,
+  .plugin-catalog-detail__icon > span {
+    grid-row: 1;
+    width: 64px;
+    height: 64px;
+    border-radius: var(--radius-lg);
+  }
+  .plugin-catalog-detail__heading {
+    display: contents;
+  }
+  .plugin-catalog-detail__name {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .plugin-catalog-detail__publisher {
+    margin-top: var(--space-1);
+    font-size: var(--control-ui-text-md);
+  }
+  .plugin-catalog-detail__summary,
+  .plugin-catalog-detail__actions {
+    grid-column: 1 / -1;
+  }
+  .plugin-catalog-detail__summary {
+    margin-top: var(--space-4);
+    font-size: var(--control-ui-text-md);
+  }
+}
+
+.plugin-catalog-detail--loading .skeleton,
+.plugin-catalog-detail__loading-card {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
@@ -1325,303 +1471,36 @@ h3.settings-row__title {
 .plugin-catalog-detail__loading-publisher {
   width: 220px;
   height: 48px;
-  margin-top: var(--space-5);
+  margin-top: var(--space-3);
 }
 
 .plugin-catalog-detail__loading-card {
-  height: 124px;
+  height: 90px;
+  margin-bottom: 12px;
 }
 
-.plugin-catalog-detail__loading-tabs {
-  grid-area: tabs;
-  width: min(640px, 75%);
-  height: 40px;
-}
-
-.plugin-catalog-detail__loading-readme {
-  grid-area: panel;
-  width: min(820px, 80%);
-  height: 220px;
-}
-
-.plugin-catalog-detail__tabs {
-  grid-area: tabs;
-  width: 100%;
-  overflow-x: auto;
-}
-
-.plugin-catalog-detail__panel {
-  grid-area: panel;
+.plugin-catalog-detail__main {
+  grid-area: main;
+  display: grid;
+  gap: 28px;
   min-width: 0;
+}
+
+.plugin-catalog-detail__panel:empty {
+  display: none;
+}
+
+.plugin-catalog-detail__panel > .plugin-capabilities:last-child {
+  margin-bottom: 0;
 }
 
 .plugin-catalog-detail__readme {
   max-width: 820px;
-}
-
-.plugin-catalog-detail__rows {
-  display: grid;
-}
-
-.plugin-catalog-detail__row {
-  padding-block: var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-catalog-detail__row:first-child {
-  padding-top: 0;
-}
-
-.plugin-catalog-detail__row h3,
-.plugin-catalog-detail__row p,
-.plugin-catalog-detail__row time {
-  margin: 0;
-}
-
-.plugin-catalog-detail__row h3 {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
-}
-
-.plugin-catalog-detail__row p,
-.plugin-catalog-detail__row time,
-.plugin-catalog-detail__empty {
-  color: var(--muted);
-}
-
-.plugin-catalog-detail__row p {
-  margin-top: var(--space-2);
-}
-
-.plugin-catalog-detail__definition-list {
-  display: grid;
-  max-width: 720px;
-  margin: 0;
-}
-
-.plugin-catalog-detail__definition-list > div {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr);
-  gap: var(--space-4);
-  padding-block: var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-catalog-detail__definition-list dt {
-  color: var(--muted);
-}
-
-.plugin-catalog-detail__definition-list dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text-strong);
-}
-
-/* ---------- install wizard ---------- */
-
-.plugin-install-wizard {
-  display: grid;
-  max-height: min(88dvh, 840px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
-}
-
-.plugin-install-wizard__header,
-.plugin-install-wizard__body,
-.plugin-install-wizard__actions {
-  padding: var(--space-5);
-}
-
-.plugin-install-wizard__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-install-wizard__header > div {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.plugin-install-wizard__title-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.plugin-install-wizard__title-row h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-xl);
-}
-
-.plugin-install-wizard__progress {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  margin: 0;
-  padding: var(--space-4) var(--space-5);
-  border-bottom: 1px solid var(--border);
-  list-style: none;
-}
-
-.plugin-install-wizard__progress li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-}
-
-.plugin-install-wizard__progress li > span {
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-}
-
-.plugin-install-wizard__progress li > span svg {
-  width: 14px;
-  height: 14px;
-}
-
-.plugin-install-wizard__progress li.is-active {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.plugin-install-wizard__progress li.is-active > span {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
-.plugin-install-wizard__progress li.is-complete,
-.plugin-install-wizard__success {
-  color: var(--ok);
-}
-
-.plugin-install-wizard__progress li.is-complete > span {
-  border-color: var(--ok);
-  background: var(--ok-subtle);
-}
-
-.plugin-install-wizard__body {
-  min-height: 210px;
-}
-
-.plugin-install-wizard__review dl {
-  display: grid;
-  margin: 0;
-}
-
-.plugin-install-wizard__review dl > div {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: var(--space-4);
-  padding-block: var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.plugin-install-wizard__review dt {
-  color: var(--muted);
-}
-
-.plugin-install-wizard__review dd {
-  margin: 0;
-  color: var(--text-strong);
   overflow-wrap: anywhere;
 }
 
-.plugin-install-wizard__review > p,
-.plugin-install-wizard__status,
-.plugin-install-wizard__working p,
-.plugin-install-wizard__success p,
-.plugin-install-wizard__alert p {
-  margin: var(--space-3) 0 0;
-  color: var(--muted);
-  line-height: 1.5;
-}
-
-.plugin-install-wizard__working,
-.plugin-install-wizard__success {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 180px;
-  gap: var(--space-3);
-  text-align: left;
-}
-
-.plugin-install-wizard__working p,
-.plugin-install-wizard__success p {
-  margin: 0;
-}
-
-.plugin-install-wizard__success > span,
-.plugin-install-wizard__success > span svg {
-  width: 40px;
-  height: 40px;
-}
-
-.plugin-install-wizard__success strong {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-}
-
-.plugin-install-wizard__spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: plugin-install-spin 800ms linear infinite;
-}
-
-@keyframes plugin-install-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .plugin-install-wizard__spinner {
-    animation: none;
-  }
-}
-
-.plugin-install-wizard__alert {
-  padding: var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
-  border-radius: var(--radius-lg);
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
-.plugin-install-wizard__alert--warning {
-  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
-  background: var(--warn-subtle);
-  color: var(--warn);
-}
-
-.plugin-install-wizard__config {
-  margin-top: var(--space-4);
-}
-
-.plugin-install-wizard__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  border-top: 1px solid var(--border);
+.plugin-catalog-detail__readme :is(h1, h2, h3) {
+  border-bottom: 0;
 }
 
 .skill-library-import {
@@ -1634,32 +1513,40 @@ h3.settings-row__title {
   justify-self: end;
 }
 
-/* ---------- responsive ---------- */
-
 @media (max-width: 640px) {
-  .settings-page.oc-app-surface:has(> .plugins-settings-content) {
-    padding-top: 0;
-  }
-
   openclaw-skills-page .plugins-toolbar--fields {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: end;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > :is(.settings-segmented, .plugins-field) {
-    grid-column: 1 / -1;
-    width: 100%;
+  openclaw-skills-page .skills-toolbar__search {
     min-width: 0;
   }
 
-  openclaw-skills-page .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
+  /* Search keeps its room; the status select takes the next line. */
+  openclaw-skills-page .plugins-toolbar > .skills-toolbar__status {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    width: 100%;
   }
 
-  openclaw-skills-page .plugins-toolbar__hint {
-    white-space: normal;
-    overflow-wrap: anywhere;
+  /* Views stay on one line in every theme, however wide its font. */
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  openclaw-skills-page .skill-library-toolbar__views > .settings-segmented::-webkit-scrollbar {
+    display: none;
+  }
+
+  openclaw-skills-page
+    .skill-library-toolbar__views
+    > .settings-segmented
+    > .settings-segmented__btn {
+    flex: 0 0 auto;
   }
 
   openclaw-skills-page .plugins-toolbar:has(> .field) {
@@ -1672,54 +1559,76 @@ h3.settings-row__title {
     max-width: 100%;
     white-space: normal;
   }
-}
 
-@media (max-width: 560px) {
-  .plugin-install-wizard__header,
-  .plugin-install-wizard__body,
-  .plugin-install-wizard__actions {
-    padding: var(--space-4);
+  /* Every library tab keeps one rhythm under the tabs; groups stay apart. */
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) {
+    gap: var(--space-3);
   }
 
-  .plugin-install-wizard__progress {
-    grid-template-columns: repeat(5, auto);
-    justify-content: space-between;
-    padding: var(--space-3) var(--space-4);
+  openclaw-skills-page .settings-page:has(> .skill-library-toolbar__actions) > p.muted {
+    margin: 0;
   }
 
-  .plugin-install-wizard__progress li {
-    font-size: 0;
+  openclaw-skills-page
+    .settings-page:has(> .skill-library-toolbar__actions)
+    > .skills-group
+    + .skills-group {
+    margin-top: var(--space-4);
   }
 
-  .plugin-install-wizard__review dl > div {
-    grid-template-columns: 1fr;
-    gap: var(--space-1);
+  openclaw-skills-page :is(.skill-library-toolbar__actions, .skill-library-toolbar__refresh) {
+    display: none;
   }
 
-  .plugin-catalog-detail__hero {
+  openclaw-skills-page .skill-library-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  openclaw-skills-page .skill-library-search > .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  openclaw-skills-page .skill-library-search input {
+    min-width: 0;
+    text-overflow: ellipsis;
+  }
+
+  openclaw-skills-page .skill-library-search__action,
+  .topnav-shell__page-actions .skill-library-search__action {
+    display: inline-flex;
+    flex: none;
+  }
+
+  openclaw-skills-page .btn.skill-library-search__icon {
+    width: var(--settings-control-height);
+    height: var(--settings-control-height);
+    padding: 0;
+  }
+
+  /* Center beside an inline menu; with the menu in the header, use the trailing refresh line. */
+  openclaw-skills-page .skill-library-search__action:not(:last-child) .refresh-button {
+    justify-items: center;
+  }
+
+  openclaw-skills-page .skill-library-search__icon > .oc-menu-item__label {
     display: contents;
   }
 
-  .plugin-catalog-detail {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "breadcrumb"
-      "main"
-      "sidebar"
-      "tabs"
-      "panel";
-    gap: var(--space-4);
+  openclaw-skills-page .skill-library-search__icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
   }
 
-  .plugin-catalog-detail__definition-list > div {
-    grid-template-columns: 1fr;
-    gap: var(--space-1);
+  openclaw-skills-page .plugins-toolbar--fields:has(> .skill-library-search__action) {
+    grid-template-columns: minmax(0, 1fr) auto auto;
   }
+}
 
-  .plugins-toolbar--fields > .settings-segmented {
-    height: auto;
-  }
-
+@media (max-width: 560px) {
   .plugins-row-message {
     align-items: stretch;
     flex-direction: column;
@@ -1728,4 +1637,1215 @@ h3.settings-row__title {
   .plugins-row-message--warning {
     padding: var(--space-2) 0 0;
   }
+}
+
+.plugin-metadata__placeholder {
+  display: block;
+  width: 72%;
+  height: 14px;
+  border-radius: var(--radius-sm);
+}
+.plugin-metadata__loading {
+  display: grid;
+  gap: var(--space-3);
+}
+.plugin-metadata__loading > :last-child {
+  width: 100%;
+  height: 20px;
+}
+
+.plugin-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugin-connection-status svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ok);
+}
+
+/* A phone has no hover to reveal the status tooltip, so the state is spelled out. */
+.plugin-catalog-card__status-label {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .plugin-catalog-card__status-label {
+    display: inline;
+  }
+}
+
+/* Recommended plugin prompts and their inline composer reference. */
+.plugin-recommended-prompts {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: clamp(0px, 20vw, 250px);
+  padding: 24px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+/* Transparent artwork leaves the active canvas visible in every theme. The
+   intensity masks retain the grain while a quiet tint follows the live primary. */
+.plugin-recommended-prompts__art {
+  position: absolute;
+  inset: 0;
+  isolation: isolate;
+  pointer-events: none;
+  opacity: 0.18;
+}
+
+.plugin-recommended-prompts__art > span {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  mask: var(--plugin-prompt-mask) 38% 50% / cover no-repeat;
+}
+
+.plugin-recommended-prompts__art > [data-channel="r"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-r.png");
+
+  background: rgb(from var(--primary) r 0 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="g"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-g.png");
+
+  background: rgb(from var(--primary) 0 g 0);
+}
+
+.plugin-recommended-prompts__art > [data-channel="b"] {
+  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-b.png");
+
+  background: rgb(from var(--primary) 0 0 b);
+}
+
+.plugin-recommended-prompts__list {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: min(100%, 680px);
+}
+
+.plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+  --btn-bg: var(--card);
+  --btn-bg-hover: var(--bg-hover);
+
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  color: var(--card-foreground);
+  font: inherit;
+  text-align: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.plugin-recommended-prompts__prompt:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: 3px;
+}
+
+.plugin-recommended-prompts__text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.plugin-prompt-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+}
+
+.plugin-prompt-mention__icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.plugin-prompt-mention__icon :is(img, svg) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.plugin-recommended-prompts__prompt .plugin-prompt-mention {
+  color: var(--link);
+}
+
+.plugin-recommended-prompts__action {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: var(--surface-hover);
+  border-radius: 50%;
+}
+
+/* Reference mode preserves the raw @id glyph widths, so native caret and wrapping
+   remain aligned with the advisory composer overlay. */
+.plugin-prompt-mention--reference {
+  display: inline;
+  background: var(--accent-subtle);
+  border-radius: 3px;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__mark {
+  position: relative;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__at {
+  visibility: hidden;
+}
+
+.plugin-prompt-mention--reference .plugin-prompt-mention__icon {
+  position: absolute;
+  inset-inline-start: 0;
+  top: 50%;
+  width: 100%;
+  height: 1em;
+  transform: translateY(-50%);
+}
+
+.agent-chat__composer-prediction.agent-chat__plugin-draft-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  max-height: none;
+  padding-inline: calc(
+      var(--chat-composer-editor-inset-inline) - var(--chat-composer-editor-scroll-inset)
+    )
+    var(--chat-composer-editor-inset-inline);
+  color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:has(~ .agent-chat__plugin-draft-overlay):not(
+    [data-composer-overflow],
+    [data-composing]
+  ) {
+  color: transparent;
+  caret-color: var(--text-strong);
+}
+
+.agent-chat__composer-combobox
+  > textarea:is([data-composer-overflow], [data-composing])
+  ~ .agent-chat__plugin-draft-overlay {
+  display: none;
+}
+
+/* ── Plugins catalog as rows: tile, name with its mark and handle, the summary, one action ── */
+.plugin-catalog-results--rows {
+  --plugin-row-tone: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.plugin-catalog-results--rows .plugin-catalog-search input.settings-input,
+.plugin-catalog-results--rows .plugin-catalog-search input.oc-input {
+  border-radius: var(--composer-radius);
+  background: var(--card);
+  font-size: var(--control-ui-text-md);
+}
+
+.plugin-catalog-results--rows .plugin-catalog-chips {
+  gap: 4px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-chip,
+.plugin-catalog-results--rows .plugin-catalog-chip--skeleton {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--radius-full);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-chip:hover {
+  background: var(--surface-hover);
+}
+
+.plugin-catalog-results--rows .plugin-catalog-chip.is-active {
+  background: var(--surface-selected);
+  color: var(--text-strong);
+}
+
+/* Category names carry the chip; the glyphs only repeated them. */
+.plugin-catalog-results--rows .plugin-catalog-chip > span {
+  display: none;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-results__body {
+  gap: 36px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-section {
+  gap: 10px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-section__header h2 {
+  font-size: var(--control-ui-text-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 28px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card {
+  gap: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  background: transparent;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card:hover {
+  border-color: transparent;
+  background: var(--plugin-row-tone);
+  box-shadow: none;
+  transform: none;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card__content {
+  gap: 8px;
+}
+
+.plugin-catalog-row__main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.plugin-catalog-row__text {
+  display: grid;
+  flex: 1 1 0;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agents-home__template-art,
+.plugin-catalog-card__art--fallback {
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.plugin-catalog-card__art > .plugins-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: calc(11px * var(--openclaw-corner-radius-scale));
+  object-fit: contain;
+}
+
+.plugin-catalog-results--rows .plugin-card-title-row {
+  gap: 6px;
+  line-height: 20px;
+}
+
+.plugin-catalog-results--rows .plugin-card-title-row h3 {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-catalog-results--rows .plugin-card-title-row .plugin-official-badge {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.plugin-catalog-results--rows .plugin-card-title-row .plugin-official-badge svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* The name never gives way to the handle: the handle shortens first. */
+.plugin-catalog-results--rows .plugin-card-title-row .plugin-card-author {
+  flex: 0 100 auto;
+  min-height: 0;
+  margin-left: 2px;
+  font-size: 12.5px;
+}
+
+.plugin-catalog-results--rows .installed-plugins-card__summary {
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card__action {
+  height: auto;
+  margin-inline-start: 0;
+}
+
+.settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 12px;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text) 6.5%, transparent);
+  box-shadow: none;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.settings-page.oc-app-surface
+  .plugin-catalog-results--rows
+  .btn.plugin-catalog-card__install:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 11%, transparent);
+}
+
+.settings-page.oc-app-surface
+  .plugin-catalog-results--rows
+  .btn.plugin-catalog-card__install.plugin-install-action__button--failed {
+  box-shadow: inset 0 0 0 1px var(--warn);
+  color: var(--warn);
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card__status {
+  margin: 0 11px;
+}
+
+/* A row's message belongs to that row: it starts under the text, not under the tile. */
+.plugin-catalog-results--rows .plugin-catalog-card__content > .plugins-row-message {
+  position: relative;
+  z-index: 3;
+  margin-inline-start: 54px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card--skeleton .plugin-catalog-row__text {
+  gap: 8px;
+}
+
+.plugin-catalog-results--rows .plugin-catalog-card__skeleton-line {
+  width: 72%;
+  height: 9px;
+}
+
+@media (max-width: 1100px) {
+  .plugin-catalog-results--rows .plugin-catalog-grid {
+    gap: 4px 20px;
+  }
+}
+
+@media (max-width: 900px) {
+  .plugin-catalog-results--rows .plugin-catalog-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
+  .plugin-catalog-results--rows
+    .plugin-catalog-section--expandable
+    .plugin-catalog-card:nth-child(-n + 6) {
+    display: grid;
+  }
+}
+
+/* Phone: two lines of summary, the action always shows its surface, finger-sized links. */
+@media (max-width: 640px) {
+  .plugin-catalog-results--rows .plugin-catalog-results__body {
+    gap: 26px;
+  }
+
+  .plugin-catalog-results--rows
+    .plugin-catalog-section--expandable
+    .plugin-catalog-card:nth-child(n + 6) {
+    display: none;
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-card {
+    margin-inline: -8px;
+    padding: 9px 8px;
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-card:hover {
+    background: transparent;
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-row__main {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-card__art {
+    margin-top: 1px;
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-card__action {
+    align-self: center;
+  }
+
+  .plugin-catalog-results--rows .installed-plugins-card__summary {
+    display: -webkit-box;
+    font-size: var(--control-ui-text-md);
+    line-height: 1.4;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
+    height: 32px;
+    min-height: 32px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-chip {
+    min-height: 32px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+
+  .plugin-catalog-results--rows .plugin-card-title-row .plugin-card-author--linked {
+    margin-block: -6px;
+    padding-block: 6px;
+  }
+
+  .settings-page.oc-app-surface
+    .plugin-catalog-results--rows
+    .btn.plugin-catalog-section__view-all {
+    margin-block: -9px;
+    padding: 9px 0 9px 12px;
+  }
+}
+
+/* ── Plugin page: header across the top, the reading column, facts in a quiet rail ── */
+.plugin-catalog-detail--rail {
+  --plugin-detail-tone: color-mix(in srgb, var(--text) 4.5%, transparent);
+  --plugin-readme-clamp: 170px;
+
+  gap: 30px;
+}
+
+.plugin-catalog-detail--rail > .plugins-settings-breadcrumb {
+  margin-bottom: -8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.plugin-catalog-detail--rail .plugins-settings-breadcrumb__current {
+  color: var(--text-strong);
+}
+
+.plugin-catalog-detail--rail .plugins-settings-breadcrumb__chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__hero {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 26px;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: calc(18px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon > .plugins-tile {
+  font-size: 22px;
+}
+
+.plugin-catalog-detail--rail
+  .plugin-catalog-detail__icon
+  > .plugins-tile:not(.plugins-tile--fallback) {
+  padding: 14px;
+  background: transparent;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__heading {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__title-row h1 {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__publisher {
+  gap: 6px;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__publisher-name strong {
+  font-weight: 550;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+  flex: none;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 10px;
+  margin: 0;
+}
+
+.settings-page.oc-app-surface
+  .plugin-catalog-detail--rail
+  .plugin-catalog-detail__actions
+  .btn.oc-action,
+.settings-page.oc-app-surface .plugin-catalog-detail--rail .btn.plugin-catalog-detail__sign-in {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 18px;
+  font-size: 13.5px;
+}
+
+.settings-page.oc-app-surface
+  .plugin-catalog-detail--rail
+  .plugin-catalog-detail__actions
+  .btn.oc-action-icon {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  margin-inline-end: -8px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--muted);
+}
+
+.settings-page.oc-app-surface
+  .plugin-catalog-detail--rail
+  .plugin-catalog-detail__actions
+  .btn.oc-action-icon:hover {
+  background: var(--plugin-detail-tone);
+  color: var(--text-strong);
+}
+
+.plugin-catalog-detail__actions-divider {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px 0 2px;
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.plugin-catalog-detail__enabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted-strong);
+  font-size: 13.5px;
+  white-space: nowrap;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__content {
+  grid-template-columns: minmax(0, 1fr) 248px;
+  gap: 64px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__main {
+  gap: 32px;
+}
+
+/* Whole-plugin status opens the reading column; with nothing to say it takes no space. */
+.plugin-catalog-detail__notices {
+  display: contents;
+}
+
+.plugin-catalog-detail--rail .plugin-recommended-prompts {
+  min-height: 0;
+  padding: 20px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__summary {
+  max-width: 680px;
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__panel {
+  display: grid;
+  gap: 32px;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities {
+  margin-bottom: 0;
+}
+
+/* Section names are small muted labels over a tonal block, not uppercase headings. */
+.plugin-catalog-detail--rail .plugin-capabilities .settings-section {
+  gap: 10px;
+}
+
+.plugin-catalog-detail--rail
+  :is(.plugin-capabilities, .plugin-catalog-detail__readme-section)
+  h2.settings-section__heading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__readme-section > h2.settings-section__heading {
+  margin: 0 0 10px;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-group {
+  padding: 6px;
+  border: 0;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  background: var(--plugin-detail-tone);
+  box-shadow: none;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-row {
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
+  background: transparent;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-row--nav:hover {
+  background: var(--plugin-detail-tone);
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-row__title {
+  font-size: var(--control-ui-text-md);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-row__desc {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.plugin-catalog-detail--rail .plugin-capabilities .settings-row__control {
+  align-self: center;
+}
+
+.plugin-catalog-detail--rail .plugin-capability__icon {
+  flex: 0 0 36px;
+  border: 0;
+  border-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  background: var(--card);
+  color: var(--muted-strong);
+}
+
+.plugin-catalog-detail--rail .plugin-capability__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.plugin-catalog-detail__readme-well {
+  padding: 22px 24px;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  background: var(--plugin-detail-tone);
+}
+
+.plugin-catalog-detail__readme-well:has(> .plugin-catalog-detail__readme-toggle:not([hidden])) {
+  padding-bottom: 16px;
+}
+
+.plugin-catalog-detail__readme-well.is-clamped
+  > .plugin-catalog-detail__readme-body:not(:focus-within) {
+  max-height: var(--plugin-readme-clamp);
+  overflow: hidden;
+  mask-image: linear-gradient(black 62%, transparent 100%);
+}
+
+.plugin-catalog-detail__readme-well .plugin-catalog-detail__readme {
+  max-width: none;
+}
+
+.plugin-catalog-detail__readme-well .plugin-catalog-detail__readme > :first-child,
+.plugin-catalog-detail__readme-well .plugin-catalog-detail__readme > .lit-content > :first-child {
+  margin-top: 0;
+}
+
+.plugin-catalog-detail__readme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.plugin-catalog-detail__readme-toggle[hidden] {
+  display: none;
+}
+
+.plugin-catalog-detail__readme-toggle:hover {
+  color: var(--text);
+}
+
+.plugin-catalog-detail__readme-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* The rail is reference material: a label above each value, quieter than the reading column. */
+/* One shrinkable track, so a long link is cut in its middle instead of widening the rail. */
+.plugin-catalog-detail--rail .plugin-catalog-detail__sidebar {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 22px;
+}
+
+.plugin-metadata__facts--rail {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.plugin-metadata__facts--rail > div {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.plugin-metadata__facts--rail dt {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.plugin-metadata__facts--rail dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 400;
+  text-align: start;
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security .oc-icon-button {
+  --icon-button-glyph: var(--control-ui-text-xs);
+  --icon-button-color: var(--muted);
+
+  margin-block: -7px;
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security-score > span {
+  height: auto;
+  border-radius: 0;
+  background: transparent;
+}
+
+.plugin-catalog-detail__security-verdict {
+  color: var(--text-strong);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.plugin-catalog-detail__security-bars {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security-bars > span {
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security--pass .is-filled {
+  background: var(--ok);
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security--warning .is-filled {
+  background: var(--warn);
+}
+
+.plugin-metadata__facts--rail .plugin-catalog-detail__security--danger .is-filled {
+  background: var(--danger);
+}
+
+.plugin-metadata__facts--rail dd.plugin-metadata__link-value {
+  display: block;
+}
+
+.plugin-metadata__link-value > .plugin-metadata__link {
+  display: flex;
+}
+
+.plugin-metadata__audit-link,
+.plugin-metadata__link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  text-decoration: none;
+}
+
+.plugin-metadata__audit-link {
+  gap: 3px;
+  margin-inline-start: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.plugin-metadata__audit-link:hover {
+  color: var(--text);
+}
+
+.plugin-metadata__audit-link:hover span,
+.plugin-metadata__link:hover .plugin-metadata__middle {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.plugin-metadata__audit-link svg {
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+}
+
+.plugin-metadata__link {
+  gap: 7px;
+  color: var(--text);
+}
+
+.plugin-metadata__link svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: color-mix(in srgb, var(--text) 44%, transparent);
+}
+
+.plugin-metadata__link svg:last-child {
+  width: 12px;
+  height: 12px;
+  color: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.plugin-metadata__audit-link:focus-visible,
+.plugin-metadata__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+.plugin-metadata__middle {
+  display: flex;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.plugin-metadata__middle > span:first-child {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-metadata__middle > span:last-child {
+  flex: none;
+}
+
+.plugin-metadata__facts--rail .plugin-metadata__categories {
+  gap: 6px;
+}
+
+.plugin-metadata__facts--rail .plugin-metadata__categories .chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  background: var(--plugin-detail-tone);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.plugin-catalog-detail--rail.plugin-catalog-detail--loading .plugin-catalog-detail__icon {
+  width: 64px;
+  height: 64px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__loading-title {
+  height: 28px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__loading-publisher {
+  height: 18px;
+  margin-top: 8px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__loading-summary {
+  display: none;
+}
+
+/* One column: what the plugin adds, its README, then the facts close the page in two columns. */
+@container (max-width: 768px) {
+  .plugin-catalog-detail--rail .plugin-catalog-detail__content {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: none;
+    gap: 32px;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__content > .plugin-catalog-detail__main {
+    display: grid;
+    grid-area: auto;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__content > .plugin-catalog-detail__sidebar {
+    order: 0;
+    padding-top: 22px;
+    border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+  }
+
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__main
+    > .plugin-catalog-detail__readme-section {
+    order: 0;
+  }
+
+  .plugin-catalog-detail--rail .plugin-metadata__facts--rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 18px 16px;
+  }
+
+  .plugin-metadata__facts--rail > .plugin-catalog-detail__security,
+  .plugin-metadata__facts--rail > .plugin-metadata__section,
+  .plugin-metadata__facts--rail > div:has(.plugin-metadata__link) {
+    grid-column: 1 / -1;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__icon > span {
+    width: 64px;
+    height: 64px;
+  }
+}
+
+/* Phone: the header wraps; buttons that do not fit beside the name take a full row. */
+@container (max-width: 560px) {
+  .plugin-catalog-detail--rail .plugin-catalog-detail__hero {
+    flex-wrap: wrap;
+    gap: 14px 12px;
+    padding-bottom: 18px;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__icon,
+  .plugin-catalog-detail--rail .plugin-catalog-detail__icon > span {
+    width: 52px;
+    height: 52px;
+    border-radius: calc(15px * var(--openclaw-corner-radius-scale));
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__title-row h1 {
+    font-size: 20px;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    > .btn,
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    > openclaw-tooltip,
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    > openclaw-plugin-install-action {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    .btn,
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    openclaw-plugin-install-action,
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions:not(:has(.plugin-catalog-detail__enabled))
+    .plugin-install-action {
+    width: 100%;
+  }
+
+  .settings-page.oc-app-surface
+    .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions
+    .btn.oc-action,
+  .settings-page.oc-app-surface .plugin-catalog-detail--rail .btn.plugin-catalog-detail__sign-in {
+    height: 38px;
+    min-height: 38px;
+    padding: 0 14px;
+  }
+
+  .settings-page.oc-app-surface
+    .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions
+    .btn.oc-action-icon {
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__actions-divider {
+    display: none;
+  }
+
+  .plugin-catalog-detail--rail
+    .plugin-catalog-detail__actions
+    > :has(.plugin-catalog-detail__enabled),
+  .plugin-catalog-detail--rail .plugin-catalog-detail__actions > .plugin-catalog-detail__enabled {
+    margin-inline-start: auto;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__summary {
+    line-height: 1.55;
+  }
+
+  .plugin-catalog-detail--rail .plugin-capabilities .settings-group {
+    padding: 4px;
+  }
+
+  .plugin-catalog-detail--rail .plugin-capabilities .settings-row {
+    gap: 12px;
+    padding: 10px;
+  }
+
+  .plugin-catalog-detail__readme-well {
+    padding: 16px;
+  }
+
+  /* Touch: small text links keep their look and gain a finger-sized area. */
+  .plugin-catalog-detail__readme-toggle {
+    margin: -2px 0 -8px;
+    padding: 8px 14px 8px 0;
+  }
+
+  .plugin-metadata__facts--rail .plugin-catalog-detail__security .oc-icon-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    margin-block: -9px;
+    margin-inline: -4px;
+  }
+
+  .plugin-metadata__link {
+    margin-block: -7px;
+    padding-block: 7px;
+  }
+
+  /* Keep the existing touch area for short links and the switch. */
+  .plugin-catalog-detail--rail .plugins-settings-breadcrumb__parent,
+  .plugin-metadata__audit-link,
+  .plugin-catalog-detail__enabled {
+    margin-block: -8px;
+    padding-block: 8px;
+  }
+
+  .plugin-catalog-detail--rail .plugin-catalog-detail__publisher .plugin-card-author {
+    margin-block: -6px;
+    padding-block: 6px;
+  }
+}
+
+/* Plugins without an icon: the same quiet tile as a skill without one, holding the plug glyph. */
+.plugin-catalog-card__art--fallback,
+.plugin-catalog-detail--rail
+  .plugin-catalog-detail__icon
+  > .plugins-tile--fallback.plugins-tile--neutral {
+  background: var(--card);
+  color: var(--muted-strong);
+  text-shadow: none;
+}
+
+.plugin-catalog-results--rows .plugins-tile--neutral svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.6px;
+}
+
+.plugin-catalog-detail--rail .plugin-catalog-detail__icon > .plugins-tile--neutral svg {
+  width: 26px;
+  height: 26px;
+  stroke-width: 1.5px;
 }

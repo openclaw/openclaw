@@ -3,14 +3,21 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type { MarkdownIt, Token } from "markdown-it";
 import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-origin.js";
+import { templateCatalogPackageNameFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { releasedSessionQuery } from "../app/released-session-query.ts";
+import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import {
+  markdownInlineChildren,
+  replaceMarkdownTextMatches,
+} from "./markdown-text-replacements.ts";
 
-export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
+const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
 type SessionKeyTarget = {
   sessionKey: string;
@@ -26,6 +33,10 @@ type SessionPathTarget = {
 
 export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
 
+function markdownLinkUrl(raw: string) {
+  return globalThis.location ? URL.parse(raw, globalThis.location.href) : null;
+}
+
 function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();
   const parsed = parseAgentSessionKey(sessionKey);
@@ -35,34 +46,54 @@ function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   return { sessionKey, agentId: parsed.agentId };
 }
 
-export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
-  if (!/^(?:https?:\/\/|\/)/i.test(raw.trim())) {
+function parseMarkdownSessionUrl(
+  raw: string,
+  basePath?: string,
+  mainKey?: string,
+  url = markdownLinkUrl(raw),
+) {
+  if (
+    !url ||
+    !/^(?:https?:\/\/|\/)/i.test(raw.trim()) ||
+    (url.protocol !== "http:" && url.protocol !== "https:")
+  ) {
     return null;
   }
-  try {
-    const url = new URL(raw, globalThis.location.href);
-    const target = sessionRefFromPath(
-      url.pathname,
-      basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0],
-      mainKey,
-    );
-    return target && (url.protocol === "http:" || url.protocol === "https:")
-      ? { url, target }
-      : null;
-  } catch {
-    return null;
+  const mount = basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
+  const released = releasedSessionQuery(url, mount);
+  if (released) {
+    // Unqualified keys belong to startup, which can resolve their agent.
+    const pathname = released.path("", mainKey);
+    if (!pathname) {
+      return null;
+    }
+    url.pathname = pathname;
+    url.search = released.search;
   }
+  const target = sessionRefFromPath(url.pathname, mount, mainKey);
+  return target && { url, target };
 }
 
-export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
+export function parseLocalMarkdownSessionUrl(
+  raw: string,
+  options: { basePath?: string; mainKey?: string; publicOrigin?: string } = {},
+) {
+  const path = parseMarkdownSessionUrl(raw, options.basePath, options.mainKey);
+  return path &&
+    (path.url.origin === globalThis.location.origin || path.url.origin === options.publicOrigin)
+    ? path
+    : null;
+}
+
+export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
   // Capture cleaned hrefs before file decoration can claim session-shaped paths.
   markdownParser.core.ruler.before("file-links", "session-links", (state) => {
     if (state.env?.sessionLinks !== true) {
       return;
     }
-    const decorate = (token: Token, raw: string): boolean => {
+    const decorate = (token: Token, raw: string, url?: URL | null): boolean => {
       const key = parseSessionLinkKey(raw);
-      const path = key ? null : parseMarkdownSessionUrl(raw);
+      const path = key ? null : parseMarkdownSessionUrl(raw, undefined, undefined, url);
       if (!key && !path) {
         return false;
       }
@@ -81,11 +112,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
       token.attrSet("tabindex", "0");
       return true;
     };
-    for (const blockToken of state.tokens) {
-      const children = blockToken.children;
-      if (blockToken.type !== "inline" || !children) {
-        continue;
-      }
+    for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
@@ -93,7 +120,24 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
           continue;
         }
         if (token.type === "link_open") {
-          decorate(token, String(token.attrGet("href") ?? ""));
+          const href = String(token.attrGet("href") ?? "");
+          const url = markdownLinkUrl(href);
+          const template =
+            url &&
+            url.origin === globalThis.location.origin &&
+            !url.search &&
+            !url.hash &&
+            templateCatalogPackageNameFromPath(
+              url.pathname,
+              resolveControlUiPaths(globalThis.location.pathname)[0],
+            );
+          if (template) {
+            token.attrJoin("class", "markdown-template-link");
+            token.attrSet("data-template-package", template);
+            token.attrSet("aria-haspopup", "dialog");
+          } else {
+            decorate(token, href, url);
+          }
           linkDepth++;
         } else if (token.type === "link_close") {
           linkDepth--;
@@ -106,33 +150,25 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
             token.attrSet("data-session-href", token.content);
           }
         } else if (linkDepth === 0 && token.type === "text") {
-          const replacements: Token[] = [];
-          let cursor = 0;
-          const text = (content: string) => {
-            const label = new state.Token("text", "", 0);
-            label.content = content;
-            replacements.push(label);
-          };
-          for (const match of token.content.matchAll(scanPattern)) {
-            const end = match.index + match[0].length;
-            const open = new state.Token("link_open", "a", 1);
-            if (
-              !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
-              !decorate(open, match[0])
-            ) {
-              continue;
-            }
-            text(token.content.slice(cursor, match.index));
-            replacements.push(open);
-            text(match[0]);
-            replacements.push(new state.Token("link_close", "a", -1));
-            cursor = end;
-          }
-          if (cursor) {
-            text(token.content.slice(cursor));
-            children.splice(index, 1, ...replacements);
-            index += replacements.length - 1;
-          }
+          index = replaceMarkdownTextMatches(
+            state,
+            children,
+            index,
+            SESSION_LINK_SCAN_RE,
+            (match) => {
+              const end = match.index + match[0].length;
+              const open = new state.Token("link_open", "a", 1);
+              if (
+                !hasMarkdownLinkBoundaries(token.content, match.index, end) ||
+                !decorate(open, match[0])
+              ) {
+                return null;
+              }
+              const label = new state.Token("text", "", 0);
+              label.content = match[0];
+              return [open, label, new state.Token("link_close", "a", -1)];
+            },
+          );
         }
       }
     }
@@ -142,7 +178,9 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
 export function markdownSessionPublicOrigin(
   context?: ApplicationContext | null,
 ): string | undefined {
-  const config = context?.runtimeConfig?.state.configSnapshot?.runtimeConfig;
+  const config = context?.runtimeConfig
+    ? currentDisplayRuntimeConfig(context.runtimeConfig.state)
+    : null;
   return resolveGatewayPublicOrigin({
     gateway: { publicOrigin: readNonBlankString(asOptionalRecord(config?.gateway)?.publicOrigin) },
   });
@@ -156,21 +194,29 @@ export function markdownSessionLinkFromEvent(
     event.target instanceof Element
       ? event.target.closest<HTMLElement>("a, [data-session-href]")
       : null;
-  const sessionKey = anchor?.dataset.sessionKey;
+  if (!anchor) {
+    return null;
+  }
+  const sessionKey = anchor.dataset.sessionKey;
   if (sessionKey && !anchor.dataset.sessionHref) {
     return parseSessionLinkKey(sessionKey);
   }
-  // Lit assigns context before the lazy provider upgrades; routing must not wait for its card.
-  const context = anchor?.closest<HTMLElement & { context?: ApplicationContext | null }>(
+  // Routing must not wait for the lazy hovercard provider to upgrade.
+  const context = anchor.closest<HTMLElement & { context?: ApplicationContext | null }>(
     "openclaw-session-progress-hovercard-provider",
   )?.context;
-  const href = anchor?.getAttribute("href") ?? anchor?.dataset.sessionHref;
-  const path = href ? parseMarkdownSessionUrl(href, basePath ?? context?.basePath) : null;
-  if (
-    !path ||
-    (path.url.origin !== globalThis.location.origin &&
-      path.url.origin !== markdownSessionPublicOrigin(context))
-  ) {
+  const path = parseLocalMarkdownSessionUrl(
+    anchor.getAttribute("href") ?? anchor.dataset.sessionHref ?? "",
+    {
+      basePath: basePath ?? context?.basePath,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: context?.agents.state.agentsList,
+        hello: context?.gateway.snapshot.hello,
+      }),
+      publicOrigin: markdownSessionPublicOrigin(context),
+    },
+  );
+  if (!path) {
     return null;
   }
   const { url, target: parsed } = path;

@@ -20,7 +20,7 @@ scenario:
     - docs/channels/group-messages.md
   codeRefs:
     - extensions/memory-core/src/tools.ts
-    - extensions/qa-channel/src/protocol.ts
+    - src/plugin-sdk/qa-channel-protocol.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow

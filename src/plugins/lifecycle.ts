@@ -1,6 +1,13 @@
 import type { ConfigReplaceResult } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatBundledPluginDevReloadWarning,
+  resolveBundledPluginDevReloadMode,
+} from "./bundled-plugin-dev-reload.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
+import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistryVersion } from "./runtime.js";
 
 export const getPluginRuntimeGeneration = getActivePluginRegistryVersion;
@@ -29,6 +36,8 @@ export class PluginRuntimeApplicationError extends Error {
       pluginIds: string[];
       phase: "prepare" | "drain" | "activate" | "dispose";
       committed: boolean;
+      /** The failed replacement also could not restore model/reply publication. */
+      runtimeRestorationFailed?: true;
     },
     options?: ErrorOptions,
   ) {
@@ -46,6 +55,9 @@ export type PluginRuntimeApplication = {
   generation: number;
   pluginIds: string[];
   sourceDigests?: Record<string, string>;
+  selectedEntries?: Record<string, string>;
+  /** Registration applied, but process-shared code needs a Gateway restart. */
+  restartRequired?: boolean;
   warnings?: string[];
 };
 
@@ -57,14 +69,73 @@ export type PluginLifecycleReason =
   | "reload"
   | "metadata";
 
+/** Project the published registry's captured-code facts into its application receipt. */
+export function createPluginRuntimeApplication(params: {
+  operationId: string;
+  generation: number;
+  registry: PluginRegistry;
+  pluginIds: ReadonlySet<string>;
+  reloadPluginIds?: ReadonlySet<string>;
+  warnings: readonly string[];
+}): PluginRuntimeApplication {
+  const sourceDigests = new Map<string, string>();
+  const selectedEntries = new Map<string, string>();
+  const restartWarnings = new Set<string>();
+  const devReloadWarnings = new Set<string>();
+  for (const record of params.registry.plugins) {
+    if (!params.pluginIds.has(record.id)) {
+      continue;
+    }
+    const instance = getPluginInstance(record);
+    const entry = getPluginRuntimeEntrySource(record);
+    if (instance && record.status === "loaded" && entry) {
+      selectedEntries.set(record.id, entry);
+    }
+    if (instance?.sourceDigest) {
+      sourceDigests.set(record.id, instance.sourceDigest);
+    }
+    if (
+      params.reloadPluginIds?.has(record.id) &&
+      record.enabled &&
+      record.status === "loaded" &&
+      instance &&
+      record.origin === "bundled"
+    ) {
+      // Only a development reload's capture gives a bundled runtime instance a source digest.
+      if (instance.sourceDigest) {
+        devReloadWarnings.add(formatBundledPluginDevReloadWarning(record.id));
+        continue;
+      }
+      restartWarnings.add(
+        "Bundled plugin code is owned by the running Gateway. Restart the Gateway to load updated code; rebuild first when using compiled output.",
+      );
+      const ignored = resolveBundledPluginDevReloadMode().ignoredWarning;
+      if (ignored) {
+        restartWarnings.add(ignored);
+      }
+    }
+  }
+  const warnings = [...restartWarnings, ...devReloadWarnings, ...params.warnings];
+  return {
+    operationId: params.operationId,
+    generation: params.generation,
+    pluginIds: [...params.pluginIds].toSorted(),
+    sourceDigests: Object.fromEntries(sourceDigests),
+    selectedEntries: Object.fromEntries(selectedEntries),
+    ...(restartWarnings.size ? { restartRequired: true } : {}),
+    ...(warnings.length ? { warnings } : {}),
+  };
+}
+
 export type PluginLifecycleRuntimeApply = (params: {
   config: OpenClawConfig;
   write?: Pick<ConfigReplaceResult, "persistedHash" | "persistedSourceConfig">;
   pluginIds: readonly string[];
   reason: PluginLifecycleReason;
+  /** Explicit reload admission wait; cancellation never owns recovery or published cleanup. */
+  waitForDrain?: boolean;
+  drainSignal?: AbortSignal;
   expectedSourceDigests?: Readonly<Record<string, string>>;
-  /** Canonical install owners whose committed contents may already be running. */
-  expectedInstallHashes?: Readonly<Record<string, string>>;
   /** Private invoker authority; never part of the published runtime receipt. */
   assertInvokerOwned?: () => void;
 }) => Promise<PluginRuntimeApplication>;

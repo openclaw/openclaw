@@ -1,6 +1,12 @@
-// Public process helpers for plugins that spawn or probe local commands.
-
+export { createBoundedLineFramer } from "../process/bounded-line-framer.js";
+export { stripGatewayAllocatorEnv } from "../process/child-env.js";
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+export { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
+export {
+  resolveNodeRuntimeExecutable,
+  resolveNodeRuntimeExecutableAsync,
+} from "../infra/node-runtime-executable.js";
+export { resolveLaunchableNodePath } from "../infra/stable-node-path.js";
 export { splitCommandArgs } from "../utils/shell-argv.js";
 export {
   type CommandOptions,
@@ -13,14 +19,50 @@ export {
   shouldSpawnWithShell,
   type SpawnResult,
 } from "../process/exec.js";
-export { prepareOomScoreAdjustedSpawn } from "../process/linux-oom-score.js";
+export { withCommandProcessScope } from "../process/exec-spawn.js";
+export { prepareOomScoreAdjustedSpawn, spawnOomScoreAdjusted } from "../process/linux-oom-score.js";
 export type { OomScoreAdjustedSpawn, OomWrapOptions } from "../process/linux-oom-score.js";
 export { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-export { WorkerTaskError, WorkerTaskPool, serveWorkerTasks } from "../infra/worker-task-pool.js";
+export { resolvePackageRuntimeProcessEntrypointUrl } from "../infra/runtime-process-package-url.js";
+export { createPluginRuntimeProcessEntrypoint } from "../infra/runtime-process-manifest.js";
+export {
+  resolveRuntimeDependencyEntrypointUrl,
+  resolvePluginRuntimeProcessAssetUrl,
+} from "../infra/runtime-process-dependency-url.js";
+export { createCpuTrackedWorker } from "../infra/worker-cpu.js";
+export { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
+// Released official plugins retain these exports until their supported hosts
+// provide worker-task-server; bundled workers use that narrower entrypoint.
+export { serveWorkerTasks } from "../infra/worker-task-server.js";
+export type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
+export type { WorkerTaskResponse } from "../infra/worker-task-pool.js";
 export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
+export { reapOrphanedProcesses } from "../process/orphaned-process.js";
+export {
+  spawnTerminalPty,
+  type TerminalPtyHandle,
+  type TerminalPtySpawnParams,
+  type TerminalPtySubscription,
+} from "../process/terminal-pty.js";
 export {
   getFileLockProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
 } from "../shared/pid-alive.js";
 export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-secret-input.js";
+
+export {
+  createOwnedStdioProcess,
+  closeOwnedStdioProcess,
+  OwnedStdioCleanupError,
+  type OwnedStdioProcess,
+  type OwnedStdioProcessOptions,
+} from "../process/owned-stdio.js";
+
+export {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+  type DarwinProcess,
+} from "../process/darwin-process-inspection.js";

@@ -1,11 +1,14 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
+  resolveSidebarAttentionKey,
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
 } from "../components/sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
+import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -14,6 +17,7 @@ import type { ApplicationOverlays } from "./overlays-types.ts";
 
 export type SidebarAttentionStoreSources = {
   gateway: ApplicationGateway;
+  config: Pick<ApplicationConfigCapability, "current" | "subscribe">;
   agentSelection: AgentSelectionCapability;
   agents: AgentCapability;
   overlays: ApplicationOverlays;
@@ -21,38 +25,26 @@ export type SidebarAttentionStoreSources = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
-export type SidebarAttentionStoreController = {
+export type SidebarAttentionStoreOwner = {
   readonly entries: readonly SidebarInboxEntry[];
   readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
   syncDismissals(): void;
+  refreshOpenClawId(): void;
   dispose(): void;
 };
 
-type SidebarAttentionStoreControllerConstructor = new (
+type SidebarAttentionStoreOwnerConstructor = new (
   sources: SidebarAttentionStoreSources,
   onChange: () => void,
-) => SidebarAttentionStoreController;
+) => SidebarAttentionStoreOwner;
 
-export type SidebarAttentionStore = {
-  readonly entries: readonly SidebarInboxEntry[];
-  activate(Controller: SidebarAttentionStoreControllerConstructor): MentionsCapability;
-  dismiss(dismissal: SidebarAttentionDismissal): void;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
-};
+export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
-export function createSidebarAttentionStore(
-  sources: SidebarAttentionStoreSources,
-): SidebarAttentionStore {
-  const listeners = new Set<() => void>();
-  let controller: SidebarAttentionStoreController | null = null;
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
-  // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
+export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
+  const listeners = createChangeListeners();
+  let owner: SidebarAttentionStoreOwner | null = null;
+  // Retire dismissals even when no Inbox presenter is mounted, such as mobile Settings.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
     const scopes = snapshot.hello?.auth?.scopes;
@@ -61,33 +53,33 @@ export function createSidebarAttentionStore(
       scopes &&
       !resolveScopeUpgradeDismissal({ scopes, state: sources.scopeUpgrade.state })
     ) {
-      clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
+      clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
     }
-    controller?.syncDismissals();
+    owner?.syncDismissals();
   };
   const stopGateway = sources.gateway.subscribe(synchronizeScopeUpgradeDismissal);
   const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
   synchronizeScopeUpgradeDismissal();
   return {
     get entries() {
-      return controller?.entries ?? [];
+      return owner?.entries ?? [];
     },
-    activate(Controller) {
-      controller ??= new Controller(sources, publish);
-      return controller.mentions;
+    activate(Owner: SidebarAttentionStoreOwnerConstructor) {
+      owner ??= new Owner(sources, listeners.publish);
+      return owner.mentions;
     },
-    dismiss(dismissal) {
-      controller?.dismiss(dismissal);
+    refreshOpenClawId() {
+      owner?.refreshOpenClawId();
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    dismiss(dismissal: SidebarAttentionDismissal) {
+      owner?.dismiss(dismissal);
     },
+    subscribe: listeners.subscribe,
     dispose() {
       stopGateway();
       stopScopeUpgrade();
-      controller?.dispose();
-      controller = null;
+      owner?.dispose();
+      owner = null;
       listeners.clear();
     },
   };

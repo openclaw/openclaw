@@ -22,11 +22,6 @@ export function shouldKeepNativeHookRelayInProcess(
   return platform !== "win32" && isNativeHookRelayArgv(argv);
 }
 
-function isInteractiveTtyCommandArgv(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
-}
-
 export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   if (invocation.hasHelpOrVersion) {
@@ -35,7 +30,6 @@ export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }
 
-/** Returns whether CLI startup should avoid the general respawn wrapper for this argv. */
 export function shouldSkipRespawnForArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
@@ -46,14 +40,11 @@ export function shouldSkipRespawnForArgv(
     invocation.commandPath[0] === "gateway" &&
     invocation.commandPath[1] === "status";
   return (
-    invocation.hasHelpOrVersion ||
-    isInteractiveTtyCommandArgv(argv) ||
-    isForegroundGmailRunArgv(argv) ||
-    shouldKeepNativeHookRelayInProcess(argv, platform) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(argv, platform) ||
+    (invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary)) ||
     // Status commonly overlaps the running Gateway; a warning-only wrapper doubles
     // transient CLI memory. Startup-environment respawn remains separately owned.
-    isGatewayStatus ||
-    (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
+    isGatewayStatus
   );
 }
 

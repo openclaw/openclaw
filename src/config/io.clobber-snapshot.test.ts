@@ -1,293 +1,85 @@
-// Covers config IO clobber snapshot handling during writes.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
 
-const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+const roots = useAutoCleanupTempDirTracker(afterEach);
+const limit = 32;
+const timestamp = (index: number) => `2026-05-03T00:00:${String(index).padStart(2, "0")}.000Z`;
+function fixture() {
+  const dir = roots.make("openclaw-config-clobber-");
+  const configPath = path.join(dir, "openclaw.json");
+  fs.writeFileSync(configPath, "{}\n");
+  const warn = vi.fn();
+  const params = (index: number, observedAt = timestamp(0)) => ({
+    deps: { fs, logger: { warn } },
+    configPath,
+    raw: `polluted-${index}\n`,
+    observedAt,
+  });
+  const files = () =>
+    fs.readdirSync(dir).filter((name) => name.startsWith("openclaw.json.clobbered."));
+  const contents = () => files().map((name) => fs.readFileSync(path.join(dir, name), "utf8"));
+  return { dir, warn, params, files, contents };
+}
 
 describe("config clobber snapshots", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  beforeAll(async () => {
-    fixtureRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-config-clobber-"));
-  });
-
-  afterAll(async () => {
-    await fsp.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  async function withCase<T>(fn: (configPath: string) => Promise<T>): Promise<T> {
-    const home = path.join(fixtureRoot, `case-${caseId++}`);
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    await fsp.mkdir(path.dirname(configPath), { recursive: true });
-    await fsp.writeFile(configPath, "{}\n", "utf-8");
-    return await fn(configPath);
-  }
-
-  async function listClobberFiles(configPath: string): Promise<string[]> {
-    const entries = await fsp.readdir(path.dirname(configPath));
-    const prefix = `${path.basename(configPath)}.clobbered.`;
-    return entries.filter((entry) => entry.startsWith(prefix));
-  }
-
-  async function readClobberFileContents(configPath: string): Promise<string[]> {
-    const dir = path.dirname(configPath);
-    const clobberFiles = await listClobberFiles(configPath);
-    return await Promise.all(
-      clobberFiles.map((entry) => fsp.readFile(path.join(dir, entry), "utf-8")),
+  it("serializes concurrent snapshots under the cap with one rotation warning", async () => {
+    const f = fixture();
+    const paths = await Promise.all(
+      Array.from({ length: limit + 24 }, (_, index) =>
+        persistBoundedClobberedConfigSnapshot(f.params(index)),
+      ),
     );
-  }
-
-  async function findClobberFileByContent(
-    configPath: string,
-    expectedContent: string,
-  ): Promise<string> {
-    const dir = path.dirname(configPath);
-    for (const entry of await listClobberFiles(configPath)) {
-      const candidatePath = path.join(dir, entry);
-      if ((await fsp.readFile(candidatePath, "utf-8")) === expectedContent) {
-        return candidatePath;
-      }
-    }
-    throw new Error(`Missing clobber snapshot with content ${expectedContent}`);
-  }
-
-  async function touchClobberFilesByContentOrder(configPath: string): Promise<void> {
-    const dir = path.dirname(configPath);
-    const filesWithContents = await Promise.all(
-      (await listClobberFiles(configPath)).map(async (entry) => ({
-        entry,
-        content: await fsp.readFile(path.join(dir, entry), "utf-8"),
-      })),
+    expect(paths).not.toContain(null);
+    expect(f.files()).toHaveLength(limit);
+    expect(f.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Config clobber snapshot cap reached"),
     );
-    for (const file of filesWithContents) {
-      const match = /^polluted-(\d+)\n$/.exec(file.content);
-      if (!match) {
-        continue;
-      }
-      const touchedAt = new Date(
-        `2026-05-03T00:00:${expectDefined(match[1], "match[1] test invariant").padStart(2, "0")}.000Z`,
-      );
-      await fsp.utimes(path.join(dir, file.entry), touchedAt, touchedAt);
+  });
+
+  it("rotates by artifact timestamp rather than mutable mtime", async () => {
+    const f = fixture();
+    for (let index = 0; index < limit; index++) {
+      await persistBoundedClobberedConfigSnapshot(f.params(index, timestamp(index)));
     }
-  }
-
-  function touchClobberFilesByContentOrderSync(configPath: string): void {
-    const dir = path.dirname(configPath);
-    const prefix = `${path.basename(configPath)}.clobbered.`;
-    for (const entry of fs.readdirSync(dir)) {
-      if (!entry.startsWith(prefix)) {
-        continue;
-      }
-      const targetPath = path.join(dir, entry);
-      const match = /^polluted-(\d+)\n$/.exec(fs.readFileSync(targetPath, "utf-8"));
-      if (!match) {
-        continue;
-      }
-      const touchedAt = new Date(
-        `2026-05-03T00:00:${expectDefined(match[1], "match[1] test invariant").padStart(2, "0")}.000Z`,
-      );
-      fs.utimesSync(targetPath, touchedAt, touchedAt);
-    }
-  }
-
-  it("keeps concurrent async snapshots under the per-path cap by rotating oldest files", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-      const observedAt = "2026-05-03T00:00:00.000Z";
-
-      const snapshotPaths = await Promise.all(
-        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 24 }, (_, index) =>
-          persistBoundedClobberedConfigSnapshot({
-            deps: { fs, logger: { warn } },
-            configPath,
-            raw: `polluted-${index}\n`,
-            observedAt,
-          }),
-        ),
-      );
-
-      expect(snapshotPaths).not.toContain(null);
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const capWarnings = warn.mock.calls.filter(
-        ([message]) =>
-          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
-      );
-      expect(capWarnings).toHaveLength(1);
-    });
+    const oldest = f
+      .files()
+      .find((name) => fs.readFileSync(path.join(f.dir, name), "utf8") === "polluted-0\n");
+    expect(oldest).toBeDefined();
+    const future = new Date("2026-05-03T01:00:00.000Z");
+    await fsp.utimes(path.join(f.dir, oldest!), future, future);
+    await persistBoundedClobberedConfigSnapshot(f.params(limit, "2026-05-03T00:01:00.000Z"));
+    expect(f.files()).toHaveLength(limit);
+    expect(f.contents()).not.toContain("polluted-0\n");
+    expect(f.contents()).toContain(`polluted-${limit}\n`);
+    expect(f.warn).toHaveBeenCalledOnce();
   });
 
-  it("rotates async snapshots so the latest clobbered config is preserved", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-
-      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3; index++) {
-        await persistBoundedClobberedConfigSnapshot({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt: `2026-05-03T00:00:${String(index).padStart(2, "0")}.000Z`,
-        });
+  it.each([persistBoundedClobberedConfigSnapshot, persistBoundedClobberedConfigSnapshotSync])(
+    "rotates reused same-timestamp artifacts through %s",
+    async (persist) => {
+      const f = fixture();
+      for (let index = 0; index < limit; index++) {
+        const artifact = await persist(f.params(index));
+        expect(artifact).not.toBeNull();
+        const touched = new Date(timestamp(index));
+        await fsp.utimes(artifact!, touched, touched);
       }
-
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const contents = await readClobberFileContents(configPath);
+      for (let index = limit; index < limit + 3; index++) {
+        await persist(f.params(index));
+      }
+      expect(f.files()).toHaveLength(limit);
+      const contents = f.contents();
       expect(contents).not.toContain("polluted-0\n");
       expect(contents).not.toContain("polluted-1\n");
       expect(contents).not.toContain("polluted-2\n");
-      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
-      const capWarnings = warn.mock.calls.filter(
-        ([message]) =>
-          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
-      );
-      expect(capWarnings).toHaveLength(1);
-    });
-  });
-
-  it("rotates async snapshots by artifact timestamp rather than mutable mtime", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-
-      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT; index++) {
-        await persistBoundedClobberedConfigSnapshot({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt: `2026-05-03T00:00:${String(index).padStart(2, "0")}.000Z`,
-        });
-      }
-
-      const oldestPath = await findClobberFileByContent(configPath, "polluted-0\n");
-      const future = new Date("2026-05-03T01:00:00.000Z");
-      await fsp.utimes(oldestPath, future, future);
-
-      await persistBoundedClobberedConfigSnapshot({
-        deps: { fs, logger: { warn } },
-        configPath,
-        raw: "polluted-latest\n",
-        observedAt: "2026-05-03T00:01:00.000Z",
-      });
-
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const contents = await readClobberFileContents(configPath);
-      expect(contents).not.toContain("polluted-0\n");
-      expect(contents).toContain("polluted-latest\n");
-      expect(warn.mock.calls).toHaveLength(1);
-    });
-  });
-
-  it("keeps rotating same-timestamp async snapshots after the base artifact is reused", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-      const observedAt = "2026-05-03T00:00:00.000Z";
-
-      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT; index++) {
-        await persistBoundedClobberedConfigSnapshot({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt,
-        });
-      }
-      await touchClobberFilesByContentOrder(configPath);
-
-      for (
-        let index = CONFIG_CLOBBER_SNAPSHOT_LIMIT;
-        index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3;
-        index++
-      ) {
-        await persistBoundedClobberedConfigSnapshot({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt,
-        });
-      }
-
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const contents = await readClobberFileContents(configPath);
-      expect(contents).not.toContain("polluted-0\n");
-      expect(contents).not.toContain("polluted-1\n");
-      expect(contents).not.toContain("polluted-2\n");
-      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
-    });
-  });
-
-  it("rotates sync snapshots so the latest clobbered config is preserved", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-
-      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3; index++) {
-        persistBoundedClobberedConfigSnapshotSync({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt: `2026-05-03T00:00:${String(index).padStart(2, "0")}.000Z`,
-        });
-      }
-
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const contents = await readClobberFileContents(configPath);
-      expect(contents).not.toContain("polluted-0\n");
-      expect(contents).not.toContain("polluted-1\n");
-      expect(contents).not.toContain("polluted-2\n");
-      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
-      const capWarnings = warn.mock.calls.filter(
-        ([message]) =>
-          typeof message === "string" && message.includes("Config clobber snapshot cap reached"),
-      );
-      expect(capWarnings).toHaveLength(1);
-    });
-  });
-
-  it("keeps rotating same-timestamp sync snapshots after the base artifact is reused", async () => {
-    await withCase(async (configPath) => {
-      const warn = vi.fn();
-      const observedAt = "2026-05-03T00:00:00.000Z";
-
-      for (let index = 0; index < CONFIG_CLOBBER_SNAPSHOT_LIMIT; index++) {
-        persistBoundedClobberedConfigSnapshotSync({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt,
-        });
-      }
-      touchClobberFilesByContentOrderSync(configPath);
-
-      for (
-        let index = CONFIG_CLOBBER_SNAPSHOT_LIMIT;
-        index < CONFIG_CLOBBER_SNAPSHOT_LIMIT + 3;
-        index++
-      ) {
-        persistBoundedClobberedConfigSnapshotSync({
-          deps: { fs, logger: { warn } },
-          configPath,
-          raw: `polluted-${index}\n`,
-          observedAt,
-        });
-      }
-
-      const clobberFiles = await listClobberFiles(configPath);
-      expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const contents = await readClobberFileContents(configPath);
-      expect(contents).not.toContain("polluted-0\n");
-      expect(contents).not.toContain("polluted-1\n");
-      expect(contents).not.toContain("polluted-2\n");
-      expect(contents).toContain(`polluted-${CONFIG_CLOBBER_SNAPSHOT_LIMIT + 2}\n`);
-    });
-  });
+      expect(contents).toContain(`polluted-${limit + 2}\n`);
+    },
+  );
 });

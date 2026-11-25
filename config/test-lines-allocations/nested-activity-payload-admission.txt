@@ -1,0 +1,5 @@
+# Nested-activity payload admission: exact +123 LF regression-test lines.
+# Bound transferred payload bytes, preserve selected corruption failures, and
+# cover duplicate envelopes/custom types, inline rows, and malformed roles.
+# Keep the shared baseline unchanged; retire this record with the coverage.
+123

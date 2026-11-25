@@ -1,41 +1,65 @@
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import { getAgentRunContext, validateAgentRunDelegatedAuthority } from "./agent-run-registry.js";
+import { getAgentRunContext, getAgentRunLifecycleGeneration } from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
 type TerminalWriteContext = { run: <T>(write: () => T) => T };
 type TerminalWrites = {
-  authority: AgentRunDelegatedAuthority;
-  context?: TerminalWriteContext;
+  owner: AgentRunContext;
+  instance: OperationalRunInstance;
   pending: Set<Promise<void>>;
 };
 
 const terminalWrites = new WeakMap<AgentRunContext, TerminalWrites>();
+// Execution cleanup cannot discard terminal work already accepted by the lifecycle owner.
+const operationalTerminalWrites = new WeakMap<OperationalRunInstance, TerminalWrites>();
 
-/** Bind a prepared runtime's write context to its exact live operational owner. */
-export function bindAgentRunTerminalWriteContext(
-  authority: AgentRunDelegatedAuthority,
-  context: TerminalWriteContext,
-): void {
-  const owner = getAgentRunContext(authority.operationalRunInstance.runId);
-  if (owner?.delegatedAuthority !== authority || !validateAgentRunDelegatedAuthority(authority)) {
-    throw new Error("Terminal write owner is no longer active");
+function prepareTerminalWrites(owner: AgentRunContext, instance: OperationalRunInstance) {
+  let current = terminalWrites.get(owner);
+  const retained = operationalTerminalWrites.get(instance);
+  if (
+    (retained && current !== retained) ||
+    (owner.delegatedAuthority && owner.delegatedAuthority.operationalRunInstance !== instance)
+  ) {
+    throw new Error("Terminal write settlement owner changed");
   }
-  const current = terminalWrites.get(owner);
-  if (current?.authority === authority) {
-    current.context = context;
-  } else {
-    terminalWrites.set(owner, { authority, context, pending: new Set() });
+  if (!current || current.instance !== instance) {
+    current = { owner, instance, pending: new Set() };
+    terminalWrites.set(owner, current);
+  }
+  operationalTerminalWrites.set(instance, current);
+  return current;
+}
+
+/** Register settlement before a projected turn can fail prior to runtime admission. */
+export function bindAgentRunTerminalWriteSettlement(instance: OperationalRunInstance): void {
+  const owner = getAgentRunContext(instance.runId);
+  if (owner) {
+    prepareTerminalWrites(owner, instance);
   }
 }
 
-/** A new fallback candidate cannot borrow the preceding runtime's account context. */
-export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstance): void {
-  const owner = getAgentRunContext(instance.runId);
+function trackTerminalWrite(current: TerminalWrites, persistence: Promise<void>): void {
+  current.pending.add(persistence);
+  const settled = () => current.pending.delete(persistence);
+  void persistence.then(settled, settled);
+}
+
+/** Capture accepted-work settlement independently of permission to perform a write. */
+export function captureAgentRunTerminalPersistence(
+  runId: string,
+  owner = getAgentRunContext(runId),
+) {
+  const writeContext = captureAgentRunTerminalWriteContext(runId, owner);
   const current = owner ? terminalWrites.get(owner) : undefined;
-  if (current?.authority.operationalRunInstance === instance) {
-    current.context = undefined;
-  }
+  return {
+    writeContext,
+    track:
+      writeContext?.track ??
+      (current
+        ? (persistence: Promise<void>) => trackTerminalWrite(current, persistence)
+        : undefined),
+  };
 }
 
 export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
@@ -44,47 +68,59 @@ export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
 };
 
 /** Capture before async session resolution; a replaced candidate revokes this exact capture. */
-export function captureAgentRunTerminalWriteContext(
+function captureAgentRunTerminalWriteContext(
   runId: string,
+  owner: AgentRunContext | undefined,
 ): CapturedAgentRunTerminalWriteContext | undefined {
-  const owner = getAgentRunContext(runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  const context = current?.context;
-  if (!owner || !current || !context) {
+  if (!owner?.lifecycleGeneration) {
     return undefined;
   }
+  const refuse = (): never => {
+    throw new Error("Terminal write owner changed before commit");
+  };
+  const authority = owner.delegatedAuthority;
+  const current = authority
+    ? prepareTerminalWrites(owner, authority.operationalRunInstance)
+    : terminalWrites.get(owner);
+  if (!current) {
+    return undefined;
+  }
+  // Execution may already be revoked. Settlement retains only this run's
+  // lifecycle/candidate binding; the session writer checks its durable target.
+  const lifecycleGeneration = owner.lifecycleGeneration;
+  const captured = current;
   const assertCurrent = () => {
+    const currentOwner = getAgentRunContext(runId);
     if (
-      getAgentRunContext(runId) !== owner ||
-      terminalWrites.get(owner) !== current ||
-      current.context !== context ||
-      owner.delegatedAuthority !== current.authority ||
-      !validateAgentRunDelegatedAuthority(current.authority)
+      getAgentRunLifecycleGeneration() !== lifecycleGeneration ||
+      (currentOwner && currentOwner !== owner) ||
+      terminalWrites.get(owner) !== captured ||
+      (owner.delegatedAuthority &&
+        owner.delegatedAuthority.operationalRunInstance !== captured.instance)
     ) {
-      throw new Error("Terminal write owner changed before commit");
+      refuse();
     }
   };
   return {
     assertCurrent,
     run: (write) => {
       assertCurrent();
-      return context.run(write);
+      return write();
     },
-    track: (persistence) => {
-      current.pending.add(persistence);
-      const settled = () => current.pending.delete(persistence);
-      void persistence.then(settled, settled);
-    },
+    track: (persistence) => trackTerminalWrite(captured, persistence),
   };
 }
 
-/** Normal completion joins accepted terminal writes; explicit authority close stays immediate. */
+/** Join accepted terminal writes, then retire their binding; execution close stays immediate. */
 export async function drainAgentRunTerminalWrites(instance: OperationalRunInstance): Promise<void> {
-  const owner = getAgentRunContext(instance.runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  if (current?.authority.operationalRunInstance === instance) {
+  const current = operationalTerminalWrites.get(instance);
+  if (current) {
     while (current.pending.size > 0) {
       await Promise.allSettled(current.pending);
     }
+    if (terminalWrites.get(current.owner)?.instance === instance) {
+      terminalWrites.delete(current.owner);
+    }
+    operationalTerminalWrites.delete(instance);
   }
 }

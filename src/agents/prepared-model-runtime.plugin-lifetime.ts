@@ -6,24 +6,44 @@ import {
   retainPluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import {
+  pluginInvocationContext,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
+import { withPluginRetentionOwner } from "../plugins/plugin-retention-diagnostics.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
+  bindPluginRegistryLifetime,
   capturePluginRegistryLifecycleEpoch,
   capturePluginRegistryLifecycleSignal,
+  getPluginRegistryLifetime,
+  getPluginRegistryGatewayOwner,
   getPluginRegistryResourceOwner,
   markPluginRegistryActive,
   isPluginRegistryRetired,
+  isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
+  aggregatePluginRuntimeCloseErrors,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { registerPreparedPluginRetirement } from "./prepared-model-runtime.lifecycle.js";
+import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
+import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
+import {
+  registerPreparedPluginRetirement,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   closeEphemeralPreparedModelRuntimeResources,
   retainPreparedModelRuntimeSnapshotResources,
@@ -31,27 +51,45 @@ import {
 import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+import {
+  createRuntimePluginWork,
+  releaseRuntimePluginWork,
+  retainRuntimePluginWork,
+} from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
-type Lifetime = ReturnType<typeof createLifetime>;
+const runUnscoped = <T>(run: () => T): T => run();
+type Lifetime = ReturnType<typeof createLifetime> & {
+  instances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+  deferredCapabilities?: ReadonlySet<PluginInstanceHandle>;
+};
+type PreparedCatalogBuildOwner = Pick<
+  PreparedModelRuntimeCatalogAccessParams,
+  "pluginGeneration"
+> & {
+  agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input">;
+};
+type PreparedPluginGenerationResources = Pick<
+  PreparedModelRuntimePluginGeneration,
+  "pluginMetadataSnapshot" | "pluginRegistry" | "inboundPluginRegistry"
+>;
 // Source and compiled consumers can share the same generation and registry objects.
 // Share only cleanup ownership; model/auth snapshots keep their existing module identity.
-const { generations, registries, active, retirements, publications } = resolveGlobalSingleton(
+const { generations, active, retirements, publications } = resolveGlobalSingleton(
   Symbol.for("openclaw.preparedPluginLifetimes"),
   () => ({
-    generations: new WeakMap<PreparedModelRuntimePluginGeneration, Lifetime>(),
-    registries: new WeakMap<PluginRegistry, Lifetime>(),
+    generations: new WeakMap<PreparedPluginGenerationResources, Lifetime>(),
     active: new Set<Lifetime>(),
     retirements: new Set<Promise<void>>(),
-    publications: new WeakMap<
-      object,
-      { generation: PreparedModelRuntimePluginGeneration; release: () => Promise<void> }
-    >(),
+    publications: new WeakMap<object, { release: () => Promise<void> }>(),
   }),
 );
 
-function createLifetime(dispose: () => Promise<unknown>) {
+function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () => void) {
+  const cleanupWork = new AsyncWorkScope();
   const references = new Set<object>();
   let closing: Deferred | undefined;
   let disposing = false;
@@ -59,16 +97,22 @@ function createLifetime(dispose: () => Promise<unknown>) {
     get referenced() {
       return references.size > 0;
     },
-    retain() {
+    retain(work = false) {
       if (closing) {
-        throw new Error("Prepared plugin generation has retired");
+        throw new PreparedModelRuntimePluginGenerationRetiredError(
+          "Prepared plugin generation has retired",
+        );
       }
+      const releaseWork = work ? retainWork?.() : undefined;
       const reference = {};
       references.add(reference);
       let releaseCompletion: Promise<void> | undefined;
       return () => {
-        if (references.delete(reference) && references.size === 0) {
-          releaseCompletion = lifetime.close();
+        if (references.delete(reference)) {
+          const completion = references.size === 0 ? lifetime.close() : undefined;
+          releaseCompletion = releaseWork
+            ? releaseRuntimePluginWork(() => completion, releaseWork)
+            : completion;
         }
         return releaseCompletion;
       };
@@ -93,12 +137,14 @@ function createLifetime(dispose: () => Promise<unknown>) {
       if (references.size === 0 && !disposing) {
         disposing = true;
         const completion = closing;
-        // Close admission immediately; physical disposal waits for the final borrower.
-        try {
-          void dispose().then(() => completion.resolve(), completion.reject);
-        } catch (error) {
-          completion.reject(error);
-        }
+        // A catalog lease can outlive its requesting RPC; this lifetime owns its cleanup.
+        void (async () => {
+          try {
+            await cleanupWork.track(dispose);
+          } finally {
+            await cleanupWork.run(() => cleanupWork.drain());
+          }
+        })().then(() => completion.resolve(), completion.reject);
       }
       return closing.promise;
     },
@@ -107,7 +153,11 @@ function createLifetime(dispose: () => Promise<unknown>) {
   return lifetime;
 }
 
-function retainRegistry(registryView: PluginRegistry): (() => void | Promise<void>) | undefined {
+/** Retain physical registry custody for construction or publication, independent of active work. */
+export function retainPreparedPluginRegistry(
+  registryView: PluginRegistry,
+): (() => void | Promise<void>) | undefined {
+  registerPreparedPluginLifetime();
   const prepared = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registryView });
   if (prepared) {
     return prepared.release;
@@ -117,14 +167,16 @@ function retainRegistry(registryView: PluginRegistry): (() => void | Promise<voi
     return inspection.retain().release;
   }
   const registry = getPluginRegistryResourceOwner(registryView);
-  let lifetime = registries.get(registry);
+  let lifetime = getPluginRegistryLifetime(registry);
   if (!lifetime) {
     // Gateway-root and other externally activated registries remain borrowed.
     if (capturePluginRegistryLifecycleEpoch(registry)) {
       return undefined;
     }
-    if (isPluginRegistryRetired(registry)) {
-      throw new Error("Prepared plugin registry has retired");
+    if (isPluginRegistryRetired(registry) || !isPluginRegistryRecordSetAdmitting(registry)) {
+      throw new PreparedModelRuntimePluginGenerationRetiredError(
+        "Prepared plugin registry has retired",
+      );
     }
     markPluginRegistryActive(registry);
     lifetime = createLifetime(async () => {
@@ -135,7 +187,7 @@ function retainRegistry(registryView: PluginRegistry): (() => void | Promise<voi
         throw new PluginRuntimeCloseRetainedError(error);
       }
     });
-    registries.set(registry, lifetime);
+    bindPluginRegistryLifetime(registry, lifetime);
   }
   return lifetime.retain();
 }
@@ -146,7 +198,7 @@ export function registerPreparedPluginLifetime(): void {
 }
 
 export function ownPreparedPluginGeneration(
-  generation: PreparedModelRuntimePluginGeneration,
+  generation: PreparedPluginGenerationResources,
 ): Lifetime {
   const existing = generations.get(generation);
   if (existing) {
@@ -157,23 +209,54 @@ export function ownPreparedPluginGeneration(
     getPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot),
   );
   const releases: Array<() => void | Promise<void>> = [];
-  const acquisitionFailures: unknown[] = [];
-  const lifetime = createLifetime(async () => {
-    const results = await Promise.allSettled(releases.map(async (release) => await release()));
-    releaseMetadata();
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
+  const selectedRegistries = new Set(
+    [generation.pluginRegistry, generation.inboundPluginRegistry].filter(
+      (registry) => registry !== undefined,
+    ),
+  );
+  let instances: Map<PluginInstanceHandle, PluginRegistry> | undefined;
+  const deferredCapabilities = new Set<PluginInstanceHandle>();
+  for (const registry of selectedRegistries) {
+    // Hooks can first run at finalization; model providers can first resolve at fallback.
+    const deferredIds = new Set(
+      [...registry.hooks, ...registry.typedHooks, ...registry.providers].map(
+        ({ pluginId }) => pluginId,
+      ),
     );
-    if (failures.length) {
-      throw new AggregateError(
-        [...acquisitionFailures, ...failures],
-        "Prepared plugin generation cleanup failed",
-      );
+    for (const instance of collectRegistryInvocationInstances(registry)) {
+      if (!instances?.has(instance)) {
+        (instances ??= new Map()).set(instance, registry);
+      }
+      if (deferredIds.has(instance.pluginId) && !instance.owner?.record.generationOverlap) {
+        deferredCapabilities.add(instance);
+      }
     }
-  });
+  }
+  const acquisitionFailures: unknown[] = [];
+  const lifetime = createLifetime(
+    async () => {
+      const results = await Promise.allSettled(releases.map(async (release) => await release()));
+      releaseMetadata();
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw aggregatePluginRuntimeCloseErrors(
+          [...acquisitionFailures, ...failures],
+          "Prepared plugin generation cleanup failed",
+        );
+      }
+    },
+    () =>
+      retainRuntimePluginWork(
+        selectedRegistries,
+        "prepared-generation-lease",
+        captureTurnHandoverRequest(selectedRegistries),
+      ),
+  );
   try {
-    for (const registry of new Set([generation.pluginRegistry, generation.inboundPluginRegistry])) {
-      const release = registry && retainRegistry(registry);
+    for (const registry of selectedRegistries) {
+      const release = retainPreparedPluginRegistry(registry);
       if (release) {
         releases.push(release);
       }
@@ -184,6 +267,8 @@ export function ownPreparedPluginGeneration(
     void lifetime.close().catch(() => {});
     throw error;
   }
+  // Immutable selection is shared; each lease retains only the capabilities it invokes.
+  Object.assign(lifetime, { instances, deferredCapabilities });
   generations.set(generation, lifetime);
   return lifetime;
 }
@@ -191,9 +276,103 @@ export function ownPreparedPluginGeneration(
 export function retainPreparedPluginGeneration(
   generation: PreparedModelRuntimePluginGeneration,
 ): () => Promise<void> {
-  const release = ownPreparedPluginGeneration(generation).retain();
+  const release = ownPreparedPluginGeneration(generation).retain(true);
   return async () => {
     await release();
+  };
+}
+
+/**
+ * Shared catalog builds outlive their requesting turn: they hold the generation, not the turn's
+ * scope, and retention diagnostics name the agent's catalog discovery rather than that turn.
+ */
+export function runWithPreparedPluginGeneration<T>(
+  { pluginGeneration: generation, agentFacts }: PreparedCatalogBuildOwner,
+  build: () => Promise<T>,
+): Promise<T> {
+  const owner = { agentId: agentFacts.input.agentId, serviceId: "model-catalog-discovery" };
+  return pluginInvocationContext.exit(() =>
+    withPluginRetentionOwner(owner, async () => {
+      // Custody keeps the generation's resources without holding work on its plugins. Each
+      // plugin stays held only by its own running calls, so a plugin whose callback settled, or
+      // that the build never called, reloads while a slower lookup continues (#199521).
+      const release = ownPreparedPluginGeneration(generation).retain();
+      try {
+        return await build();
+      } finally {
+        await release();
+      }
+    }),
+  );
+}
+
+/** Each admitted lease owns callable authority independently of its parent's lifetime. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
+  const registryByInstance = lifetime.instances;
+  const registry = registryByInstance?.values().next().value;
+  const work = createRuntimePluginWork("prepared-generation-lease", (pluginId, yieldHold) =>
+    handover(pluginId, yieldHold),
+  );
+  const handover = captureTurnHandoverRequest(
+    new Set(registryByInstance?.values()),
+    () => scope?.pendingReplacementInstances ?? [],
+  );
+  const scope =
+    registryByInstance && registry
+      ? new PluginInvocationScope(registry, registryByInstance.keys(), {
+          // Overlap promises already-admitted leases access after ordinary admission closes.
+          retained: (instance) => instance.owner?.record.generationOverlap === true,
+          work,
+          parent: pluginInvocationContext.getStore(),
+          registryByInstance,
+        })
+      : undefined;
+  let releaseGeneration: () => Promise<void>;
+  try {
+    for (const instance of lifetime.deferredCapabilities ?? []) {
+      work.retain(instance);
+    }
+    const release = lifetime.retain();
+    releaseGeneration = () => releaseRuntimePluginWork(release, work.release);
+  } catch (error) {
+    scope?.release();
+    work.release();
+    throw error;
+  }
+  if (!scope && !onRelease) {
+    return {
+      snapshot,
+      pluginGeneration,
+      run: runUnscoped,
+      [Symbol.asyncDispose]: releaseGeneration,
+    };
+  }
+  let closed = false;
+  let disposal: Promise<void> | undefined;
+  return {
+    snapshot,
+    pluginGeneration,
+    run: scope ? <T>(run: () => T): T => scope.run(run) : runUnscoped,
+    [Symbol.asyncDispose]() {
+      if (!closed) {
+        closed = true;
+        // Generation cleanup can await these consumers; revoke them before joining cleanup.
+        scope?.release();
+        disposal = (async () => {
+          try {
+            onRelease?.();
+          } finally {
+            await releaseGeneration();
+          }
+        })();
+      }
+      return disposal!;
+    },
   };
 }
 
@@ -205,11 +384,7 @@ export function publishPreparedPluginGeneration(
   const previous = publications.get(owner);
   const instances = new Set(
     [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
-      registry
-        ? [...collectRegistryInvocationInstances(registry)].filter(
-            (instance) => !instance.owner || instance.owner.record.status === "loaded",
-          )
-        : [],
+      registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
     ),
   );
   const cacheSignal = getPluginCacheRetirementSignal(
@@ -218,10 +393,13 @@ export function publishPreparedPluginGeneration(
   const isCurrent = () =>
     !cacheSignal.aborted && [...instances].every((instance) => instance.acceptingCalls);
   if (!isCurrent()) {
-    throw new Error("Prepared plugin generation retired before publication");
+    throw new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    );
   }
-  const release = retainPreparedPluginGeneration(generation);
+  const release = ownPreparedPluginGeneration(generation).retain();
   const version = owner.generation;
+  const gatewayLenders = new Set<PluginRegistry>();
   let signal: AbortSignal | undefined;
   const unsubscribe = () => signal?.removeEventListener("abort", observe);
   const observe = () => {
@@ -231,19 +409,39 @@ export function publishPreparedPluginGeneration(
       // leases retain the same generation independently until their work finishes.
       if (owner.generation === version) {
         owner.generation++;
+        retirePreparedModelRuntimeGeneration(owner);
         owner.needsRefresh = true;
-        owner.refreshError = new Error("Prepared model runtime plugin generation retired");
+        owner.refreshError = new PreparedModelRuntimePluginGenerationRetiredError(
+          "Prepared model runtime plugin generation retired",
+        );
         owner.pluginGeneration = undefined;
+        const retiredGatewayLoan = [...instances].some((instance) => {
+          const registry = instance.owner?.registry;
+          return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
+        });
+        releasePreparedPluginPublication(owner);
+        // Independent prepared instances and metadata caches retain their terminal
+        // retirement contract; only a lost Gateway loan needs process publication.
+        if (retiredGatewayLoan) {
+          owner.onPluginGenerationRetired?.();
+        }
+        return;
       }
       releasePreparedPluginPublication(owner);
       return;
     }
     // Publication can transfer an unchanged instance before aborting its old registry
     // epoch. Follow its new owner so a later real retirement remains observable.
+    gatewayLenders.clear();
     signal = AbortSignal.any([
       cacheSignal,
       ...[...instances].flatMap((instance) => {
         const registry = instance.owner?.registry;
+        // A turn registry can carry its admitting Gateway without being its lender.
+        // Capture physical custody while the Gateway owner still admits work.
+        if (registry && getPluginRegistryGatewayOwner(registry)?.current() === registry) {
+          gatewayLenders.add(registry);
+        }
         const current =
           registry &&
           capturePluginRegistryLifecycleSignal(
@@ -257,10 +455,9 @@ export function publishPreparedPluginGeneration(
     signal.addEventListener("abort", observe, { once: true });
   };
   publications.set(owner, {
-    generation,
     release: () => {
       unsubscribe();
-      return release();
+      return Promise.resolve(release());
     },
   });
   observe();

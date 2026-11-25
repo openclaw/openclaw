@@ -2,12 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import {
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-  collectBundledPluginBuildEntries,
-} from "./bundled-plugin-build-entries.mjs";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.ts";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
+import { readBoundedArtifactText } from "./bounded-artifact-text.mts";
+import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
+import { groupBy } from "./group-by.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
-import { isRecord } from "./record-shared.mjs";
+import { isRecord, trimString } from "./record-shared.mjs";
 
 type PluginGatewayEntry = {
   id: string;
@@ -30,16 +31,6 @@ const MANIFEST_NAMES = ["openclaw.plugin.json", "openclaw.plugin.json5"];
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 const QA_SUMMARY_MAX_BYTES_ENV = "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES";
 const DEFAULT_QA_SUMMARY_MAX_BYTES = 2 * 1024 * 1024;
-
-function normalizeStringOrEmpty(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function normalizeStringArray(value: unknown) {
-  return Array.isArray(value)
-    ? value.map((entry) => normalizeStringOrEmpty(entry)).filter((entry) => entry.length > 0)
-    : [];
-}
 
 function readPluginManifest(manifestPath: string) {
   const raw = fs.readFileSync(manifestPath, "utf8");
@@ -97,20 +88,20 @@ function collectCommandAliasRecords(manifest: PluginManifest) {
   return aliases
     .map((alias) => {
       if (typeof alias === "string") {
-        const name = normalizeStringOrEmpty(alias);
+        const name = trimString(alias);
         return name ? { name, kind: "runtime-slash", cliCommand: null } : null;
       }
       if (!isRecord(alias)) {
         return null;
       }
-      const name = normalizeStringOrEmpty(alias.name);
+      const name = trimString(alias.name);
       if (!name) {
         return null;
       }
       return {
         name,
-        kind: normalizeStringOrEmpty(alias.kind) || "runtime-slash",
-        cliCommand: normalizeStringOrEmpty(alias.cliCommand) || null,
+        kind: trimString(alias.kind) || "runtime-slash",
+        cliCommand: trimString(alias.cliCommand) || null,
       };
     })
     .filter((alias) => alias !== null);
@@ -119,14 +110,14 @@ function collectCommandAliasRecords(manifest: PluginManifest) {
 function collectAuthMethods(manifest: PluginManifest) {
   const auth = Array.isArray(manifest.auth) ? manifest.auth : [];
   return auth
-    .map((entry) => (isRecord(entry) ? normalizeStringOrEmpty(entry.method) : ""))
+    .map((entry) => (isRecord(entry) ? trimString(entry.method) : ""))
     .filter((method) => method.length > 0);
 }
 
 function collectOnboardingScopes(manifest: PluginManifest) {
   const scopes = new Set<string>();
   const addScopes = (value: unknown) => {
-    for (const scope of normalizeStringArray(value)) {
+    for (const scope of normalizeTrimmedStringList(value)) {
       scopes.add(scope);
     }
   };
@@ -148,17 +139,17 @@ function buildPluginMatrixEntry(repoRoot: string, manifestPath: string, manifest
   return {
     id: manifest.id,
     buildId: path.basename(pluginDir),
-    name: normalizeStringOrEmpty(manifest.name) || manifest.id,
+    name: trimString(manifest.name) || manifest.id,
     dir: path.relative(repoRoot, pluginDir),
     manifestPath: relativeManifestPath,
     enabledByDefault: manifest.enabledByDefault === true,
     activation: isRecord(manifest.activation) ? manifest.activation : {},
-    providers: normalizeStringArray(manifest.providers),
-    channels: normalizeStringArray(manifest.channels),
-    skills: normalizeStringArray(manifest.skills),
+    providers: normalizeTrimmedStringList(manifest.providers),
+    channels: normalizeTrimmedStringList(manifest.channels),
+    skills: normalizeTrimmedStringList(manifest.skills),
     authMethods: collectAuthMethods(manifest),
     onboardingScopes: collectOnboardingScopes(manifest),
-    requiredPlugins: normalizeStringArray(manifest.requiresPlugins),
+    requiredPlugins: normalizeTrimmedStringList(manifest.requiresPlugins),
     hasConfigSchema: isRecord(manifest.configSchema),
     hasRequiredConfigFields: schemaHasRequiredFields(manifest.configSchema),
     commandAliases,
@@ -196,7 +187,7 @@ function selectPluginEntries<T extends PluginGatewayEntry>(
   entries: T[],
   options: { ids?: string[]; shardIndex?: number; shardTotal?: number; limit?: number } = {},
 ) {
-  const ids = new Set(normalizeStringArray(options.ids));
+  const ids = new Set(normalizeTrimmedStringList(options.ids));
   let selected = ids.size > 0 ? entries.filter((entry) => ids.has(entry.id)) : [...entries];
   const missingIds = [...ids].filter((id) => !entries.some((entry) => entry.id === id));
   if (missingIds.length > 0) {
@@ -283,17 +274,6 @@ function median(values: unknown[]) {
     : (lower + upper) / 2;
 }
 
-function groupByPhase(rows: JsonRecord[]) {
-  const phases = new Map<string, JsonRecord[]>();
-  for (const row of rows) {
-    const phase = normalizeStringOrEmpty(row.phase) || "unknown";
-    const current = phases.get(phase) ?? [];
-    current.push(row);
-    phases.set(phase, current);
-  }
-  return phases;
-}
-
 function collectMetricObservations(rows: JsonRecord[], thresholds: MetricThresholds = {}) {
   const cpuCoreWarn = thresholds.cpuCoreWarn ?? 0.9;
   const hotWallWarnMs = thresholds.hotWallWarnMs ?? 30_000;
@@ -302,7 +282,7 @@ function collectMetricObservations(rows: JsonRecord[], thresholds: MetricThresho
   const rssAnomalyMultiplier = thresholds.rssAnomalyMultiplier ?? 2.5;
   const firstWorkRow = rows.find((row) => row.phase !== "prebuild");
   const observations = [];
-  for (const [phase, phaseRows] of groupByPhase(rows)) {
+  for (const [phase, phaseRows] of groupBy(rows, (row) => trimString(row.phase) || "unknown")) {
     const wallMedianMs = median(phaseRows.map((row) => row.wallMs));
     const rssMedianMb = median(phaseRows.map((row) => row.maxRssMb));
     for (const row of phaseRows) {
@@ -439,38 +419,22 @@ function buildGauntletPrebuildEnv(
     includePrivateQa?: boolean;
   } = {},
 ) {
-  const buildIds = new Set(normalizeStringArray(options.buildIds));
-  const runtimeOnlyPrebuildEnv = options.skipDeclarationBuild
-    ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }
-    : {};
-  const hasRuntimeOnlyPrebuildEnv = Object.keys(runtimeOnlyPrebuildEnv).length > 0;
+  const buildIds = new Set(normalizeTrimmedStringList(options.buildIds));
   if (options.includePrivateQa) {
     for (const pluginId of NON_PACKAGED_BUNDLED_PLUGIN_DIRS) {
       buildIds.add(pluginId);
     }
   }
-  if (!options.includePrivateQa) {
-    return buildIds.size === 0 && !hasRuntimeOnlyPrebuildEnv
-      ? env
-      : {
-          ...env,
-          PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
-          ...runtimeOnlyPrebuildEnv,
-          ...(buildIds.size > 0
-            ? {
-                OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
-                  .toSorted((left, right) => left.localeCompare(right))
-                  .join(","),
-              }
-            : {}),
-        };
+  if (!options.includePrivateQa && !options.skipDeclarationBuild && buildIds.size === 0) {
+    return env;
   }
   return {
     ...env,
     PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: env.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN ?? "false",
-    ...runtimeOnlyPrebuildEnv,
-    OPENCLAW_BUILD_PRIVATE_QA: "1",
-    OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    ...(options.skipDeclarationBuild ? { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" } : {}),
+    ...(options.includePrivateQa
+      ? { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }
+      : {}),
     ...(buildIds.size > 0
       ? {
           OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: [...buildIds]
@@ -510,7 +474,7 @@ function collectGatewayCpuObservations(params: {
     if (!isRecord(result)) {
       continue;
     }
-    const id = normalizeStringOrEmpty(result.id) || "unknown";
+    const id = trimString(result.id) || "unknown";
     const cpuCoreMax = metricMax(result.summary, "cpuCoreRatio");
     const wallMax = metricMax(result.summary, "readyzMs") ?? metricMax(result.summary, "healthzMs");
     if (
@@ -582,21 +546,7 @@ function readQaSuiteSummaryText(summaryPath: string) {
     process.env[QA_SUMMARY_MAX_BYTES_ENV] || String(DEFAULT_QA_SUMMARY_MAX_BYTES),
     QA_SUMMARY_MAX_BYTES_ENV,
   );
-  const stat = fs.statSync(summaryPath);
-  if (!stat.isFile()) {
-    throw new Error(`QA suite summary is not a file: ${summaryPath}`);
-  }
-  if (stat.size > maxBytes) {
-    throw new Error(
-      `QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${stat.size} bytes)`,
-    );
-  }
-  const text = fs.readFileSync(summaryPath, "utf8");
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > maxBytes) {
-    throw new Error(`QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${bytes} bytes)`);
-  }
-  return text;
+  return readBoundedArtifactText(summaryPath, maxBytes, "QA suite summary");
 }
 
 function validateQaSuiteSummary(summary: unknown) {

@@ -1,11 +1,5 @@
-// Migrate Hermes plugin module implements items behavior.
 import type { MigrationItem } from "openclaw/plugin-sdk/migration";
-import {
-  createMigrationItem,
-  markMigrationItemConflict,
-  markMigrationItemError,
-  markMigrationItemSkipped,
-} from "openclaw/plugin-sdk/migration";
+import { createMigrationItem } from "openclaw/plugin-sdk/migration";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
@@ -101,25 +95,14 @@ export function createHermesSecretItem(params: {
   });
 }
 
-export function readHermesSecretDetails(item: MigrationItem):
-  | {
-      envVar?: string;
-      provider: string;
-      profileId: string;
-      mode?: "token";
-      sourceKind?: string;
-      sourceProvider?: string;
-      sourceCredentialId?: string;
-      secretField?: string;
-    }
-  | undefined {
+export function readHermesSecretDetails(item: MigrationItem) {
   const envVar = normalizeOptionalString(item.details?.envVar);
   const provider = normalizeOptionalString(item.details?.provider);
   const profileId = normalizeOptionalString(item.details?.profileId);
   if (!provider || !profileId) {
     return undefined;
   }
-  const mode = item.details?.mode === "token" ? "token" : undefined;
+  const mode = item.details?.mode === "token" ? ("token" as const) : undefined;
   const sourceKind = normalizeOptionalString(item.details?.sourceKind);
   const sourceProvider = normalizeOptionalString(item.details?.sourceProvider);
   const sourceCredentialId = normalizeOptionalString(item.details?.sourceCredentialId);
@@ -134,16 +117,4 @@ export function readHermesSecretDetails(item: MigrationItem):
     ...(sourceCredentialId ? { sourceCredentialId } : {}),
     ...(secretField ? { secretField } : {}),
   };
-}
-
-export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemConflict(item, reason);
-}
-
-export function hermesItemError(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemError(item, reason);
-}
-
-export function hermesItemSkipped(item: MigrationItem, reason: string): MigrationItem {
-  return markMigrationItemSkipped(item, reason);
 }

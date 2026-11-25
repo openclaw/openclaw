@@ -88,6 +88,57 @@ class ClawComponentsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun statusRowsKeepCompleteLabelsAndValuesAtLargeFont() {
+    val title = mutableStateOf("Phone Node")
+    val value = mutableStateOf("Online")
+    val fontScale = mutableStateOf(1f)
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale.value)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item { ClawStatusRow(title.value, value.value, healthy = false) }
+          }
+        }
+      }
+    }
+    composeRule.onNodeWithText(title.value).assertCompleteText(title.value)
+    composeRule.onNodeWithText(value.value).assertCompleteText(value.value)
+    val normalTitle = composeRule.onNodeWithText(title.value).fetchSemanticsNode().boundsInRoot
+    val normalValue = composeRule.onNodeWithText(value.value).fetchSemanticsNode().boundsInRoot
+    assertTrue("Fitting status remains beside its title", normalTitle.right <= normalValue.left && normalValue.top < normalTitle.bottom)
+
+    composeRule.runOnIdle {
+      title.value = "Mémoire des conversations"
+      value.value = "Connexion interrompue : nouvelle tentative nécessaire"
+      fontScale.value = 2f
+    }
+    composeRule.onNodeWithText(title.value).assertCompleteText(title.value)
+    composeRule.onNodeWithText(value.value).assertCompleteText(value.value)
+    val largeTitle = composeRule.onNodeWithText(title.value).fetchSemanticsNode().boundsInRoot
+    val largeValue = composeRule.onNodeWithText(value.value).fetchSemanticsNode().boundsInRoot
+    assertTrue("Long status moves below the complete title", largeValue.top >= largeTitle.bottom)
+  }
+
+  @Test
+  fun standaloneStatusPillWrapsItsCompleteValueAtLargeFont() {
+    val label = "Connexion interrompue : nouvelle tentative nécessaire"
+    composeRule.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(2f)) {
+        ClawDesignTheme {
+          LazyColumn(Modifier.width(280.dp)) {
+            item { ClawStatusPill(label, ClawStatus.Warning, Modifier.testTag("status-pill")) }
+          }
+        }
+      }
+    }
+    val text = composeRule.onNodeWithText(label)
+    text.assertCompleteText(label)
+    val textBounds = text.fetchSemanticsNode().boundsInRoot
+    val pillBounds = composeRule.onNodeWithTag("status-pill").fetchSemanticsNode().boundsInRoot
+    assertTrue("All status lines stay inside the pill", textBounds.left >= pillBounds.left && textBounds.right <= pillBounds.right && textBounds.top >= pillBounds.top && textBounds.bottom <= pillBounds.bottom)
+  }
+
+  @Test
   fun avatarMarksKeepBothGlyphsInsideTheirCircleAtLargeFont() {
     val fontScale = mutableStateOf(1f)
     val marks = listOf("OC", "WW")
@@ -674,7 +725,7 @@ class ClawComponentsTest {
 
   @Test
   fun emptySegmentedOptionsProduceNoRows() {
-    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList()))
+    assertEquals(emptyList<List<String>>(), segmentedControlRows(emptyList<String>()))
   }
 
   @Test

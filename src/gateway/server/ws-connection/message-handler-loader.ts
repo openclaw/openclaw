@@ -1,4 +1,5 @@
-import { formatError } from "../../server-utils.js";
+import { formatErrorMessage as formatError } from "../../../infra/errors.js";
+import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../../server-constants.js";
 import {
   classifyGatewayStaleInstall,
   GATEWAY_STALE_INSTALL_CLOSE_REASON,
@@ -9,7 +10,7 @@ import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 export function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerParams): void {
   const queued: GatewayConnectionFrame[] = [];
   const queueMessage = (data: GatewayConnectionFrame) => {
-    if (queued.length >= 16) {
+    if (queued.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES) {
       params.setCloseCause("message-handler-loading-overflow", { queuedFrames: queued.length });
       params.close(1008, "gateway message handler loading");
       return;

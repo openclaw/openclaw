@@ -19,6 +19,9 @@ openclaw-debug-overlay-content {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xl);
   backdrop-filter: blur(18px) saturate(1.15);
+  /* The layout owner animates size explicitly. Global reduced-motion durations
+     must not turn direct pointer/keyboard placement into CSS transitions. */
+  transition-property: none;
 }
 
 .debug-overlay__header {
@@ -28,6 +31,18 @@ openclaw-debug-overlay-content {
   gap: 16px;
   padding: 13px 14px 11px;
   border-bottom: 1px solid var(--border);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.debug-overlay__header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.debug-overlay--dragging .debug-overlay__header {
+  cursor: grabbing;
 }
 
 .debug-overlay__header h2,
@@ -49,7 +64,13 @@ openclaw-debug-overlay-content {
   text-transform: uppercase;
 }
 
-.debug-overlay__close {
+.debug-overlay__controls {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.debug-overlay__control {
   display: grid;
   width: 30px;
   height: 30px;
@@ -63,10 +84,20 @@ openclaw-debug-overlay-content {
   border-radius: var(--radius-sm);
 }
 
-.debug-overlay__close:hover {
+.debug-overlay__control:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
+}
+
+.debug-overlay__control:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.debug-overlay__control svg {
+  width: 16px;
+  height: 16px;
 }
 
 .debug-overlay__body {
@@ -99,6 +130,88 @@ openclaw-debug-overlay-content {
     width: calc(100vw - 16px);
     max-height: calc(100dvh - 16px);
   }
+}
+
+.debug-overlay--minimized {
+  width: min(240px, calc(100vw - 32px));
+  height: auto;
+  max-height: min(92px, calc(100dvh - 32px));
+
+  .debug-overlay__header {
+    gap: 6px;
+    padding: 2px 4px 2px 8px;
+  }
+
+  .debug-overlay__header h2 {
+    font-size: 11px;
+  }
+
+  .debug-overlay__control {
+    width: 24px;
+    height: 24px;
+  }
+
+  .debug-overlay__body {
+    padding: 4px;
+  }
+
+  .gateway-vital {
+    min-height: 50px;
+    padding: 4px 5px 0;
+  }
+
+  .sparkline-tile__head {
+    display: flex;
+    line-height: 1;
+  }
+
+  .sparkline-tile__label {
+    font-size: 8.5px;
+    letter-spacing: 0.03em;
+  }
+
+  .sparkline-tile__value {
+    overflow: hidden;
+    margin: 2px 0 1px;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sparkline-tile__sub {
+    display: none;
+  }
+
+  .sparkline-tile__chart svg {
+    height: 20px;
+  }
+
+  .sparkline-tile__chart {
+    margin-inline: -5px;
+  }
+
+  .sparkline-tile__secondary {
+    font-size: 8px;
+    line-height: 9px;
+  }
+
+  .gateway-vital--cpu .sparkline-tile__chart svg {
+    height: 11px;
+  }
+}
+
+.debug-overlay__widget {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.debug-overlay__compact-loading {
+  display: grid;
+  min-height: 50px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .debug-overlay__placeholder-content {

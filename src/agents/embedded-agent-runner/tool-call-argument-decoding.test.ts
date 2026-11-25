@@ -50,7 +50,9 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       query: "Rock &amp; Roll &#65; &#39;ok&#39; &#x27;hex&#x27;",
       emoji: "ok &#x1F600;",
       args: ["--flag=&quot;value&quot;", "&lt;input&gt;", 42, true, null],
-      nested: { deep: "a &amp; b &mdash; &copy;" },
+      nested: JSON.parse(
+        '{"deep":"a &amp; b &mdash; &copy;","__proto__":{"note":"&lt;metadata&gt;"}}',
+      ),
       invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
     });
 
@@ -60,20 +62,12 @@ describe("createHtmlEntityToolCallArgumentDecodingWrapper", () => {
       query: "Rock & Roll A 'ok' 'hex'",
       emoji: "ok 😀",
       args: ['--flag="value"', "<input>", 42, true, null],
-      nested: { deep: "a & b — ©" },
+      nested: { deep: "a & b — ©", ["__proto__"]: { note: "<metadata>" } },
       invalid: "bad &#x110000; and &#9999999999; and &#xD800; and &#55296;",
     });
   });
 
-  it("decodes a shared tool-call arguments object exactly once, keyed by object identity, across its partial, message, and result()", async () => {
-    const { baseStreamFn } = buildSharedArgumentsAssistant();
-
-    const finalMessage = await drive(baseStreamFn);
-
-    expect(finalMessage.content[0]?.arguments.content).toBe("&amp;");
-  });
-
-  it("decodes the same arguments object once even when it flows through two independent wrapper invocations (the guard spans wrapper instances, not a single stream)", async () => {
+  it("decodes shared arguments once across partials, results, and wrapper invocations", async () => {
     const { assistant, baseStreamFn } = buildSharedArgumentsAssistant();
     const secondStreamFn = (() => ({
       async *[Symbol.asyncIterator]() {

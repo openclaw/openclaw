@@ -1,0 +1,331 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
+import { root } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveQaArtifactPath } from "../cli-paths.js";
+import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
+  QA_EVIDENCE_FILENAME,
+  validateQaEvidenceSummaryJson,
+} from "../evidence-summary.js";
+
+type NormalizedScenarioSummary = {
+  details?: string;
+  screenshotPath?: string;
+  status: string;
+  videoPath?: string;
+};
+
+export type LaneResult = {
+  outputDir: string;
+  scenarioDetails?: string;
+  screenshotPath?: string;
+  status: string;
+  videoPath?: string;
+};
+
+export type MantisRunStaging = {
+  dir: string;
+  relative: string;
+};
+
+const MANTIS_STABLE_ENTRIES = [
+  "baseline",
+  "candidate",
+  "comparison.json",
+  "mantis-report.md",
+  "mantis-evidence.json",
+] as const;
+
+type MantisOutputRoot = Pick<
+  Awaited<ReturnType<typeof root>>,
+  "exists" | "mkdir" | "move" | "remove"
+>;
+
+export async function removeMantisOutputTree(
+  outputRoot: MantisOutputRoot,
+  relativePath: string,
+): Promise<void> {
+  await outputRoot.remove(relativePath, {
+    recursive: true,
+    force: true,
+    order: "sorted",
+    maxEntries: Infinity,
+    maxDepth: Infinity,
+  });
+}
+
+async function rollbackMantisStableOutput(params: {
+  backedUp: readonly string[];
+  backupRelative: string;
+  installed: readonly string[];
+  outputRoot: MantisOutputRoot;
+  staging: MantisRunStaging;
+}): Promise<{ errors: unknown[]; retainedBackupEntries: string[] }> {
+  const rollbackErrors: unknown[] = [];
+  const retainedBackupEntries: string[] = [];
+  for (const entry of params.installed.toReversed()) {
+    try {
+      await removeMantisOutputTree(params.outputRoot, entry);
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+  }
+  for (const entry of params.backedUp.toReversed()) {
+    try {
+      await params.outputRoot.move(path.posix.join(params.backupRelative, entry), entry, {
+        overwrite: true,
+      });
+    } catch (error) {
+      rollbackErrors.push(error);
+      retainedBackupEntries.push(entry);
+    }
+  }
+  const transientPaths = [params.staging.relative];
+  if (retainedBackupEntries.length === 0) {
+    transientPaths.push(params.backupRelative);
+  }
+  for (const transient of transientPaths) {
+    try {
+      await removeMantisOutputTree(params.outputRoot, transient);
+    } catch (error) {
+      rollbackErrors.push(error);
+    }
+  }
+  return { errors: rollbackErrors, retainedBackupEntries };
+}
+
+export async function publishMantisRunOutput(params: {
+  outputRoot: MantisOutputRoot;
+  runId: string;
+  signal?: AbortSignal;
+  staging: MantisRunStaging;
+}): Promise<void> {
+  // Concurrent writers to one output directory are intentionally unsupported.
+  // The run id isolates rollback state; callers use distinct output directories.
+  params.signal?.throwIfAborted();
+  const backupRelative = `.mantis-previous-${params.runId}`;
+  const backedUp: string[] = [];
+  const installed: string[] = [];
+  try {
+    await params.outputRoot.mkdir(backupRelative);
+    for (const entry of MANTIS_STABLE_ENTRIES) {
+      params.signal?.throwIfAborted();
+      if (await params.outputRoot.exists(entry)) {
+        await params.outputRoot.move(entry, path.posix.join(backupRelative, entry), {
+          overwrite: true,
+        });
+        backedUp.push(entry);
+      }
+      await params.outputRoot.move(path.posix.join(params.staging.relative, entry), entry, {
+        overwrite: true,
+      });
+      installed.push(entry);
+    }
+    if (await params.outputRoot.exists("error.txt")) {
+      await params.outputRoot.move("error.txt", path.posix.join(backupRelative, "error.txt"), {
+        overwrite: true,
+      });
+      backedUp.push("error.txt");
+    }
+    // No awaited work separates this last abort check from committing the set.
+    // Before this boundary, both stable evidence and any stale error roll back.
+    params.signal?.throwIfAborted();
+  } catch (error) {
+    const rollback = await rollbackMantisStableOutput({
+      backedUp,
+      backupRelative,
+      installed,
+      outputRoot: params.outputRoot,
+      staging: params.staging,
+    });
+    if (rollback.errors.length > 0) {
+      const retained = rollback.retainedBackupEntries.length
+        ? ` Unrestored backups were retained under .mantis-previous-* (${rollback.retainedBackupEntries.join(", ")}).`
+        : "";
+      throw new AggregateError(
+        [error, ...rollback.errors],
+        `Mantis stable artifact publication failed and rollback failed.${retained}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+
+  // The stable set is committed. Hidden cleanup failures retain only redundant
+  // old/staging data and must not misreport the coherent new run as failed.
+  for (const transient of [params.staging.relative, backupRelative]) {
+    try {
+      await removeMantisOutputTree(params.outputRoot, transient);
+    } catch (error) {
+      console.warn(`Mantis published but could not remove ${transient}: ${String(error)}`);
+    }
+  }
+}
+
+function remapPublishedArtifactPath(params: {
+  artifactPath: string | undefined;
+  laneOutputDir: string;
+  publishedLaneDir: string;
+}): string | undefined {
+  if (!params.artifactPath || !path.isAbsolute(params.artifactPath)) {
+    return params.artifactPath;
+  }
+  const relativePath = path.relative(params.laneOutputDir, params.artifactPath);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    return params.artifactPath;
+  }
+  return path.join(params.publishedLaneDir, relativePath);
+}
+
+export function remapMantisLaneResult(params: {
+  publishedLaneDir: string;
+  result: LaneResult;
+  stagedLaneDir: string;
+}): LaneResult {
+  const remap = (artifactPath: string | undefined) =>
+    remapPublishedArtifactPath({
+      artifactPath,
+      laneOutputDir: params.stagedLaneDir,
+      publishedLaneDir: params.publishedLaneDir,
+    });
+  return {
+    ...params.result,
+    outputDir: params.publishedLaneDir,
+    screenshotPath: remap(params.result.screenshotPath),
+    videoPath: remap(params.result.videoPath),
+  };
+}
+
+async function readNormalizedLaneResult(params: {
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<NormalizedScenarioSummary | undefined> {
+  const summaryPath = path.join(params.publishedLaneDir, QA_EVIDENCE_FILENAME);
+  let rawSummary: string;
+  try {
+    rawSummary = await fs.readFile(summaryPath, "utf8");
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+
+  const summary = validateQaEvidenceSummaryJson(JSON.parse(rawSummary));
+  const outcome =
+    summary.schemaVersion === 3 ? projectQaEvidenceScenarioOutcomes(summary)[0] : undefined;
+  const selected =
+    summary.schemaVersion === 3
+      ? getEffectiveQaEvidenceEntries(summary).filter(
+          (candidate) =>
+            outcome?.scenarioId === params.scenario &&
+            "binding" in candidate &&
+            candidate.binding.occurrenceId === outcome.occurrenceId,
+        )
+      : [];
+  const entry =
+    summary.schemaVersion === 3
+      ? (selected.find((candidate) => candidate.result.status === outcome?.status) ?? selected[0])
+      : (summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
+        summary.entries[0]);
+  const artifacts = entry?.execution?.artifacts ?? [];
+  return {
+    details: entry?.result.failure?.reason,
+    screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,
+    status:
+      summary.schemaVersion === 3
+        ? outcome?.scenarioId === params.scenario
+          ? (outcome.status ?? "unknown")
+          : "unknown"
+        : (entry?.result.status ?? "fail"),
+    videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
+  };
+}
+
+async function readLegacyLaneSummary(params: {
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<NormalizedScenarioSummary> {
+  const summaryPath = path.join(params.publishedLaneDir, "discord-qa-summary.json");
+  const parsed: unknown = JSON.parse(await fs.readFile(summaryPath, "utf8"));
+  const scenarios =
+    isPlainObject(parsed) && Array.isArray(parsed.scenarios)
+      ? parsed.scenarios.filter(isPlainObject)
+      : [];
+  const scenarioSummary = scenarios.find((entry) => entry.id === params.scenario) ?? scenarios[0];
+  const artifactPaths = isPlainObject(scenarioSummary?.artifactPaths)
+    ? scenarioSummary.artifactPaths
+    : undefined;
+  return {
+    details: typeof scenarioSummary?.details === "string" ? scenarioSummary.details : undefined,
+    screenshotPath:
+      typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
+    status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
+    videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
+  };
+}
+
+export async function readMantisLaneResult(params: {
+  laneOutputDir: string;
+  laneRepoRoot: string;
+  publishedLaneDir: string;
+  scenario: string;
+}): Promise<LaneResult> {
+  const summary = (await readNormalizedLaneResult(params)) ?? (await readLegacyLaneSummary(params));
+  const resolveArtifact = (artifactPath: string | undefined) =>
+    artifactPath
+      ? remapPublishedArtifactPath({
+          ...params,
+          artifactPath: resolveQaArtifactPath(
+            params.laneRepoRoot,
+            params.laneOutputDir,
+            artifactPath,
+          ),
+        })
+      : undefined;
+  return {
+    outputDir: params.publishedLaneDir,
+    scenarioDetails: summary.details,
+    screenshotPath: resolveArtifact(summary.screenshotPath),
+    status: summary.status,
+    videoPath: resolveArtifact(summary.videoPath),
+  };
+}
+
+export async function copyMantisLaneArtifacts(params: {
+  lane: "baseline" | "candidate";
+  result: LaneResult;
+}): Promise<LaneResult> {
+  const copied = {
+    screenshotPath: params.result.screenshotPath,
+    videoPath: params.result.videoPath,
+  };
+  for (const [field, extension] of [
+    ["screenshotPath", "png"],
+    ["videoPath", "mp4"],
+  ] as const) {
+    const artifactPath = params.result[field];
+    if (!artifactPath) {
+      continue;
+    }
+    const source = path.isAbsolute(artifactPath)
+      ? artifactPath
+      : path.join(params.result.outputDir, artifactPath);
+    const target = path.join(params.result.outputDir, `${params.lane}.${extension}`);
+    await fs.copyFile(source, target);
+    copied[field] = target;
+  }
+  return { ...params.result, ...copied };
+}
+
+export async function stageMantisLaneOutput(sourceDir: string, targetDir: string): Promise<void> {
+  await fs.mkdir(targetDir);
+  await fs.cp(sourceDir, targetDir, { recursive: true });
+}

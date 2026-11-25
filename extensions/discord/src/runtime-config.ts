@@ -1,5 +1,4 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-// Discord helper module supports runtime config behavior.
 import {
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,

@@ -26,23 +26,3 @@ export function getUpdateDoctorConfigFailureReason(refusal?: UpdateDoctorConfigW
       : "repair-requires-config-change"
     : undefined;
 }
-
-export function createUpdateDoctorConfigWarningStep(
-  root: string,
-  changes: readonly UpdateDoctorConfigChange[],
-) {
-  const keys = [
-    ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
-  ].toSorted();
-  return {
-    name: "candidate Doctor config",
-    command: "report Doctor config changes",
-    cwd: root,
-    durationMs: 0,
-    exitCode: 0,
-    advisory: {
-      kind: "recoverable-maintenance" as const,
-      message: `Candidate Doctor changed keys ${keys.join(", ") || "none recorded"}; promotion receipts unavailable for this candidate version.`,
-    },
-  };
-}

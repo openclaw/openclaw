@@ -1,17 +1,10 @@
 // Streams one-property legacy JSON object stores without buffering the whole file.
 import { createHash } from "node:crypto";
+import type { BigIntStats } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import type { Root } from "@openclaw/fs-safe";
 
 const JSON_WHITESPACE = new Set([" ", "\t", "\r", "\n"]);
-
-type LegacyJsonStreamSnapshot = {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  sha256: string;
-  size: number;
-};
 
 class JsonCharacterCursor {
   private readonly chunks: AsyncIterator<string>;
@@ -74,17 +67,17 @@ async function expectCharacter(cursor: JsonCharacterCursor, expected: string): P
   }
 }
 
-async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
-  await cursor.skipWhitespace();
-  if ((await cursor.take()) !== '"') {
-    throw new Error("expected string in legacy JSON store");
-  }
+/** The opening quote has already been consumed by the enclosing parser. */
+async function readJsonStringToken(
+  cursor: JsonCharacterCursor,
+  enclosing: "string" | "object",
+): Promise<string> {
   let raw = '"';
   let escaped = false;
   while (true) {
     const character = await cursor.take();
     if (character === null) {
-      throw new Error("unterminated string in legacy JSON store");
+      throw new Error(`unterminated ${enclosing} in legacy JSON store`);
     }
     raw += character;
     if (escaped) {
@@ -96,13 +89,21 @@ async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
       continue;
     }
     if (character === '"') {
-      const parsed = parseLegacyJson(raw);
-      if (typeof parsed !== "string") {
-        throw new Error("invalid string in legacy JSON store");
-      }
-      return parsed;
+      return raw;
     }
   }
+}
+
+async function readJsonString(cursor: JsonCharacterCursor): Promise<string> {
+  await cursor.skipWhitespace();
+  if ((await cursor.take()) !== '"') {
+    throw new Error("expected string in legacy JSON store");
+  }
+  const parsed = parseLegacyJson(await readJsonStringToken(cursor, "string"));
+  if (typeof parsed !== "string") {
+    throw new Error("invalid string in legacy JSON store");
+  }
+  return parsed;
 }
 
 async function readJsonObject(cursor: JsonCharacterCursor): Promise<unknown> {
@@ -112,27 +113,17 @@ async function readJsonObject(cursor: JsonCharacterCursor): Promise<unknown> {
   }
   let raw = "{";
   let depth = 1;
-  let escaped = false;
-  let inString = false;
   while (depth > 0) {
     const character = await cursor.take();
     if (character === null) {
       throw new Error("unterminated object in legacy JSON store");
     }
-    raw += character;
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
+    if (character === '"') {
+      raw += await readJsonStringToken(cursor, "object");
       continue;
     }
-    if (character === '"') {
-      inString = true;
-    } else if (character === "{") {
+    raw += character;
+    if (character === "{") {
       depth += 1;
     } else if (character === "}") {
       depth -= 1;
@@ -179,18 +170,14 @@ async function parseSinglePropertyObject(params: {
   }
 }
 
-async function* decodeUtf8Chunks(params: {
-  handle: FileHandle;
-  hash: ReturnType<typeof createHash>;
-  onBytes: (length: number) => void;
-}): AsyncGenerator<string> {
+async function* decodeUtf8Chunks(
+  handle: FileHandle,
+  observeChunk: (chunk: Buffer | string) => Buffer,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const stream = params.handle.createReadStream({ autoClose: false, start: 0 });
+  const stream = handle.createReadStream({ autoClose: false, start: 0 });
   for await (const rawChunk of stream) {
-    const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-    params.hash.update(chunk);
-    params.onBytes(chunk.byteLength);
-    const text = decoder.decode(chunk, { stream: true });
+    const text = decoder.decode(observeChunk(rawChunk), { stream: true });
     if (text) {
       yield text;
     }
@@ -201,17 +188,13 @@ async function* decodeUtf8Chunks(params: {
   }
 }
 
-function assertStableRead(
-  before: Awaited<ReturnType<FileHandle["stat"]>>,
-  after: Awaited<ReturnType<FileHandle["stat"]>>,
-  bytesRead: number,
-): void {
+function assertStableRead(before: BigIntStats, after: BigIntStats, bytesRead: number): void {
   if (
     before.dev !== after.dev ||
     before.ino !== after.ino ||
-    before.mtimeMs !== after.mtimeMs ||
+    before.mtimeNs !== after.mtimeNs ||
     before.size !== after.size ||
-    bytesRead !== after.size
+    BigInt(bytesRead) !== after.size
   ) {
     throw new Error("legacy JSON store changed while it was being read");
   }
@@ -223,23 +206,23 @@ export async function readLegacyJsonObjectStream(params: {
   relativePath: string;
   property?: string;
   onEntry?: (key: string, value: unknown) => void;
-}): Promise<LegacyJsonStreamSnapshot> {
-  const opened = await params.stateRoot.open(params.relativePath, {
+}) {
+  await using opened = await params.stateRoot.open(params.relativePath, {
     hardlinks: "reject",
     symlinks: "reject",
   });
   const hash = createHash("sha256");
   let size = 0;
   try {
-    const before = opened.stat;
+    const before = await opened.handle.stat({ bigint: true });
+    const observeChunk = (rawChunk: Buffer | string) => {
+      const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
+      hash.update(chunk);
+      size += chunk.byteLength;
+      return chunk;
+    };
     if (params.property && params.onEntry) {
-      const chunks = decodeUtf8Chunks({
-        handle: opened.handle,
-        hash,
-        onBytes: (length) => {
-          size += length;
-        },
-      });
+      const chunks = decodeUtf8Chunks(opened.handle, observeChunk);
       await parseSinglePropertyObject({
         chunks,
         property: params.property,
@@ -248,17 +231,15 @@ export async function readLegacyJsonObjectStream(params: {
     } else {
       const stream = opened.handle.createReadStream({ autoClose: false, start: 0 });
       for await (const rawChunk of stream) {
-        const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
-        hash.update(chunk);
-        size += chunk.byteLength;
+        observeChunk(rawChunk);
       }
     }
-    const after = await opened.handle.stat();
+    const after = await opened.handle.stat({ bigint: true });
     assertStableRead(before, after, size);
     return {
       dev: after.dev,
       ino: after.ino,
-      mtimeMs: after.mtimeMs,
+      mtimeMs: Number(after.mtimeNs / 1_000_000n) + Number(after.mtimeNs % 1_000_000n) / 1_000_000,
       sha256: hash.digest("hex"),
       size,
     };
@@ -267,7 +248,5 @@ export async function readLegacyJsonObjectStream(params: {
       throw new Error("legacy JSON store is not valid UTF-8", { cause: error });
     }
     throw error;
-  } finally {
-    await opened[Symbol.asyncDispose]();
   }
 }

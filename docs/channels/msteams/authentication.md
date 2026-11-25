@@ -33,7 +33,7 @@ Use a PEM certificate registered with your Entra ID app registration.
       tenantId: "<TENANT_ID>",
       authType: "federated",
       certificatePath: "/path/to/cert.pem",
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }
@@ -72,7 +72,7 @@ Use Azure Managed Identity for passwordless authentication on Azure infrastructu
       tenantId: "<TENANT_ID>",
       authType: "federated",
       useManagedIdentity: true,
-      webhook: { port: 3978, path: "/api/messages" },
+      webhook: { path: "/api/messages" },
     },
   },
 }

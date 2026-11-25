@@ -1,5 +1,3 @@
-// Numeric budget flag/env helpers shared by benchmark and performance scripts.
-/** Parse an optional non-negative budget number from CLI or env text. */
 function parseBudgetNumber(raw: string | undefined, label: string): number | null {
   const value = raw?.trim();
   if (!value) {
@@ -12,12 +10,10 @@ function parseBudgetNumber(raw: string | undefined, label: string): number | nul
   return parsed;
 }
 
-/** Read a non-negative budget number from an environment variable. */
 export function readBudgetEnvNumber(name: string, env = process.env) {
   return parseBudgetNumber(env[name], name);
 }
 
-/** Create a flag spec that stores a non-negative floating-point budget value. */
 export function budgetFloatFlag<Key extends string>(flag: string, key: Key) {
   return {
     consume(argv: string[], index: number) {

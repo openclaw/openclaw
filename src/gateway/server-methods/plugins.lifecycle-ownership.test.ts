@@ -31,26 +31,10 @@ const context: Pick<GatewayRequestContext, "applyPluginLifecycleChange"> = {
 };
 const lifecycleRequests = [
   {
-    method: "plugins.install",
-    params: { source: "official", pluginId: "workboard" },
-    operation: managementMocks.install,
-  },
-  {
-    method: "plugins.setEnabled",
-    params: { pluginId: "workboard", enabled: false },
-    operation: managementMocks.setEnabled,
-  },
-  {
-    method: "plugins.uninstall",
-    params: { pluginId: "workboard" },
-    operation: managementMocks.uninstall,
-  },
-  {
     method: "plugins.reload",
     params: { plugins: [{ pluginId: "workboard" }] },
     operation: managementMocks.reload,
   },
-  { method: "plugins.refresh", params: {}, operation: managementMocks.refreshMetadata },
 ] as const;
 type ManagedMutationOptions = Pick<
   Parameters<typeof installManagedPlugin>[0],
@@ -164,7 +148,7 @@ describe("plugin lifecycle invoker ownership", () => {
         invocation: {
           signal: controller.signal,
           sessionMutationCommitGuard: () => {
-            if (!open) {
+            if (fence === "guard" && !open) {
               throw failure;
             }
           },
@@ -207,11 +191,13 @@ describe("plugin lifecycle invoker ownership", () => {
       "rejects retained $method $checkpoint work after an await",
       async ({ method, params, operation, checkpoint }) => {
         const owner = createInvocation();
+        const entered = createDeferred();
         const paused = createDeferred();
         const persist = vi.fn();
         if (checkpoint === "publication") {
           applyRuntime.mockImplementation(
             async (change: Parameters<NonNullable<ManagedMutationOptions["applyRuntime"]>>[0]) => {
+              entered.resolve();
               await paused.promise;
               change.assertInvokerOwned?.();
               persist();
@@ -221,6 +207,7 @@ describe("plugin lifecycle invoker ownership", () => {
         }
         operation.mockImplementation(async (options: ManagedMutationOptions) => {
           if (checkpoint !== "publication") {
+            entered.resolve();
             await paused.promise;
           }
           if (checkpoint === "persistence") {
@@ -241,6 +228,12 @@ describe("plugin lifecycle invoker ownership", () => {
         });
         const pending = callHandler(method, params, owner.invocation);
         try {
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error(`${method} completed before queued ${checkpoint}`);
+            }),
+          ]);
           expect(operation).toHaveBeenCalledOnce();
           owner.close();
           paused.resolve();

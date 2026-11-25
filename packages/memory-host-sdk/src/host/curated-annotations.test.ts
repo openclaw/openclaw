@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  INVALID_PROJECT_ANNOTATION_KEY,
   extractCuratedEntryRecallMetadata,
   extractProjectKeysFromCuratedEntry,
   stripMemoryAnnotationCarriers,
@@ -58,7 +59,6 @@ describe("curated annotation grammar", () => {
   it("keeps long unfinished carriers unchanged and invalid project markers scoped", () => {
     const openers = "<!--project:".repeat(20_000);
     const spaces = `<!--project:${" ".repeat(20_000)}X`;
-    const started = performance.now();
     for (const input of [openers, spaces]) {
       expect(stripMemoryAnnotationCarriers(input)).toBe(input);
       expect(extractProjectKeysFromCuratedEntry(input)).toEqual({
@@ -69,6 +69,24 @@ describe("curated annotation grammar", () => {
         validCount: 0,
       });
     }
-    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("parses incomplete recall annotations without pathological backtracking", () => {
+    const sourceLines = [`- Incomplete. <!--trigger:${"--><!--project:".repeat(26)}X`];
+    // #138995's exponential suffix regex took 44 s on this 417-character witness.
+    // Time only the sub-millisecond parser; 2 s leaves ample scheduling headroom.
+    const started = performance.now();
+    const metadata = extractCuratedEntryRecallMetadata({
+      sourceLines,
+      curatedRoot: true,
+      projectScopeEligible: true,
+    });
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(2_000);
+    expect(metadata).toEqual({
+      importance: null,
+      triggers: null,
+      projectKey: INVALID_PROJECT_ANNOTATION_KEY,
+    });
   });
 });

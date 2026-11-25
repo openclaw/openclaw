@@ -1,0 +1,255 @@
+name: Full Release Validation Nightly
+
+on:
+  schedule:
+    # Every 3 hours while main moves toward a release; one pinned main SHA per run.
+    - cron: "7 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Full release validation or a managed runner scheduling check
+        type: choice
+        default: full-release-validation
+        options:
+          - full-release-validation
+          - runner-canary
+
+permissions:
+  contents: read
+
+# Full validation runs queue behind one another; the short manual runner canary
+# has its own group so it cannot delay scheduled validation.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' &&
+    'full-release-validation-nightly-canary' || 'full-release-validation-nightly' }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  boat_nightly_runner:
+    name: Provision Boat nightly runner
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && !cancelled() && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'))
+    runs-on: ubuntu-24.04
+    # Leave setup time around the 15-minute provision and 10-minute registration.
+    timeout-minutes: 30
+    outputs:
+      nightly_vm: ${{ steps.nightly.outputs.vm }}
+      nightly_runner: ${{ steps.nightly.outputs.runner }}
+      nightly_label: ${{ steps.nightly.outputs.label }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Provision nightly runner
+        id: nightly
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: provision
+          role: nightly
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+
+  runner_canary:
+    name: Verify Boat runner scheduling
+    needs: [boat_nightly_runner]
+    if: "!cancelled() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && needs.boat_nightly_runner.result == 'success'"
+    runs-on: >-
+      ${{ fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(needs.boat_nightly_runner.outputs.nightly_label))) }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Confirm the managed runner accepted this job
+        shell: bash
+        run: |
+          test "$RUNNER_ENVIRONMENT" = self-hosted
+          printf 'Managed nightly runner accepted run %s attempt %s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+
+  validate:
+    needs: [boat_nightly_runner]
+    if: "!cancelled() && (github.event_name != 'workflow_dispatch' || inputs.operation != 'runner-canary') && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_nightly_runner.result == 'success') && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'"
+    # The helper watches the parent for up to 720 minutes, like the parent's own
+    # release_decision waiter, so this job uses that job's runner and budget.
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(needs.boat_nightly_runner.outputs.nightly_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404')) }}
+    timeout-minutes: 720
+    permissions:
+      # Dispatch the parent and read its runs and evidence artifacts.
+      actions: write
+      # Create and delete the helper's immutable release-ci/* workflow ref.
+      contents: write
+    steps:
+      - name: Checkout scheduled main SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      # Full Release Validation dispatches its children from its own workflow ref and
+      # refuses when that ref moved. Mutable main moves on a busy day, so the helper
+      # pins one scheduled main SHA as both Validation and Tooling SHA and dispatches
+      # from an immutable release-ci/<sha12>-<id> transport ref instead. Keep the
+      # explicit trusted-main route: scheduled bots do not attest candidate admission.
+      - name: Run Full Release Validation for the scheduled main SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_SHA: ${{ github.sha }}
+        run: |
+          pnpm ci:full-release \
+            --sha "$VALIDATION_SHA" \
+            --workflow-sha "$VALIDATION_SHA" \
+            --trusted-workflow-ref main \
+            -f validation_purpose=main-qualification \
+            -f release_profile=stable \
+            -f run_release_soak=true \
+            -f reuse_evidence=true \
+            -f rerun_group=all \
+            -f allow_unreleased_changelog=true \
+            -f fail_fast=false
+
+      - name: Upload dispatch request record
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: full-release-validation-nightly-request
+          path: .artifacts/full-release-validation/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  cleanup_boat_nightly_runner:
+    name: Remove Boat nightly runner
+    needs: [boat_nightly_runner, validate]
+    if: always() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && 25 || 15 }}
+    permissions:
+      contents: read
+      # The canary watchdog cancels only this workflow before normal cleanup.
+      actions: write
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      # This hosted job must not wait on runner_canary: a runner that never
+      # accepts the job cannot start that job's execution timeout.
+      - name: Await the managed runner canary
+        id: canary_wait
+        timeout-minutes: 6
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && needs.boat_nightly_runner.result == 'success'
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANARY_LABEL: ${{ needs.boat_nightly_runner.outputs.nightly_label }}
+        with:
+          script: |
+            core.setOutput("terminal", "false");
+            core.setOutput("succeeded", "false");
+            const deadline = Date.now() + 5 * 60_000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+                ...context.repo, run_id: context.runId,
+                attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT), per_page: 100,
+                request: { timeout: 10_000 },
+              });
+              const matches = data.jobs.filter((job) => job.name === "Verify Boat runner scheduling");
+              if (matches.length > 1) throw new Error("Ambiguous canary job identity.");
+              const job = matches[0];
+              if (job && (job.head_sha !== context.sha || !job.labels.includes(process.env.CANARY_LABEL))) {
+                throw new Error("Canary job does not match this workflow's runner.");
+              }
+              if (job?.status === "completed") {
+                core.setOutput("terminal", "true");
+                core.setOutput("succeeded", job.conclusion === "success" && job.runner_id > 0 &&
+                  job.runner_name === process.env.CANARY_LABEL);
+                return;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+            }
+            core.setFailed("The managed runner did not complete the canary within five minutes.");
+      - name: Cancel an unfinished canary before cleanup
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary' && steps.canary_wait.outputs.terminal != 'true'
+        timeout-minutes: 6
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CANARY_LABEL: ${{ needs.boat_nightly_runner.outputs.nightly_label }}
+        with:
+          script: |
+            await github.rest.actions.cancelWorkflowRun({
+              ...context.repo, run_id: context.runId, request: { timeout: 10_000 },
+            });
+            const deadline = Date.now() + 5 * 60_000;
+            while (Date.now() < deadline) {
+              const { data } = await github.rest.actions.listJobsForWorkflowRunAttempt({
+                ...context.repo, run_id: context.runId,
+                attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT), per_page: 100,
+                request: { timeout: 10_000 },
+              });
+              const matches = data.jobs.filter((job) => job.name === "Verify Boat runner scheduling");
+              if (matches.length > 1) throw new Error("Ambiguous canary job identity.");
+              const job = matches[0];
+              if (job && (job.head_sha !== context.sha || !job.labels.includes(process.env.CANARY_LABEL))) {
+                throw new Error("Canary job does not match this workflow's runner.");
+              }
+              if (job?.status === "completed") return;
+              await new Promise((resolve) => setTimeout(resolve, 5_000));
+            }
+            throw new Error("Canary cancellation did not settle; resource cleanup will still be attempted.");
+      - name: Cleanup nightly runner
+        id: nightly
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: nightly
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_nightly_runner.outputs.nightly_vm }}
+          runner: ${{ needs.boat_nightly_runner.outputs.nightly_runner }}
+      - name: Require successful canary completion
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'runner-canary'
+        env:
+          CANARY_SUCCEEDED: ${{ steps.canary_wait.outputs.succeeded }}
+        run: test "$CANARY_SUCCEEDED" = true

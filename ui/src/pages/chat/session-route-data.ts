@@ -1,8 +1,9 @@
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { SessionCatalogProfileRelation } from "../../../../packages/gateway-protocol/src/index.js";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { MissingSessionRouteData } from "./route-loader-session-reference.ts";
 
-export type SessionRouteCandidate = {
+type SessionRouteCandidate = {
   agentId: string;
   displayName: string;
   href: string;
@@ -13,6 +14,9 @@ export type ChatRouteData =
   | {
       kind: "session";
       sessionKey: string;
+      /** Ephemeral query handoff, not persisted in the route or session identity. */
+      catalogProfileRelation?: SessionCatalogProfileRelation;
+      creation?: Readonly<{ admitted: boolean }>;
       agentId?: string;
       draft?: string;
       focusComposer?: boolean;
@@ -20,6 +24,7 @@ export type ChatRouteData =
       face: BoardFace;
       shortId?: string;
       routeLoadingSkeleton?: true;
+      sessionResolutionFromCache?: "roster" | "snapshot";
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
       canonicalLocationSource?: RouteLocation;
@@ -31,6 +36,7 @@ export type ChatRouteData =
       truncated: boolean;
       face: BoardFace;
     }
+  | { kind: "unavailable-home"; agentId: string; face: BoardFace }
   | MissingSessionRouteData
   | { kind: "route-error"; message: string; face: "chat" };
 

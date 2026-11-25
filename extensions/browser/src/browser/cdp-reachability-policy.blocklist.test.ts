@@ -60,29 +60,36 @@ describe("assertChromeMcpCdpTransportAllowed blocklist scoping", () => {
     },
   );
 
-  describe.each([
-    { name: "mcpArgs-only profile", cdpUrl: undefined },
-    { name: "mcpArgs overriding a trusted cdpUrl", cdpUrl: trustedHttpEndpoint },
-  ])("$name", ({ cdpUrl }) => {
-    it.each(
-      [
-        { flag: "--browserUrl", url: blockedHttpEndpoint },
-        { flag: "--browser-url", url: blockedHttpEndpoint },
-        { flag: "-u", url: blockedHttpEndpoint },
-        { flag: "--u", url: blockedHttpEndpoint },
-        { flag: "--wsEndpoint", url: blockedWsEndpoint },
-        { flag: "--ws-endpoint", url: blockedWsEndpoint },
-        { flag: "-w", url: blockedWsEndpoint },
-        { flag: "--w", url: blockedWsEndpoint },
-      ].flatMap(({ flag, url }) => [
-        { name: `${flag} split`, mcpArgs: [flag, url] },
-        { name: `${flag} equals`, mcpArgs: [`${flag}=${url}`] },
-      ]),
-    )("rejects the blocklisted endpoint from $name", ({ mcpArgs }) => {
-      expect(() =>
-        assertConfiguredTransportAllowed({ cdpUrl, mcpArgs }, privateAccessWithBlocklist),
-      ).toThrow(/cannot carry that pinned transport/i);
-    });
+  it("rejects an endpoint supplied only through mcpArgs", () => {
+    expect(() =>
+      assertConfiguredTransportAllowed(
+        { mcpArgs: ["--browserUrl", blockedHttpEndpoint] },
+        privateAccessWithBlocklist,
+      ),
+    ).toThrow(/cannot carry that pinned transport/i);
+  });
+
+  it.each(
+    [
+      { flag: "--browserUrl", url: blockedHttpEndpoint },
+      { flag: "--browser-url", url: blockedHttpEndpoint },
+      { flag: "-u", url: blockedHttpEndpoint },
+      { flag: "--u", url: blockedHttpEndpoint },
+      { flag: "--wsEndpoint", url: blockedWsEndpoint },
+      { flag: "--ws-endpoint", url: blockedWsEndpoint },
+      { flag: "-w", url: blockedWsEndpoint },
+      { flag: "--w", url: blockedWsEndpoint },
+    ].flatMap(({ flag, url }) => [
+      { name: `${flag} split`, mcpArgs: [flag, url] },
+      { name: `${flag} equals`, mcpArgs: [`${flag}=${url}`] },
+    ]),
+  )("rejects a blocklisted $name endpoint overriding a trusted cdpUrl", ({ mcpArgs }) => {
+    expect(() =>
+      assertConfiguredTransportAllowed(
+        { cdpUrl: trustedHttpEndpoint, mcpArgs },
+        privateAccessWithBlocklist,
+      ),
+    ).toThrow(/cannot carry that pinned transport/i);
   });
 
   it.each([

@@ -27,7 +27,7 @@ export const diagnosticCanaries = {
 
 export function diagnosticEnvReportScript(routing: NodeJS.ProcessEnv): string {
   return `JSON.stringify({
-    present: Object.fromEntries(${JSON.stringify(Object.keys(diagnosticCanaries))}.map(key => [key, Object.hasOwn(process.env, key)])),
+    defined: Object.fromEntries(${JSON.stringify(Object.keys(diagnosticCanaries))}.map(key => [key, process.env[key] !== undefined])),
     routingPreserved: Object.entries(${JSON.stringify(routing)}).every(([key, value]) => process.env[key] === value)
   })`;
 }

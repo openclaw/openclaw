@@ -87,8 +87,6 @@ The commit may contain a partial locale set. The job summary lists applied local
 
 The weekly run uses `full` mode. It forces a full reconciliation across every locale and every source page instead of relying only on changed source hashes.
 
-Glossary changes also force full reconciliation because glossary guidance can affect pages whose source hashes did not change.
-
 Expected behavior:
 
 - regenerate or verify every locale page
@@ -108,4 +106,4 @@ Translations deploy after the aggregate i18n commit. The finalizer dispatches Gi
 
 A hot docs day should produce many fast English deploys, but only a small number of locale deploys.
 
-If external deploy providers such as Mintlify watch every push, the aggregate i18n commit is the load reducer. Avoid restoring per-locale pushes to `main`.
+The aggregate i18n commit limits publish work to one update. Avoid restoring per-locale pushes to `main`.

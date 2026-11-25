@@ -6,7 +6,7 @@ import { parseArgs, promisify } from "node:util";
 import { chromium } from "playwright";
 import { resolveSystemBin } from "../src/infra/resolve-system-bin.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../ui/src/test-helpers/control-ui-e2e.ts";
-import { rasterizeCaptions } from "../ui/src/test-helpers/proof-video.ts";
+import { rasterizeProofOverlays } from "../ui/src/test-helpers/proof-video.ts";
 import { planProofVideoRender, validateProofVideoCues } from "./lib/proof-video-render.ts";
 
 const run = promisify(execFile);
@@ -95,7 +95,7 @@ async function main() {
   });
   const missing = [];
   for (const cue of cues.cues) {
-    if (cue.kind !== "caption") {
+    if (cue.kind !== "caption" && cue.kind !== "annotation") {
       continue;
     }
     try {
@@ -105,14 +105,14 @@ async function main() {
     }
   }
   if (missing.length && !values.rasterize) {
-    throw new Error("Caption PNGs are missing; rerun with --rasterize");
+    throw new Error("Caption/annotation PNGs are missing; rerun with --rasterize");
   }
   if (missing.length) {
     const browser = await chromium.launch({
       executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
     });
     try {
-      await rasterizeCaptions(browser, { ...cues, cues: missing }, dir);
+      await rasterizeProofOverlays(browser, { ...cues, cues: missing }, dir);
     } finally {
       await browser.close();
     }

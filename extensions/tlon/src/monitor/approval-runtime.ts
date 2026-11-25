@@ -1,13 +1,18 @@
-// Tlon plugin module implements approval runtime behavior.
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import type { PendingApproval, TlonSettingsStore } from "../settings.js";
+import type { TlonClubPolicy, TlonClubRules } from "../config-schema.js";
+import {
+  putTlonSetting,
+  TLON_PENDING_APPROVAL_LIMIT,
+  type PendingApproval,
+  type TlonSettingsStore,
+} from "../settings.js";
 import { normalizeShip } from "../targets.js";
 import { sendDm } from "../urbit/send.js";
 import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import {
   findPendingApproval,
   formatApprovalConfirmation,
+  requiresResendAfterApproval,
   formatApprovalRequest,
   formatBlockedList,
   formatPendingList,
@@ -18,51 +23,30 @@ import {
 
 type TlonApprovalApi = Pick<UrbitSSEClient, "poke" | "scry">;
 
-type ApprovedMessageProcessor = (approval: PendingApproval) => Promise<void>;
-
 export function createTlonApprovalRuntime(params: {
   api: TlonApprovalApi;
   runtime: RuntimeEnv;
   botShipName: string;
-  getPendingApprovals: () => PendingApproval[];
-  setPendingApprovals: (approvals: PendingApproval[]) => void;
-  getCurrentSettings: () => TlonSettingsStore;
-  setCurrentSettings: (settings: TlonSettingsStore) => void;
-  getEffectiveDmAllowlist: () => string[];
-  setEffectiveDmAllowlist: (ships: string[]) => void;
-  getEffectiveOwnerShip: () => string | null;
-  processApprovedMessage: ApprovedMessageProcessor;
+  state: {
+    pendingApprovals: PendingApproval[];
+    currentSettings: TlonSettingsStore;
+    effectiveDmAllowlist: string[];
+    effectiveClubPolicy: TlonClubPolicy;
+    effectiveClubRules: TlonClubRules;
+    effectiveOwnerShip: string | null;
+  };
+  processApprovedMessage: (approval: PendingApproval) => Promise<void>;
   refreshWatchedChannels: () => Promise<number>;
 }) {
-  const {
-    api,
-    runtime,
-    botShipName,
-    getPendingApprovals,
-    setPendingApprovals,
-    getCurrentSettings,
-    setCurrentSettings,
-    getEffectiveDmAllowlist,
-    setEffectiveDmAllowlist,
-    getEffectiveOwnerShip,
-    processApprovedMessage,
-    refreshWatchedChannels,
-  } = params;
+  const { api, runtime, botShipName, state, processApprovedMessage, refreshWatchedChannels } =
+    params;
+
+  let approvalOverflowNoticeSent = false;
+  let approvalOverflowNoticeAttempts = 0;
 
   const savePendingApprovals = async (required = false): Promise<void> => {
     try {
-      await api.poke({
-        app: "settings",
-        mark: "settings-event",
-        json: {
-          "put-entry": {
-            desk: "moltbot",
-            "bucket-key": "tlon",
-            "entry-key": "pendingApprovals",
-            value: JSON.stringify(getPendingApprovals()),
-          },
-        },
-      });
+      await putTlonSetting(api, "pendingApprovals", JSON.stringify(state.pendingApprovals));
     } catch (err) {
       runtime.error?.(`[tlon] Failed to save pending approvals: ${String(err)}`);
       if (required) {
@@ -73,23 +57,12 @@ export function createTlonApprovalRuntime(params: {
 
   const addToDmAllowlist = async (ship: string): Promise<void> => {
     const normalizedShip = normalizeShip(ship);
-    const nextAllowlist = getEffectiveDmAllowlist().includes(normalizedShip)
-      ? getEffectiveDmAllowlist()
-      : [...getEffectiveDmAllowlist(), normalizedShip];
-    setEffectiveDmAllowlist(nextAllowlist);
+    const nextAllowlist = state.effectiveDmAllowlist.includes(normalizedShip)
+      ? state.effectiveDmAllowlist
+      : [...state.effectiveDmAllowlist, normalizedShip];
+    state.effectiveDmAllowlist = nextAllowlist;
     try {
-      await api.poke({
-        app: "settings",
-        mark: "settings-event",
-        json: {
-          "put-entry": {
-            desk: "moltbot",
-            "bucket-key": "tlon",
-            "entry-key": "dmAllowlist",
-            value: nextAllowlist,
-          },
-        },
-      });
+      await putTlonSetting(api, "dmAllowlist", nextAllowlist);
       runtime.log?.(`[tlon] Added ${normalizedShip} to dmAllowlist`);
     } catch (err) {
       runtime.error?.(`[tlon] Failed to update dmAllowlist: ${String(err)}`);
@@ -98,7 +71,7 @@ export function createTlonApprovalRuntime(params: {
 
   const addToChannelAllowlist = async (ship: string, channelNest: string): Promise<void> => {
     const normalizedShip = normalizeShip(ship);
-    const currentSettings = getCurrentSettings();
+    const currentSettings = state.currentSettings;
     const channelRules = currentSettings.channelRules ?? {};
     const rule = channelRules[channelNest] ?? { mode: "restricted", allowedShips: [] };
     const allowedShips = [...(rule.allowedShips ?? [])];
@@ -111,38 +84,38 @@ export function createTlonApprovalRuntime(params: {
       ...channelRules,
       [channelNest]: { ...rule, allowedShips },
     };
-    setCurrentSettings({ ...currentSettings, channelRules: updatedRules });
+    state.currentSettings = { ...currentSettings, channelRules: updatedRules };
 
     try {
-      await api.poke({
-        app: "settings",
-        mark: "settings-event",
-        json: {
-          "put-entry": {
-            desk: "moltbot",
-            "bucket-key": "tlon",
-            "entry-key": "channelRules",
-            value: JSON.stringify(updatedRules),
-          },
-        },
-      });
+      await putTlonSetting(api, "channelRules", JSON.stringify(updatedRules));
       runtime.log?.(`[tlon] Added ${normalizedShip} to ${channelNest} allowlist`);
     } catch (err) {
       runtime.error?.(`[tlon] Failed to update channelRules: ${String(err)}`);
     }
   };
 
-  const blockShip = async (ship: string): Promise<void> => {
+  const setClubRule = async (clubId: string, rule: "allow" | "deny"): Promise<void> => {
+    const clubRules = { ...state.effectiveClubRules, [clubId]: rule };
+    // Publish the grant only after the settings owner accepts it. A failed write leaves it pending.
+    await putTlonSetting(api, "clubRules", JSON.stringify(clubRules));
+    state.effectiveClubRules = clubRules;
+    state.currentSettings = { ...state.currentSettings, clubRules };
+  };
+
+  const setShipBlocked = async (ship: string, blocked: boolean): Promise<boolean> => {
     const normalizedShip = normalizeShip(ship);
+    const action = blocked ? "block" : "unblock";
     try {
       await api.poke({
         app: "chat",
-        mark: "chat-block-ship",
+        mark: `chat-${action}-ship`,
         json: { ship: normalizedShip },
       });
-      runtime.log?.(`[tlon] Blocked ship ${normalizedShip}`);
+      runtime.log?.(`[tlon] ${blocked ? "Blocked" : "Unblocked"} ship ${normalizedShip}`);
+      return true;
     } catch (err) {
-      runtime.error?.(`[tlon] Failed to block ship ${normalizedShip}: ${String(err)}`);
+      runtime.error?.(`[tlon] Failed to ${action} ship ${normalizedShip}: ${String(err)}`);
+      return false;
     }
   };
 
@@ -169,27 +142,11 @@ export function createTlonApprovalRuntime(params: {
     }
   };
 
-  const unblockShip = async (ship: string): Promise<boolean> => {
-    const normalizedShip = normalizeShip(ship);
-    try {
-      await api.poke({
-        app: "chat",
-        mark: "chat-unblock-ship",
-        json: { ship: normalizedShip },
-      });
-      runtime.log?.(`[tlon] Unblocked ship ${normalizedShip}`);
-      return true;
-    } catch (err) {
-      runtime.error?.(`[tlon] Failed to unblock ship ${normalizedShip}: ${String(err)}`);
-      return false;
-    }
-  };
-
-  const sendOwnerNotification = async (message: string): Promise<void> => {
-    const ownerShip = getEffectiveOwnerShip();
+  const sendOwnerNotification = async (message: string): Promise<boolean> => {
+    const ownerShip = state.effectiveOwnerShip;
     if (!ownerShip) {
       runtime.log?.("[tlon] No ownerShip configured, cannot send notification");
-      return;
+      return false;
     }
     try {
       await sendDm({
@@ -199,46 +156,96 @@ export function createTlonApprovalRuntime(params: {
         text: message,
       });
       runtime.log?.(`[tlon] Sent notification to owner ${ownerShip}`);
+      return true;
     } catch (err) {
       runtime.error?.(`[tlon] Failed to send notification to owner: ${String(err)}`);
+      return false;
     }
   };
 
-  const queueApprovalRequest = async (approval: PendingApproval): Promise<void> => {
-    if (await isShipBlocked(approval.requestingShip)) {
+  const queueApprovalRequestUnqueued = async (approval: PendingApproval): Promise<boolean> => {
+    if (approval.clubId === undefined && (await isShipBlocked(approval.requestingShip))) {
       runtime.log?.(`[tlon] Ignoring request from blocked ship ${approval.requestingShip}`);
-      return;
+      return false;
     }
 
-    const approvals = getPendingApprovals();
-    const existingIndex = approvals.findIndex(
-      (item) =>
+    const approvals = state.pendingApprovals;
+    const existing = approvals.find((item) => {
+      if (approval.type === "club") {
+        return (
+          item.type === "club" &&
+          item.clubId === approval.clubId &&
+          item.clubMode === approval.clubMode &&
+          (approval.clubMode === "once" ||
+            item.originalMessage?.messageId === approval.originalMessage?.messageId)
+        );
+      }
+      return (
         item.type === approval.type &&
         item.requestingShip === approval.requestingShip &&
+        item.clubId === approval.clubId &&
         (approval.type !== "channel" || item.channelNest === approval.channelNest) &&
-        (approval.type !== "group" || item.groupFlag === approval.groupFlag),
-    );
+        (approval.type !== "group" || item.groupFlag === approval.groupFlag)
+      );
+    });
 
-    if (existingIndex !== -1) {
-      const existing = expectDefined(approvals[existingIndex], "located pending approval index");
+    if (existing) {
+      // One conversation prompt retains the first message and does not notify on every new claim.
+      if (approval.type === "club") {
+        return true;
+      }
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
+        // The stored message now comes from this request, so its provenance must follow it.
+        if (approval.verifiedDirect === true) {
+          existing.verifiedDirect = true;
+        } else {
+          delete existing.verifiedDirect;
+        }
       }
       runtime.log?.(
         `[tlon] Updated existing approval for ${approval.requestingShip} (${approval.type}) - re-sending notification`,
       );
       await savePendingApprovals(true);
       await sendOwnerNotification(formatApprovalRequest(existing));
-      return;
+      return true;
     }
 
-    setPendingApprovals([...approvals, approval]);
-    await savePendingApprovals(true);
+    if (approvals.length >= TLON_PENDING_APPROVAL_LIMIT) {
+      runtime.log?.(
+        `[tlon] Pending approval limit reached; ignoring ${approval.type} request from ${approval.requestingShip}`,
+      );
+      if (!approvalOverflowNoticeSent && approvalOverflowNoticeAttempts < 3) {
+        approvalOverflowNoticeAttempts += 1;
+        approvalOverflowNoticeSent = await sendOwnerNotification(
+          `Pending approval queue is full (${approvals.length}). Resolve existing requests by replying with approve, deny, or block followed by the request ID before asking rejected requesters to retry.`,
+        );
+      }
+      return false;
+    }
+
+    approvalOverflowNoticeSent = false;
+    approvalOverflowNoticeAttempts = 0;
+    const nextApprovals = [...approvals, approval];
+    await putTlonSetting(api, "pendingApprovals", JSON.stringify(nextApprovals));
+    state.pendingApprovals = nextApprovals;
     await sendOwnerNotification(formatApprovalRequest(approval));
     runtime.log?.(
       `[tlon] Queued approval request: ${approval.id} (${approval.type} from ${approval.requestingShip})`,
     );
+    return true;
+  };
+
+  // Different ingress lanes can request approval together; serialize their shared settings row.
+  let pendingRequestWrite = Promise.resolve();
+  const queueApprovalRequest = (approval: PendingApproval): Promise<boolean> => {
+    const result = pendingRequestWrite.then(() => queueApprovalRequestUnqueued(approval));
+    pendingRequestWrite = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
   };
 
   const handleApprovalResponse = async (text: string): Promise<boolean> => {
@@ -247,19 +254,62 @@ export function createTlonApprovalRuntime(params: {
       return false;
     }
 
-    const approval = findPendingApproval(getPendingApprovals(), parsed.id);
+    const approval = findPendingApproval(state.pendingApprovals, parsed.id);
     if (!approval) {
       await sendOwnerNotification(
-        `No pending approval found${parsed.id ? ` for ID: ${parsed.id}` : ""}`,
+        parsed.id
+          ? `No pending approval found for ID: ${parsed.id}`
+          : state.pendingApprovals.length > 1
+            ? `Multiple approvals are pending. Include an approval ID with your decision.\n\n${formatPendingList(state.pendingApprovals)}`
+            : "No pending approval found.",
       );
+      return true;
+    }
+
+    // A queued decision checks the current policy when it starts. In-flight work may finish.
+    if (
+      approval.clubId !== undefined &&
+      (state.effectiveClubPolicy === "disabled" ||
+        state.effectiveClubRules[approval.clubId] === "deny")
+    ) {
+      await sendOwnerNotification(
+        `Group DM ${approval.clubId} is disabled. No message was processed.`,
+      );
+      state.pendingApprovals = removePendingApproval(state.pendingApprovals, approval.id);
+      await savePendingApprovals();
       return true;
     }
 
     if (parsed.action === "approve") {
       switch (approval.type) {
-        case "dm":
-          await addToDmAllowlist(approval.requestingShip);
+        case "club":
+          if (
+            approval.clubId &&
+            approval.clubMode === "once" &&
+            state.effectiveClubPolicy === "approve-once"
+          ) {
+            await setClubRule(approval.clubId, "allow");
+          } else if (approval.clubMode === "once") {
+            await sendOwnerNotification(
+              "The club policy changed. Send a new club message to request approval under the current policy.",
+            );
+            state.pendingApprovals = removePendingApproval(state.pendingApprovals, approval.id);
+            await savePendingApprovals();
+            return true;
+          }
           if (approval.originalMessage) {
+            await processApprovedMessage(approval);
+          }
+          break;
+        case "dm":
+          if (approval.clubId === undefined) {
+            await addToDmAllowlist(approval.requestingShip);
+          }
+          if (requiresResendAfterApproval(approval)) {
+            runtime.log?.(
+              `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown; owner told to request a resend`,
+            );
+          } else if (approval.originalMessage) {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );
@@ -311,16 +361,14 @@ export function createTlonApprovalRuntime(params: {
           }
           break;
       }
-
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "approve"));
-    } else if (parsed.action === "block") {
-      await blockShip(approval.requestingShip);
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "block"));
-    } else {
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "deny"));
+    } else if (approval.type === "club" && approval.clubId) {
+      await setClubRule(approval.clubId, "deny");
+    } else if (parsed.action === "block" && approval.clubId === undefined) {
+      await setShipBlocked(approval.requestingShip, true);
     }
+    await sendOwnerNotification(formatApprovalConfirmation(approval, parsed.action));
 
-    setPendingApprovals(removePendingApproval(getPendingApprovals(), approval.id));
+    state.pendingApprovals = removePendingApproval(state.pendingApprovals, approval.id);
     await savePendingApprovals();
     return true;
   };
@@ -339,9 +387,9 @@ export function createTlonApprovalRuntime(params: {
         return true;
       }
       case "pending":
-        await sendOwnerNotification(formatPendingList(getPendingApprovals()));
+        await sendOwnerNotification(formatPendingList(state.pendingApprovals));
         runtime.log?.(
-          `[tlon] Owner requested pending approvals list (${getPendingApprovals().length} pending)`,
+          `[tlon] Owner requested pending approvals list (${state.pendingApprovals.length} pending)`,
         );
         return true;
       case "unblock": {
@@ -350,7 +398,7 @@ export function createTlonApprovalRuntime(params: {
           await sendOwnerNotification(`${shipToUnblock} is not blocked.`);
           return true;
         }
-        const success = await unblockShip(shipToUnblock);
+        const success = await setShipBlocked(shipToUnblock, false);
         await sendOwnerNotification(
           success ? `Unblocked ${shipToUnblock}.` : `Failed to unblock ${shipToUnblock}.`,
         );

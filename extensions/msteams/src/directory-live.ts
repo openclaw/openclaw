@@ -1,4 +1,3 @@
-// Msteams plugin module implements directory live behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -6,61 +5,68 @@ import {
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
-  listChannelsForTeam,
-  listTeamsByName,
-  normalizeQuery,
+  listChannelsForTeamWithPageInfo,
+  listTeamsByNameWithPageInfo,
   resolveGraphToken,
 } from "./graph.js";
 
 export async function listMSTeamsDirectoryPeersLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const query = normalizeQuery(params.query);
+  const query = params.query?.trim() ?? "";
   if (!query) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const token = await resolveGraphToken(params.cfg, {
+    accountId: params.accountId,
+  });
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
 
-  return users
-    .map((user) => {
-      const id = user.id?.trim();
-      if (!id) {
-        return null;
-      }
-      const name = user.displayName?.trim();
-      const handle = user.userPrincipalName?.trim() || user.mail?.trim();
-      return {
+  return users.flatMap((user): ChannelDirectoryEntry[] => {
+    const id = user.id?.trim();
+    if (!id) {
+      return [];
+    }
+    const name = user.displayName?.trim();
+    const handle = user.userPrincipalName?.trim() || user.mail?.trim();
+    return [
+      {
         kind: "user",
         id: `user:${id}`,
         name: name || undefined,
         handle: handle ? `@${handle}` : undefined,
         raw: user,
-      } satisfies ChannelDirectoryEntry;
-    })
-    .filter(Boolean) as ChannelDirectoryEntry[];
+      },
+    ];
+  });
 }
 
 export async function listMSTeamsDirectoryGroupsLive(params: {
   cfg: unknown;
+  accountId?: string | null;
   query?: string | null;
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
-  const rawQuery = normalizeQuery(params.query);
+  const rawQuery = params.query?.trim() ?? "";
   if (!rawQuery) {
     return [];
   }
-  const token = await resolveGraphToken(params.cfg);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
+  const token = await resolveGraphToken(params.cfg, {
+    accountId: params.accountId,
+  });
+  const limit = params.limit != null && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];
 
-  const teams = await listTeamsByName(token, teamQuery);
+  // Canonical forms compare equal here; channel entries keep their original spelling.
+  const normalizedChannelQuery = normalizeLowercaseStringOrEmpty(channelQuery).normalize("NFC");
+  const { items: teams } = await listTeamsByNameWithPageInfo(token, teamQuery);
   const results: ChannelDirectoryEntry[] = [];
 
   for (const team of teams) {
@@ -82,16 +88,14 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
       }
       continue;
     }
-    const channels = await listChannelsForTeam(token, teamId);
+    const { items: channels } = await listChannelsForTeamWithPageInfo(token, teamId);
     for (const channel of channels) {
       const name = channel.displayName?.trim();
       if (!name) {
         continue;
       }
       if (
-        !normalizeLowercaseStringOrEmpty(name).includes(
-          normalizeLowercaseStringOrEmpty(channelQuery),
-        )
+        !normalizeLowercaseStringOrEmpty(name).normalize("NFC").includes(normalizedChannelQuery)
       ) {
         continue;
       }

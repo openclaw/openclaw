@@ -74,7 +74,11 @@ flow:
                 const command = async (expected) => {
                   const start = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;
                   await transport.sendInbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, senderId: 'qa-operator', senderName: 'QA Operator', text: '/whoami', nativeCommand: { name: 'whoami' } });
-                  await transport.waitForOutbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, sinceIndex: start, textIncludes: expected, timeoutMs: 60000 });
+                  if (expected) {
+                    await transport.waitForOutbound({ conversation: { id: 'telegram-policy-dm', kind: 'direct' }, sinceIndex: start, textIncludes: expected, timeoutMs: 60000 });
+                  } else {
+                    await transport.waitForNoOutbound({ quietMs: 3000, sinceIndex: start });
+                  }
                 };
                 for (const scope of ['root', 'account']) {
                   if (scope === 'root') {
@@ -85,9 +89,9 @@ flow:
                   }
                   await command('Identity');
                   await mutate(scope, { dmPolicy: 'disabled' });
-                  await command('not authorized');
+                  await command(null);
                   await mutate(scope, { dmPolicy: 'allowlist', allowFrom: denied });
-                  await command('not authorized');
+                  await command(null);
                   await mutate(scope, { allowFrom: allowed, replyToMode: 'first', streaming: { mode: 'partial' }, textChunkLimit: 512 });
                   const marker = `TG-RELOAD-${scope}-${randomUUID().slice(0, 8)}`;
                   const start = state.getSnapshot().messages.filter(row => row.direction === 'outbound').length;

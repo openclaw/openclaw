@@ -4,23 +4,31 @@ import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
-import { VERSION } from "../version.js";
+import { resolveOsHomeDir } from "../infra/home-dir.js";
+import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
+  canonicalMigrationFilePath,
   readSessionSqliteMigrationManifest,
   filterRestoreManifestTargets,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationGithubIssue,
+  type SessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { VERSION } from "../version.js";
 import type {
-  DoctorSessionSqliteIssue,
+  DoctorSessionSqliteTargetReport,
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 export function writeSessionSqliteMigrationFailureReports(
   manifestPath: string,
-  params: { reason: string; trustedTargets?: readonly SessionSqliteMigrationTargetInput[] },
+  params: {
+    reason: string;
+    recoveryTargets?: readonly DoctorSessionSqliteTargetReport[];
+    trustedTargets?: readonly SessionSqliteMigrationTargetInput[];
+  },
 ): { jsonPath: string; markdownPath: string } {
   const manifest = readSessionSqliteMigrationManifest(manifestPath);
   const { jsonPath, markdownPath } = resolveFailureReportPaths(manifestPath);
@@ -32,41 +40,59 @@ export function writeSessionSqliteMigrationFailureReports(
       ? filterRestoreManifestTargets(manifest, params.trustedTargets)
       : manifest.targets
     : [];
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
-    reason: params.reason,
-    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
-    restoreStatus: manifest?.restore?.status ?? "not_attempted",
-    runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
-    targets: targets.map((target) => ({
-      agentId: sanitizeFailureReportText(target.agentId),
-      completedMoves: target.completedMoves.length,
-      issues: target.issues.map((issue) => ({
-        code: issue.code,
-        message: sanitizeFailureIssueMessage(issue, target),
-        ...(issue.sessionKey ? { sessionKey: redactSessionKey(issue.sessionKey) } : {}),
-      })),
-      plannedMoves: target.plannedMoves.length,
-      sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-      storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
-      validationBeforeArchive: target.validationBeforeArchive,
-    })),
-    version: VERSION,
-  };
+  const home = resolveOsHomeDir();
+  const payload = createFailureReportPayload(
+    manifestPath,
+    manifest,
+    params.reason,
+    targets.map((target) =>
+      createFailureReportTarget(
+        target,
+        collectFailureReportIssues(target, home, params.recoveryTargets),
+        home,
+      ),
+    ),
+    home,
+  );
   fs.writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   fs.writeFileSync(markdownPath, renderFailureMarkdown(payload), { mode: 0o600 });
   if (manifest) {
     manifest.failureReports = {
-      ...(manifest.failureReports?.githubIssue
-        ? { githubIssue: manifest.failureReports.githubIssue }
-        : {}),
       jsonPath,
       markdownPath,
     };
     writeSessionSqliteMigrationManifest({ manifest, manifestPath });
   }
   return { jsonPath, markdownPath };
+}
+
+function collectFailureReportIssues(
+  target: SessionSqliteMigrationTargetManifest,
+  home: string | undefined,
+  recoveryTargets: readonly DoctorSessionSqliteTargetReport[] = [],
+): { issues: DoctorSessionSqliteIssue[]; recoveryIssues?: DoctorSessionSqliteIssue[] } {
+  const recoveryTarget = recoveryTargets.find(
+    (current) =>
+      current.agentId === target.agentId &&
+      canonicalMigrationFilePath(current.storePath) ===
+        canonicalMigrationFilePath(target.storePath) &&
+      canonicalMigrationFilePath(current.sqlitePath) ===
+        canonicalMigrationFilePath(target.sqlitePath),
+  );
+  const issues = new Map<string, DoctorSessionSqliteIssue>();
+  for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
+    issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
+  }
+  const replacements = failureReportPathReplacements(target, home);
+  const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
+    code: issue.code,
+    message: sanitizeFailureIssueMessage(issue, replacements, home),
+    sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
+  });
+  return {
+    issues: [...issues.values()].map(sanitize),
+    recoveryIssues: recoveryTarget?.issues.map(sanitize),
+  };
 }
 
 export function createSessionSqliteMigrationFailureIssue(
@@ -90,29 +116,30 @@ export function createSessionSqliteMigrationFailureIssue(
   if (bodyPath && !persistedBody) {
     return undefined;
   }
+  const home = resolveOsHomeDir();
   const reportBody =
     persistedBody ??
-    renderFailureMarkdown({
-      generatedAt: new Date().toISOString(),
-      manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
-      reason: "session SQLite migration failed",
-      recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
-      restoreStatus: manifest.restore?.status ?? "not_attempted",
-      runId: manifest.runId,
-      targets: targets.map((target) => ({
-        agentId: sanitizeFailureReportText(target.agentId),
-        completedMoves: target.completedMoves.length,
-        issues: target.issues.map((issue) => ({
-          code: issue.code,
-          message: sanitizeFailureIssueMessage(issue, target),
-        })),
-        plannedMoves: target.plannedMoves.length,
-        sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-        storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
-        validationBeforeArchive: target.validationBeforeArchive,
-      })),
-      version: VERSION,
-    });
+    renderFailureMarkdown(
+      createFailureReportPayload(
+        manifestPath,
+        manifest,
+        "session SQLite migration failed",
+        targets.map((target) => {
+          const replacements = failureReportPathReplacements(target, home);
+          return createFailureReportTarget(
+            target,
+            {
+              issues: target.issues.map((issue) => ({
+                code: issue.code,
+                message: sanitizeFailureIssueMessage(issue, replacements, home),
+              })),
+            },
+            home,
+          );
+        }),
+        home,
+      ),
+    );
   const body = [
     "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
     "",
@@ -204,28 +231,51 @@ function resolveFailureReportPaths(manifestPath: string): {
   };
 }
 
-function renderFailureMarkdown(payload: {
-  generatedAt: string;
-  manifestPath: string;
-  reason: string;
-  recoveryCommand: string;
-  restoreStatus: string;
-  runId: string;
-  targets: Array<{
-    agentId: string;
-    completedMoves: number;
-    issues: Array<{ code: string; message: string; sessionKey?: string }>;
-    plannedMoves: number;
-    sqlitePath: string;
-    storePath: string;
-    validationBeforeArchive: string;
-  }>;
-  version: string;
-}): string {
+function createFailureReportTarget(
+  target: SessionSqliteMigrationTargetManifest,
+  evidence: {
+    issues: DoctorSessionSqliteIssue[];
+    recoveryIssues?: DoctorSessionSqliteIssue[];
+  },
+  home: string | undefined,
+) {
+  return {
+    agentId: sanitizeFailureReportText(target.agentId),
+    completedMoves: target.completedMoves.length,
+    ...evidence,
+    plannedMoves: target.plannedMoves.length,
+    sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath, home)),
+    storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath, home)),
+    validationBeforeArchive: target.validationBeforeArchive,
+  };
+}
+
+function createFailureReportPayload(
+  manifestPath: string,
+  manifest: SessionSqliteMigrationManifest | undefined,
+  reason: string,
+  targets: ReturnType<typeof createFailureReportTarget>[],
+  home: string | undefined,
+) {
+  return {
+    failedAt: manifest?.failedAt,
+    generatedAt: new Date().toISOString(),
+    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath, home)),
+    reason,
+    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
+    restoreStatus: manifest?.restore?.status ?? "not_attempted",
+    runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
+    targets,
+    version: VERSION,
+  };
+}
+
+function renderFailureMarkdown(payload: ReturnType<typeof createFailureReportPayload>): string {
   const lines = [
     "# Session SQLite Migration Failure",
     "",
     `- Run: ${payload.runId}`,
+    `- Failed: ${payload.failedAt ?? "not recorded"}`,
     `- Generated: ${payload.generatedAt}`,
     `- OpenClaw version: ${payload.version}`,
     `- Reason: ${sanitizeFailureReportText(payload.reason)}`,
@@ -244,12 +294,22 @@ function renderFailureMarkdown(payload: {
       `- Planned moves: ${target.plannedMoves}`,
       `- Completed moves: ${target.completedMoves}`,
       `- Validation before archive: ${target.validationBeforeArchive}`,
-      `- Issues: ${target.issues.length}`,
     );
-    for (const issue of target.issues.slice(0, 10)) {
-      lines.push(
-        `  - [${issue.code}] ${issue.sessionKey ? `${issue.sessionKey}: ` : ""}${issue.message}`,
-      );
+    const groups: Array<[string, DoctorSessionSqliteIssue[]]> = [
+      ["Recorded migration and recovery evidence", target.issues],
+    ];
+    if (target.recoveryIssues) {
+      groups.unshift(["Current recovery issues", target.recoveryIssues]);
+    } else {
+      lines.push("- Current recovery: not assessed");
+    }
+    for (const [label, issues] of groups) {
+      lines.push(`- ${label}: ${issues.length}`);
+      for (const issue of issues) {
+        lines.push(
+          `  - [${issue.code}] ${issue.sessionKey ? `${issue.sessionKey}: ` : ""}${issue.message}`,
+        );
+      }
     }
   }
   lines.push("");
@@ -264,31 +324,52 @@ function sanitizeFailureReportText(value: string): string {
   return truncateUtf16Safe(sanitized, 500);
 }
 
-function shortenFailureReportPath(filePath: string): string {
-  const home = process.env.HOME;
+function shortenFailureReportPath(filePath: string, home: string | undefined): string {
   if (home && filePath.startsWith(`${home}${path.sep}`)) {
     return `~${path.sep}${path.relative(home, filePath)}`;
   }
   return filePath;
 }
 
-function sanitizeFailureIssueMessage(
-  issue: DoctorSessionSqliteIssue,
+/**
+ * Resolves a target's path rewrites once. A target can carry one move per legacy file
+ * (tens of thousands), so rewriting every path inside every issue message was
+ * quadratic and could hold doctor recovery for hours (#194621). A plain home-prefix
+ * rewrite equals what redactAbsoluteHomePaths applies to every message anyway, so only
+ * rewrites that also normalize the path need a per-message pass.
+ */
+function failureReportPathReplacements(
   target: SessionSqliteMigrationTargetManifest,
-): string {
-  let message = issue.message;
+  home: string | undefined,
+): ReadonlyArray<readonly [string, string]> {
+  const replacements = new Map<string, string>();
   for (const filePath of [
     target.storePath,
     target.sqlitePath,
     ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
     ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
   ]) {
-    message = message.split(filePath).join(shortenFailureReportPath(filePath));
+    const shortened = shortenFailureReportPath(filePath, home);
+    if (shortened !== filePath && (!home || shortened !== `~${filePath.slice(home.length)}`)) {
+      replacements.set(filePath, shortened);
+    }
+  }
+  return [...replacements];
+}
+
+function sanitizeFailureIssueMessage(
+  issue: DoctorSessionSqliteIssue,
+  replacements: ReadonlyArray<readonly [string, string]>,
+  home: string | undefined,
+): string {
+  let message = issue.message;
+  for (const [filePath, shortened] of replacements) {
+    message = message.split(filePath).join(shortened);
   }
   if (issue.sessionKey) {
     message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));
   }
-  message = redactAbsoluteHomePaths(message);
+  message = redactAbsoluteHomePaths(message, home);
   return sanitizeFailureReportText(message);
 }
 
@@ -300,10 +381,13 @@ function redactSessionKey(sessionKey: string): string {
   return `[redacted-session-key:${randomUUID().slice(0, 8)}]`;
 }
 
-function redactAbsoluteHomePaths(value: string): string {
-  const home = process.env.HOME;
+function redactAbsoluteHomePaths(value: string, home: string | undefined): string {
   if (!home) {
     return value;
   }
-  return value.split(home).join("~");
+  let redacted = value;
+  for (const prefix of new Set([home, home.replaceAll("\\", "/"), home.replaceAll("/", "\\")])) {
+    redacted = redacted.split(prefix).join("~");
+  }
+  return redacted;
 }

@@ -1,6 +1,6 @@
 import type { ChatEvent } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { subscribeAgentEvents } from "../server-chat.agent-events.test-helpers.js";
 import {
   createAgentEventHandler,
   createChatRunState,
@@ -33,14 +33,18 @@ export function createWorkerChatProjection(sessionKey: string) {
     loadGatewaySessionLifecycleSnapshotForEvent: () => ({ row: null }),
     persistGatewaySessionLifecycleEventForEvent: async () => {},
   });
-  const unsubscribe = onAgentRuntimeEvent(handler);
+  const unsubscribe = subscribeAgentEvents(handler);
   return {
     events,
     state,
-    dispose() {
-      unsubscribe();
-      handler.dispose();
-      state.clear();
+    drain: unsubscribe.drain,
+    async dispose() {
+      try {
+        await unsubscribe();
+      } finally {
+        await handler.dispose();
+        state.clear();
+      }
     },
   };
 }

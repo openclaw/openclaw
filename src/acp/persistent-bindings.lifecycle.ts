@@ -1,10 +1,10 @@
-/** Ensures configured channel-to-ACP bindings have live sessions and matching runtime options. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
+import { isRejectedConfigOptionValue } from "./control-plane/manager.runtime-controls.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
@@ -12,7 +12,6 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
-// Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
@@ -53,8 +52,8 @@ function sessionStructurallyMatchesConfiguredBinding(params: {
   return true;
 }
 
-/** Creates or replaces the ACP session required by one configured binding. */
 export async function ensureConfiguredAcpBindingSession(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
@@ -65,11 +64,13 @@ export async function ensureConfiguredAcpBindingSession(params: {
     ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
   };
   try {
-    const resolution = acpManager.resolveSession({
+    const resolution = await acpManager.resolveSessionAsync({
       cfg: params.cfg,
       agentId: params.spec.agentId,
       sessionKey,
+      assertCurrent: params.assertActive,
     });
+    params.assertActive?.();
     if (
       resolution.kind === "ready" &&
       sessionStructurallyMatchesConfiguredBinding({
@@ -84,13 +85,25 @@ export async function ensureConfiguredAcpBindingSession(params: {
       for (const key of ["model", "thinking"] as const) {
         const value = runtimeOptions[key];
         if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
-          currentOptions = await acpManager.setSessionConfigOption({
-            cfg: params.cfg,
-            agentId: params.spec.agentId,
-            sessionKey,
-            key,
-            value,
-          });
+          params.assertActive?.();
+          try {
+            currentOptions = await acpManager.setSessionConfigOption({
+              ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+              cfg: params.cfg,
+              agentId: params.spec.agentId,
+              sessionKey,
+              key,
+              value,
+            });
+          } catch (error) {
+            // A configured thinking level the adapter will not accept keeps the accepted one.
+            if (key !== "thinking" || !isRejectedConfigOptionValue(error)) {
+              throw error;
+            }
+            logVerbose(
+              `acp-configured-binding: ${sessionKey} keeps its accepted thinking level: ${formatErrorMessage(error)}`,
+            );
+          }
         }
       }
       return {
@@ -101,6 +114,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 
     if (resolution.kind !== "none") {
       await acpManager.closeSession({
+        ...(params.assertActive ? { assertActive: params.assertActive } : {}),
         cfg: params.cfg,
         agentId: params.spec.agentId,
         sessionKey,
@@ -111,7 +125,9 @@ export async function ensureConfiguredAcpBindingSession(params: {
       });
     }
 
+    params.assertActive?.();
     await acpManager.initializeSession({
+      ...(params.assertActive ? { assertActive: params.assertActive } : {}),
       cfg: params.cfg,
       agentId: params.spec.agentId,
       sessionKey,
@@ -139,8 +155,8 @@ export async function ensureConfiguredAcpBindingSession(params: {
   }
 }
 
-/** Resolves a configured binding for a conversation and ensures its ACP session exists. */
 export async function ensureConfiguredAcpBindingReadyCore(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -148,6 +164,7 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
     return { ok: true };
   }
   const ensured = await ensureConfiguredAcpBindingSession({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
     spec: params.configuredBinding.spec,
   });
@@ -156,6 +173,6 @@ export async function ensureConfiguredAcpBindingReadyCore(params: {
   }
   return {
     ok: false,
-    error: ensured.error ?? "unknown error",
+    error: ensured.error,
   };
 }

@@ -1,14 +1,14 @@
-// Frontmatter helpers parse skill metadata from SKILL.md files.
 import {
   normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { parseFrontmatterBlockResult } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,
-  normalizeStringList,
   parseOpenClawManifestInstallBase,
   parseFrontmatterBool,
   resolveOpenClawManifestBlock,
@@ -23,7 +23,6 @@ import type {
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "../types.js";
-import type { Skill } from "./skill-contract.js";
 
 export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
@@ -42,13 +41,9 @@ const UV_PACKAGE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._\-[\]=<>!~+,]*$/;
 
 function normalizeSafeBrewFormula(raw: unknown): string | undefined {
   const formula = normalizeOptionalString(raw);
-  if (!formula || formula.startsWith("-") || formula.includes("\\") || formula.includes("..")) {
-    return undefined;
-  }
-  if (!BREW_FORMULA_PATTERN.test(formula)) {
-    return undefined;
-  }
-  return formula;
+  return formula && BREW_FORMULA_PATTERN.test(formula) && !formula.includes("..")
+    ? formula
+    : undefined;
 }
 
 function normalizeSafeNpmSpec(raw: unknown): string | undefined {
@@ -64,13 +59,7 @@ function normalizeSafeNpmSpec(raw: unknown): string | undefined {
 
 function normalizeSafePackageSpec(raw: unknown, pattern: RegExp): string | undefined {
   const value = normalizeOptionalString(raw);
-  if (!value || value.startsWith("-") || value.includes("\\") || value.includes("://")) {
-    return undefined;
-  }
-  if (!pattern.test(value)) {
-    return undefined;
-  }
-  return value;
+  return value && pattern.test(value) ? value : undefined;
 }
 
 function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
@@ -78,15 +67,10 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   if (!value || /\s/.test(value)) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:"
+    ? parsed.toString()
+    : undefined;
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
@@ -95,83 +79,54 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     return undefined;
   }
   const { raw } = parsed;
-  const spec = applyOpenClawManifestInstallCommonFields<SkillInstallSpec>(
+  const common = applyOpenClawManifestInstallCommonFields<SkillInstallSpec>(
     {
       kind: parsed.kind as SkillInstallSpec["kind"],
     },
     parsed,
   );
-  const osList = normalizeStringList(raw.os);
-  if (osList.length > 0) {
-    spec.os = osList;
-  }
-  const formula = normalizeSafeBrewFormula(raw.formula);
-  if (formula) {
-    spec.formula = formula;
-  }
-  const cask = normalizeSafeBrewFormula(raw.cask);
-  if (!spec.formula && cask) {
-    spec.formula = cask;
-  }
-  if (spec.kind === "node") {
-    const pkg = normalizeSafeNpmSpec(raw.package);
-    if (pkg) {
-      spec.package = pkg;
-    }
-  } else if (spec.kind === "uv") {
-    const pkg = normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN);
-    if (pkg) {
-      spec.package = pkg;
-    }
-  }
+  const osList = normalizeCsvOrLooseStringList(raw.os);
+  const formula = normalizeSafeBrewFormula(raw.formula) ?? normalizeSafeBrewFormula(raw.cask);
+  const pkg =
+    common.kind === "node"
+      ? normalizeSafeNpmSpec(raw.package)
+      : common.kind === "uv"
+        ? normalizeSafePackageSpec(raw.package, UV_PACKAGE_PATTERN)
+        : undefined;
   const moduleSpec = normalizeSafePackageSpec(raw.module, GO_MODULE_PATTERN);
-  if (moduleSpec) {
-    spec.module = moduleSpec;
-  }
   const downloadUrl = normalizeSafeDownloadUrl(raw.url);
-  if (downloadUrl) {
-    spec.url = downloadUrl;
-  }
-  if (spec.kind === "download" && raw.sha256 !== undefined) {
+  let sha256: string | undefined;
+  if (common.kind === "download" && raw.sha256 !== undefined) {
     if (typeof raw.sha256 !== "string") {
       return undefined;
     }
-    const sha256 = raw.sha256.trim().toLowerCase();
+    sha256 = raw.sha256.trim().toLowerCase();
     if (!/^[a-f0-9]{64}$/u.test(sha256)) {
       return undefined;
     }
-    spec.sha256 = sha256;
   }
-  if (typeof raw.archive === "string") {
-    spec.archive = raw.archive;
-  }
-  if (typeof raw.extract === "boolean") {
-    spec.extract = raw.extract;
-  }
-  if (typeof raw.stripComponents === "number") {
-    spec.stripComponents = raw.stripComponents;
-  }
-  if (typeof raw.targetDir === "string") {
-    spec.targetDir = raw.targetDir;
-  }
+  const spec: SkillInstallSpec = {
+    ...common,
+    ...(osList.length > 0 ? { os: osList } : {}),
+    ...(formula ? { formula } : {}),
+    ...(pkg ? { package: pkg } : {}),
+    ...(moduleSpec ? { module: moduleSpec } : {}),
+    ...(downloadUrl ? { url: downloadUrl } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    ...(typeof raw.archive === "string" ? { archive: raw.archive } : {}),
+    ...(typeof raw.extract === "boolean" ? { extract: raw.extract } : {}),
+    ...(typeof raw.stripComponents === "number" ? { stripComponents: raw.stripComponents } : {}),
+    ...(typeof raw.targetDir === "string" ? { targetDir: raw.targetDir } : {}),
+  };
 
-  if (spec.kind === "brew" && !spec.formula) {
-    return undefined;
-  }
-  if (spec.kind === "node" && !spec.package) {
-    return undefined;
-  }
-  if (spec.kind === "go" && !spec.module) {
-    return undefined;
-  }
-  if (spec.kind === "uv" && !spec.package) {
-    return undefined;
-  }
-  if (spec.kind === "download" && !spec.url) {
-    return undefined;
-  }
-
-  return spec;
+  const target = {
+    brew: spec.formula,
+    node: spec.package,
+    go: spec.module,
+    uv: spec.package,
+    download: spec.url,
+  }[spec.kind];
+  return target ? spec : undefined;
 }
 
 export function resolveSkillManifestMetadata(
@@ -188,7 +143,7 @@ export function resolveSkillManifestMetadata(
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
-    skillKey: readStringValue(metadataObj.skillKey),
+    skillKey: readNonEmptyStringPreservingWhitespace(metadataObj.skillKey),
     primaryEnv: readStringValue(metadataObj.primaryEnv),
     os: osRaw.length > 0 ? osRaw : undefined,
     requires,
@@ -208,6 +163,6 @@ export function resolveSkillInvocationPolicy(
   };
 }
 
-export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.metadata?.skillKey ?? skill.name;
+export function resolveSkillKey(entry: SkillEntry): string {
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }

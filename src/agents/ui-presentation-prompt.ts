@@ -2,12 +2,13 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 /** Tool eligibility and results own surface support; do not infer it from channel names. */
 export function buildUiPresentationPrompt(params: {
+  screenToolName?: string;
   showWidgetToolName?: string;
   dashboardToolName?: string;
   portalToolName?: string;
   messageTool?: { name: string; parameters: unknown };
 }): string {
-  const { showWidgetToolName, dashboardToolName, portalToolName } = params;
+  const { screenToolName, showWidgetToolName, dashboardToolName, portalToolName } = params;
   const messageProperties = asOptionalRecord(
     asOptionalRecord(params.messageTool?.parameters)?.properties,
   );
@@ -17,31 +18,19 @@ export function buildUiPresentationPrompt(params: {
     messageProperties && Object.hasOwn(messageProperties, "clawhub")
       ? params.messageTool?.name
       : undefined;
-  if (!showWidgetToolName && !dashboardToolName && !portalToolName && !clawHubMessageToolName) {
-    return "";
-  }
-  return [
-    "## UI Presentation",
-    ...(clawHubMessageToolName
-      ? [
-          `\`${clawHubMessageToolName}\`: When the user asks to install an integration or whether you can perform an action, check ClawHub first with \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\`, omitting channel and target. This presents official plugin or skill cards, including when it is already installed. Report availability and installation state from the result. An installed desktop app does not establish that its OpenClaw plugin is installed. Treat an unqualified service install request as an OpenClaw capability request unless the user explicitly asks for a desktop app.`,
-        ]
-      : []),
-    ...(showWidgetToolName
-      ? [
-          `\`${showWidgetToolName}\`: author widgets using this turn's schema. pin=true saves to the dashboard; status=pinned means the widget is on the session dashboard. Follow result.presentation when present. Inline availability is per turn, including after restart.`,
-        ]
-      : []),
-    ...(dashboardToolName
-      ? [
-          `\`${dashboardToolName}\`: layout/plugin widgets, not HTML authoring. For a saved widget, use action="focus_tab" with its tabId.${showWidgetToolName ? "" : " Custom authoring is unavailable this turn, not unsupported by dashboards."}`,
-        ]
-      : []),
-    ...(portalToolName
-      ? [
-          `\`${portalToolName}\`: separate app in Control UI → Portals. publicUrl is not a launch link; token URLs stay private.`,
-        ]
-      : []),
-    "Inspect widgets in their chat/dashboard frame; do not open hosting URLs as browser pages. Verify the delivered interaction or say unverified.",
-  ].join("\n");
+  const lines = [
+    screenToolName &&
+      `\`${screenToolName}\`: \`${screenToolName}(action="browser_show")\`/\`browser_hide\` for agent Browser only (app previews use \`portal_show(portalId)\`, generic "side panel" needs intended content); \`sidebar_show|hide\`, \`terminal_show|hide\`, optional \`dock="right"|"bottom"\`. Never create/expand a dashboard to open a panel.`,
+    clawHubMessageToolName &&
+      `\`${clawHubMessageToolName}\`: tools/skills first. For explicit plugin/skill search/install or missing capability, use \`${clawHubMessageToolName}(action="send", clawhub={query:"capability"})\` (omit channel/target; skip for routine tasks/errors/permissions).`,
+    showWidgetToolName &&
+      `\`${showWidgetToolName}\`: use a widget when a visual helps (dashboards/charts/trackers/checklists/timers/choices) instead of text tables or chart images; use this turn's schema, \`pin=true\` saves to dashboard, follow \`result.presentation\`. Inline availability is per turn.`,
+    dashboardToolName &&
+      `\`${dashboardToolName}\`: layout/plugin widgets only (not HTML authoring or browser side panels); \`action="focus_tab"\` with \`tabId\` for saved widgets.${showWidgetToolName ? "" : " Custom authoring is unavailable this turn, not unsupported."}`,
+    portalToolName &&
+      `\`${portalToolName}\`: allocate port on the target environment (\`environmentId\` if attached, else omit), start app with \`PORT\` and \`PUBLIC_URL=publicUrl\`. Keep URLs unchanged and bearer URLs private (\`publicUrl\` != launch link; loopback-only is Gateway-local, non-loopback != remote-access proof).${screenToolName ? ` Open via \`${screenToolName}(action="portal_show", portalId="<id>")\`.` : " No `screen` tool this turn—direct viewer to Control UI → Portals."} Verify rendering from the requesting viewer (worker/Gateway fetch or panel dispatch != delivery proof); report blocked/unverified results.`,
+    (showWidgetToolName || dashboardToolName) &&
+      "Inspect widgets in their chat/dashboard frame (not hosting URLs as browser pages); verify interaction or say unverified.",
+  ].filter(Boolean);
+  return lines.length > 0 ? ["## UI Presentation", ...lines].join("\n") : "";
 }
