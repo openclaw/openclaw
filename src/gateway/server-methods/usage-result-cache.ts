@@ -45,7 +45,11 @@ const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
     ? dayBucket.mode === "time-zone"
-      ? `time-zone:${dayBucket.timeZone}`
+      ? JSON.stringify([
+          dayBucket.timeZone,
+          dayBucket.civilDays?.from,
+          dayBucket.civilDays?.through,
+        ])
       : `utc-offset:${dayBucket.utcOffsetMinutes}`
     : "gateway";
 }
