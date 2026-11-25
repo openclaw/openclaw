@@ -23,6 +23,18 @@ import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/opencl
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 
+// Snapshot of the title formatter before internal wakes were excluded (#179219).
+// Its exec title collapsed whitespace and truncated at the preceding word boundary.
+const legacyWakeTitleByPrompt = new Map<string, string>(
+  Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).map((prompt) => [
+    prompt,
+    prompt === INTERNAL_WAKE_TRANSCRIPT_PROMPTS.exec
+      ? "[OpenClaw exec completion] Disable automatic completion…"
+      : prompt,
+  ]),
+);
+const legacyWakeTitles = new Set(legacyWakeTitleByPrompt.values());
+
 function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
 ) {
@@ -47,8 +59,10 @@ function readLegacySessionTitle(
       const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
       if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
-        const displayName = deriveGoalSessionTitle(projected.text);
-        return displayName || undefined;
+        return {
+          displayName: deriveGoalSessionTitle(projected.text) || undefined,
+          legacyWakeTitle: legacyWakeTitleByPrompt.get(projected.text),
+        };
       }
     }
     return undefined;
@@ -100,25 +114,30 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const sessions: Array<{ sessionKey: string; sessionId: string; clearWakeTitle: boolean }> =
-          [];
+        const sessions: Array<{
+          sessionKey: string;
+          sessionId: string;
+          legacyWakeTitle?: string;
+        }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
-            // Older Doctor versions persisted these transcript markers as display names.
-            // Human labels and other naming fields still win; do not guess at similar text.
-            const clearWakeTitle = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).some(
-              (prompt) => entry.displayName === prompt,
-            );
+            // A matching name only selects a candidate; the first transcript input must
+            // corroborate the same historical wake before Doctor may clear it.
+            const legacyWakeTitle = legacyWakeTitles.has(entry.displayName ?? "")
+              ? entry.displayName
+              : undefined;
             if (
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
               // Spawn owns child labels; its first user message is a runtime task envelope.
               !isSubagentSessionKey(sessionKey) &&
-              !hasExplicitSessionName(clearWakeTitle ? { ...entry, displayName: undefined } : entry)
+              !hasExplicitSessionName(
+                legacyWakeTitle ? { ...entry, displayName: undefined } : entry,
+              )
             ) {
-              sessions.push({ sessionKey, sessionId: entry.sessionId, clearWakeTitle });
+              sessions.push({ sessionKey, sessionId: entry.sessionId, legacyWakeTitle });
             }
           },
         );
@@ -128,14 +147,18 @@ export async function repairLegacySessionTitles(params: {
     if (!scan.ok) {
       continue;
     }
-    for (const { sessionKey, sessionId, clearWakeTitle } of scan.value) {
+    for (const { sessionKey, sessionId, legacyWakeTitle } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
         const session = { ...scope, sessionKey, sessionId };
-        const title = readLegacySessionTitle(session);
-        if (!title && !clearWakeTitle) {
+        const source = readLegacySessionTitle(session);
+        if (legacyWakeTitle && source?.legacyWakeTitle !== legacyWakeTitle) {
+          continue;
+        }
+        const title = source?.displayName;
+        if (!title && !legacyWakeTitle) {
           continue;
         }
         report.found++;
