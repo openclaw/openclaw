@@ -49,10 +49,13 @@ struct TalkChimeAudioProofTests {
     @Test func `scripted call places readiness, reply and end chimes with audible samples`() throws {
         // Decisions come from the real lifecycle state machine.
         var call = TalkChimeLifecycle()
-        let wake = try #require(call.ready(enabled: true))
+        let wakeCue = call.ready(enabled: true)
         call.replyFinished(isRealtime: false)
-        let follow = try #require(call.resumedListening(isRealtime: false, enabled: true))
-        let bye = try #require(call.end(clean: true, enabled: true))
+        let followCue = call.resumedListening(isRealtime: false, enabled: true)
+        let byeCue = call.end(clean: true, enabled: true)
+        let wake = try #require(wakeCue)
+        let follow = try #require(followCue)
+        let bye = try #require(byeCue)
         #expect([wake, follow, bye] == [.wake, .follow, .bye])
 
         let script: [(TalkChimeLifecycle.Cue, String, Double)] = [
