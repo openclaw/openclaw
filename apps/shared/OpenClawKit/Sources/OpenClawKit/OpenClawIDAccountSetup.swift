@@ -1,3 +1,4 @@
+#if os(iOS) || os(macOS)
 import Foundation
 import Synchronization
 
@@ -603,3 +604,4 @@ public final class OpenClawIDAccountSetupService: OpenClawIDSetupService {
         code.count == 6 ? "\(code.prefix(3)) \(code.suffix(3))" : code
     }
 }
+#endif
