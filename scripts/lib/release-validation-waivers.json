@@ -917,6 +917,13 @@
           ]
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.11",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Operator risk acceptance on 2026-11-25 for 2026.11.11 Kova mock-provider peak RSS and missing coverage, matching the signed v2026.11.10 baseline; artifact provenance, candidate identity and all other gates are not waived.",
+      "aggregates": []
     }
   ]
 }
