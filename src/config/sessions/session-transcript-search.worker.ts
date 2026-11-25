@@ -305,11 +305,16 @@ function* readSessionTranscriptSearch(
         undefined,
         markers,
       );
+    const snippet = substringTerms.length
+      ? expression.ref("text").as("snippet")
+      : nativeSnippet().as("snippet");
     // UTF-8 bytes bound the source's UTF-16 units. SQLite can add two omission
     // markers. Short messages only need the plain native snippet.
-    const markedSnippet =
-      !postgres && !substringTerms.length
-        ? expression
+    const snippetFocus =
+      substringPositions[0]?.as("snippet_focus") ??
+      (postgres
+        ? expression.lit(null).as("snippet_focus")
+        : expression
             .case()
             .when(
               expression.fn<number>("octet_length", ["text"]),
@@ -319,11 +324,8 @@ function* readSessionTranscriptSearch(
             .then(nativeSnippet(SESSION_SEARCH_MATCH_MARKERS))
             .else(null)
             .end()
-        : sql<null>`null`;
-    const snippets = [
-      (substringTerms.length ? expression.ref("text") : nativeSnippet()).as("snippet"),
-      (substringPositions[0] ?? markedSnippet).as("snippet_focus"),
-    ] as const;
+            .as("snippet_focus"));
+    const snippets = [snippet, snippetFocus] as const;
     const stream =
       filtered && !postgres && useFts && substringTerms.length === 0
         ? db

@@ -51,7 +51,15 @@ export function bindSqliteFullText(store: object, db?: DatabaseSync): FullTextCa
       }
       const start = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.start) : sql.lit("");
       const end = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.end) : sql.lit("");
-      return /* kysely-allow-raw: Native snippet uses the admitted table and checked field ordinal. */ sql<string>`snippet(${sql.raw(table)}, ${sql.lit(column)}, ${start}, ${end}, ' … ', ${sql.lit(maxTokens)})`;
+      const snippet = createFunctionModule()<string>("snippet", [
+        sql.table(table),
+        sql.lit(column),
+        start,
+        end,
+        sql.lit(" … "),
+        sql.lit(maxTokens),
+      ]);
+      return /* kysely-allow-raw: Expose the native function through the full-text expression contract. */ sql<string>`${snippet}`;
     },
     identity: (index) =>
       /* kysely-allow-raw: Native row identity uses the admitted index declaration. */ sql<number>`${sql.raw(`${relation(index)}.rowid`)}`,
