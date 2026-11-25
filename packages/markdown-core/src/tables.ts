@@ -89,20 +89,22 @@ function matchesLabel(
 
 // Cut at whitespace between top-level inline constructs. A link, code span, or
 // emphasis spanning multiple words stays together. All slices refer to the cell source.
-function rowLabelSlices(markdown: string, env: Env): string[] {
-  if (!/\s/u.test(markdown)) {
-    return [markdown];
-  }
+function rowLabelSlices(markdown: string, env: Env) {
   // Use the same emphasis boundaries as markdownToIR when locating source
   // ranges. CommonMark can pair a CJK star with one in a later word.
   const parser = (rowLabelSourceParser ??= makeRowLabelParser().use(markdownItCjkFriendly));
   const slices: string[] = [];
+  let flattened = "";
   let start = 0;
   let offset = 0;
   for (const token of parser.parseInline(markdown, env)[0]?.children ?? []) {
     const spelling = token.nesting ? token.markup : token.content;
     if (!markdown.startsWith(spelling, offset)) {
-      return [markdown];
+      return { slices: [markdown] };
+    }
+    const nextOffset = offset + spelling.length;
+    if (token.type !== "strong_open" && token.type !== "strong_close") {
+      flattened += markdown.slice(offset, nextOffset);
     }
     if (token.level === 0 && token.type === "text") {
       for (const space of spelling.matchAll(/\s+/gu)) {
@@ -111,9 +113,11 @@ function rowLabelSlices(markdown: string, env: Env): string[] {
         start = end + space[0].length;
       }
     }
-    offset += spelling.length;
+    offset = nextOffset;
   }
-  return offset === markdown.length ? [...slices, markdown.slice(start)] : [markdown];
+  return offset === markdown.length
+    ? { slices: [...slices, markdown.slice(start)], flattened }
+    : { slices: [markdown] };
 }
 
 function renderLabelRuns(runs: LabelRun[], compact: boolean): string {
@@ -164,9 +168,60 @@ function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): s
     return original;
   }
 
-  const slices = rowLabelSlices(markdown, env);
+  const { slices, flattened } = rowLabelSlices(markdown, env);
   if (slices.length === 1) {
-    return `**${renderLabelRuns(runs, false)}**`;
+    const fallback = `**${renderLabelRuns(runs, false)}**`;
+    if (flattened === undefined || flattened === markdown) {
+      return fallback;
+    }
+    const project = (value: string) =>
+      markdownToIRWithMeta(value, { linkify: true, autolink: true }).ir;
+    const semantic = (ir: ReturnType<typeof project>) => {
+      const spans = ir.styles
+        .filter((span) => span.style !== "bold")
+        .map(({ style, language, start, end }) => ({
+          key: JSON.stringify([style, language]),
+          start,
+          end,
+        }))
+        .sort((left, right) => {
+          if (left.key === right.key) {
+            return left.start - right.start;
+          }
+          return left.key < right.key ? -1 : 1;
+        });
+      const coverage: typeof spans = [];
+      for (const span of spans) {
+        const previous = coverage.at(-1);
+        if (previous && previous.key === span.key && span.start <= previous.end) {
+          previous.end = Math.max(previous.end, span.end);
+        } else {
+          coverage.push(span);
+        }
+      }
+      return JSON.stringify([
+        ir.text,
+        ir.links.map(({ start, end, href }) => [start, end, href]),
+        coverage,
+      ]);
+    };
+    const expected = semantic(project(markdown));
+    if (semantic(project(fallback)) === expected) {
+      return fallback;
+    }
+    const candidate = `__${flattened}__`;
+    if (matchesLabel(runs, candidate, parser, env)) {
+      const ir = project(candidate);
+      if (
+        semantic(ir) === expected &&
+        ir.styles.some(
+          (span) => span.style === "bold" && span.start === 0 && span.end === ir.text.length,
+        )
+      ) {
+        return candidate;
+      }
+    }
+    return fallback;
   }
   const content = slices
     .map((slice) => {
