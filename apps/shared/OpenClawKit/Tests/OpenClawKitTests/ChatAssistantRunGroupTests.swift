@@ -261,6 +261,40 @@ struct ChatAssistantRunGroupTests {
     }
 
     @Test
+    func `recorded live tools keep reasoning reachable in the activity disclosure`() throws {
+        let reasoning = "Check both files before comparing them."
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                .init(type: "thinking", thinking: reasoning),
+                .init(type: "toolcall", id: "first", name: "read"),
+                .init(type: "toolcall", id: "second", name: "read"),
+            ],
+            timestamp: 2, transcriptRunID: "run")
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: [Self.message("user", at: 1), message]),
+            runWorking: true, activeRunIDs: ["run"], searchActive: false)
+        guard case let .completedWork(input) = rows.last, input.isActivityRun else {
+            Issue.record("The fixture must coalesce into a recorded activity run")
+            return
+        }
+
+        let groups = ChatAssistantRunGroup.build(
+            rows, liveRunID: "run", hasLiveContent: true, searchActive: false, compactLiveRunIDs: ["run"])
+        let liveFrame = groups.first { $0.includesLive }
+        let frame = try #require(liveFrame)
+        guard case let .row(.completedWork(work)) = frame.parts.first else {
+            Issue.record("Keep the full message available in the activity disclosure")
+            return
+        }
+        let retained = try #require(work.messages.first)
+        let display = ChatMessageVisibleText.displayText(in: retained, includeThinking: true)
+        #expect(AssistantTextParser.segments(from: display).contains {
+            $0.kind == .thinking && $0.text == reasoning
+        })
+    }
+
+    @Test
     func `unsettled live activity without a canonical outcome is running`() {
         var call = Self.tool("read", at: 2)
         call.activity = .init(

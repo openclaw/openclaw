@@ -185,6 +185,11 @@ struct ChatAssistantRunGroup: Identifiable {
                 items = Self.activeToolItems([message], calls: callsByRun[runID] ?? [])
                 sourceID = message.presentationID
             case let .row(.completedWork(work)) where work.isActivityRun:
+                // Keep full message rendering for reasoning the tool-only disclosure cannot show.
+                guard !work.messages.contains(where: Self.hasRecordedReasoning) else {
+                    compacted.append(part)
+                    continue
+                }
                 items = Self.activeToolItems(work.messages, calls: callsByRun[runID] ?? [])
                 sourceID = work.anchorID
             default:
@@ -204,6 +209,11 @@ struct ChatAssistantRunGroup: Identifiable {
             }
         }
         return compacted
+    }
+
+    private static func hasRecordedReasoning(_ message: OpenClawChatMessage) -> Bool {
+        let text = ChatMessageVisibleText.displayText(in: message, includeThinking: true)
+        return AssistantTextParser.segments(from: text).contains { $0.kind == .thinking }
     }
 
     private static func activeToolItems(
