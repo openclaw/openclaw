@@ -153,6 +153,15 @@ it.each<[string, (manifest: parity.Capture) => void, number?]>([
   ["unsafe-path", (m) => Object.assign(m.shots[0]!, { file: "../outside.png" })],
   ["checksum", (m) => Object.assign(m.shots[0]!, { sha256: parity.hash("changed-file") })],
   ["incompatible browser", (m) => Object.assign(m, { browser: "another-browser" }), 1],
+  ["incompatible platform", (m) => Object.assign(m, { platform: "another-platform" }), 1],
+  [
+    "incompatible fixture contract",
+    (m) => {
+      m.contract.fixtures = parity.hash("another-fixture");
+      m.catalog = parity.hash(JSON.stringify(m.contract));
+    },
+    1,
+  ],
 ])("rejects %s evidence", async (_defect, corrupt, exitCode) => {
   const a = await fixture(0),
     b = await fixture(0);
