@@ -28,17 +28,19 @@ export function normalizeEscapedLineBreaksForVisibleText(text: string): string {
 
 function sliceLiteralPollBody(literal: string, start: number, end: number): string {
   // Map the formatter's two UTF-16 boundaries back across the decoded escapes.
+  let literalStart = start;
+  let literalEnd = end;
   for (const match of literal.matchAll(ESCAPED_LINE_BREAKS)) {
-    if (match.index >= end) {
+    if (match.index >= literalEnd) {
       break;
     }
     const extra = match[0].length - 1;
-    if (match.index < start) {
-      start += extra;
+    if (match.index < literalStart) {
+      literalStart += extra;
     }
-    end += extra;
+    literalEnd += extra;
   }
-  return literal.slice(start, end).replace(/\r\n/g, "\n");
+  return literal.slice(literalStart, literalEnd).replace(/\r\n/g, "\n");
 }
 
 export type VisibleTextSuppressionReason =
