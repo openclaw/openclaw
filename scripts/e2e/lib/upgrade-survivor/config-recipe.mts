@@ -260,6 +260,17 @@ export function resolveUpgradeSurvivorConfigSteps(
     },
     ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
+    ...(scenario === "base" &&
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth"
+      ? [
+          {
+            // Keep the seeded Discord and WhatsApp principals out of the same DM session.
+            id: "restart-auth-dm-scope",
+            intent: "restart-auth-dm-scope",
+            argv: ["config", "set", "session.dmScope", "per-channel-peer"],
+          },
+        ]
+      : []),
     validateStep,
   ];
 }

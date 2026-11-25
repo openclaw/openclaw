@@ -215,6 +215,8 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
+      // Hold the discovery retry deadline still without faking Gateway I/O or RPC timers.
+      vi.useFakeTimers({ toFake: ["Date"] });
       // Fail real preparation after worker exit, without synthesizing publication events.
       failedPreparations = 1;
       await worker!.terminate();
@@ -273,6 +275,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect(catalogModelIds(refreshed, provider)).toEqual(["original", "recovered"]);
       expect(refreshed.refreshFailed).not.toBe(true);
     } finally {
+      vi.useRealTimers();
       releasePublication?.();
       releaseResponses();
     }
