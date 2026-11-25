@@ -394,9 +394,9 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
         unavailable: false,
       },
       async (scope, assertCurrent) => {
-        const matches = await readManagedOutgoingAttachmentIndex(scope, messageIds);
+        const index = await readManagedOutgoingAttachmentIndex(scope, messageIds);
         assertCurrent();
-        return matches ?? false;
+        return index ?? false;
       },
     );
     // Unavailable history cannot prove absence. A missing session can.
