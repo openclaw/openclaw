@@ -91,6 +91,8 @@ struct OpenClawChatComposer: View {
     @State private var isSlashPopoverPresented = false
     @State private var suppressNextSlashPopoverUpdate = false
     @State private var slashPanelHeight: CGFloat = 0
+    @State private var slashRowsHeight: CGFloat = 0
+    @Environment(ChatTranscriptRoom.self) private var transcriptRoom: ChatTranscriptRoom?
     @State private var slashHighlightIndex = 0
     @State var dictationTask: Task<Void, Never>?
     /// Set on the tap that sends a message expecting a reply; see `ChatComposerPrimaryButton.swift`.
@@ -933,6 +935,9 @@ extension OpenClawChatComposer {
         ChatComposerSection {
             let query = self.slashQuery ?? ""
             let matches = self.viewModel.slashCommandMatches(query: query, filter: .all)
+            // As tall as its rows, up to the space above the composer; the rows scroll beyond that.
+            let room = self.transcriptRoom?.height ?? 0
+            let rowsLimit = room > 0 ? max(room - 16, 60) : 340
             VStack(alignment: .leading, spacing: 0) {
                 if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
                     HStack(spacing: 10) {
@@ -996,16 +1001,18 @@ extension OpenClawChatComposer {
                         .onChange(of: self.slashHighlightIndex) { _, index in
                             proxy.scrollTo(index)
                         }
+                        .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { _, height in
+                            self.slashRowsHeight = height
+                        }
                     }
-                    .frame(maxHeight: .infinity)
+                    .frame(height: min(self.slashRowsHeight > 0 ? self.slashRowsHeight : rowsLimit, rowsLimit))
                     .overlay(alignment: .bottom) {
-                        if matches.count > 4 {
+                        if self.slashRowsHeight > rowsLimit {
                             self.slashCommandScrollAffordance
                         }
                     }
                 }
             }
-            .frame(height: 340)
             .background(
                 .regularMaterial,
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous))

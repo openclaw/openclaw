@@ -13,6 +13,29 @@ extension EnvironmentValues {
     @Entry public var openClawChatNewSessionOptionsPresented: Binding<Bool>?
 }
 
+/// The transcript's visible height, between the chat header and the composer. The composer's slash panel sits
+/// outside the transcript and reads it to stop below the header.
+@MainActor @Observable
+final class ChatTranscriptRoom {
+    var height: CGFloat = 0
+
+    struct Provider: ViewModifier {
+        @State private var room = ChatTranscriptRoom()
+
+        func body(content: Content) -> some View {
+            content.environment(self.room)
+        }
+    }
+
+    struct Reader: ViewModifier {
+        @Environment(ChatTranscriptRoom.self) private var room: ChatTranscriptRoom?
+
+        func body(content: Content) -> some View {
+            content.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.room?.height = $0 }
+        }
+    }
+}
+
 #if os(iOS)
 struct ChatSafeAreaBar<Bar: View>: ViewModifier {
     var edge: VerticalEdge
