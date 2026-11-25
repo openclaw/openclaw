@@ -33,21 +33,17 @@ function probe(role?: DatabaseProcessRole) {
 
 async function probeMaintenance() {
   assert.throws(assertEngineStoreExecutionAllowed, /must run in a worker/);
-  let expired = false;
+  let ownerChecks = 0;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent() {
-      if (expired) {
-        throw new Error("maintenance owner expired");
-      }
+      ownerChecks += 1;
     },
   });
   const captured = await scope.run(async () => {
     await Promise.resolve();
     assert.doesNotThrow(assertEngineStoreExecutionAllowed);
-    expired = true;
-    assert.throws(assertEngineStoreExecutionAllowed, /maintenance owner expired/);
-    expired = false;
+    assert.equal(ownerChecks, 1, "Execution permission must not recheck owner policy");
     return AsyncLocalStorage.snapshot();
   });
   await scope.close();

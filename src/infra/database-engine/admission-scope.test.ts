@@ -58,7 +58,7 @@ it.each([
   );
 });
 
-it("admits resumed schema maintenance without admitting runtime, stale, or config-only custody", async () => {
+it("admits resumed schema maintenance without admitting runtime, closed, or config-only custody", async () => {
   await probeChild(
     new URL("./admission-role.test-support.ts", import.meta.url),
     { role: "gateway", maintenance: true },

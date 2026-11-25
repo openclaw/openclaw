@@ -43,7 +43,7 @@ export function assertEngineStoreExecutionAllowed(): void {
   if (threadId === 0 && admissionDepth === 0 && processRole.role !== "cli-oneshot") {
     const maintenance = getOpenClawDatabaseMaintenanceScope();
     if (maintenance?.ownsSchemaMaintenance) {
-      maintenance.assertAdmission();
+      maintenance.assertAdmissionLifecycle();
       return;
     }
     throw new Error(
