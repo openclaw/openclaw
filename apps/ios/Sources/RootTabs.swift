@@ -69,6 +69,9 @@ struct RootTabs: View {
         Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
+    @State private var isSearchPresented = false
+    /// What a search result opens once the cover is gone, so a Settings sheet never races its dismissal.
+    @State private var pendingSearchTarget: RootSearchTarget?
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
@@ -272,6 +275,14 @@ struct RootTabs: View {
                         // Observation-only content must not cover native accessibility hit targets.
                             .frame(width: 0, height: 0)
                 }
+                .fullScreenCover(isPresented: self.$isSearchPresented, onDismiss: self.openPendingSearchTarget) {
+                    // Search replaces the sidebar while it is open, bottom bar included. A cover owns its
+                    // keyboard inset, which the drawer layers do not pass down.
+                    RootSearchScreen(
+                        sidebarModel: self.sidebarModel,
+                        open: self.openSearchResult,
+                        close: { self.setSearchPresented(false) })
+                }
         }
     }
 
@@ -330,6 +341,7 @@ struct RootTabs: View {
                 selectDestination: self.selectSidebarDestination,
                 selectSession: self.selectSidebarSession,
                 openPagesEditor: self.openSidebarPagesEditor,
+                openSearch: { self.setSearchPresented(true) },
                 drawerFooterBottomInset: drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
         }
         .padding(.top, drawerSafeAreaInsets?.top ?? 0)
@@ -810,6 +822,36 @@ extension RootTabs {
                 agentId: session.agentId)
             guard self.isSidebarDrawerLayout else { return }
             self.hideSidebar()
+        }
+    }
+
+    /// The cover appears in place, without the sheet slide: search takes the sidebar's spot, it is not a new layer.
+    private func setSearchPresented(_ isPresented: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            self.isSearchPresented = isPresented
+        }
+    }
+
+    private func openSearchResult(_ target: RootSearchTarget) {
+        self.pendingSearchTarget = target
+        self.setSearchPresented(false)
+    }
+
+    private func openPendingSearchTarget() {
+        guard let target = self.pendingSearchTarget else { return }
+        self.pendingSearchTarget = nil
+        switch target {
+        case let .destination(destination):
+            self.selectSidebarDestination(destination)
+        case let .settings(route):
+            self.selectSettingsRoute(route)
+        case .newChat:
+            self.appModel.requestNewChat()
+            self.selectSidebarDestination(.chat)
+        case let .session(session):
+            self.selectSidebarSession(session)
         }
     }
 

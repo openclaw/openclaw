@@ -78,7 +78,7 @@ final class ChatScrollPerformanceUITests: XCTestCase {
     /// slid-out chat, three times per iteration.
     func testSidebarOpenCloseHitches() throws {
         let (app, _, chat) = try self.openLongChat()
-        let search = app.buttons["Search sessions"]
+        let search = app.buttons["RootTabs.Sidebar.Search"]
         let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5))
         let open = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
         let card = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5))
@@ -137,7 +137,7 @@ final class ChatScrollPerformanceUITests: XCTestCase {
             return
         }
         let show = app.buttons.matching(identifier: "RootTabs.Sidebar.Show").firstMatch
-        let search = app.buttons["Search sessions"]
+        let search = app.buttons["RootTabs.Sidebar.Search"]
         let deadline = Date().addingTimeInterval(30)
         while Date() < deadline, !(search.exists && search.isHittable), !show.exists {
             sleep(1)

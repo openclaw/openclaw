@@ -8,11 +8,8 @@ struct RootSidebar: View {
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
     @State private var scrollAnchor = RootSidebarScrollAnchor()
-    @State private var searchText = ""
     @State private var collapsedParents: Set<String> = []
-    @State private var isSearchActive = false
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
-    @FocusState private var isSearchFocused: Bool
     @AppStorage("sidebar.pinnedSessionsCollapsed") private var pinnedSessionsCollapsed = false
     @AppStorage("sidebar.sessionsCollapsed") private var sessionsCollapsed = false
     @AppStorage(RootTabs.pinnedSidebarPagesStorageKey) private var pinnedPagesStorage: String = ""
@@ -22,6 +19,7 @@ struct RootSidebar: View {
     let selectDestination: (RootTabs.SidebarDestination) -> Void
     let selectSession: (OpenClawChatSessionEntry) -> Void
     let openPagesEditor: () -> Void
+    let openSearch: () -> Void
     var drawerFooterBottomInset: CGFloat = 0
 
     var body: some View {
@@ -47,7 +45,7 @@ struct RootSidebar: View {
                             String(localized: "Pinned"),
                             isCollapsed: self.$pinnedSessionsCollapsed,
                             id: "RootTabs.Sidebar.PinnedSection")
-                        if !self.pinnedSessionsCollapsed || self.isFilteringSessions {
+                        if !self.pinnedSessionsCollapsed {
                             ForEach(self.displayRows(sessionLayout.pinnedNodes)) { row in
                                 self.sessionTreeRow(row, rowPass: rowPass)
                             }
@@ -67,18 +65,11 @@ struct RootSidebar: View {
         }
         .scrollEdgeEffectStyle(.soft, for: .vertical)
         .safeAreaBar(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                self.agentHeader
-                if self.isSearchActive {
-                    self.searchField
-                }
-            }
+            self.agentHeader
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
-            // Search owns the screen while it is open; the footer would otherwise ride up with the keyboard.
-            if !self.isSearchActive {
-                self.footer.padding(.bottom, self.drawerFooterBottomInset)
-            }
+            // Search opens full screen over the sidebar, so the footer never rides up with the keyboard.
+            self.footer.padding(.bottom, self.drawerFooterBottomInset)
         }
         .task(id: self.appModel.chatViewModelIdentityID) {
             await self.appModel.sessionGroups.refresh(appModel: self.appModel)
@@ -88,7 +79,6 @@ struct RootSidebar: View {
         .onChange(of: self.isSidebarVisible) { _, isVisible in
             if !isVisible {
                 self.presentedAttention = nil
-                self.isSearchFocused = false
             }
         }
     }
@@ -108,17 +98,9 @@ struct RootSidebar: View {
             Spacer(minLength: 0)
             self.headerIconButton(
                 systemName: "magnifyingglass",
-                label: String(localized: "Search sessions"))
-            {
-                withAnimation(.easeInOut(duration: 0.15)) {
-                    self.isSearchActive.toggle()
-                }
-                if self.isSearchActive {
-                    self.isSearchFocused = true
-                } else {
-                    self.searchText = ""
-                }
-            }
+                label: String(localized: "Search"),
+                action: self.openSearch)
+                .accessibilityIdentifier("RootTabs.Sidebar.Search")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -288,48 +270,6 @@ struct RootSidebar: View {
         return Image(uiImage: image)
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(OpenClawType.captionSemiBold)
-                .foregroundStyle(OpenClawSidebarPalette.muted)
-                .accessibilityHidden(true)
-            ZStack(alignment: .leading) {
-                if self.searchText.isEmpty {
-                    Text(String(localized: "Search sessions"))
-                        .font(OpenClawType.subhead)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                        .accessibilityHidden(true)
-                }
-                TextField("", text: self.$searchText)
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused(self.$isSearchFocused)
-                    .accessibilityLabel(String(localized: "Search sessions"))
-            }
-            if !self.searchText.isEmpty {
-                Button {
-                    self.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(OpenClawType.subhead)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(String(localized: "Clear session search"))
-            }
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, 12)
-        .background(OpenClawSidebarPalette.elevated, in: RoundedRectangle(
-            cornerRadius: OpenClawProMetric.controlRadius,
-            style: .continuous))
-        .padding(.horizontal, 10)
-        .padding(.bottom, 4)
-    }
-
     private func sessionsSection(
         sections: [ChatSessionSidebarModel.Section],
         hasPinnedSessions: Bool,
@@ -356,7 +296,7 @@ struct RootSidebar: View {
                     for: Self.flattened(sections.flatMap(\.nodes)).map(\.session),
                     targetID: "section:recent")
             }
-            if !self.sessionsCollapsed || self.isFilteringSessions {
+            if !self.sessionsCollapsed {
                 let rows = self.sessionRows(in: sections)
                 if self.model.isRefreshing, self.model.sessions.isEmpty {
                     HStack(spacing: 9) {
@@ -431,7 +371,6 @@ struct RootSidebar: View {
     }
 
     private func showPagesEditor() {
-        self.isSearchFocused = false
         self.openPagesEditor()
     }
 
@@ -561,7 +500,7 @@ struct RootSidebar: View {
     private func visibleSessionSections(categories: [String]) -> [ChatSessionSidebarModel.Section] {
         RootSidebarModel.sections(
             sessions: self.model.sessions,
-            query: self.searchText,
+            query: "",
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
@@ -598,17 +537,11 @@ struct RootSidebar: View {
     }
 
     private func sessionRows(in sections: [ChatSessionSidebarModel.Section]) -> [ChatSessionSidebarModel.Row] {
-        let nodes = sections.flatMap(\.nodes)
-        guard let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return self.displayRows(nodes)
-        }
-        let recent = nodes.sorted { ($0.session.updatedAt ?? 0) > ($1.session.updatedAt ?? 0) }
-        return Array(self.displayRows(recent).prefix(limit))
+        let recent = sections.flatMap(\.nodes).sorted { ($0.session.updatedAt ?? 0) > ($1.session.updatedAt ?? 0) }
+        return Array(self.displayRows(recent).prefix(Self.recentSessionCap))
     }
 
-    static func recentSessionCap(searchText: String) -> Int? {
-        searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 15 : nil
-    }
+    static let recentSessionCap = 15
 
     /// Value inputs are shared within one render pass, never retained across a state change.
     private struct SessionRowPass {
@@ -620,7 +553,7 @@ struct RootSidebar: View {
 
     private func displayRows(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Row] {
         ChatSessionSidebarModel.rows(nodes) { node in
-            !self.searchText.isEmpty || !self.collapsedParents.contains(node.id)
+            !self.collapsedParents.contains(node.id)
         }
     }
 
@@ -766,43 +699,30 @@ struct RootSidebar: View {
         .tint(.primary)
     }
 
-    private var isFilteringSessions: Bool {
-        !self.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    @ViewBuilder
     private func sessionSectionHeader(
         _ title: String,
         isCollapsed: Binding<Bool>,
         id: String) -> some View
     {
-        let label = HStack(spacing: 6) {
-            Text(verbatim: title)
-                .font(OpenClawType.captionMedium)
-            if !self.isFilteringSessions {
+        Button {
+            isCollapsed.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text(verbatim: title)
+                    .font(OpenClawType.captionMedium)
                 Image(systemName: isCollapsed.wrappedValue ? "chevron.right" : "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .accessibilityHidden(true)
             }
+            .foregroundStyle(OpenClawSidebarPalette.muted)
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .padding(.horizontal, 10)
+            .contentShape(Rectangle())
         }
-        .foregroundStyle(OpenClawSidebarPalette.muted)
-        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-        .padding(.horizontal, 10)
-        .contentShape(Rectangle())
-
-        if self.isFilteringSessions {
-            label.accessibilityAddTraits(.isHeader)
-        } else {
-            Button {
-                isCollapsed.wrappedValue.toggle()
-            } label: {
-                label
-            }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityValue(isCollapsed.wrappedValue ? Text("Collapsed") : Text("Expanded"))
-            .accessibilityIdentifier(id)
-        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityValue(isCollapsed.wrappedValue ? Text("Collapsed") : Text("Expanded"))
+        .accessibilityIdentifier(id)
     }
 
     private var gatewayName: String {
@@ -854,7 +774,6 @@ struct RootSidebar: View {
     }
 
     private func selectSidebarDestination(_ destination: RootTabs.SidebarDestination) {
-        self.isSearchFocused = false
         self.selectDestination(destination)
     }
 }
