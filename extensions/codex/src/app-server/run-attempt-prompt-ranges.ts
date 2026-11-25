@@ -2,8 +2,9 @@ import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harne
 import type { CodexProjectedContextRange } from "./context-engine-projection.js";
 
 /**
- * An earlier fallback candidate may have frozen this turn's model text. Send those exact
- * bytes in place of this attempt's request, inbound and hook text, as embedded fallbacks do.
+ * An earlier fallback candidate may have frozen this turn's model text. Send those exact bytes
+ * in place of this attempt's request, as embedded fallbacks do; this attempt's inbound and hook
+ * context stay around them, like embedded fallback runtime context.
  */
 export function applyCodexFrozenPrompt(
   params: Pick<
@@ -20,10 +21,16 @@ export function applyCodexFrozenPrompt(
   if (frozen === undefined) {
     return { ...promptBuild, promptText };
   }
-  // Projected history ends with the current request; only that tail is replaced.
+  // The hook input ends with the projected prompt, which ends with the current request.
   const request = promptText.endsWith(params.prompt) ? params.prompt : params.prompt.trim();
-  const prompt = promptText.slice(0, promptText.length - request.length) + frozen;
-  return { prompt, promptInputRange: { start: 0, end: prompt.length }, promptText: prompt };
+  const { prompt } = promptBuild;
+  const { start, end } = promptBuild.promptInputRange ?? { start: 0, end: prompt.length };
+  const requestStart = end - request.length;
+  return {
+    prompt: prompt.slice(0, requestStart) + frozen + prompt.slice(end),
+    promptInputRange: { start, end: requestStart + frozen.length },
+    promptText: promptText.slice(0, promptText.length - request.length) + frozen,
+  };
 }
 
 /**

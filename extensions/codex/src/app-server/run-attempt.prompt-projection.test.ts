@@ -114,9 +114,9 @@ it("keeps a projection an earlier embedded fallback attempt froze", async () => 
   await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
   await run;
   const sentText = getRequestInputText(harness);
-  // Codex sends the frozen bytes, not its own retry marker or re-run hook context.
-  expect(sentText.endsWith(frozen)).toBe(true);
-  expect(sentText).not.toContain("codex attempt context");
+  // Codex sends the frozen bytes in place of its retry-marked request; this attempt's hook
+  // context stays around them, as embedded fallback runtime context does.
+  expect(sentText.endsWith(`codex attempt context\n\n${frozen}`)).toBe(true);
   expect(sentText).not.toContain("Retry after");
   expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection).toEqual({
     version: 1,
