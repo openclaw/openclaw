@@ -33,3 +33,42 @@ export function getBorrowedRelayCdpAccess(cdpUrl: string): BorrowedRelayAccess |
   relay?.client.assertCurrent();
   return relay;
 }
+
+// Loopback ports served by this process's own relay listeners.
+const ownedRelayPorts = new Map<number, number>();
+
+/** Registered by the relay listener for exactly the time it is bound. */
+export function registerOwnedRelayCdpPort(port: number): () => void {
+  ownedRelayPorts.set(port, (ownedRelayPorts.get(port) ?? 0) + 1);
+  let registered = true;
+  return () => {
+    if (!registered) {
+      return;
+    }
+    registered = false;
+    const remaining = (ownedRelayPorts.get(port) ?? 1) - 1;
+    if (remaining > 0) {
+      ownedRelayPorts.set(port, remaining);
+    } else {
+      ownedRelayPorts.delete(port);
+    }
+  };
+}
+
+/**
+ * Whether a CDP endpoint is an extension relay, owned or borrowed. Relay clients drive the
+ * user's own signed-in browser rather than one OpenClaw launched.
+ */
+export function isExtensionRelayCdpUrl(cdpUrl: string): boolean {
+  const key = cdpUrl.replace(/\/$/u, "");
+  if (borrowedCdpAccess.has(key)) {
+    return true;
+  }
+  let url: URL;
+  try {
+    url = new URL(key);
+  } catch {
+    return false;
+  }
+  return url.hostname === "127.0.0.1" && ownedRelayPorts.has(Number(url.port));
+}

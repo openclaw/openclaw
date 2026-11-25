@@ -8,6 +8,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { waitForBrowserStartup } from "../sdk-node-runtime.js";
+import { holdBrowserConnection } from "./browser-connection-holds.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
@@ -275,6 +276,8 @@ export async function withProfileOperationLease<T>(params: {
       : combineSignals(lifecycleSignal, params.signal);
   signal.throwIfAborted();
   const release = createLease(actor);
+  // Connection holds are process-wide, so a successor runtime's work also holds a shared adapter.
+  const releaseConnection = holdBrowserConnection(params.runtime.profile.cdpUrl);
   try {
     const leases = new Map(inherited);
     leases.set(params.runtime, { signal });
@@ -287,6 +290,7 @@ export async function withProfileOperationLease<T>(params: {
     await params.commit?.(result);
     return result;
   } finally {
+    releaseConnection();
     release();
   }
 }

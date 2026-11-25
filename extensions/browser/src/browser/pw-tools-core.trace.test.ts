@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +25,9 @@ vi.mock("./pw-session.js", () => sessionMocks);
 
 const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-trace-test-"));
 traceTestState.rootDir = await fs.realpath(tempRoot);
-const { traceStopViaPlaywright } = await import("./pw-tools-core.trace.js");
+const { traceStartViaPlaywright, traceStopViaPlaywright } =
+  await import("./pw-tools-core.trace.js");
+const { isBrowserConnectionHeld } = await import("./browser-connection-holds.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "tab-1" };
 const outputPath = (name: string) => path.join(traceTestState.rootDir, name);
@@ -75,4 +78,31 @@ it("preserves trace state when Playwright stop itself rejects", async () => {
 
   await expect(stopTrace("stop-failure.zip")).rejects.toBe(stopError);
   expectStopped(true);
+});
+
+function recordingContext() {
+  const context = Object.assign(new EventEmitter(), {
+    tracing: { start: vi.fn(async () => {}), stop: traceTestState.stop },
+  });
+  sessionMocks.getPageForTargetId.mockImplementation(
+    async () => ({ context: () => context }) as never,
+  );
+  traceTestState.traceState.traceActive = false;
+  return context;
+}
+
+it("holds the browser connection while a trace records across requests", async () => {
+  recordingContext();
+  await traceStartViaPlaywright(target);
+  expect(isBrowserConnectionHeld(target.cdpUrl)).toBe(true);
+
+  await stopTrace("held.zip");
+  expect(isBrowserConnectionHeld(target.cdpUrl)).toBe(false);
+});
+
+it("releases a recording's hold when its browser context closes", async () => {
+  const context = recordingContext();
+  await traceStartViaPlaywright(target);
+  context.emit("close");
+  expect(isBrowserConnectionHeld(target.cdpUrl)).toBe(false);
 });

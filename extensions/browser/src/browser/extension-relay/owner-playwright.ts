@@ -40,6 +40,8 @@ export async function connectRelayBrowser(
       timeout: 5_000,
       headers: {},
       preparedTransport: transport,
+      // A relay drives the user's own browser; keep its color scheme and focus state.
+      noDefaults: true,
     });
     try {
       if (

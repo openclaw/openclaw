@@ -4,6 +4,7 @@ import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page } from "playwright-core";
+import { holdBrowserConnection } from "./browser-connection-holds.js";
 import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
@@ -299,6 +300,8 @@ export function markObservedDialogsHandledRemotelyForPage(
 
 export function armObservedDialogResponseOnPage(opts: {
   page: Page;
+  /** Holds this connection while the response stays armed. */
+  cdpUrl?: string;
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
@@ -316,8 +319,13 @@ export function armObservedDialogResponseOnPage(opts: {
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
-    state.armedDialogResponse = undefined;
+    if (state.armedDialogResponse === response) {
+      clearArmedDialogResponse(state);
+    }
   }, timeoutMs);
+  if (opts.cdpUrl) {
+    response.releaseConnection = holdBrowserConnection(opts.cdpUrl);
+  }
   state.armedDialogResponse = response;
 }
 
@@ -385,6 +393,7 @@ function clearArmedDialogResponse(state: PageState): void {
   if (state.armedDialogResponse?.timer) {
     clearTimeout(state.armedDialogResponse.timer);
   }
+  state.armedDialogResponse?.releaseConnection?.();
   state.armedDialogResponse = undefined;
 }
 

@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isBrowserConnectionHeld } from "../browser-connection-holds.js";
 import { attachBrowserScreencastViewer, stopBrowserScreencasts } from "./session.js";
 import { parseScreencastFrame, screencastParams, ScreencastViewer } from "./test-support.js";
 
@@ -280,6 +281,20 @@ describe("browser screencast sessions", () => {
     page.emit("load");
     await flush();
     expect(viewer.messages().at(-1)).toEqual({ type: "meta", url: nextUrl, title: "Loaded" });
+  });
+
+  it("holds the browser connection until the last viewer's capture is retired", async () => {
+    const params = screencastParams({ checkNavigationAllowed: check });
+    const first = await attach(params);
+    const second = await attach(params);
+    expect(isBrowserConnectionHeld(params.cdpUrl)).toBe(true);
+    first.close();
+    await flush();
+    expect(isBrowserConnectionHeld(params.cdpUrl)).toBe(true);
+    second.close();
+    await flush();
+    expect(page.cdp.detach).toHaveBeenCalledTimes(1);
+    expect(isBrowserConnectionHeld(params.cdpUrl)).toBe(false);
   });
 
   it("closes viewers with target_closed when CDP closes", async () => {

@@ -278,6 +278,15 @@ the browser-node host while the node uses its configured remote Gateway. An
 explicit `--gateway-url` pairing connects directly to that remote Gateway and
 remains a manual-only flow.
 
+OpenClaw stays connected only while it uses your browser. Chrome shows its
+"started debugging this browser" bar while the extension holds a debugger on any
+tab. After 60 seconds with no browser request, recording trace, screencast
+viewer, or armed dialog response, OpenClaw disconnects and the extension
+detaches from every tab, so the bar clears. The next request reconnects; take a
+fresh snapshot if an element ref no longer resolves. OpenClaw also leaves your
+browser's color scheme and focus state alone, so sites keep following your
+system light or dark mode.
+
 ### Standalone direct-loopback relay
 
 A pairing on `ws://127.0.0.1:<port>/extension` can run without a local Gateway

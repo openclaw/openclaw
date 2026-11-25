@@ -70,6 +70,8 @@ export type ArmedDialogResponse = {
   /** Process-local elapsed deadline, independent of wall-clock corrections. */
   expiresAtMonotonicMs: number;
   timer?: ReturnType<typeof setTimeout>;
+  /** Holds the page's connection until the response fires, expires, or is replaced. */
+  releaseConnection?: () => void;
 };
 
 export type ConnectedBrowser = {
@@ -78,6 +80,8 @@ export type ConnectedBrowser = {
   /** Read from the browser's launch command line; headless contexts refuse modal passkey requests. */
   headless?: boolean;
   onDisconnected?: () => void;
+  /** Cancels idle release of a connection to the user's own browser. */
+  stopIdleWatch?: () => void;
 };
 
 export type ActionDownloadCapture = {
@@ -131,6 +135,8 @@ export type RoleRefsCacheEntry = {
 
 export type ContextState = {
   traceActive: boolean;
+  /** Holds the connection while a trace records across separate requests. */
+  releaseTraceConnection?: () => void;
 };
 
 export const pageStates = new WeakMap<Page, PageState>();
@@ -154,5 +160,11 @@ export const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 export const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 export const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
 export const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
+/**
+ * Unheld time before a connection to the user's own browser is released. The
+ * extension keeps chrome.debugger attached, with its "started debugging this browser"
+ * bar, for as long as a CDP client stays connected.
+ */
+export const USER_BROWSER_IDLE_RELEASE_MS = 60_000;
 export const blockedTargetsByCdpUrl = new Set<string>();
 export const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
