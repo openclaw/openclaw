@@ -30,6 +30,7 @@ import {
   createCompletionScope,
   directSpawnItem,
   notifyChildStarted,
+  observeCompletionAttempts,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment as Assignment } from "./native-subagent-pending-assignments.js";
@@ -378,10 +379,28 @@ describe("native subagent submission receipts in the binding store", () => {
     },
   );
 
-  it.each(["receipt", "assignment"] as const)(
-    "Stop preserves recovery across a rejected %s acknowledgement and consumes it on retry",
-    async (rejectedOwner) => {
-      const f = await fixture();
+  it.each([
+    "receipt",
+    "assignment",
+    "lost final",
+    "rotated during read",
+    "registered during read",
+    "revoked before read",
+  ])(
+    "settles an accepted follow-up after Stop acknowledgement failure or disconnect (%s)",
+    async (scenario) => {
+      const queued =
+        scenario === "lost final"
+          ? {
+              ...receipt,
+              callId: "queued-call",
+              childThreadId: "sibling",
+              predecessorRunId: "codex-thread:sibling",
+              predecessorNativeTurnId: "sibling-a",
+              submissionId: "sibling-b",
+            }
+          : undefined;
+      const f = await fixture(queued);
       const { owner, assertCurrent, reopen } = f;
       const stopReceipt = { ...receipt, predecessorRunId: "codex-thread:child-thread" };
       const { childThreadId, submissionId, predecessorNativeTurnId, parentTurnId, callId } =
@@ -396,7 +415,7 @@ describe("native subagent submission receipts in the binding store", () => {
         if (
           reject &&
           mutation.kind ===
-            (rejectedOwner === "receipt" ? consumeSubmission : "consume-native-subagent-assignment")
+            (scenario === "receipt" ? consumeSubmission : "consume-native-subagent-assignment")
         ) {
           return Promise.resolve(false);
         }
@@ -412,16 +431,30 @@ describe("native subagent submission receipts in the binding store", () => {
         }
         return recorded;
       });
-      const client = createClient();
+      const createObserverClient = () => {
+        const client = createClient();
+        if (queued) {
+          client.setThreadRead(
+            queued.childThreadId,
+            threadRead({
+              childThreadId: queued.childThreadId,
+              turnId: queued.predecessorNativeTurnId,
+            }),
+          );
+        }
+        return client;
+      };
+      const client = createObserverClient();
       const parentItem = (item: Parameters<typeof client.item>[0]) =>
         client.item(item, parentTurnId, binding.threadId);
       const activeTurn = (turnId: string) =>
         threadRead({ turnId, status: "inProgress", threadStatus: "active" });
       client.setThreadRead(childThreadId, activeTurn(predecessorNativeTurnId));
       const runtime = createRuntime();
+      const authority = new AbortController();
       const custody: AgentHarnessCompletionCustody = {
-        signal: new AbortController().signal,
-        isCurrent: () => true,
+        signal: authority.signal,
+        isCurrent: () => !authority.signal.aborted,
         retain: () => custody,
         settleExecution() {},
         release() {},
@@ -435,6 +468,7 @@ describe("native subagent submission receipts in the binding store", () => {
       });
       const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
         interruptChildAndWait: interrupt,
+        hasObservationBacking: (_parent, child) => child === queued?.childThreadId,
       });
       const requestCustody = Object.freeze({});
       const modelSource = createNativeModelSourceFixture(["test-model"]);
@@ -531,19 +565,102 @@ describe("native subagent submission receipts in the binding store", () => {
           expect(await assignmentStore.read()).toEqual(assignments);
           expect(await submissionStore.read()).toEqual(receipts);
         };
-        await expectSaved([assignment], [stopReceipt]);
+        await expectSaved([assignment], queued ? [queued, stopReceipt] : [stopReceipt]);
+        if (scenario !== "receipt" && scenario !== "assignment") {
+          await parent.unregister();
+          const attempts = observeCompletionAttempts();
+          const peer = createClient();
+          peer.client.initialize = async () => {};
+          peer.client.close = vi.fn(peer.close);
+          let replacement: typeof monitor | undefined;
+          let observer: typeof parent | undefined;
+          const final = threadRead({
+            turnId: submissionId,
+            result: "B result",
+            resultPhase: "final_answer",
+          });
+          final.thread.turns!.unshift(...predecessor.thread.turns);
+          const registerAgain = async () => {
+            const next = createObserverClient();
+            next.setThreadRead(childThreadId, final);
+            replacement = new CodexNativeSubagentMonitor(next.client, runtime);
+            observer = await replacement.registerParent({
+              parentThreadId: binding.threadId,
+              requesterSessionKey: identity.sessionKey,
+              historyOwner: owner,
+              completionScope: createCompletionScope(identity.sessionKey),
+              assignmentStore,
+              submissionStore,
+            });
+            await observer.ready;
+            await attempts.settle();
+          };
+          peer.setThreadReadFactory(childThreadId, async () => {
+            if (scenario === "rotated during read") {
+              await f.rotate("replacement");
+            }
+            if (scenario === "registered during read") {
+              await registerAgain();
+            }
+            return final;
+          });
+          const openPeer = vi.fn(() => peer.client);
+          client.client.getDisconnectedPeer = () => openPeer;
+          try {
+            client.close();
+            if (scenario === "revoked before read") {
+              authority.abort();
+            }
+            await monitor.dispose();
+            await attempts.settle();
+            if (scenario === "revoked before read") {
+              expect(openPeer).not.toHaveBeenCalled();
+              expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+              await expectSaved([assignment], [stopReceipt]);
+              return;
+            }
+            if (scenario === "registered during read") {
+              expect(observer).toBeDefined();
+              expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+            } else if (queued) {
+              expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledOnce();
+              await expectSaved([], [queued]);
+              await registerAgain();
+            }
+          } finally {
+            await observer?.unregister();
+            await attempts.settle();
+            await replacement?.dispose();
+          }
+          if (scenario !== "rotated during read") {
+            expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({ childSessionKey: assignment.runId, result: "B result" }),
+            );
+            await expectSaved([], queued ? [queued] : []);
+          } else {
+            expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+            expect(
+              await f.store.readNativeSubagentAssignments?.(identity, {
+                ...owner,
+                parentThreadId: "replacement",
+              }),
+            ).toEqual([assignment]);
+          }
+          expect(peer.client.close).toHaveBeenCalledOnce();
+          return;
+        }
         reject = true;
         const failed = await stop();
         expect(failed.killed).toBe(0);
         expect(failed.errors).toEqual([
           new Error(
-            rejectedOwner === "receipt"
+            scenario === "receipt"
               ? "Cancelled native follow-up receipt was not acknowledged."
               : "Native assignment was not acknowledged.",
           ),
         ]);
         await reopen();
-        await expectSaved([assignment], rejectedOwner === "receipt" ? [stopReceipt] : []);
+        await expectSaved([assignment], scenario === "receipt" ? [stopReceipt] : []);
         reject = false;
         const retried = await stop();
         expect([retried.killed, retried.errors]).toEqual([1, undefined]);

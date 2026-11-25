@@ -1,19 +1,29 @@
+import { isDeepStrictEqual } from "node:util";
 import { isDurableAgentHarnessCompletionDelivery } from "openclaw/plugin-sdk/agent-harness-completion";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAppServerClient } from "./client.js";
+import type { CodexNativeSubagentAssignmentInventory } from "./native-subagent-assignment-inventory.js";
 import {
   codexNativeSubagentRunId,
+  findCodexNativeSuccessorTurn,
   readCodexNativeSubagentRunId,
+  readThreadSpawnSource,
 } from "./native-subagent-assignment.js";
 import { assertHistoryOwnerMatchesRegistration } from "./native-subagent-history-owner.js";
-import { initialWaitReceipt } from "./native-subagent-history-recovery.js";
+import { initialWaitReceipt, readTurnCompletion } from "./native-subagent-history-recovery.js";
 import type {
   ChildState,
   NativeSubagentMonitorRuntime,
   ParentOwner,
   ParentState,
+  RecoveredCompletion,
 } from "./native-subagent-monitor-types.js";
+import { logRecoveryFailure } from "./native-subagent-recovery-coordinator.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
-import type { CodexThread, CodexTurn } from "./protocol.js";
+import type { CodexNativeSubagentSubmissionOwner } from "./native-subagent-submission-owner.js";
+import type { CodexNativeSubagentSubmission } from "./native-subagent-submission.js";
+import { isJsonObject, type CodexThread, type CodexTurn } from "./protocol.js";
+import { waitForPromiseOrAbort } from "./timeout.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
@@ -40,6 +50,169 @@ export class CodexNativeSubagentCompletionDelivery {
   private readonly attempts = new Map<ChildState, Promise<void>>();
 
   constructor(private readonly dependencies: CompletionDeliveryDependencies) {}
+
+  async settleAfterClose(options: {
+    closed?: CodexAppServerClient;
+    held?: ReadonlyMap<ChildState, CodexNativeSubagentSubmission>;
+    parents: ParentState[];
+    submissions: CodexNativeSubagentSubmissionOwner;
+    assignments: CodexNativeSubagentAssignmentInventory;
+    finish: () => void;
+    complete: (state: ParentState, child: ChildState, result: RecoveredCompletion) => Promise<void>;
+  }) {
+    const { parents, submissions, assignments, closed, held, finish, complete } = options;
+    const drain = () =>
+      Promise.allSettled(
+        parents.flatMap((state) => [submissions.drain(state), assignments.drain(state)]),
+      );
+    const pending = parents.some(
+      (state) => assignments.hasWrites(state) || submissions.hasCustody(state),
+    );
+    if (pending) {
+      await drain();
+    }
+    finish();
+    if (closed && held?.size) {
+      try {
+        await this.recoverDetached(closed, held, (state, child, result) => {
+          void complete(state, child, result).catch((error: unknown) =>
+            logRecoveryFailure(child.childThreadId, error),
+          );
+        });
+      } finally {
+        for (const child of held.keys()) {
+          if (!child.terminal && this.dependencies.children.get(child.runId) === child) {
+            this.dependencies.unregisterChild(child);
+          }
+        }
+      }
+    }
+    // Releasing acknowledged children can enqueue their final receipt consumption.
+    await drain();
+    for (const state of parents) {
+      if (this.dependencies.parents.get(state.parentThreadId) !== state) {
+        state.submissionStore?.release?.();
+      }
+    }
+  }
+
+  // A disconnected subscription can lose the final event after the parent has
+  // detached. Read only the exact accepted successor, without resuming either thread.
+  private async recoverDetached(
+    client: CodexAppServerClient,
+    held: ReadonlyMap<ChildState, CodexNativeSubagentSubmission>,
+    complete: (state: ParentState, child: ChildState, completion: RecoveredCompletion) => void,
+  ) {
+    const open = client.getDisconnectedPeer();
+    const identity = client.getRuntimeIdentity();
+    if (!open || !identity) {
+      return;
+    }
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), 10_000);
+    timer.unref();
+    let peer: CodexAppServerClient | undefined;
+    let initialized: Promise<void> | undefined;
+    const recover = async (child: ChildState, receipt: CodexNativeSubagentSubmission) => {
+      const state = this.dependencies.parents.get(child.parentThreadId);
+      const store = state?.assignmentStore;
+      const custody = child.completionCustody;
+      if (!store || !state?.historyOwner || !custody) {
+        return;
+      }
+      const signal = AbortSignal.any([deadline.signal, custody.signal]);
+      if (signal.aborted) {
+        return;
+      }
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        store.assertCurrent();
+        if (
+          !this.isCurrent(state, child) ||
+          !custody.isCurrent() ||
+          state.assignmentStore !== store ||
+          state.historyOwner?.parentThreadId !== child.parentThreadId ||
+          !isDeepStrictEqual(state.historyOwner, child.historyOwner) ||
+          child.nativeTurnId !== receipt.submissionId ||
+          child.terminal ||
+          child.subscriptionClosed ||
+          child.cancellationRequested ||
+          child.cancelledModelTurnId === receipt.submissionId
+        ) {
+          throw new Error("Disconnected native submission is no longer current.");
+        }
+      };
+      const pending = async () =>
+        (await store.read()).some(
+          (entry) =>
+            entry.runId === child.runId &&
+            entry.nativeParentThreadId === state.parentThreadId &&
+            !entry.recordedCompletion &&
+            isDeepStrictEqual(entry.owner, child.historyOwner) &&
+            isDeepStrictEqual(entry.submission, receipt),
+        );
+      const read = async () => {
+        assertCurrent();
+        if (!(await pending())) {
+          return;
+        }
+        assertCurrent();
+        const reader = (peer ??= open());
+        await (initialized ??= reader.initialize());
+        assertCurrent();
+        if (!isDeepStrictEqual(identity, reader.getRuntimeIdentity())) {
+          return;
+        }
+        const { thread } = await reader.request(
+          "thread/read",
+          { threadId: child.childThreadId, includeTurns: true },
+          { signal, assertCurrent },
+        );
+        assertCurrent();
+        const spawn = readThreadSpawnSource(thread);
+        const turn = findCodexNativeSuccessorTurn(
+          thread.turns ?? [],
+          receipt.predecessorNativeTurnId,
+          receipt.submissionId,
+        );
+        if (
+          thread.id !== child.childThreadId ||
+          thread.parentThreadId !== state.parentThreadId ||
+          (spawn && spawn.parent_thread_id !== state.parentThreadId) ||
+          thread.forkedFromId ||
+          (thread.status?.type !== "idle" && thread.status?.type !== "notLoaded") ||
+          turn?.status !== "completed" ||
+          turn !== thread.turns?.at(-1) ||
+          (turn.threadId !== undefined && turn.threadId !== thread.id) ||
+          turn.error != null ||
+          !Number.isSafeInteger(turn.completedAt) ||
+          !turn.completedAt ||
+          turn.completedAt < (turn.startedAt ?? 0) ||
+          !isJsonObject(turn)
+        ) {
+          return;
+        }
+        const completion = readTurnCompletion(turn, thread.id);
+        if (completion?.statusLabel !== "task_complete" || !(await pending())) {
+          return;
+        }
+        assertCurrent();
+        if (this.claim(state, child)) {
+          complete(state, child, completion);
+        }
+      };
+      await waitForPromiseOrAbort(Promise.resolve().then(read), signal).catch((error: unknown) =>
+        logRecoveryFailure(child.childThreadId, error),
+      );
+    };
+    try {
+      await Promise.allSettled([...held].map(([child, receipt]) => recover(child, receipt)));
+    } finally {
+      clearTimeout(timer);
+      deadline.abort();
+      peer?.close();
+    }
+  }
 
   // Close handlers run synchronously in either order. Reserve only pending
   // results before the queued detached attempt can admit a wake.

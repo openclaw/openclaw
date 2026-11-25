@@ -6,6 +6,7 @@ import {
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS } from "./attempt-client-cleanup.js";
+import type { CodexAppServerClient } from "./client.js";
 import {
   CodexNativeSubagentAdmissionCustody,
   releaseCompletionCustody,
@@ -397,8 +398,8 @@ class Monitor {
       acceptInteraction: this.submissions.modelInputs.acceptInteraction,
       observeCall: this.submissions.modelInputs.observeCall,
     });
-    this.removeCloseHandler = client.addCloseHandler(() => {
-      void this.dispose().catch((error: unknown) => {
+    this.removeCloseHandler = client.addCloseHandler((closed) => {
+      void this.startDisposal(closed).catch((error: unknown) => {
         embeddedAgentLog.warn("Failed to settle Codex native assignments after client closure", {
           error: formatErrorMessage(error),
         });
@@ -407,10 +408,15 @@ class Monitor {
   }
 
   dispose(): Promise<void> {
+    return this.startDisposal();
+  }
+
+  private startDisposal(closed?: CodexAppServerClient): Promise<void> {
     if (this.disposal) {
       return this.disposal;
     }
     this.disposed = true;
+    const held = closed?.getDisconnectedPeer?.() ? this.submissions.stopForDisconnect() : undefined;
     this.removeNotificationHandler();
     this.removeCloseHandler();
     for (const childState of this.childStates.values()) {
@@ -428,43 +434,29 @@ class Monitor {
     for (const state of parents) {
       notifyNativeModelSourceWaiters(state);
     }
-    const pending = parents.some(
-      (state) => this.assignments.hasWrites(state) || this.submissions.hasCustody(state),
-    );
-    if (!pending) {
-      this.finishDisposal();
-    }
-    this.disposal = (async () => {
-      await Promise.allSettled(
-        parents.flatMap((state) => [this.submissions.drain(state), this.assignments.drain(state)]),
-      );
-      if (pending) {
-        this.finishDisposal();
-        // Releasing acknowledged children can enqueue their final receipt consumption.
-        await Promise.allSettled(
-          parents.flatMap((state) => [
-            this.submissions.drain(state),
-            this.assignments.drain(state),
-          ]),
-        );
-      }
-      for (const state of parents) {
-        if (this.parentStates.get(state.parentThreadId) !== state) {
-          state.submissionStore?.release?.();
-        }
-      }
-    })();
+    this.disposal = this.completionDelivery.settleAfterClose({
+      closed,
+      held,
+      parents,
+      submissions: this.submissions,
+      assignments: this.assignments,
+      finish: () => this.finishDisposal(held),
+      complete: (state, child, result) =>
+        this.processCompletion(state, child, result, result.completedAt),
+    });
     return this.disposal;
   }
 
-  private finishDisposal(): void {
-    this.submissions.dispose();
+  private finishDisposal(
+    held?: ReturnType<CodexNativeSubagentSubmissionOwner["stopForDisconnect"]>,
+  ): void {
+    this.submissions.dispose(held && new Set(held.values()));
     for (const childState of this.childStates.values()) {
       releaseNativeDirectChild(childState);
       releaseNativeModelExecution(childState);
       // Terminal delivery no longer needs app-server. Keep its bounded retry
       // alive if idle-pool eviction closes this client between attempts.
-      if (childState.terminal && childState.pendingCompletion) {
+      if ((childState.terminal && childState.pendingCompletion) || held?.has(childState)) {
         this.recovery.clearRecoveryTimers(childState);
         continue;
       }
