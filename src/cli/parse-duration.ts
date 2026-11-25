@@ -5,6 +5,10 @@ type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
 };
 
+const MAX_TOKEN_LENGTH = 100;
+// The token limit bounds decimal precision. Use one exact scale across units and segments.
+const DURATION_SCALE = 10n ** BigInt(MAX_TOKEN_LENGTH);
+
 const DURATION_UNIT_MS = new Map<string, number>([
   ["ms", durationUnitMs.millisecond],
   ["s", durationUnitMs.second],
@@ -19,20 +23,17 @@ function invalidDuration(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
 }
 
-function parseDurationToken(raw: string, value: string, unit: string): number {
+function parseScaledDurationToken(raw: string, value: string, unit: string): bigint {
   const multiplier = DURATION_UNIT_MS.get(unit);
-  if (multiplier === undefined || value.length + unit.length > 100) {
+  if (multiplier === undefined || value.length + unit.length > MAX_TOKEN_LENGTH) {
     throw invalidDuration(raw);
   }
-  const parsed = Number(value) * multiplier;
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw invalidDuration(raw);
-  }
-  return parsed;
+  const [whole, fraction = ""] = value.split(".");
+  return BigInt(`${whole}${fraction.padEnd(MAX_TOKEN_LENGTH, "0")}`) * BigInt(multiplier);
 }
 
-function roundSafeDurationMs(raw: string, value: number): number {
-  const ms = Math.round(value);
+function roundSafeDurationMs(raw: string, scaledMs: bigint): number {
+  const ms = Number((scaledMs + DURATION_SCALE / 2n) / DURATION_SCALE);
   if (!Number.isSafeInteger(ms)) {
     throw invalidDuration(raw);
   }
@@ -49,11 +50,11 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
   if (single) {
     const value = single[1] ?? "";
     const unit = single[2] ?? opts?.defaultUnit ?? "ms";
-    return roundSafeDurationMs(raw, parseDurationToken(raw, value, unit));
+    return roundSafeDurationMs(raw, parseScaledDurationToken(raw, value, unit));
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
-  let totalMs = 0;
+  let scaledMs = 0n;
   let consumed = 0;
   const tokenRe = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
   for (const match of trimmed.matchAll(tokenRe)) {
@@ -64,7 +65,7 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     if (match.index !== consumed) {
       throw invalidDuration(raw, "each composite segment needs a unit");
     }
-    totalMs += parseDurationToken(raw, valueRaw, unitRaw);
+    scaledMs += parseScaledDurationToken(raw, valueRaw, unitRaw);
     consumed += full.length;
   }
 
@@ -72,5 +73,5 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     throw invalidDuration(raw);
   }
 
-  return roundSafeDurationMs(raw, totalMs);
+  return roundSafeDurationMs(raw, scaledMs);
 }

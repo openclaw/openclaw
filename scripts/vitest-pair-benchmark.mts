@@ -208,5 +208,5 @@ if (options.mode === "node-cache-qualification-admission") {
     });
   });
 } else {
-  throw new Error(`Unhandled benchmark mode: ${options.mode}`);
+  throw new Error("Unhandled benchmark mode");
 }

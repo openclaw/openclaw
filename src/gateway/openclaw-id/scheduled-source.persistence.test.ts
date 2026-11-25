@@ -495,7 +495,7 @@ it("keeps owner-only standing within the retained scope and fences control edits
           assertCurrent: () => {},
         });
         try {
-          expect(restored.controlUiAdmin).toBe(owner);
+          expect(restored.authority.grant.owner).toBe(owner);
         } finally {
           restored.release();
         }

@@ -103,9 +103,10 @@ openclaw_resolve_frozen_upgrade_skill_library_contract() {
 }
 
 openclaw_resolve_frozen_update_channel_switch_contract() {
-  local source_root="${1:?missing selected source root}" legacy current normalized in_place detached
+  local source_root="${1:?missing selected source root}" legacy current normalized in_place detached owner_guard
   export OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=MAIN
   export OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE=detached
+  export OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE=refuse
   [ -n "${OPENCLAW_SELECTED_SHA:-}" ] || return 0
   openclaw_frozen_target_source validate "$source_root" || return 2
   legacy="$(openclaw_frozen_target_source_flag contains "$source_root" src/cli/update-cli/update-command-target.ts 'updateInstallKind === "package" && explicitTag === "main"')" || return 2
@@ -125,6 +126,9 @@ openclaw_resolve_frozen_update_channel_switch_contract() {
     0:1) ;;
     *) echo "unsupported selected package-to-Git updater contract" >&2; return 2 ;;
   esac
+  # Resident-owned targets refuse installer-kind switches; older cuts still switch.
+  owner_guard="$(openclaw_frozen_target_source_flag contains "$source_root" src/cli/update-cli/update-command-admission-report.ts 'The resident launcher owns this installation.')" || return 2
+  [ "$owner_guard" = 1 ] || export OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE=switch
 }
 
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {

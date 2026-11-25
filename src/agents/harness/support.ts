@@ -28,6 +28,7 @@ import type {
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
+import { resolveAgentHarnessSupport } from "./route-support.js";
 import type {
   AgentHarness,
   AgentHarnessPreparedAuthSupport,
@@ -263,12 +264,14 @@ export function resolveAutoAgentHarnessId(
     config?: OpenClawConfig;
     modelProvider?: AgentHarnessSupportContext["modelProvider"];
     preparedModelProvider?: boolean;
+    mode?: "execution" | "projection";
   } & AgentRuntimePolicyScope,
 ): string | undefined {
   return resolveAutoAgentHarnessSelection(
     listRegisteredAgentHarnesses().map(({ harness }) => harness),
     params.provider,
     () => buildAgentHarnessSupportContext({ ...params, requestedRuntime: "auto" }),
+    params.mode !== "execution",
   ).selected?.id;
 }
 
@@ -276,6 +279,7 @@ export function resolveAutoAgentHarnessSelection(
   harnesses: readonly AgentHarness[],
   provider: string,
   createSupportContext: () => AgentHarnessSupportContext,
+  projection = false,
 ) {
   const hintedCandidates = harnesses.map((harness) => ({
     harness,
@@ -284,7 +288,9 @@ export function resolveAutoAgentHarnessSelection(
   let supportContext: AgentHarnessSupportContext | undefined;
   const candidates = hintedCandidates.map(({ harness, support }) => ({
     harness,
-    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+    support:
+      support ??
+      resolveAgentHarnessSupport(harness, (supportContext ??= createSupportContext()), projection),
   }));
   const selected = candidates.filter(isSupportedHarness).toSorted((left, right) => {
     const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);

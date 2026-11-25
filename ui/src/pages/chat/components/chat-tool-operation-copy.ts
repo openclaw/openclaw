@@ -17,6 +17,56 @@ const catalog: Readonly<Record<string, object>> =
   registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["memory_search", "brain"],
+  ["personal_instructions", "fileText"],
+  ["knowledge_annotate", "book"],
+  ["knowledge_attach", "book"],
+  ["knowledge_attach_file", "book"],
+  ["knowledge_attachment", "book"],
+  ["knowledge_chronicle_day", "book"],
+  ["knowledge_chronicle_last_seen", "book"],
+  ["knowledge_chronicle_since", "book"],
+  ["knowledge_connections", "book"],
+  ["knowledge_correct", "book"],
+  ["knowledge_create_claim", "book"],
+  ["knowledge_create_relationship", "book"],
+  ["knowledge_diagnostics", "book"],
+  ["knowledge_edit_body", "book"],
+  ["knowledge_evidence_read", "book"],
+  ["knowledge_extract_section", "book"],
+  ["knowledge_grep", "book"],
+  ["knowledge_history", "book"],
+  ["knowledge_lookup", "book"],
+  ["knowledge_merge", "book"],
+  ["knowledge_mutation", "book"],
+  ["knowledge_ontology", "book"],
+  ["knowledge_publish_batch", "book"],
+  ["knowledge_recall", "book"],
+  ["knowledge_reconcile_evidence", "book"],
+  ["knowledge_record", "book"],
+  ["knowledge_records", "book"],
+  ["knowledge_relink", "book"],
+  ["knowledge_remember", "book"],
+  ["knowledge_resume", "book"],
+  ["knowledge_revision", "book"],
+  ["knowledge_save_page", "book"],
+  ["knowledge_source_check", "book"],
+  ["knowledge_status", "book"],
+  ["knowledge_supersede", "book"],
+  ["knowledge_timeline", "book"],
+  ["knowledge_unmerge", "book"],
+  ["knowledge_verify", "book"],
+  ["knowledge_withdraw", "book"],
+  ["intent", "brain"],
+  ["memory_forget", "brain"],
+  ["memory_recall", "brain"],
+  ["memory_store", "brain"],
+  ["wiki_apply", "book"],
+  ["wiki_get", "book"],
+  ["wiki_lint", "book"],
+  ["wiki_search", "book"],
+  ["wiki_status", "book"],
+  ["local_image", "image"],
   ["discussion", "messageSquare"],
   ["facetime_call", "audioLines"],
   ["feishu_app_scopes", "fileText"],
@@ -127,6 +177,81 @@ function describedNodeName(selector: unknown, details: unknown): string | undefi
   return node === described?.displayName && node !== described.nodeId ? node : undefined;
 }
 
+function completedMediaGenerationPhase(card: ToolCard, kind: string) {
+  const details = asNullableRecord(card.details);
+  const receipt = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
+  if (receipt?.action === "status" || receipt?.duplicateGuard === true) {
+    return "action";
+  }
+  if (receipt?.async === true && typeof receipt.status === "string") {
+    return receipt.status === "started" ? "requested" : "action";
+  }
+  if (Array.isArray(receipt?.attachments)) {
+    return receipt.async !== true && receipt.attachments.length > 0 ? "done" : "action";
+  }
+  // History may keep only the producer's opening sentence (after an optional review notice).
+  const output = unwrapToolResultTextForDisplay(card.outputText ?? "");
+  const startedKind =
+    /^(?:Review-before-delivery is enabled\.[^\n]*\n)?Background task started for (image|music|video) generation \([^\s()]+\)\./u.exec(
+      output,
+    )?.[1];
+  if (startedKind === kind) {
+    return "requested";
+  }
+  const generatedUnit =
+    /^Generated [1-9]\d* (image|track|video)s? with [^/\n]+\/[^\n]+\.(?:\r?\n|$)/u.exec(
+      output,
+    )?.[1];
+  return receipt?.async !== true && generatedUnit === (kind === "music" ? "track" : kind)
+    ? "done"
+    : "action";
+}
+
+// These labels describe the publication, not merely a successful tool call.
+const knowledgePublicationTools = new Set([
+  "knowledge_annotate",
+  "knowledge_correct",
+  "knowledge_create_claim",
+  "knowledge_create_relationship",
+  "knowledge_edit_body",
+  "knowledge_extract_section",
+  "knowledge_merge",
+  "knowledge_publish_batch",
+  "knowledge_recall",
+  "knowledge_reconcile_evidence",
+  "knowledge_resume",
+  "knowledge_save_page",
+  "knowledge_supersede",
+  "knowledge_unmerge",
+  "knowledge_withdraw",
+]);
+
+function knowledgePublicationQualifier(receipt: Record<string, unknown> | null | undefined) {
+  switch (receipt?.state) {
+    case "published":
+      return undefined;
+    case "accepted":
+      return "operationPendingPublication";
+    case "conflict":
+    case "rejected":
+      return "operationNotApplied";
+    case undefined:
+      // Only a published agent receipt omits state and carries the new revision and full hash.
+      if (
+        typeof receipt?.id === "string" &&
+        /^\S{1,96}$/u.test(receipt.id) &&
+        typeof receipt.revision === "number" &&
+        Number.isSafeInteger(receipt.revision) &&
+        receipt.revision > 0 &&
+        typeof receipt.hash === "string" &&
+        /^[a-f0-9]{64}$/u.test(receipt.hash)
+      ) {
+        return undefined;
+      }
+  }
+  return "operationUnknown";
+}
+
 export function catalogToolOperation(
   card: ToolCard,
   outcome: ToolCardOutcome,
@@ -135,6 +260,8 @@ export function catalogToolOperation(
   const call = unwrapToolCallForDisplay(card);
   const name = call.name.trim().toLowerCase();
   const args = asNullableRecord(call.args);
+  const mediaGenerator =
+    name === "image_generate" || name === "music_generate" || name === "video_generate";
   if (name === "toolsearch" || name === "tool_search") {
     const selecting =
       name === "toolsearch" &&
@@ -210,17 +337,35 @@ export function catalogToolOperation(
       ? `status_${args.status}`
       : name === "browser" && action === "act"
         ? browserOperation(args, labels)
-        : action?.replaceAll(".", "_");
-  const operation = key && Object.hasOwn(labels, key) ? key : "default";
+        : name === "local_image" && args?.task === "ocr"
+          ? "task_ocr"
+          : mediaGenerator && args
+            ? action?.trim().toLowerCase() || "generate"
+            : action?.replaceAll(".", "_");
+  let operation = key && Object.hasOwn(labels, key) ? key : "default";
+  if (name === "knowledge_attach" && args?.final === true) {
+    operation = "final";
+  } else if (
+    (name === "knowledge_relink" || name === "knowledge_reconcile_evidence") &&
+    args?.dryRun === true
+  ) {
+    operation = "preview";
+  } else if (name === "knowledge_supersede" && args?.undo === true) {
+    operation = "restore";
+  }
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
+  let qualifier: ReturnType<typeof knowledgePublicationQualifier>;
   let phase =
     outcome === "running"
       ? "running"
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
+  if (mediaGenerator && operation === "generate" && phase === "done") {
+    phase = completedMediaGenerationPhase(card, name.slice(0, -"_generate".length));
+  }
   if (name === "message" && operation === "reply" && phase === "done") {
     const receipt = readMessageReceipt(card);
     const messageId = normalizeOptionalString(receipt?.messageId);
@@ -235,13 +380,67 @@ export function catalogToolOperation(
       phase = "action";
     }
   }
-  const query =
-    name === "web_search" && typeof args?.query === "string"
-      ? truncateUtf16WithEllipsis(
-          args.query.replace(/[\s\p{Cc}\p{Bidi_Control}]+/gu, " ").trim(),
-          120,
-        )
-      : undefined;
+  const remember = name === "knowledge_remember";
+  if (phase === "done" && (remember || knowledgePublicationTools.has(name))) {
+    // The dispatcher retains the called tool's structured result even when history omits its text.
+    const details = asNullableRecord(card.details);
+    const structured = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
+    const result =
+      structured &&
+      (remember ? "receipt" in structured : "state" in structured || "revision" in structured)
+        ? structured
+        : safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? ""));
+    const receipt = remember ? asNullableRecord(result?.receipt) : result;
+    // All duplicates need no publication. An "inserted" item alone does not prove a save.
+    const allDuplicates =
+      remember &&
+      result?.receipt === null &&
+      Array.isArray(result.items) &&
+      result.items.length > 0 &&
+      result.items.every((item: unknown) => asNullableRecord(item)?.status === "duplicate");
+    if (name === "knowledge_reconcile_evidence" && receipt?.state === "preview") {
+      operation = "preview";
+    } else if (!allDuplicates) {
+      qualifier =
+        operation === "preview" ? "operationUnknown" : knowledgePublicationQualifier(receipt);
+      if (qualifier) {
+        phase = "action";
+      }
+    }
+  } else if (phase === "done" && (name === "knowledge_relink" || name === "knowledge_verify")) {
+    const details = asNullableRecord(card.details);
+    const result = {
+      ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
+      ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    };
+    if (name === "knowledge_relink") {
+      if (result.dryRun === true) {
+        operation = "preview";
+      } else if (
+        operation !== "preview" &&
+        typeof result.linked === "number" &&
+        result.linked > 0
+      ) {
+        phase = "linked";
+      }
+    } else {
+      phase =
+        result.failed === 0 && typeof result.passed === "number" && result.passed > 0
+          ? "done"
+          : "checked";
+    }
+  }
+  // Searches and page reads stay distinguishable by what they looked for.
+  const input =
+    (name === "web_search" || name === "memory_search") && typeof args?.query === "string"
+      ? args.query
+      : name === "wiki_get" && typeof args?.lookup === "string"
+        ? args.lookup
+        : undefined;
+  const query = input
+    ? truncateUtf16WithEllipsis(input.replace(/[\s\p{Cc}\p{Bidi_Control}]+/gu, " ").trim(), 120) ||
+      undefined
+    : undefined;
   const label = t(
     `chat.toolCards.operationLabels.${name}.${operation}.${phase}${query ? "WithQuery" : ""}`,
     query ? { query } : undefined,
@@ -250,8 +449,11 @@ export function catalogToolOperation(
     name === "nodes" && operation === "describe"
       ? describedNodeName(args?.node, card.details)
       : addressed?.name;
-  return {
-    label: target ? t("chat.toolCards.namedOperation", { action: label, name: target }) : label,
-    showOutcome: true,
-  };
+  const named = target
+    ? t("chat.toolCards.namedOperation", { action: label, name: target })
+    : label;
+  // A publication receipt qualifies a completed call; the row's outcome slot covers the rest.
+  return qualifier
+    ? { label: t(`chat.toolCards.${qualifier}`, { action: named }) }
+    : { label: named, showOutcome: true };
 }

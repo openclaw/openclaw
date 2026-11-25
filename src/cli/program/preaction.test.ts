@@ -1,8 +1,11 @@
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loggingState } from "../../logging/state.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { isConfigSetJsonParseOnly } from "../config-output-mode.js";
 import { setCommandJsonMode } from "./json-mode.js";
 import {
@@ -21,6 +24,7 @@ const recheckGatewayMock = vi.fn(async () => true);
 const reloadGatewayEnvMock = vi.fn(async () => true);
 
 const runtimeMock = vi.mocked(createNonExitingRuntimeEnv());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../../globals.js", () => ({ setVerbose: setVerboseMock }));
@@ -225,6 +229,54 @@ describe("registerPreActionHooks", () => {
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expectConfig(["models", "aliases", "list"], { suppressDoctorStdout: true });
+  });
+
+  it("loads plugin recovery metadata only for an install", async () => {
+    const installConfigLoaded = vi.fn();
+    vi.doMock("../../plugins/install-config.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../../plugins/install-config.js")>();
+      installConfigLoaded();
+      return actual;
+    });
+    try {
+      const parser = new Command().name("openclaw");
+      const action = vi.fn();
+      parser
+        .command("infer")
+        .alias("capability")
+        .command("model")
+        .command("run")
+        .option("--local")
+        .option("--agent <id>")
+        .option("--prompt-stdin")
+        .action(action);
+      parser.command("update").action(action);
+      parser.command("plugins").command("install <spec>").action(action);
+      registerPreActionHooks(parser, "9.9.9-test");
+      const invoke = async (...args: string[]) => {
+        process.argv = ["node", "openclaw", ...args];
+        await parser.parseAsync(process.argv);
+      };
+      await invoke("capability", "model", "run", "--local", "--agent", "main", "--prompt-stdin");
+      expectConfig(["infer", "model", "run"]);
+      await invoke("update");
+      expect(configReadyMock).toHaveBeenCalledOnce();
+      expect(installConfigLoaded).not.toHaveBeenCalled();
+
+      const dir = tempDirs.make("openclaw-install-recovery-");
+      writeFixtureJsonSync(path.join(dir, "package.json"), {
+        openclaw: { install: { allowInvalidConfigRecovery: true } },
+      });
+      writeFixtureJsonSync(path.join(dir, "openclaw.plugin.json"), {
+        id: "recovery",
+        configSchema: { type: "object" },
+      });
+      await invoke("plugins", "install", dir);
+      expectConfig(["plugins", "install"], { allowInvalid: true });
+      expect(installConfigLoaded).toHaveBeenCalledOnce();
+    } finally {
+      vi.doUnmock("../../plugins/install-config.js");
+    }
   });
 
   it.each([

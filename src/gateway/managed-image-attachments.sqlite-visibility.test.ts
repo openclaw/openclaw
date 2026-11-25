@@ -76,10 +76,10 @@ function message(id: string, parentId: string | null, content: unknown) {
   return { type: "message", id, parentId, timestamp, message: { role: "assistant", content } };
 }
 
-async function fixture(messageId = "attached") {
+async function fixture(messageId = "attached", key?: string) {
   const agentId = "main";
   const sessionId = `managed-visibility-${randomUUID()}`;
-  const sessionKey = `agent:${agentId}:${sessionId}`;
+  const sessionKey = key ?? `agent:${agentId}:${sessionId}`;
   const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
   const scope = { agentId, sessionId, sessionKey, storePath };
   // This fixture owns the competing writer; background entry maintenance must not join it.
@@ -271,6 +271,44 @@ describe("managed attachment SQLite visibility", () => {
       expect(reads).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("groups cleanup by session and owner without discarding a qualified global session's media", async () => {
+    const global = await fixture("attached", "global");
+    const qualified = await fixture("attached", "agent:main:global");
+    const other = await fixture();
+    const legacy = await createFixture(stateDir, {
+      sessionKey: global.scope.sessionKey,
+      attachmentId: randomUUID(),
+      messageId: global.messageId,
+    });
+    const legacyUrl = `/api/chat/media/outgoing/global/${legacy.attachmentId}/full`;
+    const orphans = [];
+    for (const f of [global, qualified, other]) {
+      const content = f === global ? [f.block, { type: "image", url: legacyUrl }] : [f.block];
+      await seed(f, [message(f.messageId, null, content)]);
+      orphans.push(
+        await createFixture(stateDir, {
+          sessionKey: f.scope.sessionKey,
+          agentId: "main",
+          attachmentId: randomUUID(),
+          messageId: f.messageId,
+        }),
+      );
+    }
+    const reads = vi.spyOn(managedSessionRead, "withManagedImageSessionRead");
+    onTestFinished(() => reads.mockRestore());
+
+    await cleanup();
+
+    for (const retained of [global, qualified, other, legacy]) {
+      await expectRetained(retained);
+    }
+    for (const orphan of orphans) {
+      expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
+      expect(fs.existsSync(orphan.originalPath)).toBe(false);
+    }
+    expect(reads).toHaveBeenCalledTimes(3);
+  });
 
   it.each(["sqlite", "archive"] as const)(
     "retains media owned by oversized %s history while cleaning other sessions",
