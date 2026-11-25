@@ -17,7 +17,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["external", "logs", "tmp", "npm", "node_modules", "git-install", "deep", "symlink"])(
-  "refuses an uncovered %s store before touching its bytes, but allows a same-schema update",
+  "refuses an uncovered %s store only when its reader floor rises",
   async (layout) => {
     const root = dirs.make("state-boundary-");
     const outside = dirs.make("state-boundary-external-");
@@ -59,6 +59,18 @@ it.each(["external", "logs", "tmp", "npm", "node_modules", "git-install", "deep"
     {
       using db = new DatabaseSync(shared);
       db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+    }
+    // Upgrading shared state does not copy or restrict an unchanged agent store.
+    await preflightStateUpgrade(env, {});
+    {
+      using db = new DatabaseSync(file);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+    }
+    // The derived nullable-CHECK step retains the agent's existing floor.
+    await preflightStateUpgrade(env, {});
+    {
+      using db = new DatabaseSync(file);
+      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 2}`);
     }
     const before = fs.readFileSync(file);
     await expect(preflightStateUpgrade(env, {})).rejects.toThrow(/cannot restore.*Move.*retry/is);

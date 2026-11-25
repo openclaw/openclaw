@@ -208,12 +208,17 @@ before mutating live databases. A schema-version increase alone does not require
 a preimage: compatible steps run in place without one.
 
 Before any floor-raising step, boot publishes the complete recovery manifest at
-`releases/<target>/.restore`, using the existing v1 format. Only databases whose
-derived minimum reader floor rises receive database preimages. SQLite images
-are independent clones or byte copies, never hard links to a database that will
-be mutated in place. Their `.pre-<build-generation>` names remain discoverable by
-existing launchers. The manifest records the images used for rollback; a
-raised-floor database can roll back only through its recorded image.
+`<prefix>/releases/<target-release-id>/.restore`, keeping the existing
+`{v:1,runId,files:[{live,preimage}]}` format. Paths are absolute; a null preimage
+means remove that file on rollback. Only databases whose derived minimum reader
+floor rises receive database preimages. SQLite images are independent clones or
+byte copies, never hard links to a database that will be mutated in place. Their
+`.pre-<build-generation>` names remain discoverable by existing launchers.
+A raised-floor database can roll back only through its recorded image.
+On a filesystem without clones, this rare step takes as long as one byte copy of
+that database. There is no pre-stop clone probe or copy-time budget. If the required
+image cannot be made, boot refuses with exit 78 before the schema step and the
+resident launcher restores the previous release.
 
 The existing launcher's `.pre-<build-generation>` scan still bounds automatic
 recovery coverage for floor-raising migrations. `check-release` refuses those

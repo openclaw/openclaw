@@ -1431,9 +1431,7 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       },
     });
     assertTargetCurrent(target);
-    if (backup) {
-      changes.push(`Saved auth profile migration backup: ${shortenHomePath(backup.path)}.`);
-    }
+    changes.push(`Saved auth profile migration backup: ${shortenHomePath(backup.path)}.`);
   }
   const assertSourceCurrent = (
     target: (typeof migrated)[number],

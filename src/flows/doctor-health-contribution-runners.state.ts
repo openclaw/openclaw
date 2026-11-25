@@ -104,7 +104,6 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
       cfg: ctx.cfg,
       env: ctx.env,
       shouldRepair: ctx.prompter.shouldRepair,
-      publishedStateDir: ctx.options.stateUpgradeLiveStateDir,
     }),
   );
   noteDoctorRepairResult(inference);

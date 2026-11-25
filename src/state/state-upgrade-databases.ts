@@ -1,20 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
-import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
-import { resolveManagedWorktreeRoot } from "../agents/worktrees/storage-root.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
-import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { getMediaDir } from "../media/store-path.js";
 import {
   readPluginMetadataStateRowsInDatabase,
   type PluginMetadataStateRow,
@@ -26,22 +20,26 @@ import {
   withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
+import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-schema-read.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  getAgentMemberAccessMinReader,
+} from "./openclaw-agent-member-access-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { readStateSchemaContentVersionRow } from "./openclaw-state-db-schema-version.js";
+import {
+  readStateSchemaContentVersionRow,
+  readStateSchemaMinReader,
+} from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 import { readUpgradeConfig } from "./state-upgrade-config.js";
-import {
-  APPLIED_UPGRADE_PREFIX as APPLIED_PREFIX,
-  UPGRADE_WORK_PREFIX as WORK_PREFIX,
-} from "./state-upgrade-receipts.js";
-import { isSqliteFile, isUpgradeRestorePath, withRecoveredSource } from "./state-upgrade-tree.js";
 
 export type DatabaseTarget = {
   kind: "state" | "agent";
   agentId?: string;
   path: string;
   version: number;
+  minReader: number;
   engine: "sqlite" | "postgres";
   postgres?: { namespace: string; physicalBytes: number };
 };
@@ -49,10 +47,9 @@ export type DatabaseTarget = {
 export type StateUpgradeInventory = {
   targets: DatabaseTarget[];
   metadataRows: PluginMetadataStateRow[];
-  skip: (absolute: string) => boolean;
 };
 
-export function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
+function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
   const user = readSqliteUserVersion(db);
   if (kind !== "state") {
     return user;
@@ -72,7 +69,6 @@ export async function discoverDatabases(
 ): Promise<StateUpgradeInventory> {
   const targets: DatabaseTarget[] = [];
   let metadataRows: PluginMetadataStateRow[] = [];
-  const retainedAgentDirectories: string[] = [];
   let retainedAgentIds = new Set<string>();
   let registeredAgents: Array<{ agentId: string; path: string }> = [];
   let configuredAgents: Array<{ agentId: string; path: string }> = [];
@@ -94,7 +90,7 @@ export async function discoverDatabases(
         );
       }
       if (kind === "agent" && configuredAgents.some((target) => target.path === pathname)) {
-        targets.push({ kind, agentId, path: pathname, version: 0, engine: "sqlite" });
+        targets.push({ kind, agentId, path: pathname, version: 0, minReader: 0, engine: "sqlite" });
       }
       return;
     }
@@ -108,6 +104,10 @@ export async function discoverDatabases(
       return {
         engine: readEngineAnchorIdentity(db, pathname).engine,
         version: readVersion(db, kind),
+        minReader:
+          kind === "state"
+            ? readStateSchemaMinReader(db)
+            : (readExistingAgentSchemaMeta(db)?.minReader ?? readSqliteUserVersion(db)),
         state:
           kind === "state"
             ? {
@@ -122,7 +122,10 @@ export async function discoverDatabases(
       };
     };
     let image;
-    if (isArtifactPreservingStateRead()) {
+    if (
+      isArtifactPreservingStateRead() ||
+      (fs.statSync(`${pathname}-journal`, { throwIfNoEntry: false })?.size ?? 0) > 0
+    ) {
       const prepared = await prepareSqliteReadOnlyLocation(pathname, {
         preserveSourceArtifacts: true,
       });
@@ -132,7 +135,7 @@ export async function discoverDatabases(
         await prepared.cleanupAsync();
       }
     } else {
-      image = withRecoveredSource(pathname, inspect);
+      image = inspect(pathname);
     }
     if (image.state) {
       metadataRows = image.state.metadataRows;
@@ -154,11 +157,19 @@ export async function discoverDatabases(
         agentId,
         path: pathname,
         version: physical.version,
+        minReader: physical.minReader,
         engine,
         postgres: { namespace: physical.namespace, physicalBytes: physical.physicalBytes },
       });
     } else {
-      targets.push({ kind, agentId, path: pathname, version: image.version, engine });
+      targets.push({
+        kind,
+        agentId,
+        path: pathname,
+        version: image.version,
+        minReader: image.minReader,
+        engine,
+      });
     }
   };
   await add("state", path.join(stateDir, "state", "openclaw.sqlite"));
@@ -169,10 +180,8 @@ export async function discoverDatabases(
     // No agents yet.
   }
   for (const agentId of agents) {
-    const agentDirectory = path.join(stateDir, "agents", agentId);
     if (retainedAgentIds.has(agentId)) {
       // Completed retention belongs to deletion, including during another store's upgrade.
-      retainedAgentDirectories.push(agentDirectory);
       continue;
     }
     await add(
@@ -186,66 +195,11 @@ export async function discoverDatabases(
     registeredDatabases: registeredAgents,
   });
   for (const target of [...registeredAgents, ...configuredAgents]) {
-    if (retainedAgentIds.has(target.agentId)) {
-      retainedAgentDirectories.push(path.dirname(target.path));
-    } else {
+    if (!retainedAgentIds.has(target.agentId)) {
       await add("agent", target.path, target.agentId);
     }
   }
-  const migrationPaths = new Set<string>();
-  for (const target of targets) {
-    migrationPaths.add(target.path);
-    migrationPaths.add(resolvePathViaExistingAncestorSync(target.path));
-  }
-  const excludedRoots = [
-    resolveDefaultAgentWorkspaceDir(env),
-    ...listAgentWorkspaceDirs(config, env),
-    ...(config.agents?.defaults?.workspace
-      ? [resolveUserPath(config.agents.defaults.workspace, env)]
-      : []),
-    resolveManagedWorktreeRoot(env),
-    resolveManagedWorktreeRoot(env, config.worktreeRoot),
-    ...["knowledge", "browser", "backups", "cache", "locks", "tmp", "git-install"].map((name) =>
-      path.join(stateDir, name),
-    ),
-    ...retainedAgentDirectories,
-    ...(process.platform === "linux"
-      ? fs
-          .readFileSync("/proc/self/mountinfo", "utf8")
-          .split("\n")
-          .map((line) => decodeMountInfoPath(line.split(" ")[4] ?? ""))
-          .filter((dir) => dir.startsWith(`${stateDir}${path.sep}`))
-      : []),
-  ].flatMap((dir) => {
-    const absolute = path.resolve(dir);
-    return fs.existsSync(absolute) ? [absolute, fs.realpathSync(absolute)] : [absolute];
-  });
-  const media = getMediaDir({ ...env, OPENCLAW_STATE_DIR: stateDir });
-  const mediaRecords = path.join(media, "outgoing", "records");
-  const within = (file: string, dir: string) =>
-    file === dir || file.startsWith(`${dir}${path.sep}`);
-  const skip = (absolute: string) => {
-    const top = path.relative(stateDir, absolute).split(path.sep)[0] ?? "";
-    if (
-      top.startsWith(WORK_PREFIX) ||
-      top.startsWith(APPLIED_PREFIX) ||
-      excludedRoots.some((dir) => within(absolute, dir)) ||
-      (within(absolute, media) &&
-        !within(mediaRecords, absolute) &&
-        !within(absolute, mediaRecords))
-    ) {
-      return true;
-    }
-    if (migrationPaths.has(absolute)) {
-      return false;
-    }
-    // Large unregistered SQLite images are not Doctor inputs.
-    const stat = fs.statSync(absolute, { throwIfNoEntry: false });
-    return (
-      stat !== undefined && stat.isFile() && stat.size > 64 * 1024 ** 2 && isSqliteFile(absolute)
-    );
-  };
-  return { targets, metadataRows, skip };
+  return { targets, metadataRows };
 }
 
 export const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
@@ -256,43 +210,49 @@ export function outdatedDatabases(targets: readonly DatabaseTarget[]): DatabaseT
   return targets.filter((target) => target.version > 0 && target.version < expectedVersion(target));
 }
 
-/**
- * Whether this start must take state ownership: an interrupted swap to finish or a
- * database older than this build. Read-only, so a start that another live owner
- * refuses learns that from its usual admission check.
- */
+/** Whether startup must acquire schema maintenance before admitting ordinary readers. */
 export async function isStateUpgradePending(env: NodeJS.ProcessEnv): Promise<boolean> {
   const stateDir = path.resolve(resolveStateDir(env));
   if (!fs.existsSync(stateDir)) {
     return false;
   }
-  if (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX))) {
-    return true;
-  }
   const { config } = readUpgradeConfig(resolveConfigPath(env, stateDir));
   return outdatedDatabases((await discoverDatabases(stateDir, config, env)).targets).length > 0;
 }
 
-/** Admission uses the same inventory and exclusions as the private copy. */
+/** Only a raised reader floor needs a rollback image. Keep classification with inventory. */
+export function floorRaisingDatabases(targets: readonly DatabaseTarget[]): DatabaseTarget[] {
+  return outdatedDatabases(targets).filter((target) => {
+    const supported = expectedVersion(target);
+    const additive =
+      target.kind === "agent" &&
+      target.version === AGENT_MEMBER_ACCESS_SCHEMA_VERSION - 1 &&
+      supported === AGENT_MEMBER_ACCESS_SCHEMA_VERSION &&
+      getAgentMemberAccessMinReader() < supported;
+    return !additive && supported > target.minReader;
+  });
+}
+
+/** The resident launcher still restores build-named images through its frozen scan. */
 export function stateUpgradeRefusal(
-  { targets, skip }: StateUpgradeInventory,
+  { targets }: StateUpgradeInventory,
   stateDir: string,
 ): string | undefined {
-  if (outdatedDatabases(targets).length === 0) {
+  const protectedTargets = floorRaisingDatabases(targets);
+  if (protectedTargets.length === 0) {
     return undefined;
   }
   const realStateDir = fs.realpathSync(stateDir);
   const device = fs.statSync(stateDir).dev;
-  for (const target of targets) {
+  for (const target of protectedTargets) {
     const relative = path.relative(stateDir, target.path);
     const stat = fs.statSync(target.path, { throwIfNoEntry: false });
     if (
       !isUpgradeRestorePath(stateDir, target.path) ||
       path.relative(realStateDir, resolvePathViaExistingAncestorSync(target.path)) !== relative ||
-      (stat !== undefined && stat.dev !== device) ||
-      skip(target.path)
+      (stat !== undefined && stat.dev !== device)
     ) {
-      return `The release trial cannot restore database ${target.path}. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
+      return `The release trial cannot restore database ${target.path} after raising its reader floor. Move it to a real directory inside ${stateDir}, at most four directories deep and outside git-install, npm, node_modules, tmp and logs. For an agent use agents/<agent-id>/agent/openclaw-agent.sqlite, without backup or companion suffixes, and update its registration/configuration. Replace symlinked or separately mounted directories with local directories before retrying openclaw update.`;
     }
   }
   return undefined;
@@ -306,12 +266,12 @@ export async function preflightStateUpgrade(
   const stateDir = path.resolve(resolveStateDir(env));
   const inventory: StateUpgradeInventory = fs.existsSync(stateDir)
     ? await withArtifactPreservingStateReads(() => discoverDatabases(stateDir, config, env))
-    : { targets: [], metadataRows: [], skip: () => false };
+    : { targets: [], metadataRows: [] };
   for (const target of inventory.targets) {
     const supported = expectedVersion(target);
-    if (target.version > supported) {
+    if (target.minReader > supported) {
       throw new Error(
-        `${target.kind}-schema-newer: on-disk schema ${target.version} is newer than this build's ${supported}`,
+        `${target.kind}-schema-newer: on-disk reader floor ${target.minReader} exceeds this build's ${supported}`,
       );
     }
   }
@@ -319,12 +279,43 @@ export async function preflightStateUpgrade(
   if (refusal) {
     throw new Error(refusal);
   }
-  const postgres = inventory.targets.filter((target) => target.engine === "postgres");
-  if (postgres.length > 0 && outdatedDatabases(inventory.targets).length > 0) {
+  const protectedTargets = floorRaisingDatabases(inventory.targets);
+  const postgres = protectedTargets.filter((target) => target.engine === "postgres");
+  if (postgres.length > 0) {
     await preflightPostgresUpgrade(
       postgres.map((target) => target.path),
       config,
     );
   }
   return inventory;
+}
+
+function isSqliteFile(pathname: string): boolean {
+  const header = Buffer.from("SQLite format 3\0", "latin1");
+  const fd = fs.openSync(pathname, "r");
+  try {
+    const actual = Buffer.alloc(header.length);
+    return fs.readSync(fd, actual, 0, actual.length, 0) === actual.length && actual.equals(header);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function isUpgradeRestorePath(stateDir: string, file: string): boolean {
+  const relative = path.relative(stateDir, file);
+  const parts = relative.split(path.sep);
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative) &&
+    parts.length <= 5 &&
+    !parts.some(
+      (part, index) =>
+        /\.pre-[^/]+$|\.pre-startup-migration-|\.scoped\.bak$|\.sqlite[^/]*\.bak$|^openclaw-media-persistence-recovery-|-(wal|shm|journal)$|\.seal$/u.test(
+          part,
+        ) ||
+        (index < parts.length - 1 &&
+          ["git-install", "npm", "node_modules", "tmp", "logs"].includes(part)),
+    )
+  );
 }

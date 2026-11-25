@@ -121,7 +121,9 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         [],
       );
     }
-    expect(fs.existsSync(path.join(path.dirname(target), ".restore"))).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(path.dirname(target), ".restore"), "utf8")),
+    ).toEqual({ v: 1, runId: pending.runId, files: [] });
     expect(fs.readdirSync(root).some((name) => name.startsWith(".upgrade-"))).toBe(false);
   }, 60_000);
 

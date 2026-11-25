@@ -621,9 +621,8 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
   if (!params.opts.reset) {
-    // Outdated state is upgraded by copy and swap before anything reads it. A start
-    // the config guard would refuse stays read-only: the previous package must still
-    // read its state.
+    // Admitted outdated state migrates in place before runtime readers open it.
+    // Refuse invalid startup config before migration changes live state.
     const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
     await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
       upgradeStateOnGatewayStart(

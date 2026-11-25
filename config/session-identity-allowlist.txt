@@ -1489,7 +1489,6 @@ src/state/openclaw-state-db-open.ts	1
 src/state/openclaw-state-db-task-delivery-recovery.ts	1
 src/state/openclaw-state-worker-context.ts	1
 src/state/session-repository-workspaces.kernel.ts	3
-src/state/state-upgrade-tree.ts	1
 src/state/user-github-connections.types.ts	2
 src/state/user-github-connections.worker.ts	2
 src/state/user-preferences-publication.ts	1
