@@ -109,7 +109,9 @@ suite.define(() => {
         const title = pane.getByText("Device ready. Waiting for your app…", { exact: true });
         await title.waitFor();
         const [host, message] = await Promise.all([pane.boundingBox(), title.boundingBox()]);
-        if (!host || !message) throw new Error("Missing portal status bounds");
+        if (!host || !message) {
+          throw new Error("Missing portal status bounds");
+        }
         expect(
           Math.abs(message.x + message.width / 2 - host.x - host.width / 2),
         ).toBeLessThanOrEqual(1);
