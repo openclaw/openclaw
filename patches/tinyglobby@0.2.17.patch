@@ -1,0 +1,182 @@
+diff --git a/dist/index.cjs b/dist/index.cjs
+index c93b23393d316a44a19b6821e69afad47b714101..53df21de3e546ae4e2467d04d7fc6d12139b6685 100644
+--- a/dist/index.cjs
++++ b/dist/index.cjs
+@@ -43,7 +43,8 @@ function getPartialMatcher(patterns, options = {}) {
+ 		patternsParts[i] = parts;
+ 		const partsCount = parts.length;
+ 		const partMatchers = Array(partsCount);
+-		for (j = 0; j < partsCount; j++) partMatchers[j] = (0, picomatch.default)(parts[j], options);
++		// Absolute roots contain empty path components, not empty glob patterns.
++		for (j = 0; j < partsCount; j++) partMatchers[j] = parts[j] === "" ? (part) => part === "" : (0, picomatch.default)(parts[j], options);
+ 		matchers[i] = partMatchers;
+ 	}
+ 	return (input) => {
+@@ -164,7 +165,10 @@ function normalizePattern(pattern, opts, props, isIgnore) {
+ 	if (pattern[pattern.length - 1] === "/") result = pattern.slice(0, -1);
+ 	if (result[result.length - 1] !== "*" && opts.expandDirectories) result += "/**";
+ 	const escapedCwd = escapePath(cwd);
+-	result = (0, path.isAbsolute)(result.replace(ESCAPING_BACKSLASHES, "")) ? path.posix.relative(escapedCwd, result) : path.posix.normalize(result);
++	const absolutePattern = (0, path.isAbsolute)(result.replace(ESCAPING_BACKSLASHES, ""));
++	const matchPattern = absolutePattern ? path.posix.normalize(result) : void 0;
++	// Relative coordinates plan traversal; absolute patterns retain their matching origin.
++	result = absolutePattern ? path.posix.relative(escapedCwd, result) : path.posix.normalize(result);
+ 	const parentDir = (_PARENT_DIRECTORY$exe = PARENT_DIRECTORY.exec(result)) === null || _PARENT_DIRECTORY$exe === void 0 ? void 0 : _PARENT_DIRECTORY$exe[0];
+ 	const parts = splitPattern(result);
+ 	if (parentDir) {
+@@ -199,7 +203,7 @@ function normalizePattern(pattern, opts, props, isIgnore) {
+ 		props.commonPath = newCommonPath;
+ 		props.root = ensureNonDriveRelativePath(newCommonPath.length > 0 ? path.posix.join(cwd, ...newCommonPath) : cwd);
+ 	}
+-	return result;
++	return absolutePattern ? (isWin && pattern.startsWith("//") && !matchPattern.startsWith("//") ? "/" + matchPattern : matchPattern) : result;
+ }
+ function processPatterns(options, patterns, props) {
+ 	const matchPatterns = [];
+@@ -220,6 +224,14 @@ function processPatterns(options, patterns, props) {
+ }
+ //#endregion
+ //#region src/crawler.ts
++function coordinateMatcher(patterns, options, partial = false) {
++	const relative = [], absolute = [];
++	for (const pattern of patterns) ((0, path.isAbsolute)(pattern.replace(ESCAPING_BACKSLASHES, "")) ? absolute : relative).push(pattern);
++	const compile = partial ? getPartialMatcher : (0, picomatch.default);
++	const relativeMatcher = relative.length ? compile(relative, options) : () => false;
++	const absoluteMatcher = absolute.length ? compile(absolute, options) : () => false;
++	return (relativePath, absolutePath) => relativeMatcher(relativePath) || absoluteMatcher(absolutePath);
++}
+ function buildCrawler(options, patterns) {
+ 	const cwd = options.cwd;
+ 	const props = {
+@@ -238,26 +250,34 @@ function buildCrawler(options, patterns) {
+ 		noglobstar: options.globstar === false,
+ 		posix: true
+ 	};
+-	const matcher = (0, picomatch.default)(processed.match, matchOptions);
+-	const ignore = (0, picomatch.default)(processed.ignore, matchOptions);
+-	const partialMatcher = getPartialMatcher(processed.match, matchOptions);
++	const matcher = coordinateMatcher(processed.match, matchOptions);
++	const ignore = coordinateMatcher(processed.ignore, matchOptions);
++	const partialMatcher = coordinateMatcher(processed.match, matchOptions, true);
+ 	const format = buildFormat(cwd, root, absolute);
++	const absoluteFormat = (p, isDirectory) => {
++		const full = absolute ? p : (0, path.resolve)(root, p);
++		const normalized = isWin ? full.replace(BACKSLASHES, "/") : full;
++		return isDirectory && normalized.endsWith("/") && !isRoot(normalized) ? normalized.slice(0, -1) : normalized;
++	};
+ 	const excludeFormatter = absolute ? format : buildFormat(cwd, root, true);
+ 	const excludePredicate = (_, p) => {
+ 		const relativePath = excludeFormatter(p, true);
+-		return relativePath !== "." && !partialMatcher(relativePath) || ignore(relativePath);
++		const absolutePath = p.endsWith("/") && !isRoot(p) ? p.slice(0, -1) : p;
++		return relativePath !== "." && !partialMatcher(relativePath, absolutePath) || ignore(relativePath, absolutePath);
+ 	};
+ 	let maxDepth;
+ 	if (options.deep !== void 0) maxDepth = Math.round(options.deep - props.depthOffset);
+ 	const crawler = new fdir.fdir({
+ 		filters: [debug ? (p, isDirectory) => {
+ 			const path = format(p, isDirectory);
+-			const matches = matcher(path) && !ignore(path);
++			const absolutePath = absoluteFormat(p, isDirectory);
++			const matches = matcher(path, absolutePath) && !ignore(path, absolutePath);
+ 			if (matches) log(`matched ${path}`);
+ 			return matches;
+ 		} : (p, isDirectory) => {
+ 			const path = format(p, isDirectory);
+-			return matcher(path) && !ignore(path);
++			const absolutePath = absoluteFormat(p, isDirectory);
++			return matcher(path, absolutePath) && !ignore(path, absolutePath);
+ 		}],
+ 		exclude: debug ? (_, p) => {
+ 			const skipped = excludePredicate(_, p);
+diff --git a/dist/index.mjs b/dist/index.mjs
+index f5db1ed7627736963cec8db6d5ec0b3c6f5915ff..8fe60f79e03b439aeb7882d14f4e569c85b927db 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -19,7 +19,8 @@ function getPartialMatcher(patterns, options = {}) {
+ 		patternsParts[i] = parts;
+ 		const partsCount = parts.length;
+ 		const partMatchers = Array(partsCount);
+-		for (j = 0; j < partsCount; j++) partMatchers[j] = picomatch(parts[j], options);
++		// Absolute roots contain empty path components, not empty glob patterns.
++		for (j = 0; j < partsCount; j++) partMatchers[j] = parts[j] === "" ? (part) => part === "" : picomatch(parts[j], options);
+ 		matchers[i] = partMatchers;
+ 	}
+ 	return (input) => {
+@@ -140,7 +141,10 @@ function normalizePattern(pattern, opts, props, isIgnore) {
+ 	if (pattern[pattern.length - 1] === "/") result = pattern.slice(0, -1);
+ 	if (result[result.length - 1] !== "*" && opts.expandDirectories) result += "/**";
+ 	const escapedCwd = escapePath(cwd);
+-	result = isAbsolute(result.replace(ESCAPING_BACKSLASHES, "")) ? posix.relative(escapedCwd, result) : posix.normalize(result);
++	const absolutePattern = isAbsolute(result.replace(ESCAPING_BACKSLASHES, ""));
++	const matchPattern = absolutePattern ? posix.normalize(result) : void 0;
++	// Relative coordinates plan traversal; absolute patterns retain their matching origin.
++	result = absolutePattern ? posix.relative(escapedCwd, result) : posix.normalize(result);
+ 	const parentDir = (_PARENT_DIRECTORY$exe = PARENT_DIRECTORY.exec(result)) === null || _PARENT_DIRECTORY$exe === void 0 ? void 0 : _PARENT_DIRECTORY$exe[0];
+ 	const parts = splitPattern(result);
+ 	if (parentDir) {
+@@ -175,7 +179,7 @@ function normalizePattern(pattern, opts, props, isIgnore) {
+ 		props.commonPath = newCommonPath;
+ 		props.root = ensureNonDriveRelativePath(newCommonPath.length > 0 ? posix.join(cwd, ...newCommonPath) : cwd);
+ 	}
+-	return result;
++	return absolutePattern ? (isWin && pattern.startsWith("//") && !matchPattern.startsWith("//") ? "/" + matchPattern : matchPattern) : result;
+ }
+ function processPatterns(options, patterns, props) {
+ 	const matchPatterns = [];
+@@ -196,6 +200,14 @@ function processPatterns(options, patterns, props) {
+ }
+ //#endregion
+ //#region src/crawler.ts
++function coordinateMatcher(patterns, options, partial = false) {
++	const relative = [], absolute = [];
++	for (const pattern of patterns) (isAbsolute(pattern.replace(ESCAPING_BACKSLASHES, "")) ? absolute : relative).push(pattern);
++	const compile = partial ? getPartialMatcher : picomatch;
++	const relativeMatcher = relative.length ? compile(relative, options) : () => false;
++	const absoluteMatcher = absolute.length ? compile(absolute, options) : () => false;
++	return (relativePath, absolutePath) => relativeMatcher(relativePath) || absoluteMatcher(absolutePath);
++}
+ function buildCrawler(options, patterns) {
+ 	const cwd = options.cwd;
+ 	const props = {
+@@ -214,26 +226,34 @@ function buildCrawler(options, patterns) {
+ 		noglobstar: options.globstar === false,
+ 		posix: true
+ 	};
+-	const matcher = picomatch(processed.match, matchOptions);
+-	const ignore = picomatch(processed.ignore, matchOptions);
+-	const partialMatcher = getPartialMatcher(processed.match, matchOptions);
++	const matcher = coordinateMatcher(processed.match, matchOptions);
++	const ignore = coordinateMatcher(processed.ignore, matchOptions);
++	const partialMatcher = coordinateMatcher(processed.match, matchOptions, true);
+ 	const format = buildFormat(cwd, root, absolute);
++	const absoluteFormat = (p, isDirectory) => {
++		const full = absolute ? p : resolve(root, p);
++		const normalized = isWin ? full.replace(BACKSLASHES, "/") : full;
++		return isDirectory && normalized.endsWith("/") && !isRoot(normalized) ? normalized.slice(0, -1) : normalized;
++	};
+ 	const excludeFormatter = absolute ? format : buildFormat(cwd, root, true);
+ 	const excludePredicate = (_, p) => {
+ 		const relativePath = excludeFormatter(p, true);
+-		return relativePath !== "." && !partialMatcher(relativePath) || ignore(relativePath);
++		const absolutePath = p.endsWith("/") && !isRoot(p) ? p.slice(0, -1) : p;
++		return relativePath !== "." && !partialMatcher(relativePath, absolutePath) || ignore(relativePath, absolutePath);
+ 	};
+ 	let maxDepth;
+ 	if (options.deep !== void 0) maxDepth = Math.round(options.deep - props.depthOffset);
+ 	const crawler = new fdir({
+ 		filters: [debug ? (p, isDirectory) => {
+ 			const path = format(p, isDirectory);
+-			const matches = matcher(path) && !ignore(path);
++			const absolutePath = absoluteFormat(p, isDirectory);
++			const matches = matcher(path, absolutePath) && !ignore(path, absolutePath);
+ 			if (matches) log(`matched ${path}`);
+ 			return matches;
+ 		} : (p, isDirectory) => {
+ 			const path = format(p, isDirectory);
+-			return matcher(path) && !ignore(path);
++			const absolutePath = absoluteFormat(p, isDirectory);
++			return matcher(path, absolutePath) && !ignore(path, absolutePath);
+ 		}],
+ 		exclude: debug ? (_, p) => {
+ 			const skipped = excludePredicate(_, p);

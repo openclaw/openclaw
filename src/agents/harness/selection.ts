@@ -30,6 +30,7 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
 import { resolveAgentHarnessOperatorPolicyError } from "../operator-access-program.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
   unwrapSecretSentinelsForProviderEgress,
@@ -50,7 +51,6 @@ import {
   resolvePluginHarnessDenyAllToolPolicyPrompt,
   resolvePluginHarnessToolPolicies,
 } from "./execution-environment.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { bindHarnessSettledTurnCallback } from "./host-source-authority.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -78,6 +78,7 @@ const WORKSPACE_EFFECT_HOOKS = [
   "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_run",
+  "before_model_request",
   "llm_input",
   "llm_output",
   "before_agent_finalize",
@@ -395,7 +396,7 @@ export async function runAgentHarnessAttempt(
     systemAgentTool: _systemAgentTool,
     ...attemptParams
   } = internalParams;
-  const pluginAttempt = withoutInternalHarnessAuthority(
+  const pluginAttempt = await withoutInternalHarnessAuthority(
     attemptParams,
     harness,
     selection.builtIn,
@@ -428,6 +429,7 @@ export async function runAgentHarnessAttempt(
                 nativeSessionRuntime?.auth === "native"
                   ? (nativeSessionRuntime.modelRef ?? null)
                   : undefined,
+                pluginAttempt.setToolPolicyScope,
               );
           const effectiveAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
@@ -520,7 +522,7 @@ export async function runAgentHarnessAttempt(
 
 function assertHarnessModelPolicySupport(harness: AgentHarness, params: EmbeddedRunAttemptParams) {
   const authority = readRunOperatorAuthority(params);
-  authority?.assertCurrent();
+  assertParticipationRuntime(authority?.participationCeiling, harness.id);
   const error = !isBuiltInOpenClawAgentHarness(harness)
     ? resolveAgentHarnessOperatorPolicyError(harness, authority)
     : undefined;
@@ -616,17 +618,18 @@ function prepareHarnessFinalizationParams(
   };
 }
 
-function withoutInternalHarnessAuthority(
+async function withoutInternalHarnessAuthority(
   params: EmbeddedRunAttemptParams,
   harness: AgentHarness,
   builtIn: boolean,
   ownerPluginId: string | undefined,
-): {
+): Promise<{
   params: import("./types.js").AgentHarnessAttemptParamsV2;
   closeHostCapabilities: () => void;
   setInputAttachmentReadAllowed: (allowed: boolean) => void;
+  setToolPolicyScope: (scope: "conversation" | "turn" | undefined) => void;
   runWithHostScope: <T>(run: () => Promise<T>) => Promise<T>;
-} {
+}> {
   if (builtIn) {
     return {
       // The caller hands us its fresh rest object; extend it without copying again.
@@ -636,9 +639,12 @@ function withoutInternalHarnessAuthority(
       }) as import("./types.js").AgentHarnessAttemptParamsV2,
       closeHostCapabilities: () => {},
       setInputAttachmentReadAllowed: () => {},
+      setToolPolicyScope: () => {},
       runWithHostScope: (run) => run(),
     };
   }
+  const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
+  resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const pluginParams = withoutPluginHarnessPrivateState(params);
   const host = createAgentHarnessHostCapabilities({
     attempt: params,
@@ -662,6 +668,7 @@ function withoutInternalHarnessAuthority(
     },
     closeHostCapabilities: host.close,
     setInputAttachmentReadAllowed: host.setInputAttachmentReadAllowed,
+    setToolPolicyScope: host.setToolPolicyScope,
     runWithHostScope: host.runWithScope,
   };
 }

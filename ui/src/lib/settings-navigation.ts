@@ -1,10 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { foldSearchCase } from "../../../src/shared/search-case.js";
 import {
   deviceSettingsGroupLabelKey,
   titleForRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginSettingsIdFromPath } from "../app-route-paths.ts";
+import { pathForRoute, pluginSettingsIdFromPath, skillPageFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -22,13 +23,16 @@ export function settingsNavigationOwnerRoute(routeId: NavigationRouteId): Naviga
 }
 
 /** The page one level up, or null when this page is already a top-level section. */
-export function settingsParentRoute(
+function settingsParentRoute(
   routeId: NavigationRouteId,
   pathname = "",
   basePath = "",
 ): NavigationRouteId | null {
   if (routeId === "plugin-settings" && pluginSettingsIdFromPath(pathname, basePath)) {
     return "plugin-settings";
+  }
+  if (routeId === "skill-settings" && skillPageFromPath(pathname, basePath)) {
+    return "skill-settings";
   }
   const owner = settingsNavigationOwnerRoute(routeId);
   return owner === routeId ? null : owner;
@@ -97,10 +101,14 @@ function settingsSearchHasWordPrefix(value: string, query: string): boolean {
   return false;
 }
 
+function normalizeSettingsSearchText(value: string): string {
+  return foldSearchCase(normalizeLowercaseStringOrEmpty(value)).normalize("NFC");
+}
+
 /** Lower ranks first: exact title, title prefix, title match, then no title match. */
 export function settingsSearchTitleRank(titles: readonly string[], query: string): number {
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
-  const candidates = titles.map((title) => normalizeLowercaseStringOrEmpty(title).normalize("NFC"));
+  const normalizedQuery = normalizeSettingsSearchText(query);
+  const candidates = titles.map(normalizeSettingsSearchText);
   if (candidates.includes(normalizedQuery)) {
     return 0;
   }
@@ -111,8 +119,8 @@ export function settingsSearchTitleRank(titles: readonly string[], query: string
 }
 
 export function settingsSearchTextMatches(value: string, query: string): boolean {
-  const candidate = normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-  const normalizedQuery = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
+  const candidate = normalizeSettingsSearchText(value);
+  const normalizedQuery = normalizeSettingsSearchText(query);
   if (!normalizedQuery) {
     return false;
   }

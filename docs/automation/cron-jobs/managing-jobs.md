@@ -13,6 +13,10 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
+When an agent or Template creates an automation in chat, the card appears as soon as the save is confirmed, even if the assistant is still working. Plans and failed attempts do not show a card. A saved automation says **Created** until its settings load, then shows the link and current on/off switch. You can pause or resume a saved automation from the conversation if you have permission to edit it. If the automation is removed or you lose access to it, the card keeps its name but no longer offers any actions.
+
+Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
+
 Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
 
 ## CLI examples
@@ -82,13 +86,13 @@ Model choices load when you open an automation's settings or create an automatio
 
 ### Conversational management
 
-An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
+Any turn admitted with `operator.admin` can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. That includes the owner on any Gateway client (Control UI, native app, CLI, or a local client of a `gateway.auth.mode: "none"` Gateway), an administrator, and a verified channel sender listed in `commands.ownerAllowFrom`. A channel owner linked to a personal profile gets that profile's access. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
 
 When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
 
-Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
+Fresh administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. A turn with `operator.cron` or `operator.write` but no `operator.admin` creates and edits only its own automations. A subagent can create and edit its own automations when the turn that started it could. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
 
-The Gateway grants this authority from the authenticated turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Other channel turns and Control UI turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the **Automations** page.
+The Gateway grants this authority once, when the turn is admitted. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh owner or administrator turn, or use the **Automations** page.
 
 When an admitted owner or administrator turn uses `sessions_yield` to wait for its subagents, the verified requester continuation retains automation management for that task. It receives fresh grants for its new run; the original run's grants expire normally. The continuation remains management-only; it cannot capture new creator execution authority. Removing the channel sender from the global owner list, cancellation, session reset or archive, a new direct user turn, and Gateway restart invalidate the handoff. Ordinary inter-session messages and child results do not grant management access.
 
@@ -105,9 +109,12 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
-Automations created before owner attribution have no recorded owner. Chat can
-still enable, disable, reschedule or remove them, but only a Gateway owner or an
-operator can change their prompt or tools.
+Automations created before owner attribution have no recorded owner. An
+authenticated administrator or configured channel owner can edit them through
+chat, including their prompt, model, and tool cap. Management keeps an
+operator automation’s execution authority and attribution; it does not adopt
+the administrator’s conversation as a new owner. Ordinary caller-scoped turns
+cannot edit ownerless operator automations.
 
 Operator-created automations that name an owner conversation run with operator
 authority. That conversation can list, enable, disable, reschedule, run
@@ -116,7 +123,7 @@ schedule or timing changes keep operator authority. Any other change
 from the owner conversation, such as the name, prompt, tools, trigger, delivery,
 failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
 changes need a Gateway owner or an operator, or a new automation. Only a Gateway
-owner or an operator can write its scratch.
+owner, an operator or the automation's own runs can write its scratch.
 
 ```bash
 # List enabled jobs
@@ -165,7 +172,7 @@ Conversation automation views use the conversation's physical key and selected a
 
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
 
-Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
+Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names linked jobs and offers **Archive anyway** or **Delete anyway**. For deletion, it warns that automations may keep running and should be disabled or removed separately. The warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 
@@ -201,7 +208,7 @@ Run history shows a loading indicator while the selected history is unavailable.
 
 After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
-Choose **View transcript** on a run to read its recorded conversation, including earlier pages. The panel shows the selected automation and its run time when available. Shared conversations can include messages from before and after that run. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
+Gateway clients can read a run’s recorded conversation using `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
 
 Intentional silence (`NO_REPLY`), heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. An empty model final is not intentional silence; exhausted recovery records a failed run rather than a synthetic successful `NO_REPLY`. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 
@@ -285,7 +292,7 @@ To block this execution path, start the Gateway with `OPENCLAW_DISABLE_CRON_HOST
 
 <AccordionGroup>
   <Accordion title="Retry behavior">
-    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) use a built-in retry schedule. Permanent errors disable the job immediately.
+    **One-shot retry**: transient errors (rate limit, overload, network, timeout, server error) retry up to three times after 30 seconds, 60 seconds, and 5 minutes. Watchdog stalls and caller aborts use the same bounded policy; rate-limited model fallback exhaustion retains its provider classification. Explicit user cancellation, revoked authentication, invalid configuration, and missing targets do not retry. After a permanent failure or the last retry, the job ends and its owner is notified. Gateway restart/drain interruptions retain the [restart recovery policy](/automation/cron-jobs/how-it-works#task-reconciliation).
 
     **Recurring retry**: consecutive execution errors back off on an extended schedule (30s, 60s, 5m, 15m, 60m). Backoff resets after the next successful run.
 

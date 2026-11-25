@@ -1,9 +1,7 @@
-import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import type {
   ChannelGatewayContext,
   ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   runPassiveAccountLifecycle,
@@ -18,6 +16,7 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { normalizeNostrAllowEntry, nostrIngressIdentity } from "./ingress-identity.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import { getNostrRuntime } from "./runtime.js";
@@ -29,31 +28,19 @@ function normalizeRelayLifecycleKey(relay: string): string {
   return new URL(relay).toString();
 }
 
-function normalizeNostrAllowEntry(entry: string): string | null {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  const accessGroup = parseAccessGroupAllowFromEntry(trimmed);
-  if (accessGroup) {
-    return `accessGroup:${accessGroup}`;
-  }
-  try {
-    return normalizePubkey(trimmed.replace(/^nostr:/i, ""));
-  } catch {
-    return null;
-  }
-}
-
-function normalizeNostrSenderPubkey(value: string): string | null {
-  try {
-    return normalizePubkey(value);
-  } catch {
-    return null;
-  }
+// Plain-text projection must see the whole Markdown message: a fragment holds only half of a
+// span crossing a chunk boundary, and projected text must not be parsed as Markdown again.
+function projectNostrText(text: string, cfg: OpenClawConfig, accountId?: string | null): string {
+  const core = getNostrRuntime();
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "nostr",
+    accountId: accountId ?? resolveDefaultNostrAccountId(cfg),
+  });
+  const sanitizedText = sanitizeAssistantVisibleText(text);
+  return sanitizedText
+    ? stripMarkdown(core.channel.text.convertMarkdownTables(sanitizedText, tableMode))
+    : "";
 }
 
 function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | undefined {
@@ -74,14 +61,6 @@ function resolveAdmissionPubkeys(account: ResolvedNostrAccount): string[] | unde
   }
   return [...new Set(pubkeys)];
 }
-
-const nostrIngressIdentity = {
-  key: "nostr-pubkey",
-  normalizeEntry: normalizeNostrAllowEntry,
-  normalizeSubject: normalizeNostrSenderPubkey,
-  sensitivity: "pii",
-  entryIdPrefix: "nostr-entry",
-} satisfies StableChannelIngressIdentityParams;
 
 export async function startNostrGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedNostrAccount>,
@@ -224,18 +203,7 @@ export async function startNostrGatewayAccount(
             deliver: async (payload) => {
               // Inbound DM replies bypass the outbound adapter; sanitize before
               // Markdown conversion so private tool traces cannot reach a relay.
-              const sanitizedText = sanitizeAssistantVisibleText(payload.text ?? "");
-              if (!sanitizedText) {
-                return;
-              }
-              const tableMode = runtime.channel.text.resolveMarkdownTableMode({
-                cfg: ctx.cfg,
-                channel: "nostr",
-                accountId: account.accountId,
-              });
-              const message = stripMarkdown(
-                runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode),
-              );
+              const message = projectNostrText(payload.text ?? "", ctx.cfg, account.accountId);
               if (message) {
                 await reply(message);
               }
@@ -338,7 +306,7 @@ export const nostrOutboundAdapter = {
   // The outbound planner ignores textChunkLimit unless the adapter also
   // supplies its chunker, causing oversized encrypted events to be rejected.
   chunker: chunkTextForOutbound,
-  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  sanitizeText: ({ text, cfg, accountId }) => projectNostrText(text, cfg ?? {}, accountId),
   deliveryCapabilities: {
     durableFinal: {
       text: true,
@@ -353,18 +321,13 @@ export const nostrOutboundAdapter = {
     assertDirectAdapterHandoff,
     onPlatformSendDispatch,
   }) => {
-    const core = getNostrRuntime();
     const aid = accountId ?? resolveDefaultNostrAccountId(cfg);
     const bus = activeBuses.get(aid);
     if (!bus) {
       throw new Error(`Nostr bus not running for account ${aid}`);
     }
-    const tableMode = core.channel.text.resolveMarkdownTableMode({
-      cfg,
-      channel: "nostr",
-      accountId: aid,
-    });
-    const message = stripMarkdown(core.channel.text.convertMarkdownTables(text ?? "", tableMode));
+    // sanitizeText already projected the whole message before the planner chunked it.
+    const message = text ?? "";
     if (!message) {
       throw new Error("Nostr send requires non-empty text after markdown stripping.");
     }

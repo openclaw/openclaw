@@ -562,4 +562,21 @@ describe("realtime voice agent consult runtime", () => {
       traceAuthorized: false,
     });
   });
+
+  it.each([
+    ["a caller listed in commands.ownerAllowFrom", "facetime:owner@example.com", true],
+    ["an allowed caller not listed there", "facetime:guest@example.com", false],
+  ])("decides owner from the sender for %s", async (_name, senderId, owner) => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+
+    await runConsult(runtime, {
+      cfg: { commands: { ownerAllowFrom: ["facetime:owner@example.com", "+15550001111"] } },
+      senderId,
+    });
+
+    expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
+      senderId,
+      senderIsOwner: owner,
+    });
+  });
 });

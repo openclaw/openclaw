@@ -6,7 +6,6 @@ import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   channelTargetSchema,
   channelTargetsSchema,
-  optionalNonNegativeIntegerSchema,
   optionalPositiveIntegerSchema,
   stringEnum,
 } from "../schema/typebox.js";
@@ -150,8 +149,6 @@ const presentationMessageSchema = Type.Object(
 function buildSendSchema(options: MessageToolSchemaOptions) {
   const props: Record<string, TSchema> = {
     message: optionalStringSchema(MESSAGE_TOOL_SEND_TEXT_DESCRIPTION),
-    effectId: optionalStringSchema("sendWithEffect id/name."),
-    effect: optionalStringSchema("Alias for effectId."),
     media: optionalStringSchema("Media URL/path. data: use buffer."),
     filename: optionalStringSchema(),
     buffer: optionalStringSchema("Base64/data-URL attachment."),
@@ -178,8 +175,6 @@ function buildSendSchema(options: MessageToolSchemaOptions) {
     voiceProvider: optionalStringSchema("Per-send speech provider override."),
     voiceId: optionalStringSchema("Per-send speech voice override."),
     silent: optionalBooleanSchema(),
-    quoteText: optionalStringSchema("Telegram reply quote text."),
-    gifPlayback: optionalBooleanSchema(),
     forceDocument: optionalBooleanSchema("Send media as document; no compression."),
     asDocument: optionalBooleanSchema("Alias for forceDocument."),
   };
@@ -187,13 +182,27 @@ function buildSendSchema(options: MessageToolSchemaOptions) {
     props.clawhub = Type.Optional(
       Type.Object(
         {
-          query: Type.String({ minLength: 1, maxLength: 160 }),
+          query: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 160,
+              description: "Search official plugins/skills. Omit kind: plugins, then skills.",
+            }),
+          ),
           kind: Type.Optional(stringEnum(["plugin", "skill"])),
+          plugin: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 214,
+              description:
+                "Exact plugin package name, e.g. @scope/name, when already known: shows only that plugin; no search. Excludes query/kind.",
+            }),
+          ),
         },
         {
           additionalProperties: false,
           description:
-            "Official plugin/skill cards in current chat; user chooses install. Omit kind: plugins, then skills.",
+            "ClawHub plugin/skill cards in current chat; user chooses install. Give query or plugin, not both.",
         },
       ),
     );
@@ -273,6 +282,46 @@ function buildPollSchema() {
   return props;
 }
 
+const CONVERSATION_ID_ACTIONS: readonly ChannelMessageActionName[] = [
+  "search",
+  "thread-list",
+  "thread-create",
+  "thread-reply",
+  "channel-info",
+  "channel-list",
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+  "topic-create",
+  "topic-edit",
+  "permissions",
+  "member-info",
+  "role-info",
+  "role-add",
+  "role-remove",
+  "addParticipant",
+  "removeParticipant",
+  "renameGroup",
+  "setGroupIcon",
+  "leaveGroup",
+  "event-create",
+  "event-list",
+  "timeout",
+  "kick",
+  "ban",
+  "emoji-list",
+  "emoji-upload",
+  "sticker-upload",
+  "voice-status",
+  "download-file",
+];
+
+// Core groups hold channel-neutral fields. A field only one channel reads belongs
+// in that plugin's describeMessageTool schema, so other channels' turns omit it.
 const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
   build: () => Record<string, TSchema>;
   actions: readonly ChannelMessageActionName[];
@@ -290,8 +339,6 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
         "Use the reacted message for this turn's status reaction lifecycle.",
       ),
       track_tool_calls: optionalBooleanSchema("snake_case alias of trackToolCalls."),
-      targetAuthor: optionalStringSchema(),
-      targetAuthorUuid: optionalStringSchema(),
       groupId: optionalStringSchema(),
     }),
     actions: [
@@ -343,76 +390,36 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
       channelId: optionalStringSchema("Channel id filter."),
       chatId: optionalStringSchema("Chat id for chat metadata."),
       channelIds: Type.Optional(Type.Array(Type.String({ description: "Channel id filter." }))),
+    }),
+    actions: CONVERSATION_ID_ACTIONS,
+  },
+  {
+    // Forum-topic and emoji-list handlers read chat ids, not member or author fields.
+    build: () => ({
       memberId: optionalStringSchema(),
-      memberIdType: optionalStringSchema(),
-      guildId: optionalStringSchema(),
       userId: optionalStringSchema(
         "member-info/moderation/participant user id; member-info uses userId, not target.",
       ),
-      openId: optionalStringSchema(),
-      unionId: optionalStringSchema(),
       authorId: optionalStringSchema(),
-      authorIds: Type.Optional(Type.Array(Type.String())),
-      roleId: optionalStringSchema(),
-      roleIds: Type.Optional(Type.Array(Type.String())),
       participant: optionalStringSchema(),
       includeMembers: optionalBooleanSchema(),
       members: optionalBooleanSchema(),
       scope: optionalStringSchema(),
       kind: optionalStringSchema(),
     }),
-    actions: [
-      "search",
-      "thread-list",
-      "thread-create",
-      "thread-reply",
-      "channel-info",
-      "channel-list",
-      "channel-create",
-      "channel-edit",
-      "channel-delete",
-      "channel-move",
-      "category-create",
-      "category-edit",
-      "category-delete",
-      "topic-create",
-      "topic-edit",
-      "permissions",
-      "member-info",
-      "role-info",
-      "role-add",
-      "role-remove",
-      "addParticipant",
-      "removeParticipant",
-      "renameGroup",
-      "setGroupIcon",
-      "leaveGroup",
-      "event-create",
-      "event-list",
-      "timeout",
-      "kick",
-      "ban",
-      "emoji-list",
-      "emoji-upload",
-      "sticker-upload",
-      "voice-status",
-      "download-file",
-    ],
+    actions: CONVERSATION_ID_ACTIONS.filter(
+      (action) => action !== "topic-create" && action !== "topic-edit" && action !== "emoji-list",
+    ),
   },
   {
     build: () => ({
       fileId: optionalStringSchema(),
-      emojiName: optionalStringSchema("Name for an uploaded custom emoji."),
       stickerId: Type.Optional(Type.Array(Type.String())),
-      stickerName: optionalStringSchema(),
-      stickerDesc: optionalStringSchema(),
-      stickerTags: optionalStringSchema(),
     }),
     actions: [
       "sticker",
       "sticker-search",
       "sticker-upload",
-      "emoji-list",
       "emoji-upload",
       "download-file",
       "upload-file",
@@ -441,9 +448,6 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
   {
     build: () => ({
       reason: optionalStringSchema(),
-      deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
-      durationMin: optionalNonNegativeIntegerSchema(),
-      until: optionalStringSchema(),
     }),
     actions: ["timeout", "kick", "ban", "delete", "unsend"],
   },
@@ -451,19 +455,8 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
     // Keep every action that reads channel-management fields here; omission hides valid params.
     build: () => ({
       name: optionalStringSchema(),
-      channelType: Type.Optional(
-        Type.Integer({
-          minimum: 0,
-          description: "Numeric channel type; avoids schema type collision.",
-        }),
-      ),
       parentId: optionalStringSchema(),
       topic: optionalStringSchema(),
-      position: optionalNonNegativeIntegerSchema(),
-      nsfw: optionalBooleanSchema(),
-      rateLimitPerUser: optionalNonNegativeIntegerSchema(),
-      categoryId: optionalStringSchema(),
-      clearParent: optionalBooleanSchema("Clear parent/category when supported."),
     }),
     actions: [
       "channel-create",

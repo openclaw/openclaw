@@ -1,5 +1,6 @@
 import type { ChatAccountSelection } from "@openclaw/gateway-protocol";
 import type {
+  CyberAccessProgram,
   FastMode,
   GatewayAgentRow,
   ModelCatalogEntry,
@@ -9,6 +10,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { resolveDaybreakAccessProgram } from "../../lib/chat/daybreak-access-program.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -72,16 +74,16 @@ export function resolveDraftAccessProgram(
   params: Parameters<typeof resolveDraftDefaultModelTarget>[0] & {
     model: string;
     agentRuntime?: string;
+    requested?: CyberAccessProgram;
   },
 ) {
-  const selected = resolveDraftModelTarget(
-    params.model,
-    undefined,
-    params.catalog,
-    params.agentRuntime,
-  );
-  return (selected?.entry ?? resolveDraftDefaultModelTarget(params)?.entry)
-    ?.cyberAccessProgramDefault;
+  const target =
+    resolveDraftModelTarget(params.model, undefined, params.catalog, params.agentRuntime) ??
+    resolveDraftDefaultModelTarget(params);
+  const selected = params.requested ?? target?.entry?.cyberAccessProgramDefault;
+  const programs = target?.entry?.availableAccessPrograms?.cyber;
+  const { on, program, visible } = resolveDaybreakAccessProgram(programs, selected);
+  return programs && !visible && selected !== "standard" ? undefined : on ? program : selected;
 }
 
 export function resolveDraftModelControls(params: {
@@ -127,7 +129,6 @@ export function resolveDraftModelControls(params: {
   };
   return {
     defaultTarget,
-    accessProgramDefault: entry?.cyberAccessProgramDefault,
     agentDefaultModel,
     modelCatalogState,
     contextWindowTarget:
@@ -255,11 +256,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
     params.initialModelPending ||
     (!metadata.hasSnapshot && Boolean(model || agentRuntime))
   ) {
-    return t(
-      metadata.status === "error"
-        ? "chat.modelControls.modelsUnavailable"
-        : "chat.modelControls.loadingModels",
-    );
+    return t("chat.modelControls.modelsUnavailable");
   }
   if (
     metadata.modelSelectionPolicy?.restricted &&
@@ -298,7 +295,7 @@ export function resolveDraftModelSelectionBlockedReason(params: {
       return t("chat.modelControls.modelsUnavailable");
     }
     if (params.metadataPending || !metadata.hasSnapshot) {
-      return t("chat.modelControls.loadingModels");
+      return t("chat.modelControls.modelsUnavailable");
     }
     if (!params.accountReady) {
       return unavailable ?? t("chat.modelControls.modelsUnavailable");

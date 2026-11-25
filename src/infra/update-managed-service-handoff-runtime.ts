@@ -5,6 +5,7 @@ import { stageFreeBsdManagedHandoffNativeRuntime } from "./update-managed-servic
 import {
   MANAGED_HANDOFF_RUNTIME_ENTRY,
   managedHandoffRuntimeEntrypoint,
+  managedHandoffPostgresBridgeEntrypoint,
 } from "./update-managed-service-handoff-runtime-assets.js";
 
 /** Prepare the complete lease owner before launch; the caller owns partial-stage cleanup. */
@@ -18,7 +19,17 @@ export function stageManagedHandoffRuntime(directory: string): string[] {
   const destination = path.join(directory, "runtime", MANAGED_HANDOFF_RUNTIME_ENTRY);
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   fs.writeFileSync(destination, fs.readFileSync(source), { mode: 0o600, flag: "wx" });
-  const staged = [destination];
+  const bridge = path.join(
+    directory,
+    "runtime",
+    managedHandoffPostgresBridgeEntrypoint.distWorkerPath,
+  );
+  fs.writeFileSync(
+    bridge,
+    fs.readFileSync(resolveRuntimeWorkerUrl(managedHandoffPostgresBridgeEntrypoint)),
+    { mode: 0o600, flag: "wx" },
+  );
+  const staged = [destination, bridge];
   if (process.platform === "win32") {
     // fs-safe resolves its executable beside the sealed bundle after the
     // original installation is replaced; partial stages remain caller-owned.

@@ -35,7 +35,7 @@ const audioProfile = (names: string[], virtual = false) =>
     ],
   });
 const config = (overrides: Record<string, unknown> = {}) =>
-  resolveFaceTimeConfig({ ownerHandles: ["omar@example.com"], ...overrides });
+  resolveFaceTimeConfig({ allowedCallers: ["omar@example.com"], ...overrides });
 
 function preflight({
   available = true,

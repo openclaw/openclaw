@@ -3,11 +3,9 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { UserTurnInput } from "../sessions/user-turn-input.types.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
-import type {
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "../sessions/user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,

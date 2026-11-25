@@ -1,3 +1,0 @@
-# Regression coverage for cron metadata/action feedback and whole-sentence
-# cron/usage summaries, including catalog routing with untranslated new keys.
-177

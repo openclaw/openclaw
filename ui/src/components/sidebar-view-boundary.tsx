@@ -1,4 +1,5 @@
 import { Errored, Loading, onSettled, Repeat, type ParentProps } from "solid-js";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -7,6 +8,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 
 function SidebarViewError(props: { error: unknown; reset: () => void }) {
+  onSettled(() => finishBootFrame());
   let active = true;
   onSettled(() => () => {
     active = false;
@@ -39,17 +41,21 @@ export function SidebarViewBoundary(
         fallback={
           props.fallback ?? (
             <div
-              class="sidebar-view-loading sidebar-recent-sessions__list"
+              class="sidebar-view-loading sidebar-view-loading__rows"
               role="status"
               aria-label={t("common.loading")}
               aria-busy="true"
             >
               <Repeat count={4}>
-                {() => (
-                  <span
-                    class="sidebar-session-tree__loading skeleton skeleton-line"
-                    aria-hidden="true"
-                  />
+                {(index) => (
+                  <span class="sidebar-session-tree__loading nav-item" aria-hidden="true">
+                    <span
+                      class={[
+                        "skeleton skeleton-line",
+                        index % 2 ? "skeleton-line--medium" : "skeleton-line--long",
+                      ]}
+                    />
+                  </span>
                 )}
               </Repeat>
             </div>

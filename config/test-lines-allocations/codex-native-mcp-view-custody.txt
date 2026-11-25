@@ -1,2 +1,0 @@
-# Expire fixture-owned MCP previews after their existing tests.
-10

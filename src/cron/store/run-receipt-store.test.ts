@@ -1,10 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { resolveMessageActionTurnAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   openOpenClawStateDatabase,
@@ -15,14 +12,16 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   bindCronJobAdmittedRun,
-  captureCronJobMessageActionAuthority,
-  captureCronJobMessageSourceAuthority,
+  bindCronSelfRemovalCommitGuard,
   resetCronActiveJobs,
 } from "../active-jobs.js";
+import { prepareCronRunAdmission } from "../run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../scheduled-occurrence.test-support.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { createCronCompletionDeliveryFence } from "../service/delivery-attempt-fence.js";
 import { start, stop } from "../service/ops-lifecycle.js";
-import { update } from "../service/ops-mutations.js";
+import { remove, update } from "../service/ops-mutations.js";
 import { markServiceCronJobActive } from "../service/run-receipts.js";
 import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
@@ -112,34 +111,50 @@ async function messageRun(job: CronJob, runId: string) {
   const { storePath } = await storeJob(job);
   const receipt = claimCronRunReceiptForTest(storePath, job, Date.now());
   const state = makeState(storePath);
-  const marker = markServiceCronJobActive(state, job, receipt);
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: job.agentId!,
-      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-    },
-  });
+  const marker = markServiceCronJobActive(job, receipt);
   const controller = new AbortController();
+  const fence = createCronCompletionDeliveryFence({
+    state,
+    job,
+    handle: receipt,
+    activeJobMarker: marker,
+    signal: controller.signal,
+  });
+  const sessionKey = `agent:${job.agentId}:cron:${job.id}`;
+  const admission = prepareCronRunAdmission({
+    cfg: {},
+    runId,
+    agentId: job.agentId!,
+    jobId: job.id,
+    sessionKey,
+    toolsAllow: job.payload.toolsAllow,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+    scheduledExecution: TEST_SCHEDULED_EXECUTION,
+    deliveryAttemptFence: fence,
+  });
   const close = async () => {
     admission.close();
     await finishOk(receipt);
     resetCronActiveJobs();
   };
   try {
-    const admitted = await admission.admit("embedded");
+    const admitted = await admission.preparedRunAdmission.admit("embedded");
     bindCronJobAdmittedRun(marker, admitted, controller.signal);
-    const input = { jobId: job.id, operationalRunInstance: admitted.operationalRunInstance };
-    const message = captureCronJobMessageActionAuthority(input);
-    const source = captureCronJobMessageSourceAuthority(input);
+    const grant = resolveMessageActionTurnAuthorization({
+      token: admission.messageActionTurnCapability,
+      agentId: job.agentId!,
+      runId,
+      sessionKey,
+    })?.scheduled;
+    const message = grant?.assertCurrent;
+    const source = grant?.assertSourceCurrent;
     return {
       storePath,
       receipt,
       state,
       controller,
       admission,
+      fence,
       message,
       source,
       [Symbol.asyncDispose]: close,
@@ -184,8 +199,30 @@ it("allows force-disabled message access only until its admission closes", async
   expect(message).not.toThrow();
   expect(source).not.toThrow();
   admission.close();
-  expect(message).toThrow("no longer active");
-  expect(source).toThrow("no longer active");
+  expect(message).toThrow();
+  expect(source).toThrow();
+});
+
+it("closes tools after durable self-removal while retaining the occurrence's completion fence", async () => {
+  const job: CronJob = {
+    ...makeCronReceiptJob("self-removing-message"),
+    payload: { kind: "agentTurn", message: "synthetic", toolsAllow: ["message"] },
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+  };
+  await using run = await messageRun(job, "self-removing-run");
+  expect(run.message).not.toThrow();
+  const commitGuard = bindCronSelfRemovalCommitGuard(
+    job.id,
+    run.admission.preparedRunAdmission.operationalRunInstance,
+    run.fence.assertCurrent,
+    run.message!,
+  );
+  await remove(run.state, job.id, { commitGuard });
+  expect((await loadCronStore(run.storePath)).jobs).toEqual([]);
+  expect(run.fence.assertCurrent).not.toThrow();
+  expect(run.message).toThrow();
+  expect(run.source).toThrow();
+  expect(run.admission.standingGrantAuthority!.assertCurrent).toThrow();
 });
 
 it.each([
@@ -197,7 +234,7 @@ it.each([
   { enabled: true, mutation: "native requester" },
   { enabled: true, mutation: "native trigger state" },
 ] as const)(
-  "retires message access after a service $mutation change from enabled=$enabled without retiring its receipt",
+  "keeps admitted message access after a service $mutation change from enabled=$enabled",
   async ({ enabled, mutation }) => {
     const native = mutation !== "tool policy" && mutation !== "origin";
     const grant = requesterGrant("requester-a");
@@ -281,19 +318,15 @@ it.each([
       await edit(patch, authorization);
     }
     if (native) {
-      // No access check between edits: the committed mutation must latch revocation.
+      // Reverted edits keep the current stored definition and this occurrence's captured grant.
       const restored = (await loadCronStore(storePath)).jobs[0]!;
       expect(restored.toolsAllowProvenance).toEqual(grant);
       expect(restored.name).toBe(job.name);
       expect(restored.delivery).toEqual(job.delivery);
       expect(restored.state.triggerState).toEqual(job.state.triggerState);
     }
-    expect(source).toThrow();
-    if (mutation === "tool policy") {
-      expect(message).toThrow();
-    } else {
-      expect(message).not.toThrow();
-    }
+    expect(source).not.toThrow();
+    expect(message).not.toThrow();
     expect(controller.signal.aborted).toBe(false);
     expect(receipts(storePath, job.id)[0]?.status).toBe("running");
     if (native) {

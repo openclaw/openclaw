@@ -1,0 +1,2 @@
+# Regression coverage: kept sub-agent sessions stay protected from maintenance until the requester settles, then release.
+124

@@ -13,6 +13,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { buildExecRunConfig } from "../commands/agent-exec-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
@@ -117,7 +118,8 @@ export async function withUpdateRepairEnvironment<T>(
 async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  const host =
+    existingHost ?? new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }

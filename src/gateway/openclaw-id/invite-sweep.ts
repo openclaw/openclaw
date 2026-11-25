@@ -73,7 +73,7 @@ export function resolvedInvite(
     return undefined;
   }
   const target = parsed.statement.body.target;
-  if (target.op === "add" && target.invite_id) {
+  if ((target.op === "add" || target.op === "add_node") && target.invite_id) {
     return { inviteId: target.invite_id, resolution: "approved" };
   }
   return target.op === "deny_invite"

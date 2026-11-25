@@ -146,12 +146,21 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
   if (!name || !alias) {
     return name || alias || "";
   }
-  if (alias.toLowerCase() === name.toLowerCase()) {
+  const normalizedName = name.toLowerCase();
+  const normalizedAlias = alias.toLowerCase();
+  // Only omit a whole family name immediately before a trailing numeric version.
+  // Substrings and custom route/configuration labels still add information.
+  const family = normalizedName.replace(/[\s-]+\d+(?:\.\d+)*$/u, "");
+  if (
+    normalizedAlias === normalizedName ||
+    (family !== normalizedName &&
+      (family === normalizedAlias || family.endsWith(` ${normalizedAlias}`)))
+  ) {
     return name;
   }
   // Aliases are selectable metadata, not a replacement for model identity.
   // Preserve richer custom labels only when they already contain the full name.
-  return alias.toLowerCase().includes(name.toLowerCase()) ? alias : `${name} · ${alias}`;
+  return normalizedAlias.includes(normalizedName) ? alias : `${name} · ${alias}`;
 }
 
 type ChatModelDisplayLookup = ReadonlyMap<string, string>;

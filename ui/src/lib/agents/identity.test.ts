@@ -14,7 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["account", "recovery scope"])(
+it.each(["account", "recovery scope", "read access"])(
   "retires identities when the same client's %s changes",
   async (change) => {
     const pending = createDeferred<AgentIdentityResult>();
@@ -47,7 +47,13 @@ it.each(["account", "recovery scope"])(
         ? { selfUser: { id: "bob", name: "Bob" } }
         : {
             selfUser: undefined,
-            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+            hello: {
+              ...hello,
+              auth: {
+                ...hello.auth!,
+                ...(change === "recovery scope" ? { recoveryScope: "bob-scope" } : { scopes: [] }),
+              },
+            },
           }),
     });
     expect(capability.get("main")).toBeNull();

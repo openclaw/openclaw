@@ -1,6 +1,4 @@
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.entry.js";
@@ -10,13 +8,13 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import { expectCollected } from "../../../test-utils/retention.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { markCodeModePermissionChangeResult } from "../../code-mode-permission-change.js";
+import { prepareCoreToolPolicy } from "../../prepared-tool-surface.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -131,12 +129,12 @@ it.each(["completion", "permission change"] as const)(
       const signal = fixture.result.toolAbortSignal;
       let reasonAtAbort: unknown;
       signal.addEventListener("abort", () => (reasonAtAbort = signal.reason), { once: true });
-      await new RetiringRun().settle(fixture.result);
-      return { signal, reasonAtAbort };
+      const run = new RetiringRun();
+      await run.settle(fixture.result);
+      return { signal, reasonAtAbort, run: new WeakRef(run) };
     })();
     // Error matchers can materialize the lazy stack and hide the retained caller.
-    await nextTurn();
-    expect(queryObjects(RetiringRun)).toBe(0);
+    await expectCollected(retained.run);
     expect(retained.signal.aborted).toBe(true);
     expect(retained.signal.reason).toBe(retained.reasonAtAbort);
     if (outcome === "completion") {
@@ -171,10 +169,9 @@ it.each(
 )(
   "aborts $surface tools before parameter preparation or effects ($outcome)",
   async ({ surface, outcome }) => {
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "reviewer-caller",
       scopes: [],
-      assertCurrent() {},
     });
     const skillsSnapshot = {
       prompt: "",
@@ -334,4 +331,59 @@ it.each([
   expect(result.webSearchUnconfigured).toBe(false);
   catalog.refreshTools(() => {});
   expect(catalog.toolSearchRunPlan.hasCallableTools).toBe(false);
+});
+
+it.each(["full", null] as const)(
+  "retains participation through live permission refresh to %s",
+  async (mode) => {
+    const participationCeiling = {
+      kind: "send" as const,
+      profileId: "guest",
+      sessionKey: dashboardSessionKey,
+      tools: ["read"],
+      permission: "guarded" as const,
+      source: {
+        agentId: "main",
+        sessionId: "test",
+        lifecycleRevision: null,
+        creatorProfileId: "creator",
+        root: "/tmp/workspace",
+      },
+    };
+    await using fixture = await createFixture(
+      {
+        config: {
+          tools: { exec: { mode: "deny" }, codeMode: false, toolSearch: { enabled: false } },
+        },
+        permissionMode: "full",
+        approvalReviewerDeviceId: "guest-device",
+      },
+      createTestOperatorAuthority({
+        canonicalIdentity: null,
+        profileId: "guest",
+        scopes: [],
+        participationCeiling,
+      }),
+    );
+    // An active explicit mode must not replace the saved default overrides on reset.
+    fixture.attempt.execOverrides = { mode: "full" };
+    await fixture.result.refreshPermissionMode(mode, () => {});
+    const options = codingTools.mock.calls.at(-1)?.[0];
+    assert(options);
+    expect(options.pluginExecutionAuthority?.participationCeiling).toEqual(participationCeiling);
+    expect(prepareCoreToolPolicy(options).readOnly).toBe(mode === null);
+    expect(options.sessionPermissionPolicy?.root).toBe("/tmp/workspace");
+  },
+);
+
+it("keeps owner default permission refresh unrestricted", async () => {
+  await using fixture = await createFixture({
+    permissionMode: "full",
+    config: { tools: { exec: { mode: "deny" }, codeMode: false, toolSearch: { enabled: false } } },
+  });
+  await fixture.result.refreshPermissionMode(null, () => {});
+  const options = codingTools.mock.calls.at(-1)?.[0];
+  assert(options);
+  expect(options.sessionPermissionPolicy).toBeUndefined();
+  expect(prepareCoreToolPolicy(options).readOnly).toBe(false);
 });

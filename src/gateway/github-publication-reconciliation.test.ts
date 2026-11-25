@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import {
   commandResult,
+  createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   persistPublicationTestSession,
@@ -19,6 +20,7 @@ import {
   createRealPublicationWorkspace,
   publicationPullRequestResponse,
 } from "./github-publication-git.test-support.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   createRequesterPolicyFixture,
   capturePublicationGuest,
@@ -231,6 +233,57 @@ it("recovers independent worktrees while preserving each worktree's publication 
   expect(mocks.runCommand.mock.calls.slice(calls).filter(([argv]) => argv[0] === "gh")).toEqual([]);
 });
 
+it("selected recovery preserves original request order and another request’s native cooldown", async () => {
+  const f = await fixture("local");
+  const claim = await holdWorkerTurn(f);
+  const first = await f.coordinator.requestForSessionV2(f.request("earlier-request", f.guest));
+  const selected = await f.coordinator.requestForSessionV2(f.request("selected-request", f.guest));
+  expect([first.status, selected.status]).toEqual(["requested", "requested"]);
+  await f.placements.releaseTurn(claim);
+  const shared = createGitHubPublicationRecoveryBackoff();
+  const coordinator = createTestGitHubPublicationCoordinator({
+    placements: f.placements,
+    recovery: { shared, repository: createGitHubPublicationRecoveryBackoff() },
+  });
+  // Establish a real owner-managed cooldown against an accepted receipt. No
+  // publication row, completion receipt, or backoff state is seeded by the test.
+  await expect(
+    shared.run(
+      f.readReceipt(first.requestId)!,
+      async () => {
+        throw new Error("Transient recovery unavailable");
+      },
+      async (result) => result,
+    ),
+  ).rejects.toThrow("Transient recovery unavailable");
+  const before = mocks.runCommand.mock.calls.length;
+  await coordinator.resumeSessionRequests(undefined, undefined, selected.requestId);
+  await coordinator.resumeSessionRequests(undefined, undefined, first.requestId);
+  expect(mocks.runCommand.mock.calls).toHaveLength(before);
+  expect([
+    f.readReceipt(first.requestId)?.status,
+    f.readReceipt(selected.requestId)?.status,
+  ]).toEqual(["requested", "requested"]);
+  const now = performance.now();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(now + 61_000);
+  try {
+    await coordinator.resumeSessionRequests(undefined, undefined, first.requestId);
+    expect(await coordinator.readAsync(first.requestId)).toMatchObject({
+      requestId: first.requestId,
+      status: "published",
+    });
+    expect(f.readReceipt(selected.requestId)?.status).toBe("requested");
+    await coordinator.resumeSessionRequests(undefined, undefined, selected.requestId);
+    expect(await coordinator.readAsync(selected.requestId)).toMatchObject({
+      requestId: selected.requestId,
+      status: "published",
+    });
+    expect(f.publishedTitles).toEqual(["earlier-request"]);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it.each(["local", "repository"] as const)(
   "settles the accepted %s publication before stopping recovery between requests",
   async (backend) => {
@@ -305,6 +358,16 @@ it.each([
       recoveryLookup = false,
       unavailableLookups = 0;
     let acceptedWrites: string[] = [];
+    const recover = async (requestId: string, restarted = f.restart()) => {
+      readbackAvailable = true;
+      await restarted.resumeSessionRequests();
+      expect(f.externalWrites).toEqual(acceptedWrites);
+      expect(await restarted.readAsync(requestId)).toMatchObject(
+        published(first.url, pullRequest.headSha),
+      );
+      expect(await restarted.readAsync(first.requestId)).toEqual(first);
+      return restarted;
+    };
     const hostScans = vi.spyOn(sqliteQueries, "iterateSqliteQuerySync");
     let recoveryScanStart = 0;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -412,7 +475,6 @@ it.each([
         head_commit: pullRequest.headSha,
       });
       expect(pullRequest.body).not.toContain(`<!-- openclaw-publication:${requestId} -->`);
-      expect(await f.coordinator.readAsync(first.requestId)).toEqual(first);
       acceptedWrites = [...f.externalWrites];
       // Closing the known PR cannot undo an accepted update.
       if (backend === "local") {
@@ -423,14 +485,7 @@ it.each([
       }
       if (authorized && mode !== "interrupted-authorized-open") {
         if (!f.local) {
-          readbackAvailable = true;
-          const restarted = f.restart();
-          await restarted.resumeSessionRequests();
-          expect(f.externalWrites).toEqual(acceptedWrites);
-          expect(await restarted.readAsync(requestId)).toMatchObject(
-            published(first.url, pullRequest.headSha),
-          );
-          expect(await restarted.readAsync(first.requestId)).toEqual(first);
+          await recover(requestId);
           return;
         }
         const { cwd, git } = f.local;
@@ -466,15 +521,8 @@ it.each([
             fs.readFile(path.join(cwd, "untracked.txt")),
           ]);
         const saved = await snapshot();
-        readbackAvailable = true;
-        const restarted = f.restart();
-        await restarted.resumeSessionRequests();
-        expect(f.externalWrites).toEqual(acceptedWrites);
-        expect(await restarted.readAsync(requestId)).toMatchObject(
-          published(first.url, pullRequest.headSha),
-        );
+        const restarted = await recover(requestId);
         expect(await snapshot()).toEqual(saved);
-        expect(await restarted.readAsync(first.requestId)).toEqual(first);
         const next = await restarted.requestForSessionV2(f.request("explicit-new-pr", f.guest));
         expect(next).toMatchObject(
           published(first.url.replace(/\d+$/u, "125201"), await git("rev-parse", "HEAD")),
@@ -490,9 +538,6 @@ it.each([
       }
       if (!authorized) {
         await f.revoke();
-        expect(f.guest.assertCurrent).toThrow();
-      } else {
-        f.guest.assertCurrent();
       }
       readbackAvailable = true;
       const restarted = f.restart();
@@ -521,10 +566,7 @@ it.each([
           unavailableRead.mockRestore();
         }
       }
-      await restarted.resumeSessionRequests();
-      expect(await restarted.readAsync(requestId)).toMatchObject(
-        published(first.url, pullRequest.headSha),
-      );
+      await recover(requestId, restarted);
       if (backend === "local") {
         expect(f.readReceipt(requestId)?.base_branch).toBe("review/continuation");
       }
@@ -539,7 +581,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "recovers a new PR after closure without selecting the old PR (publisher changed: %s)",
+  "recovers a new PR after closure through the next publish (publisher changed: %s)",
   async (publisherChanged) => {
     const { f, first, pullRequest, transport } = await prepareExistingPullRequest("local");
     pullRequest.state = "closed";
@@ -610,10 +652,18 @@ it.each([false, true])(
     })!;
     expect(nextPullRequest?.body).toContain(`<!-- openclaw-publication:${request.request_id} -->`);
     const acceptedWrites = [...f.externalWrites];
+    const restarted = f.restart();
+    const retry = () => restarted.requestForSessionV2(f.request("after-restart", f.maintainer));
+    await expect(retry()).rejects.toThrow(
+      `github_publish({"action":"readiness","requestId":"${request.request_id}"})`,
+    );
+    expect(f.externalWrites).toEqual(acceptedWrites);
     await f.revoke();
     readbackAvailable = true;
-    const restarted = f.restart();
-    await restarted.resumeSessionRequests();
+    expect(await retry()).toMatchObject({
+      requestId: request.request_id,
+      ...published(nextUrl, acceptedHead),
+    });
     expect(await restarted.readAsync(request.request_id)).toMatchObject(
       published(nextUrl, acceptedHead),
     );

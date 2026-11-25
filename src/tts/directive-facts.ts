@@ -122,7 +122,38 @@ type TtsDirectiveTextStreamCleaner = {
   push: (text: string) => string;
   flush: () => string;
   hasBufferedDirectiveText: () => boolean;
+  pendingFenceLine: () => string | undefined;
 };
+
+/** Append a delivered block to the raw source for final speech synthesis. */
+export function appendTtsBlockSource(
+  source: string,
+  text: string,
+  cleaner: TtsDirectiveTextStreamCleaner | undefined,
+  cleanerInput = text,
+): string {
+  if (!source || cleaner?.hasBufferedDirectiveText()) {
+    return source + text;
+  }
+  const marker = cleanerInput[0];
+  if (marker === "~" || marker === "`") {
+    const run = cleaner?.pendingFenceLine()?.trimStart();
+    if (
+      run?.startsWith(marker) &&
+      /^(?:~+|`+)$/u.test(run) &&
+      cleanerInput.startsWith(marker.repeat(Math.max(1, 3 - run.length)))
+    ) {
+      // Two single-marker blocks still have their normal separator until a third marker
+      // establishes a fence. Only remove it when the scanner saw both on the same line.
+      const joinedSource =
+        run.length === 2 && source.endsWith(marker + "\n" + marker)
+          ? source.slice(0, -2) + marker
+          : source;
+      return joinedSource + text;
+    }
+  }
+  return source + "\n" + text;
+}
 
 function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
   const normalized = body.trim().replace(/\s+/g, "").toLowerCase();
@@ -240,6 +271,7 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
       fence = {};
       return tail;
     },
+    pendingFenceLine: () => fence.pendingLine?.text,
     hasBufferedDirectiveText(): boolean {
       return pending.length > 0 || insideHiddenTextBlock;
     },

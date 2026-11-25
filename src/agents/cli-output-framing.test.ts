@@ -6,6 +6,7 @@ import {
   claudeBlockStart,
   claudeBlockStop,
   claudeInputJsonDelta,
+  claudeMessageStart,
   createClaudeParser,
   createClaudeBackend,
   joinJsonlFrames,
@@ -28,13 +29,6 @@ function imageResultFrame(id: string, data: string, extra: Record<string, unknow
     id,
     [{ type: "image", source: { type: "base64", media_type: "image/png", data } }],
     extra,
-  );
-}
-function numericToolResultLine(id: string, padding = "") {
-  return (
-    JSON.stringify(
-      toolResultFrame(id, [], { tool_use_result: Array(200_000).fill(1e20) }),
-    ).replaceAll("100000000000000000000", "1e20") + padding
   );
 }
 
@@ -147,20 +141,13 @@ describe("createCliJsonlStreamingParser framing", () => {
     expect(parser.getErrorText()).toContain("JSONL output exceeded");
   });
 
-  it("counts actual blank Claude frames without invoking hooks or inventing a finish frame", () => {
+  it("charges blank Claude frames without invoking hooks", () => {
     const parseJsonlEvent = vi.fn(() => null);
-    const createParser = () => createClaudeParser({ parseJsonlEvent });
-    const completeParser = createParser();
-    completeParser.push("\r\n".repeat(20_000));
-    completeParser.finish();
+    const parser = createClaudeParser({ parseJsonlEvent });
+    parser.push("\r\n".repeat(20_001));
+    parser.finish();
 
-    expect(completeParser.getErrorText()).toBeNull();
-    expect(parseJsonlEvent).not.toHaveBeenCalled();
-
-    const overflowParser = createParser();
-    overflowParser.push("\n".repeat(20_001));
-
-    expect(overflowParser.getErrorText()).toContain("exceeded 20000 lines");
+    expect(parser.getErrorText()).toBeNull();
     expect(parseJsonlEvent).not.toHaveBeenCalled();
   });
 
@@ -174,25 +161,8 @@ describe("createCliJsonlStreamingParser framing", () => {
       createLine: () => `${" ".repeat(4_300_000)}{}`,
     },
     {
-      name: "formatting inside a compacted media record",
-      createLine: () =>
-        JSON.stringify(imageResultFrame("padded-image", "YQ==")).replace(
-          '"message":',
-          `"message":${" ".repeat(4_300_000)}`,
-        ),
-    },
-    {
-      name: "tool-result IDs with short numeric wire literals",
-      createLine: () => numericToolResultLine("i".repeat(4_300_000)),
-    },
-    {
-      name: "tool-result padding with short numeric wire literals",
-      createLine: () => numericToolResultLine("padded", " ".repeat(4_300_000)),
-    },
-    {
-      name: "unknown tool-result metadata",
-      createLine: () =>
-        JSON.stringify(toolResultFrame("metadata", [], { extra: "x".repeat(4_300_000) })),
+      name: "tool-result IDs",
+      createLine: () => JSON.stringify(toolResultFrame("i".repeat(4_300_000), [])),
     },
     {
       name: "mixed tool-result and user content",
@@ -335,18 +305,48 @@ describe("createCliJsonlStreamingParser framing", () => {
     const parser = createClaudeParser();
     // Built as text: JSON.stringify is itself recursive and cannot serialize this.
     const depth = 50_000;
-    const payload = JSON.stringify({
+    const nested = `${'{"nested":'.repeat(depth)}${JSON.stringify({
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "AAAA" },
-    });
-    const line = `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deep","content":""}]},"tool_use_result":${
-      '{"nested":'.repeat(depth) + payload + "}".repeat(depth)
-    }}`;
+    })}${"}".repeat(depth)}`;
+    const toolResult = `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deep","content":""}]},"tool_use_result":${nested}}`;
+    const assistant = `{"type":"assistant","message":{"id":"deep","content":[${nested}]}}`;
 
-    expect(() => parser.push(`${line}\n`)).not.toThrow();
+    expect(() => parser.push(`${toolResult}\n${assistant}\n`)).not.toThrow();
     expect(parser.getErrorText()).toBeNull();
-    parser.push(`${line}\n`.repeat(17));
+    // An assistant snapshot too deep to re-serialize keeps raw accounting.
+    parser.push(`${assistant}\n`.repeat(16));
     expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
+  });
+
+  it("keeps the reply of a turn with thousands of small tool calls", () => {
+    // Envelope metadata as Claude Code 2.1.322 emits it; ids are synthetic.
+    const meta = { session_id: "s".repeat(36), uuid: "u".repeat(36), timestamp: "t".repeat(24) };
+    const results: string[] = [];
+    const parser = createClaudeParser({
+      onToolResult: (result) => results.push(result.toolCallId),
+    });
+    for (let call = 0; call < 4_500; call += 1) {
+      const tool = { type: "tool_use", id: `toolu_${call}`, name: "read", input: { path: "a" } };
+      const text = [{ type: "text", text: "hello" }];
+      parser.push(
+        joinJsonlFrames(
+          { type: "system", subtype: "status", status: "requesting", ...meta },
+          claudeMessageStart(`msg_${call}`),
+          claudeBlockStart({ ...tool, input: {} }, 0),
+          claudeBlockStop(0),
+          { type: "assistant", message: { id: `msg_${call}`, content: [tool] }, ...meta },
+          toolResultFrame(tool.id, text, { ...meta, tool_use_result: text }),
+          "",
+        ),
+      );
+    }
+    parser.push(joinJsonlFrames({ type: "result", subtype: "success", result: "done" }, ""));
+    parser.finish();
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(results).toHaveLength(4_500);
+    expect(parser.getOutput()?.text).toBe("done");
   });
 
   it("still enforces raw Claude line and retained-text limits", () => {
@@ -375,9 +375,17 @@ describe("createCliJsonlStreamingParser framing", () => {
     }
     expect(oversizedTextParser.getErrorText()).toContain("JSONL output exceeded");
 
-    for (const line of ["{}", JSON.stringify(toolResultFrame("repeated", []))]) {
+    // Discarded tool-result payloads, metadata, and padding over 1 KiB count as frames.
+    const discarded = "x".repeat(1_100);
+    for (const line of [
+      JSON.stringify(toolResultFrame("payload", [{ type: "text", text: discarded }])),
+      JSON.stringify(toolResultFrame("metadata", [], { extra: discarded })),
+      `${JSON.stringify(toolResultFrame("padding", []))}${" ".repeat(1_100)}`,
+    ]) {
       const excessiveLinesParser = createParser();
-      excessiveLinesParser.push(`${line}\n`.repeat(20_001));
+      excessiveLinesParser.push(`${line}\n`.repeat(20_000));
+      expect(excessiveLinesParser.getErrorText()).toBeNull();
+      excessiveLinesParser.push(`${line}\n`);
       expect(excessiveLinesParser.getErrorText()).toContain("exceeded 20000 lines");
     }
   });

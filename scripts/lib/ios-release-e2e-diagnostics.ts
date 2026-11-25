@@ -12,6 +12,17 @@ type GatewayLogEvent = {
   pending?: Record<string, boolean>;
 };
 
+export function parseIOSSimulatorTiming(line: string) {
+  const match =
+    /^OPENCLAW_SIMULATOR_TIMING phase=(cold-boot|configure|ready|verify) seconds=(\d+\.\d{3}) exit=(\d{1,3})$/u.exec(
+      line,
+    );
+  if (!match || Number(match[3]) > 255 || !Number.isFinite(Number(match[2]))) {
+    return undefined;
+  }
+  return { phase: match[1], seconds: Number(match[2]), exitCode: Number(match[3]) };
+}
+
 export function summarizeIOSBuildTiming(output: string) {
   const tasks = new Set([
     "SwiftCompile",

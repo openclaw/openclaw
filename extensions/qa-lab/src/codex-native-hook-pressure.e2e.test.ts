@@ -307,9 +307,6 @@ export default {
               (item) => item && typeof item === "object" && String(item.type).endsWith("_output"),
             ),
           );
-          if (current.failedResponses > 0 && current.outputs.length === 0) {
-            current.unacknowledgedRetries++;
-          }
           const acknowledged = new Set(
             current.outputs.flatMap((item) =>
               item &&
@@ -325,6 +322,10 @@ export default {
           const pending = Array.from({ length: current.count }, (_, i) => i).filter(
             (i) => !acknowledged.has(`call_${current.id}_${i}`),
           );
+          // Standalone context or another tool output cannot acknowledge this cohort.
+          if (current.failedResponses > 0 && pending.length === current.count) {
+            current.unacknowledgedRetries++;
+          }
           // Retry only missing calls; constructing or sending a response does not prove execution.
           if (pending.length > 0) {
             const native = tools.find(({ tool }) =>
@@ -407,7 +408,6 @@ export default {
           }
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
-            initializeCurrentRuntimeState: true,
             command: {
               executablePath: process.execPath,
               argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
@@ -441,15 +441,9 @@ export default {
               plugins.load = { paths: [pluginDir] };
               plugins.entries = {
                 ...plugins.entries,
-                // Keep the sandbox; isolate policy work from optional loop detection.
                 codex: {
                   enabled: true,
-                  config: {
-                    appServer: {
-                      sandbox: "workspace-write",
-                      loopDetectionPreToolUseRelay: false,
-                    },
-                  },
+                  config: { appServer: { sandbox: "workspace-write" } },
                 },
                 [PLUGIN_ID]: { enabled: true },
               };

@@ -161,6 +161,83 @@ function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
   return files;
 }
 
+describe("update-channel refusal contract", () => {
+  const target = "src/cli/update-cli/update-command-target.ts";
+  const global = "src/infra/update-global.ts";
+  const gitRoute = "src/cli/update-cli/update-command-git.ts";
+  const report = "src/cli/update-cli/update-command-admission-report.ts";
+  it.each([
+    {
+      gitMode: "in-place",
+      route: "updateGitCheckout({});",
+      tag: "main",
+      condition: 'explicitTag === "main"',
+      helper: "",
+      ownerReport: "",
+      packageMode: "switch",
+    },
+    {
+      gitMode: "detached",
+      route: "await updateGitRelease({});",
+      tag: "MAIN",
+      condition: "isMainPackageTarget(explicitTag)",
+      helper:
+        'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}',
+      ownerReport: "throw new Error(`The resident launcher owns this installation. ${route}`);",
+      packageMode: "refuse",
+    },
+  ])(
+    "retains the $tag refusal, $gitMode route and $packageMode Git-to-package switch",
+    ({ tag, condition, helper, gitMode, route, ownerReport, packageMode }) => {
+      const f = fixture({
+        [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
+        [global]: helper,
+        [gitRoute]: route,
+        [report]: ownerReport,
+      });
+      // Selection follows committed source, not a dirty working-tree replacement.
+      writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
+      writeFileSync(join(f.selected.root, gitRoute), "unknownContract();");
+      const result = f.run(
+        { docker: { lanes: ["update-channel-switch"] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const record = JSON.parse(result.stdout);
+      expect(record.contracts).toContainEqual({
+        consumer: "update-channel-switch",
+        status: "ADMITTED",
+        modes: {
+          OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag,
+          OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE: gitMode,
+          OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE: packageMode,
+        },
+        files: [],
+      });
+      expect(record.docker.omitted).toEqual([]);
+      expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
+        expect.arrayContaining([target, global, gitRoute, report]),
+      );
+    },
+  );
+
+  it("rejects an unknown refusal contract rather than dropping its probe", () => {
+    const f = fixture({
+      [target]: "unknownContract();",
+      [global]: "",
+      [gitRoute]: "",
+      [report]: "",
+    });
+    expectRejected(
+      f.run(
+        { docker: { lanes: ["update-channel-switch"] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      ),
+      "unsupported selected update main-target contract",
+    );
+  });
+});
+
 describe("frozen admission Docker consumer aliases", () => {
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
   const aliases = ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
@@ -298,6 +375,31 @@ describe("frozen admission upgrade Docker aliases", () => {
       );
     },
   );
+});
+
+describe("frozen admission skill library contract", () => {
+  it.each([false, true])("records selected migration=%s with omissions disabled", (split) => {
+    const doctor = "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts";
+    const migration = "src/config/skill-library-tool-split-migration.ts";
+    const files: Record<string, string> = {
+      [doctor]: split ? readFileSync(doctor, "utf8") : "export const oldToolNames = [];",
+    };
+    if (split) {
+      files[migration] = readFileSync(migration, "utf8");
+    }
+    const f = fixture(files, true);
+    const result = f.run(
+      { consumers: ["upgrade-survivor"] },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.contracts[0].modes.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE).toBe(
+      split ? "current" : "preserve",
+    );
+    expect(record.sources.selected.map((file: { path: string }) => file.path)).toContain(doctor);
+    expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
+  });
 });
 
 describe("frozen admission bootstrap repairs", () => {

@@ -120,7 +120,7 @@ defineDiscordVoiceTests(
         expectUserMessageNotIncludes("overflow");
 
         await emitFinalRealtimeUserTranscript(sibling.bridgeParams, "guest question");
-        expect(agentCommandArgsAt(2).senderIsOwner).toBe(false);
+        expect(agentCommandArgsAt(2)).toMatchObject({ runContext: { senderId: "u-guest" } });
         expect(agentCommandArgsAt(2).message).toContain("guest question");
         // The room notice is already speaking on the surviving lane; its answer queues behind it.
         sibling.bridgeParams.onEvent?.({ direction: "server", type: "response.created" });
@@ -247,10 +247,10 @@ defineDiscordVoiceTests(
 
       const ownerCommandArgs = agentCommandArgsAt(0);
       expect(ownerCommandArgs.message).toContain("owner question");
-      expect(ownerCommandArgs.senderIsOwner).toBe(true);
+      expect(ownerCommandArgs).toMatchObject({ runContext: { senderId: "u-owner" } });
       const guestCommandArgs = agentCommandArgsAt(1);
       expect(guestCommandArgs.message).toContain("guest question");
-      expect(guestCommandArgs.senderIsOwner).toBe(false);
+      expect(guestCommandArgs).toMatchObject({ runContext: { senderId: "u-guest" } });
       expect(owner.session.submitToolResult).toHaveBeenCalledWith("call-owner", {
         text: "owner answer",
       });
@@ -441,7 +441,7 @@ defineDiscordVoiceTests(
       expect(agentCommandMock).toHaveBeenCalledTimes(2);
       const followupCommandArgs = agentCommandArgsAt(1);
       expect(followupCommandArgs.message).toContain("guest followup");
-      expect(followupCommandArgs.senderIsOwner).toBe(false);
+      expect(followupCommandArgs).toMatchObject({ runContext: { senderId: "u-guest" } });
       expectUserMessageIncludes("guest answer");
     });
 
@@ -494,7 +494,7 @@ defineDiscordVoiceTests(
       await emitFinalRealtimeUserTranscript(guest.bridgeParams, "guest question");
 
       expectUserMessageIncludes("guest answer");
-      expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
+      expect(lastAgentCommandArgs()).toMatchObject({ runContext: { senderId: "u-guest" } });
     });
 
     it.each([true, false])(
@@ -705,7 +705,7 @@ defineDiscordVoiceTests(
         await Promise.resolve();
 
         const commandArgs = lastAgentCommandArgs();
-        expect(commandArgs.senderIsOwner).toBe(false);
+        expect(commandArgs).toMatchObject({ runContext: { senderId: "u-guest" } });
         expect(commandArgs.toolsAllow).toEqual([
           "read",
           "web_search",

@@ -5,6 +5,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecIoDevices } from "./linux-exec-cgroup-device.js";
 import {
   prepareAgentExecCgroupScope,
+  reloadGatewayExecCgroup,
   resolveGatewayServiceCgroupDirectory,
 } from "./linux-exec-cgroup.js";
 
@@ -98,6 +99,7 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
   if (process.platform !== "linux") {
     return "Agent exec cgroup isolation is only available on Linux.";
   }
+  reloadGatewayExecCgroup();
   let throttleFailure = "";
   try {
     const relative = /^0::(.+)$/mu.exec(fs.readFileSync("/proc/self/cgroup", "utf8"))?.[1];

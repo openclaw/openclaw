@@ -2,9 +2,9 @@ import type {
   ModelChangeEntry,
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
+import type { RunToolUsageRecorder } from "../../agents/tool-usage-recorder.js";
 import { AsyncContext } from "../../shared/async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
@@ -60,6 +60,7 @@ export type OwnedSessionTranscriptWriteContext = {
   sessionReader?: SessionEntryCohortReader;
   sessionActor?: {
     actor: SessionActor;
+    toolUsageRecorder?: RunToolUsageRecorder;
     /** Retain the physical database owner, independently of the logical session agent. */
     database: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>;
   };
@@ -83,5 +84,5 @@ export const ownedTranscriptWriteContext = new AsyncContext<
 
 /** Runs detached work without retaining an attempt-owned transcript context. */
 export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
-  return ownedTranscriptWriteContext.exit(() => runWithCliHistoryWriter(undefined, run));
+  return ownedTranscriptWriteContext.exit(run);
 }

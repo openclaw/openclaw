@@ -1,0 +1,14 @@
+# Participate split, part 6 (Control UI), measured against the branch below it:
+# 2,263 net test lines, less the 400-line allowance.
+# Retains distinct UI boundaries: invitation access choice in the chat and
+# new-session composers and its typing handoff; the sharing popover levels and
+# its lazy presentation; membership-backed People projection (desktop and mobile)
+# and removal; the lazy permission picker ceiling; participant approval notices,
+# creator review controls and own-run Stop; author-only restoration of cancelled
+# or revoked inputs; suggestion tray expansion; the guest welcome; expected
+# refusal notices; lazy English catalog loading and participant boot boundaries;
+# history rereads on keyless sharing changes only for members and viewers, and
+# approval replay requested only by an authenticated profile (both red before fix).
+# Existing fixtures and table cases are reused. No production threshold, file cap
+# or timeout changes.
+1863

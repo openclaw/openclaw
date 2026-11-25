@@ -1,2 +1,0 @@
-# Prove the unreadable-profile fixture even when a Linux VM grants read capabilities.
-23

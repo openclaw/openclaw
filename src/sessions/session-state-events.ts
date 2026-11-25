@@ -116,7 +116,7 @@ export async function getSessionStateVersions(
       options,
       {
         type: "sessionState.versions",
-        input: refs,
+        input: refs.map((ref) => ({ ...ref })),
       },
       { context },
     );

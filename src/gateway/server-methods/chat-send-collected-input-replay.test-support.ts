@@ -10,7 +10,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readPendingInputSource } from "../../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../../config/sessions/session-pending-input-snapshot.test-support.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -126,13 +126,12 @@ export function registerChatCollectedInputReplayCases(
             .run(fixture.scope.sessionKey, fixture.scope.sessionId, fixture.params.idempotencyKey);
         }
       }
-      const retained = await readPendingInputSource(
+      const retained = await readPendingInputSnapshotForTest(
         fixture.scope,
         `${fixture.params.idempotencyKey}:user`,
-        true,
       );
-      expect(retained?.snapshot.current).toBe(true);
-      expect(retained?.snapshot.pending).toBeDefined();
+      expect(retained.current).toBe(true);
+      expect(retained.pending).toBeDefined();
       fixture.context.dedupe.clear();
       dispatchInboundMessageMock.mockClear();
       if (disposition === "changed-payload") {
@@ -159,9 +158,13 @@ export function registerChatCollectedInputReplayCases(
       expect(fixture.readTranscript()).toEqual(transcript);
       expect((await pending(fixture)).total).toBe(0);
       expect(
-        (await readPendingInputSource(fixture.scope, `${fixture.params.idempotencyKey}:user`, true))
-          ?.snapshot.pending,
-      ).toEqual(retained?.snapshot.pending);
+        (
+          await readPendingInputSnapshotForTest(
+            fixture.scope,
+            `${fixture.params.idempotencyKey}:user`,
+          )
+        ).pending,
+      ).toEqual(retained.pending);
     },
   );
 }

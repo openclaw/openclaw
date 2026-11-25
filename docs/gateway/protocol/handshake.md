@@ -126,6 +126,13 @@ reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
 
+The `session-approval-recipients-v1` hello capability allows authenticated people
+without global `operator.approvals` scope to request session approval replay with
+`includeApprovals: true`. The Gateway selects the creator, reviewer, and own-turn
+status recipients; this opt-in grants no review authority. Without that advertised
+capability, clients must keep approval opt-in limited to approvals-scoped operators
+and subscribe to the plain transcript for other readers.
+
 Optional hello fields:
 
 | Field                             | Client use                                                                                                                                                                                                                                                                                   |
@@ -180,6 +187,9 @@ verification tests saved configuration without requiring a running Gateway.
 Retired APIs: use plugin surfaces instead of `canvasHostUrl`, `canvasCapability`,
 or `node.canvas.capability.refresh`; use `sessions.companion.ask` instead of
 `sessions.observer.ask`.
+
+For a complete client flow after a timeout or disconnect, see
+[config-write reconciliation](/gateway/protocol/rpc-talk-config-and-agents#reconcile-a-config-write-after-a-lost-response).
 
 While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
@@ -267,6 +277,11 @@ Assistant messages in `worker.transcript.commit` may carry the live event's
 storage, and publishes the correlation only after the row commits. It is not
 provider replay data. This worker-only field travels between the exact
 builds admitted by the bundle, version, and feature checks above.
+
+Historical assistant messages in launch history, inference context, and transcript
+commits may omit `usage.cost` when no price was recorded. Missing cost remains
+unknown, not zero. Fresh inference terminal messages retain required cost fields;
+this history distinction does not enable older worker builds.
 
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission

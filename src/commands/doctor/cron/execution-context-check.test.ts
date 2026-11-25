@@ -86,6 +86,7 @@ const roleConfig: OpenClawConfig = {
       definitions: {
         member,
         contractor: { ...member, sandbox: "required" },
+        admin: { ...member, scopes: ["operator.admin"] },
       },
     },
   },
@@ -102,6 +103,12 @@ const ownerTools = "owner-only tools such as sessions, portal, nodes, gateway an
 
 it.each([
   ["owner", null, {}, false],
+  [
+    "catalog-only nonmember",
+    "contractor",
+    { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
+    false,
+  ],
   ["member", null, roleConfig, true],
   ["removed", undefined, {}, true],
   ["sandboxed", "contractor", roleConfig, true],
@@ -113,6 +120,22 @@ it.each([
   expect(text ?? "").not.toMatch(
     /Doctor could not verify it|could not be evaluated|unsandboxed execution/,
   );
+});
+
+it("leaves an admin-role profile requester to admission", async () => {
+  mocks.jobs = [jobRow("current", { createdActor: profileActor })];
+  mocks.profiles = new Map([["profile-1", "admin"]]);
+  // Its agents list and access policy decide ownership at run time.
+  expect(await noteText(roleConfig)).toContain("Doctor could not verify it");
+});
+
+it("checks a transferred job's requester by its own role, not its creator's", async () => {
+  mocks.jobs = [jobRow("transferred", { createdActor: profileActor, ownerProfileId: "profile-2" })];
+  mocks.profiles = new Map([
+    ["profile-1", "admin"],
+    ["profile-2", null],
+  ]);
+  expect(await noteText(roleConfig)).toEqual(expect.stringContaining(ownerTools));
 });
 
 it("accepts a configured channel owner", async () => {
@@ -169,4 +192,32 @@ it("continues a read-only parent review after errors and reports only applicable
   expect(mocks.readSession).toHaveBeenCalledWith(
     expect.objectContaining({ agentId: "main", sessionKey: PARENT, readConsistency: "latest" }),
   );
+});
+
+it.each([
+  ["no roles", {}, false],
+  [
+    "catalog only",
+    { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
+    false,
+  ],
+  ["enforced roles", roleConfig, true],
+  [
+    "identity scopes",
+    { gateway: { auth: { identityScopes: { "owner@example.test": ["operator.admin"] } } } },
+    true,
+  ],
+] as const)("checks an unlinked channel requester with %s", async (_name, cfg, unverified) => {
+  mocks.jobs = [
+    jobRow("channel", {
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: { version: 1, channel: "telegram", accountId: "default", senderId: "42" },
+      },
+    }),
+  ];
+  const text = await noteText(cfg as OpenClawConfig);
+  expect(text).toContain(ownerTools);
+  expect(text?.includes("Doctor could not verify it")).toBe(unverified);
 });

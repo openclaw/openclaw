@@ -12,6 +12,7 @@ import {
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 
 type UpdateFailureAction = "triage" | "report" | "status" | "browser" | "dismiss";
 
@@ -29,6 +30,7 @@ function renderSubmissionResult(
         : `GitHub issue creation was unavailable: ${result.message}`,
       ...(browserRequested ? [`Prefilled issue: ${result.fallbackUrl}`] : []),
       `Saved sanitized report: ${result.savedReportPath}`,
+      formatUpdateReportReadHint(result.savedReportPath),
     ];
   }
   if (result.status === "retryable") {

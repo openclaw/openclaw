@@ -107,6 +107,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
+    "searchTitlesOnly",
   ] as const) {
     if (options[key] === true) {
       params[key] = true;
@@ -156,9 +157,15 @@ export function normalizeManagedSessionListQuery(
   });
 }
 
-export function sessionListQueryKey(options: SessionListOptions): string {
-  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+export function sessionListRequestKey(
+  params: Readonly<SessionsListParams & { pageSize?: number }>,
+): string {
+  const { source: _source, ...query } = params;
   return JSON.stringify(query);
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  return sessionListRequestKey(normalizeManagedSessionListQuery(options));
 }
 
 export async function requestSessionList(
@@ -184,8 +191,7 @@ export async function requestSessionListParams(
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
-    const { source: _source, ...membership } = request;
-    const key = JSON.stringify(membership);
+    const key = sessionListRequestKey(request);
     const cache = sessionWireRows.get(client);
     const conditional = request.rowMode !== undefined;
     const previous = conditional ? cache?.get(key) : undefined;

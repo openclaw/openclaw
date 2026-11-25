@@ -70,6 +70,53 @@ function emitPrs(
 }
 
 suite.define(() => {
+  it("shows an agent-published PR in Details instead of the conversation", async () => {
+    await suite.withPage(
+      { ...publicationContextOptions(), viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const request = pullRequest(
+          44,
+          "agent/quiet-publish",
+          "Keep the session list in view",
+          "open",
+        );
+        const report = `Published synthetic/publication-demo branch ${request.branch}: ${request.url} Using @agent-bot (Own account).`;
+        const timestamp = Date.now();
+        const gateway = await installPublicationGateway(page, {
+          historyMessages: [
+            { role: "user", content: "Publish the session list fix.", timestamp: timestamp - 1000 },
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-publication",
+              responseId: "github-publication:task-publish",
+              openclawGitHubPublicationStatus: "published",
+              content: report,
+              timestamp,
+            },
+          ],
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const thread = page.locator(".chat-thread-inner");
+        await thread.getByText("Publish the session list fix.", { exact: true }).waitFor();
+        const key = await waitForWatchedSessionKey(gateway);
+        await emitPrs(gateway, key, {
+          repository,
+          pullRequests: [],
+          taskPullRequests: [
+            { ...request, sourceAgentId: "main", sourceSessionKey: `${key}:publication` },
+          ],
+          taskPullRequestCount: 1,
+        });
+        const details = await openDetailsPullRequests(page);
+        const link = details.locator(`a.chat-pr__link[href="${request.url}"]`);
+        await link.waitFor();
+        expect(await thread.getByText("Own account", { exact: false }).count()).toBe(0);
+        expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      },
+    );
+  });
+
   it.each(["link", "actions"] as const)(
     "keeps accepted publication pending and enriches the confirmed %s in place",
     async (focus) => {
@@ -325,7 +372,7 @@ suite.define(() => {
       await guidance.waitFor();
       const account = environment.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
-      expect(await account.textContent()).toContain("Agent override");
+      expect(await account.textContent()).toContain("Own account");
       const refresh = environment.getByRole("button", { name: "Refresh publication" });
       const tokens = await history.evaluate((element) => {
         const probe = document.createElement("span");

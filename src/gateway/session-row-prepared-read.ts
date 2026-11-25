@@ -1,4 +1,5 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
@@ -115,6 +116,17 @@ export type SessionRowReadView = {
   ): records.MaterializedRow | undefined;
   readSource(row: records.MaterializedRow): CapturedSessionEntryReadSource | undefined;
   readMembership(query: records.Lookup): ReadonlySet<string> | undefined;
+  hasMembership(
+    storePath: string,
+    sessionKey: string,
+    identityId: string,
+    agentId: string,
+  ): boolean;
+  memberAccess(
+    storePath: string,
+    sessionKey: string,
+    identityId: string,
+  ): SessionMemberPermissionLevel | undefined;
   present(
     record: records.MaterializedRow,
     options?: records.SnapshotOptions,
@@ -240,6 +252,16 @@ export function readPreparedSessionRows<T>(
       }
       const row = privateRows.get(key);
       return captured && !records.isCurrentGeneration(captured, row) ? undefined : row;
+    },
+    memberAccess(storePath, sessionKey, identityId) {
+      assertActive();
+      return owner.memberAccess(storePath, sessionKey, identityId);
+    },
+    hasMembership(storePath, sessionKey, identityId, agentId) {
+      assertActive();
+      return isIncognitoSessionKey(sessionKey)
+        ? (read.readMembership({ agentId, storePath, key: sessionKey })?.has(identityId) ?? false)
+        : owner.hasMembership(storePath, sessionKey, identityId, agentId);
     },
     readMembership(query) {
       assertActive();

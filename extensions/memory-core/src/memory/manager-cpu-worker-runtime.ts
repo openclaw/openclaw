@@ -1,5 +1,10 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import type {
+  SessionEntryStream,
+  SessionEntrySummary,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-transcript-stats";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
@@ -8,6 +13,7 @@ import type {
   MemoryOriginReadInput,
 } from "../memory-entry-origins-task.js";
 import type { ForgetIndexReadInput } from "../memory-forget-index-task.js";
+import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import type {
   MemoryIndexPreparationInput,
@@ -18,11 +24,14 @@ import type { MemoryKeywordWorkerQuery, MemoryVectorWorkerQuery } from "./manage
 import type { MemorySearchWorkerInput, MemorySearchWorkerOutput } from "./manager-search.worker.js";
 import {
   sessionIndexPages,
+  type SessionIndexPage,
   type SessionIndexPreparation,
   type SessionIndexProgress,
 } from "./manager-session-index-preparation.js";
 import type { MemoryStatusQuery } from "./manager-status-state.js";
 const MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES = 256 * 1024 * 1024;
+// Session preparation admits one framed page at a time.
+const SESSION_INDEX_PAGE_INPUT_BYTES = 64 * 1024;
 
 type MemoryTranscriptStatsScope = Omit<
   Parameters<typeof readTranscriptStatsBatchReadOnlySync>[0][number],
@@ -50,6 +59,15 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
   workerClass: "compute",
   sharedCompute: true,
+  maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
+});
+// Session chunking runs in lockstep with its export, whose transcript worker already holds the
+// pipeline's shared compute permit while it waits for each page to be taken. A second permit would
+// deadlock on one-permit hosts, so this stage runs under the export's permit. One worker bounds it.
+const sessionIndexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
+  workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
+  workerClass: "compute",
+  maxWorkers: 1,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
 
@@ -271,60 +289,162 @@ export async function runMemoryVectorFallback(
 }
 
 export async function prepareMemoryIndexInWorker(input: MemoryIndexPreparationInput) {
-  let inputBytes = input.content.length * 2 + (input.entry.lineMap?.length ?? 0) * 8;
-  for (const provenance of input.entry.lineProvenance ?? []) {
-    inputBytes +=
-      32 +
-      2 *
-        (provenance.originClass.length +
-          provenance.sessionKind.length +
-          (provenance.supersedesKey?.length ?? 0));
-  }
   if (input.source === "sessions") {
-    const pages = sessionIndexPages(input);
-    const chunks: ReturnType<typeof prepareMemoryIndexChunks>["chunks"] = [];
-    const { content: _content, entry, cutoffLine, ...settings } = input;
-    const cutoffIndex =
-      cutoffLine === undefined
-        ? -1
-        : (entry.lineMap?.findIndex((line) => line >= cutoffLine) ?? -1);
-    const result = await indexing.run(
-      {
-        kind: "prepare-session",
-        input: {
-          ...settings,
-          // Preserve the reset owner's exact map boundary, including an empty or partial map.
-          resetAtLine: cutoffIndex > 0 ? cutoffIndex + 1 : undefined,
-          entry: { path: entry.path, mtimeMs: entry.mtimeMs },
-        },
-      },
-      {
-        // Oversized documents stream alone instead of being permanently rejected by a queue budget.
-        inputBytes: Math.min(inputBytes, MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES),
-        onRequest: (value) => {
-          // The worker exchanges a completed chunk batch for the next immutable source page.
-          // SAFETY: only the paired prepare-session worker sends requests on this task.
-          const progress = value as SessionIndexProgress;
-          for (const chunk of progress.chunks) {
-            chunks.push(chunk);
-          }
-          return Promise.resolve({
-            input: pages.next().value ?? { lines: [], done: true },
-            timeoutMs: 60_000,
-          });
-        },
-      },
-    );
-    if (result.kind !== "prepared") {
-      throw new Error("Invalid memory indexing worker result");
-    }
-    return { contentHash: undefined, chunks };
+    throw new Error("Session sources stream through prepareSessionIndexInWorker");
   }
-  const result = await indexing.run({ kind: "prepare", input }, { inputBytes });
+  const result = await indexing.run(
+    { kind: "prepare", input },
+    { inputBytes: input.content.length * 2 },
+  );
   if (result.kind !== "prepared") {
     throw new Error("Invalid memory indexing worker result");
   }
   return result.value;
+}
+
+/** Hands export pages to the index worker one at a time; the producer waits until each is taken. */
+class SessionIndexPageHandoff {
+  private readonly pages: SessionIndexPage[] = [];
+  private onAvailable: (() => void) | undefined;
+  private onTaken: { resolve: () => void; reject: (error: unknown) => void } | undefined;
+  private end: { error?: Error } | undefined;
+  private aborted: Error | undefined;
+
+  offer(pages: SessionIndexPage[]): Promise<void> {
+    if (this.aborted) {
+      return Promise.reject(this.aborted);
+    }
+    if (pages.length === 0) {
+      return Promise.resolve();
+    }
+    this.pages.push(...pages);
+    this.wake();
+    return new Promise((resolve, reject) => {
+      this.onTaken = { resolve, reject };
+    });
+  }
+
+  close(error?: unknown) {
+    this.end = error === undefined ? {} : { error: toErrorObject(error, "Session export failed") };
+    this.wake();
+  }
+
+  /** The consumer failed; release a waiting producer. */
+  abort(error: unknown) {
+    this.aborted = toErrorObject(error, "Session indexing failed");
+    this.pages.length = 0;
+    this.onTaken?.reject(this.aborted);
+    this.onTaken = undefined;
+  }
+
+  async take(): Promise<SessionIndexPage | undefined> {
+    for (;;) {
+      const page = this.pages.shift();
+      if (page) {
+        if (this.pages.length === 0) {
+          this.onTaken?.resolve();
+          this.onTaken = undefined;
+        }
+        return page;
+      }
+      if (this.end) {
+        if (this.end.error) {
+          throw this.end.error;
+        }
+        return undefined;
+      }
+      await new Promise<void>((resolve) => {
+        this.onAvailable = resolve;
+      });
+    }
+  }
+
+  private wake() {
+    const wake = this.onAvailable;
+    this.onAvailable = undefined;
+    wake?.();
+  }
+}
+
+/**
+ * Chunks a session while its export streams: neither the export nor the index worker holds more
+ * than one page of transcript text. Returns null when the transcript disappeared.
+ */
+export async function prepareSessionIndexInWorker(
+  input: SessionIndexPreparation,
+  streamExport: (stream: SessionEntryStream) => Promise<SessionEntrySummary | null>,
+): Promise<{ chunks: IndexedMemoryChunk[] } | null> {
+  const chunks: IndexedMemoryChunk[] = [];
+  const handoff = new SessionIndexPageHandoff();
+  let indexed: Promise<void> | undefined;
+  // Dispatch the chunker only once its export runs, so a queued chunker never waits on an export
+  // that is itself queued behind another chunker.
+  const startIndexing = () => {
+    if (!indexed) {
+      indexed = chunkSessionPages(input, handoff, chunks).catch((error: unknown) => {
+        handoff.abort(error);
+        throw error;
+      });
+      // Observed below; a failure must not surface as unhandled while the export settles.
+      indexed.catch(() => undefined);
+    }
+    return indexed;
+  };
+  const summary = await streamExport({
+    onPage: (page) => {
+      void startIndexing();
+      return handoff.offer(sessionIndexPages(page));
+    },
+    onReset: () => {
+      void startIndexing();
+      return handoff.offer([{ lines: [], done: false, reset: true }]);
+    },
+  }).then(
+    (exported) => {
+      handoff.close();
+      return exported;
+    },
+    async (error: unknown) => {
+      handoff.close(error);
+      // A chunker failure aborts the export; report that cause.
+      await indexed;
+      throw error;
+    },
+  );
+  if (!summary && !indexed) {
+    return null;
+  }
+  await startIndexing();
+  return summary ? { chunks } : null;
+}
+
+async function chunkSessionPages(
+  input: SessionIndexPreparation,
+  handoff: SessionIndexPageHandoff,
+  chunks: IndexedMemoryChunk[],
+) {
+  const result = await sessionIndexing.run(
+    { kind: "prepare-session", input },
+    {
+      inputBytes: SESSION_INDEX_PAGE_INPUT_BYTES,
+      onRequest: async (value) => {
+        // The worker exchanges a completed chunk batch for the next export page.
+        // SAFETY: only the paired prepare-session worker sends requests on this task.
+        const progress = value as SessionIndexProgress;
+        for (const chunk of progress.chunks) {
+          chunks.push(chunk);
+        }
+        const page = (await handoff.take()) ?? { lines: [], done: true };
+        if (page.reset) {
+          chunks.length = 0;
+        }
+        return { input: page, timeoutMs: 60_000 };
+      },
+    },
+  );
+  if (result.kind !== "prepared") {
+    throw new Error("Invalid memory indexing worker result");
+  }
 }
 
 /** Startup scans use the background indexing pool under the shared compute limit. */

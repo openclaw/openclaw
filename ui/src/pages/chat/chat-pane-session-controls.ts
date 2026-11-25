@@ -17,11 +17,13 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
+import { getAcceptedChatHistorySession, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
+import { mutateChatPendingInput } from "./chat-pending-inputs.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   readChatModelCatalogState,
@@ -29,7 +31,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import {
+  prefetchChatModelAccounts,
+  renderChatModelAccountControl,
+} from "./components/chat-model-account-control.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
@@ -40,7 +45,7 @@ type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
 type SessionActionCallbacks = Pick<
   ChatProps,
-  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage" | "onQueueCopy"
 >;
 
 type PendingPermissionChange = {
@@ -78,12 +83,14 @@ export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
   sessionKey: string,
   session?: GatewaySessionRow,
+  sessionAbsent = false,
 ) {
-  const scopedPatchAccess = (patch: SessionPatch) =>
+  const scopedPatchAccess = (patch: SessionPatch, missingScopeReasonKey?: string) =>
     readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, ...patch },
       sessionScope: true,
+      missingScopeReasonKey,
       session,
     });
   return {
@@ -92,14 +99,21 @@ export function readChatPaneMutationAccess(
       requiredScope: "operator.write",
       sessionScope: true,
       session,
+      sessionAbsent,
     }),
     model: scopedPatchAccess({ model: null }),
-    effort: scopedPatchAccess({ thinkingLevel: null }),
+    effort: scopedPatchAccess(
+      { thinkingLevel: null },
+      "chat.modelControls.thinkingPermissionDenied",
+    ),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
-    permission: scopedPatchAccess({ permissionMode: "guarded" }),
+    permission: scopedPatchAccess(
+      { permissionMode: "guarded" },
+      "chat.permissionControls.changePermissionDenied",
+    ),
     unarchive: scopedPatchAccess({ archived: false }),
     pendingInputDismiss: readSessionMethodAccess(snapshot, {
       method: "chat.pendingInputs.dismiss",
@@ -113,6 +127,20 @@ export function readChatPaneMutationAccess(
       session,
     }),
   };
+}
+
+/** Without a row, only a read that proved the routed session absent admits its first turn. */
+export function readChatPaneRouteMutationAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  state: ChatState,
+  session?: GatewaySessionRow,
+) {
+  return readChatPaneMutationAccess(
+    snapshot,
+    state.sessionKey,
+    session,
+    !session && isChatSessionProvenAbsent(state),
+  );
 }
 
 export function createChatPanePendingInputControls(
@@ -140,7 +168,7 @@ export function renderChatPaneComposerControls(params: {
   contextWindowAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  onModelSetup: () => void;
+  onModelSetup: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
@@ -163,7 +191,6 @@ export function renderChatPaneComposerControls(params: {
     onProviderSettings,
     onModelAccounts,
   } = params;
-  void state.accessPreferenceRevision;
   state.accessPreferences?.synchronize();
   const sessionKey = state.sessionKey;
   const preferenceAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
@@ -265,6 +292,7 @@ export function renderChatPaneComposerControls(params: {
           renderChatModelAccountControl({
             owner: state,
             client,
+            ownsScope: ownsRoute,
             selection: accountSelection,
             modelAuthStatusResult: state.modelAuthStatusResult,
             model: accountModel,
@@ -299,8 +327,6 @@ export function renderChatPaneComposerControls(params: {
           ? undefined
           : accessProgramAccess.reason,
         requestedAccessProgram: settingsSession?.cyberAccessProgram,
-        daybreakAccessProgram: state.accessPreferences?.readPreference(preferenceAgentId ?? "main")
-          ?.daybreakAccessProgram,
         contextWindowTarget: settingsPreview
           ? { ...(selectedSession ?? state.sessionsResult?.defaults), ...settingsPreview }
           : undefined,
@@ -324,13 +350,14 @@ export function renderChatPaneComposerControls(params: {
             }),
         sessionKey: state.sessionKey,
         selectedSession,
+        sessionRowCurrent: !cachedSessionStatePending && !snapshot,
         sessionsResult: state.sessionsResult,
         get stream() {
           return state.chatStream;
         },
         onModelSetup,
         onProviderSettings,
-        onAccessProgramSelect: async (next, targetSessionKey, previous) => {
+        onAccessProgramSelect: async (next, targetSessionKey) => {
           if (!canPatch({ cyberAccessProgram: next }, targetSessionKey)) {
             return false;
           }
@@ -343,14 +370,7 @@ export function renderChatPaneComposerControls(params: {
             await state.accessPreferences?.persistPreference(
               preferenceAgentId ?? "main",
               undefined,
-              {
-                cyberAccessProgram: next,
-                ...(next !== "standard"
-                  ? { daybreakAccessProgram: next }
-                  : previous
-                    ? { daybreakAccessProgram: previous }
-                    : {}),
-              },
+              { cyberAccessProgram: next },
             );
           }
           return confirmed;
@@ -363,7 +383,12 @@ export function renderChatPaneComposerControls(params: {
           contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
             ? switchChatSetting(state, { kind: "contextWindow", value: next }, targetSessionKey)
             : Promise.resolve(false),
-        onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+        onModelPickerOpen: () => {
+          if (modelAccess.allowed && selectedSession?.modelSelectionLocked !== true) {
+            prefetchChatModelAccounts({ owner: state, client, ownsScope: ownsRoute });
+          }
+          return refreshChatModelCatalogOnDemand(state);
+        },
         onModelPickerOpenChange: (open) => {
           state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
           // The native picker already presents this transition.
@@ -380,6 +405,10 @@ export function renderChatPaneComposerControls(params: {
     },
     permissionPicker: {
       canSelectFull,
+      participant:
+        selectedSession?.invitedAccess === "send" &&
+        selectedSession.sharingRole !== "owner" &&
+        selectedSession.sharingRole !== "admin",
       defaultMode: agents
         ? agents.agents.find((agent) => agent.id === resolveChatAgentId(state))
             ?.defaultPermissionMode
@@ -394,7 +423,11 @@ export function renderChatPaneComposerControls(params: {
         ? currentChange.nextMode
         : permissionSnapshot
           ? permissionSnapshot.permissionMode
-          : selectedSession?.permissionMode,
+          : selectedSession?.invitedAccess === "send" &&
+              selectedSession.sharingRole !== "owner" &&
+              selectedSession.sharingRole !== "admin"
+            ? selectedSession.invitedPermission
+            : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {
         const activeChange = selection.pending;
@@ -514,9 +547,10 @@ export function createChatPaneSessionActionCallbacks(params: {
     const access = readChatSessionActionAccess(snapshot, hasLocalRun, {
       session: selectedChatSessionRow(state),
       sessionAbortable: state.chatRunSessionAbortable === true,
+      runId: state.chatRunId,
     });
     // Offline Stop captures intent only. The pane retires runs on client
-    // replacement; replay checks the original client and current write access.
+    // replacement; replay checks the original client and current action access.
     if (
       snapshot.client &&
       hasLocalRun &&
@@ -538,6 +572,11 @@ export function createChatPaneSessionActionCallbacks(params: {
     return false;
   };
   return {
+    onQueueCopy: (id) =>
+      void mutateChatPendingInput(state, {
+        kind: "copy",
+        inputId: id.slice("pending-input:".length),
+      }),
     onAbort:
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined

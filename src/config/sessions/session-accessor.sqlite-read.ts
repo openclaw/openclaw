@@ -7,15 +7,12 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
   assertTransactionUsable,
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
-import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -31,7 +28,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import { readTranscriptExportInSlices } from "./session-accessor.sqlite-export-slices.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -49,10 +45,7 @@ import {
   readTranscriptContextVersionInTransaction,
   readTranscriptMutationStateInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import {
-  readTranscriptStatsBatchFromDatabase,
-  readTranscriptStatsFromDatabase,
-} from "./session-accessor.sqlite-transcript-stats.js";
+import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 import type {
@@ -61,13 +54,11 @@ import type {
 } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
-import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { assertTranscriptEventReadBudget } from "./session-transcript-read-bytes.js";
 import {
   captureSessionTranscriptQuestionAnswers,
   resolveSqliteSessionTranscriptReadFence,
-  runWithSessionTranscriptReadFence,
 } from "./session-transcript-read-fence.js";
 import {
   readTranscriptPayload,
@@ -162,197 +153,6 @@ export function readTranscriptIdentityByEventId(
 
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadTranscriptReadSnapshotSync(scope).events;
-}
-
-type TranscriptExportOptions = {
-  projection?: "reset-boundary";
-  /** Reduce each decoded event synchronously before retaining the snapshot. */
-  projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-  /** Worker-owned projection from the preceding export; null starts an incremental reader. */
-  previous?: {
-    events: TranscriptEvent[];
-    generation: string | null;
-    throughSeq: number;
-  } | null;
-};
-
-type TranscriptExportSnapshot = {
-  events: TranscriptEvent[];
-  stats: SessionTranscriptStats;
-  sessionKey: string | undefined;
-  generation?: string | null;
-  throughSeq?: number;
-  /**
-   * Rows after `afterSeq` through `throughSeq` that a sliced read still has to add, and the
-   * transcript context version this head was read at.
-   */
-  deferred?: { afterSeq?: number; throughSeq: number; version: SessionTranscriptContextVersion };
-};
-
-type TranscriptExportRequest = {
-  resolved: ResolvedTranscriptReadScope;
-  scope: SessionTranscriptReadScope;
-  options: TranscriptExportOptions;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
-type TranscriptExportRead = {
-  request: TranscriptExportRequest;
-  snapshot: TranscriptExportSnapshot;
-  throughSeq: number;
-  afterSeq?: number;
-};
-
-/**
- * Snapshot export payloads and their identity without opening the writable lifecycle, reading
- * the rows in bounded slices after the head. A deferred `batchHead` is reused while the
- * transcript context version still matches it.
- */
-export function readTranscriptExportSnapshotReadOnlySync(
-  scope: SessionTranscriptReadScope,
-  options: TranscriptExportOptions = {},
-  batchHead?: TranscriptExportSnapshot,
-) {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const request = { resolved, scope, options };
-  return readTranscriptExportInSlices({
-    ...options,
-    sessionId: resolved.sessionId,
-    batchHead,
-    transaction: (read) =>
-      withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          runSqliteReadSnapshotSync(database.db, () => read(database), {
-            operationLabel: "session transcript export snapshot",
-          }),
-        toDatabaseOptions(resolved),
-      ),
-    readHead: (database, slicing) =>
-      readTranscriptExportSnapshotsFromDatabase(database, [request], slicing)[0]!,
-  });
-}
-
-/**
- * Export metadata and only requested deltas within the caller's read transaction. With
- * `deferAboveBytes` on SQLite, a transcript whose recorded size exceeds it keeps its rows unread
- * and returns `deferred` for `readTranscriptExportSnapshotReadOnlySync` after that transaction.
- * PostgreSQL ignores it: the stalled checkpoint is a SQLite WAL problem, and PostgreSQL buffers
- * every query result, so unbounded slice queries would refetch the remaining rows.
- */
-export function readTranscriptExportSnapshotsFromDatabase(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  requests: readonly TranscriptExportRequest[],
-  { deferAboveBytes = Number.POSITIVE_INFINITY }: { deferAboveBytes?: number } = {},
-): Array<TranscriptExportSnapshot | "cold"> {
-  const exportStats = readTranscriptStatsBatchFromDatabase(
-    database,
-    requests.map(({ resolved }) => resolved.sessionId),
-    { includeGeneration: true },
-  );
-  const pending: TranscriptExportRead[] = [];
-  const snapshots = requests.map((request, index) =>
-    runWithSessionTranscriptReadFence(request.admission, () => {
-      const { resolved, scope, options } = request;
-      const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-      const { generation, cold, sessionKey, ...stats } = exportStats[index]!;
-      // Cached rows must still enter the existing archive restoration path.
-      if (cold) {
-        return "cold" as const;
-      }
-      const throughSeq = Math.min(
-        stats.eventCount === 0 ? -1 : stats.maxSeq,
-        fence ? fence.beforeRawSeq - 1 : Number.POSITIVE_INFINITY,
-      );
-      const previous =
-        generation !== null &&
-        options.previous?.generation === generation &&
-        options.previous.throughSeq <= throughSeq
-          ? options.previous
-          : undefined;
-      const snapshot: TranscriptExportSnapshot = {
-        events: [...(previous?.events ?? [])],
-        stats,
-        sessionKey: resolved.sessionKey ?? sessionKey ?? undefined,
-        ...(options.previous !== undefined ? { generation, throughSeq } : {}),
-      };
-      if (stats.eventCount > 0 && previous?.throughSeq !== throughSeq) {
-        assertTranscriptEventReadBudget(database, resolved.sessionId, {
-          beforeEventSeq: fence?.beforeRawSeq,
-          maxEventBytes: scope.maxEventBytes,
-        });
-        if (stats.sizeBytes > deferAboveBytes && !isPostgresSqlConnection(database.db)) {
-          const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
-          snapshot.deferred = { afterSeq: previous?.throughSeq, throughSeq, version };
-        } else {
-          pending.push({ request, snapshot, throughSeq, afterSeq: previous?.throughSeq });
-        }
-      }
-      return snapshot;
-    }),
-  );
-  for (const projection of [undefined, "reset-boundary"] as const) {
-    const reads = pending.filter(({ request }) => request.options.projection === projection);
-    for (let start = 0; start < reads.length;) {
-      let end = start;
-      let bytes = 0;
-      // PostgreSQL buffers results: pack by existing source sizes, with giant sessions alone.
-      while (
-        end < reads.length &&
-        end - start < 32 &&
-        (end === start || bytes + reads[end]!.snapshot.stats.sizeBytes <= 4 * 1024 * 1024)
-      ) {
-        bytes += reads[end]!.snapshot.stats.sizeBytes;
-        end += 1;
-      }
-      const batch = reads.slice(start, end);
-      const bySession = groupRecords(batch, (read) => read.request.resolved.sessionId);
-      const rows = iterateSqliteQuerySync(
-        database.db,
-        getSessionKysely(database.db)
-          .selectFrom("transcript_events")
-          .select([
-            "session_id",
-            "seq",
-            (projection === "reset-boundary"
-              ? transcriptEventResetNavigationSql(database.db)
-              : transcriptEventJsonSql(database.db)
-            ).as("event_json"),
-          ])
-          .where((eb) =>
-            eb.or(
-              batch.map(({ request, throughSeq, afterSeq }) =>
-                eb.and([
-                  eb("session_id", "=", request.resolved.sessionId),
-                  eb("seq", "<=", throughSeq),
-                  ...(afterSeq === undefined ? [] : [eb("seq", ">", afterSeq)]),
-                ]),
-              ),
-            ),
-          )
-          .orderBy("session_id", "asc")
-          .orderBy("seq", "asc"),
-      );
-      for (const row of rows) {
-        for (const read of bySession.get(row.session_id)!) {
-          if (
-            row.seq > read.throughSeq ||
-            (read.afterSeq !== undefined && row.seq <= read.afterSeq)
-          ) {
-            continue;
-          }
-          // Separate decoded objects preserve independent projections for repeated requests.
-          const event: TranscriptEvent = JSON.parse(row.event_json);
-          read.snapshot.events.push(
-            runWithSessionTranscriptReadFence(read.request.admission, () =>
-              read.request.options.projectEvent ? read.request.options.projectEvent(event) : event,
-            ),
-          );
-        }
-      }
-      start = end;
-    }
-  }
-  return snapshots;
 }
 
 /** Pair loaded bytes with the watermark that also fences opaque navigation edits. */

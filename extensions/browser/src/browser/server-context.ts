@@ -11,6 +11,7 @@ import {
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
@@ -110,6 +111,9 @@ function createProfileContext(
     openTab: rawTabOps.openTab,
   });
   const capabilities = getBrowserProfileCapabilities(profile);
+  // External CDP (remote or attachOnly) keeps a Playwright session open across requests.
+  const externallyManagedCdp =
+    capabilities.isRemote || (profile.driver === "openclaw" && profile.attachOnly);
 
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
@@ -135,7 +139,16 @@ function createProfileContext(
       }
       return await withLease(options?.signal, async (signal) => {
         // Explicit targets can come from history; lookup must not launch or restart a browser.
-        if (targetId !== undefined && !(await rawAvailability.isReachable(undefined, { signal }))) {
+        // A short probe can time out on a slow external CDP link while the open session still
+        // works, so only that already-open session may resolve the tab; never reconnect here.
+        if (
+          targetId !== undefined &&
+          !(await rawAvailability.isReachable(undefined, { signal })) &&
+          !(
+            externallyManagedCdp &&
+            getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(profile.cdpUrl)
+          )
+        ) {
           throw new BrowserProfileUnavailableError(
             `Browser profile "${profile.name}" is not running. Start the browser or open a new tab, then select a current target.`,
           );

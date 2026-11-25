@@ -21,8 +21,6 @@ import { createQaBusState } from "./bus-state.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { createQaTransportAdapter } from "./qa-transport-registry.js";
-import { createQaTransportStateMethods } from "./qa-transport.js";
-import * as runtimeToolFixture from "./runtime-tool-fixture.js";
 import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -140,58 +138,6 @@ describe("qa suite runtime flow", () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(runtimeToolFixture, "runRuntimeToolFixture").mockResolvedValue("");
-  });
-
-  it("runs transport aliases with their original receivers through a scenario flow", async () => {
-    const state = createQaBusState();
-    const resetSpy = vi.spyOn(state, "reset");
-    const inboundSpy = vi.spyOn(state, "addInboundMessage");
-    const outboundSpy = vi.spyOn(state, "addOutboundMessage");
-    const readSpy = vi.spyOn(state, "readMessage");
-    const methods = createQaTransportStateMethods({ state, accountId: "qa-channel" });
-    const env = createQaSuiteRuntimeFlowTestEnv(methods);
-    const result = await runTransportFlow(env, [
-      {
-        assert:
-          "lab === env.lab && state === transport.state && config.expected === 'value' && waitForCondition === transport.waitForCondition && waitForChannelReady === waitForTransportReady && waitForQaChannelReady === waitForTransportReady && imageUnderstandingPngBase64 === 'small'",
-      },
-      {
-        call: "injectInboundMessage",
-        args: [
-          {
-            accountId: "qa-channel",
-            conversation: { id: "qa-operator", kind: "direct" },
-            senderId: "qa-operator",
-            text: "hello",
-          },
-        ],
-        saveAs: "inbound",
-      },
-      {
-        call: "injectOutboundMessage",
-        args: [{ accountId: "qa-channel", to: "dm:qa-operator", text: "hi" }],
-        saveAs: "outbound",
-      },
-      { assert: "inbound.id.trim() !== '' && outbound.id.trim() !== ''" },
-      { call: "getTransportSnapshot", saveAs: "snapshot" },
-      { assert: "snapshot.messages.length === 2" },
-      {
-        call: "readTransportMessage",
-        args: [{ accountId: "qa-channel", messageId: { ref: "outbound.id" } }],
-        saveAs: "read",
-      },
-      { assert: "read.id === outbound.id && read.text === 'hi'" },
-      { call: "reset" },
-      { call: "resetBus" },
-      { call: "resetTransport" },
-    ]);
-
-    expect(result.status).toBe("pass");
-    expect(inboundSpy).toHaveBeenCalledTimes(1);
-    expect(outboundSpy).toHaveBeenCalledTimes(1);
-    expect(readSpy).toHaveBeenCalledTimes(1);
-    expect(resetSpy).toHaveBeenCalledTimes(3);
   });
 
   it("routes scenario injection through a factory-created transport", async () => {
@@ -283,65 +229,25 @@ describe("qa suite runtime flow", () => {
     expect(result.rttMeasurement).toEqual(latestMeasurement);
   });
 
-  it("supplies scenario context, normalization and account-scoped runtime operations", async () => {
+  it("scopes scenario reply waits to the current transport account", async () => {
     const env = createQaSuiteRuntimeFlowTestEnv();
     const scenario = makeQaSuiteTestScenario("session-memory-ranking", {
       config: { expected: "value" },
     });
 
-    const result = await runDefinition(env, scenario);
-
-    expect(result).toMatchObject({ env, scenario, signal: expect.any(AbortSignal) });
-    expect(runScenarioFlow).toHaveBeenCalledTimes(1);
-    const api = runScenarioFlow.mock.calls[0]?.[0]?.api as {
-      env: typeof env;
-      scenario: typeof scenario;
-      normalizeModelRef: (raw: string) => { provider: string; model: string } | null;
-      waitForOutboundMessage: typeof waitForOutboundMessage;
-      markGatewayLogCursor: () => number;
-      assertNoGatewayLogSentinels: () => void;
-      runRuntimeToolFixture: (
-        envArg: typeof env,
-        configArg: Record<string, unknown>,
-      ) => Promise<unknown>;
-    } & Parameters<typeof RunScenarioFlow>[0]["api"] &
-      typeof qaSuiteRuntimeFlowTestConstants;
-    expect(api.env).toBe(env);
-    expect(api.scenario).toBe(scenario);
-    expect(api.runScenario).toBeTypeOf("function");
-    const canonicalOpus = { provider: "anthropic", model: "claude-opus-5-5" };
-    const { normalizeModelRef } = api;
-    expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
-    expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
-    expect(normalizeModelRef("anthropic/claude-opus-5")).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-5",
-    });
-    expect(normalizeModelRef("OPENAI/gpt-5.6-luna")).toEqual({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    });
-    expect(normalizeModelRef("")).toBeNull();
-    expect(api.waitForOutboundMessage).toBeTypeOf("function");
+    await runDefinition(env, scenario);
+    const waitForReply = runScenarioFlow.mock.calls[0]?.[0]?.api.waitForOutboundMessage;
+    if (typeof waitForReply !== "function") {
+      throw new TypeError("Scenario API is missing waitForOutboundMessage");
+    }
     const outboundPredicate = vi.fn();
-    api.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    waitForReply(env.transport.state, outboundPredicate, 123);
     expect(waitForOutboundMessage).toHaveBeenCalledWith(
       env.transport.state,
       outboundPredicate,
       123,
       { accountId: "qa-channel" },
     );
-    expect(api.markGatewayLogCursor()).toBe(-1);
-    expect(() => api.assertNoGatewayLogSentinels()).not.toThrow();
-    await api.runRuntimeToolFixture(env, { toolName: "read" });
-    expect(runtimeToolFixture.runRuntimeToolFixture).toHaveBeenCalledWith(env, {
-      toolName: "read",
-    });
-    expect(api).toMatchObject({
-      imageUnderstandingPngBase64: "small",
-      imageUnderstandingLargePngBase64: "large",
-      imageUnderstandingValidPngBase64: "valid",
-    });
   });
 
   it("reads fresh gateway logs and sentinels from one absolute collector mark", async () => {

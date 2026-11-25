@@ -27,17 +27,17 @@ export function createUsagePartitionWrites(
   }));
 }
 
-export function disposableUsageLock(
+export async function disposableUsageLock(
   ...args: Parameters<typeof prepareSessionCostUsageRefreshLock>
 ) {
-  const lock = prepareSessionCostUsageRefreshLock(...args);
+  const lock = await prepareSessionCostUsageRefreshLock(...args);
   return Object.assign(lock, { [Symbol.asyncDispose]: lock.release });
 }
 
 export async function acquireUsageLock(
   ...args: Parameters<typeof prepareSessionCostUsageRefreshLock>
 ) {
-  const lock = disposableUsageLock(...args);
+  const lock = await disposableUsageLock(...args);
   try {
     expect(await lock.acquire()).toBe(true);
     return lock;

@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS session_members (
   identity_id TEXT NOT NULL,
   added_by TEXT NOT NULL,
   added_at INTEGER NOT NULL,
+  access TEXT CHECK (access IS NULL OR access IN ('read', 'suggest', 'send')),
   PRIMARY KEY (session_key, identity_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
@@ -639,6 +640,13 @@ CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
 CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
   ON context_engine_turn_outbox(engine_id, created_at);
 
+CREATE TABLE IF NOT EXISTS agent_tool_usage (
+  tool_id TEXT PRIMARY KEY NOT NULL,
+  score REAL NOT NULL CHECK (score >= 0),
+  updated_at INTEGER NOT NULL
+) STRICT;
+-- END AGENT TOOL USAGE
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -908,6 +916,8 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
   state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
   accepted_at INTEGER NOT NULL,
   consumed_event_id TEXT,
+  end_cause TEXT,
+  origin_source_json TEXT,
   UNIQUE (session_id, idempotency_key),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE

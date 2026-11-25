@@ -41,6 +41,8 @@ export type PostgresSchemaFragment = {
 type PostgresSchemaDefinition = {
   postgres: string;
   postgresFragments?: readonly PostgresSchemaFragment[];
+  /** Exact alternate eager DDL for a predecessor built with and without one column. */
+  postgresWithoutOptionalColumn?: { table: string; column: string; sql: string };
   /** Historical schemas default to the original vector decoder. */
   postgresVectorDecoderVersion?: 1 | 2;
   /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
@@ -56,6 +58,8 @@ export type StoreSchema = {
   /** Consecutive destinations carry generated DDL for both sides of the migration. */
   postgresMigrations?: readonly {
     version: number;
+    /** Explicit lower floor for a step safe for every reader at or above it; absent is strict. */
+    minReader?: number;
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;
@@ -63,6 +67,7 @@ export type StoreSchema = {
     backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  postgresWithoutOptionalColumn?: PostgresSchemaDefinition["postgresWithoutOptionalColumn"];
   /** Historical schemas default to the original vector decoder. */
   postgresVectorDecoderVersion?: 1 | 2;
   /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */

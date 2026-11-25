@@ -4,6 +4,7 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { collectConfiguredCatalogModels } from "./configured-model-entries.js";
 import { projectClaudeCliNativeCatalog } from "./model-catalog-cli-wildcard.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type {
@@ -38,12 +39,14 @@ export function createPreparedModelCatalogProjection(params: {
     let sourceCatalog = catalog;
     if (acquiredProviders) {
       // Retained siblings cannot hide captured rows before this provider is acquired.
-      // Successful empty discovery still owns its inventory.
+      // Successful empty discovery still owns its chat inventory. Typed-only rows come
+      // from the manifest, never from chat discovery, so acquisition cannot replace them.
       const unacquired = (entries: typeof catalog.entries) =>
         entries.filter(
           (entry) =>
             !entry.nativeRuntime &&
-            !acquiredProviders.has(params.normalizeProvider(entry.provider)),
+            (entry.inference?.chat === false ||
+              !acquiredProviders.has(params.normalizeProvider(entry.provider))),
         );
       sourceCatalog = {
         ...catalog,
@@ -69,6 +72,11 @@ export function createPreparedModelCatalogProjection(params: {
       sourceCatalog,
       !(getPreparedModelFullCatalogAuth(catalog)?.credentials ?? params.agentFacts.credentials)
         .anthropic,
+      () =>
+        loadManifestModelCatalog({
+          config: params.agentFacts.input.config,
+          metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
+        }),
     );
     const projected = materializePreparedModelCatalog(
       nativeCatalog,

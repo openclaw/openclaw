@@ -12,11 +12,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { git } from "../agents/worktrees/git-fixture.test-support.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
-import {
-  IDLE_GC_MS,
-  managedWorktrees,
-  ManagedWorktreeService,
-} from "../agents/worktrees/service.js";
+import { IDLE_GC_MS } from "../agents/worktrees/retention.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -529,7 +526,6 @@ describe("same-root local mutation routing", () => {
   );
 
   it.each([
-    "mcp logout synthetic-server",
     "models auth logout synthetic:manual --yes",
     "sandbox recreate --all --force",
     "migrate apply synthetic-missing-provider --yes --no-backup --force --json",

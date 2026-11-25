@@ -5,6 +5,7 @@ import { validateChatMessageGetParams } from "../../../packages/gateway-protocol
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
+import { isPendingInputVisibleToProfile } from "../../config/sessions/session-pending-input-audience.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
@@ -99,7 +100,10 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           if (!(await withCurrentSession(() => true))) {
             return;
           }
-          if (!pending) {
+          if (
+            !pending ||
+            !isPendingInputVisibleToProfile(pending, client?.authenticatedUserProfile?.profileId)
+          ) {
             await withCurrentSession(respondNotFound);
             return;
           }
@@ -124,7 +128,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
             ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
                 allowPluginNormalization: false,
-              }).provider
+              })?.provider
             : undefined,
           sessionAgentId,
           sessionId,

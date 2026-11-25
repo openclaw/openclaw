@@ -1,2 +1,0 @@
-# Snapshot the expected realpath before installing the counted spy.
-1

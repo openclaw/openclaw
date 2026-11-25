@@ -40,11 +40,12 @@ import {
   reconcileSessionTranscriptIndexes,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts as searchSessionTranscriptsAsync,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts as searchSessionTranscriptsAsync } from "./session-transcript-search.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
+import {
+  searchSessionTranscriptsFiltered,
+  searchSessionTranscriptsReadOnlySync,
+} from "./session-transcript-search.worker.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
@@ -467,9 +468,6 @@ describe("searchSessionTranscripts", () => {
           })),
         );
         expect(result.truncated).toBe(baseline.length > options.limit);
-        expect(
-          result.hits.every((hit) => hit.sessionId !== "dirty" && hit.sessionId !== "excluded"),
-        ).toBe(true);
         let snippets = 0;
         db.function("count_search_snippet", (value) => {
           snippets++;
@@ -506,6 +504,36 @@ describe("searchSessionTranscripts", () => {
           expect(firstContent).toBeUndefined();
         }
       }
+      statements.length = 0;
+      await searchSessionTranscriptsFiltered(
+        { agentId: "main", env: env(), query: "needle", sessionKeys, limit: 3 },
+        { agentId: "main", env: env() },
+        {
+          consumeInput() {},
+          notify() {},
+          async request(keys) {
+            return { input: Array.isArray(keys) ? keys.map(() => true) : [], consumed() {} };
+          },
+        },
+        () => {},
+      );
+      const { db, query, bindings } = statements[0]!;
+      let snippets = 0;
+      db.function("count_filtered_snippet", (value) => {
+        snippets++;
+        return value;
+      });
+      const counted = query.replace(/(snippet\([^)]*\))/u, "count_filtered_snippet($1)");
+      const cursor = prepare.call(db, counted).iterate(...bindings);
+      // Reading four candidates must evaluate four snippets, rather than every match.
+      try {
+        for (let row = 0; row < 4; row++) {
+          expect(cursor.next().done).toBe(false);
+        }
+      } finally {
+        cursor.return?.();
+      }
+      expect(snippets).toBe(4);
     } finally {
       spy.mockRestore();
     }

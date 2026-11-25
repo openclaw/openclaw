@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import { redactSensitiveText } from "../../../logging/redact.js";
 
 export async function createExternalGates() {
   type Gate = {
@@ -78,4 +79,56 @@ export async function createExternalGates() {
       await closed;
     },
   };
+}
+
+type ExecutorWaitOutcome = {
+  status: string;
+  endedAt?: number;
+  error?: string;
+  stopReason?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
+};
+
+export function isTerminalExecutorOutcome({
+  status,
+  endedAt,
+}: Pick<ExecutorWaitOutcome, "status" | "endedAt">): boolean {
+  // Non-timeout terminal observations need not include timestamps. Only use the
+  // end time for timeout, where a wait deadline is distinct from a stopped run.
+  return (
+    status === "ok" ||
+    status === "error" ||
+    status === "aborted" ||
+    (status === "timeout" && endedAt !== undefined)
+  );
+}
+
+export async function observeHeldExecutor(options: {
+  isHeldAndLive: () => boolean;
+  waitForRun: () => Promise<ExecutorWaitOutcome>;
+}): Promise<true | undefined> {
+  if (options.isHeldAndLive()) {
+    return true;
+  }
+  const outcome = await options.waitForRun();
+  if (isTerminalExecutorOutcome(outcome)) {
+    const details = [`status=${outcome.status}`];
+    if (outcome.stopReason) {
+      details.push(`stopReason=${outcome.stopReason}`);
+    }
+    if (outcome.timeoutPhase) {
+      details.push(`timeoutPhase=${outcome.timeoutPhase}`);
+    }
+    if (outcome.providerStarted !== undefined) {
+      details.push(`providerStarted=${outcome.providerStarted}`);
+    }
+    const reason = outcome.error ? `: ${outcome.error}` : "";
+    throw new Error(
+      redactSensitiveText(
+        `Foreign child executor ended before reaching the held gate: ${details.join(", ")}${reason}`,
+      ),
+    );
+  }
+  return options.isHeldAndLive() ? true : undefined;
 }

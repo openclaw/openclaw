@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawPluginNodeInvokePolicy } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BOUNDED_LINUX_PATH_BYTES, usesBoundedReplies } from "./bounded-replies.js";
 import { evaluateFilePolicy, snapshotNodeFileReadPolicy } from "./policy.js";
 import { readWorkspaceMemoryRequest } from "./workspace-memory-request.js";
 import { readWorkspaceSkillsRequest } from "./workspace-skills-request.js";
@@ -29,6 +30,20 @@ export async function handleWorkspaceWorkerPolicy(
     });
     if (!configured) {
       throw new Error("Node workspace is not configured");
+    }
+    const bounded = usesBoundedReplies(
+      ctx.config.plugins?.entries?.["file-transfer"]?.config ?? ctx.pluginConfig,
+      ctx.nodeId,
+    );
+    if (
+      bounded &&
+      request.paths.some((access) => Buffer.byteLength(access.path) > BOUNDED_LINUX_PATH_BYTES)
+    ) {
+      return {
+        ok: false,
+        code: "INVALID_PARAMS",
+        message: "workspace worker path exceeds the bounded Linux path limit",
+      };
     }
     if (
       kind === "skills" &&

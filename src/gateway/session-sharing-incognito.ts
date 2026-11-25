@@ -1,5 +1,7 @@
+import { SessionSharingAuthorityUnknownError } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { sessionMemberAccessFacts } from "../config/sessions/session-member-access-facts.js";
 import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 
 type IncognitoSessionSharingTarget = {
@@ -11,7 +13,12 @@ type IncognitoSessionSharingTarget = {
 
 export class SessionMutationFactsUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
-    super("Session access facts are unavailable; retry after session storage is ready.", options);
+    super(
+      options?.cause instanceof SessionSharingAuthorityUnknownError
+        ? "Session access facts are unavailable after an uncertain write; restart the Gateway to restore this session."
+        : "Session access facts are unavailable; retry after session storage is ready.",
+      options,
+    );
     this.name = "SessionMutationFactsUnavailableError";
   }
 }
@@ -54,7 +61,12 @@ export function captureSessionSharingMemoryFacts(
       if (!allowMissing) {
         throw new SessionMutationFactsUnavailableError();
       }
-      return { target: null, members: [], membership: new Set<string>() };
+      return {
+        target: null,
+        members: [],
+        membership: new Set<string>(),
+        memberAccess: sessionMemberAccessFacts([]),
+      };
     }
     return {
       sourcePath: path,
@@ -69,6 +81,7 @@ export function captureSessionSharingMemoryFacts(
         entry: current.entry,
       },
       members: current.members,
+      memberAccess: sessionMemberAccessFacts(current.members),
       membership: new Set(current.members.map((member) => member.identityId)),
     };
   };

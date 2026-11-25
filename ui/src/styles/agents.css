@@ -12,7 +12,12 @@
   padding-block-start: var(--space-5);
 }
 
+/* One toolbar row: the quiet refresh icon, the bordered action and the menu
+   trigger share the settings control height (settings-controls.css) and the
+   field radius. */
 .agents-toolbar-actions {
+  --icon-button-radius: var(--field-radius);
+
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -26,8 +31,8 @@
 }
 
 .btn.agents-page-menu__trigger {
-  width: 33px;
-  height: 33px;
+  width: var(--settings-control-height);
+  height: var(--settings-control-height);
   padding: 0;
 }
 
@@ -67,51 +72,24 @@
   border-color: var(--accent);
 }
 
-/* Short values and pickers share one column so the panel's controls start on the
-   same edge. Long model ids widen a picker rather than truncating. */
-.agent-overview {
-  --agent-overview-control-width: 340px;
-}
-
-.agent-overview .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
-  width: var(--agent-overview-control-width);
-}
-
-.agent-overview .settings-row__control > .model-picker {
-  min-width: min(var(--agent-overview-control-width), 100%);
-}
-
-.agent-overview .settings-row__control > .agent-fallbacks {
-  width: fit-content;
-  min-width: min(var(--agent-overview-control-width), 100%);
-  max-width: 100%;
-}
-
-/* Selects and chips read at the row's value size and stay on one line. Only the real
-   text inputs keep the touch floor that stops iOS zooming on focus. */
-.agent-overview .settings-row__control .settings-select .picker-select__trigger {
+.model-settings__fallback-control .multi-select__input::placeholder {
   font-size: var(--field-font-size);
 }
 
-.agent-overview .agent-fallbacks .multi-select__input::placeholder {
-  font-size: var(--field-font-size);
-}
-
-.agent-overview .agent-fallbacks .multi-select__chip {
+.model-settings__fallback-control .multi-select__chip {
   min-width: 0;
   padding-block: 1px;
   font-size: var(--field-font-size);
 }
 
-.agent-overview .agent-fallbacks .multi-select__chip-icon {
+.model-settings__fallback-control .multi-select__chip-icon {
   width: 20px;
   height: 20px;
   flex-basis: 20px;
 }
 
 /* The add input takes its line only while focused, so a filled chain ends at its last chip. */
-.agent-overview
-  .agent-fallbacks
+.model-settings__fallback-control
   .multi-select:has(.multi-select__chip):not(:focus-within)
   .multi-select__input {
   position: absolute;
@@ -125,21 +103,21 @@
 /* Touch has no title tooltip and the list leaves out chosen models, so tapping the field
    shows the chain's full ids until focus leaves it. */
 @media (pointer: coarse), (max-width: 640px) {
-  .agent-overview .agent-fallbacks .multi-select__chip {
+  .model-settings__fallback-control .multi-select__chip {
     padding-inline: var(--space-2);
   }
 
-  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip {
+  .model-settings__fallback-control .multi-select:focus-within .multi-select__chip {
     border-radius: var(--radius-md);
   }
 
-  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip-label {
+  .model-settings__fallback-control .multi-select:focus-within .multi-select__chip-label {
     overflow-wrap: anywhere;
     white-space: normal;
   }
 
   /* The mark stays chip-sized; its touch target reaches past it, up to the next chip. */
-  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove {
+  .model-settings__fallback-control .multi-select__chip .chip-remove {
     position: relative;
     width: 24px;
     min-width: 0;
@@ -147,7 +125,7 @@
     min-height: 0;
   }
 
-  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove::after {
+  .model-settings__fallback-control .multi-select__chip .chip-remove::after {
     position: absolute;
     inset: -6px -10px;
     content: "";
@@ -164,11 +142,6 @@
     width: auto;
     min-width: 0;
   }
-
-  /* The list wraps long ids inside the select's own width. */
-  .agent-overview .picker-select__menu.oc-overlay {
-    max-width: anchor-size(width);
-  }
 }
 
 .agent-overview .settings-row__control input.settings-input:not(.picker-select__search) {
@@ -178,6 +151,10 @@
 .agent-overview__workspace {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
+}
+
+.agent-channel-read-error {
+  overflow-wrap: anywhere;
 }
 
 .agent-config-error {
@@ -330,11 +307,14 @@
   transform: translateY(-50%);
 }
 
-@media (max-width: 640px) {
-  .agent-overview .settings-row__control > .agent-fallbacks {
-    width: 100%;
-  }
+/* Nested 3px inside the 32px field, so its box and radius are the field's minus that inset. */
+.agent-identity-editor__emoji-control .agent-emoji-picker__trigger {
+  width: 26px;
+  height: 26px;
+  border-radius: calc(var(--field-radius) - 3px);
+}
 
+@media (max-width: 640px) {
   /* The name and emoji stack beside the avatar, so the name keeps its full width. */
   .agent-identity-editor__fields {
     grid-template-columns: minmax(0, 1fr);
@@ -385,6 +365,11 @@
   gap: 12px;
   flex-wrap: wrap;
   justify-content: space-between;
+}
+
+.agent-files-workspace,
+.agent-file-sub {
+  overflow-wrap: anywhere;
 }
 
 .agent-file-sub {
@@ -931,6 +916,29 @@
   }
 }
 
+/* Keep the switch with the skill it changes, not below its status and requirements. */
+.agent-skill-row {
+  display: block;
+}
+
+.agent-skill-row__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  cursor: var(--cursor-action);
+}
+
+.agent-skill-row__heading .settings-row__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-skill-row__heading:has(input:disabled) {
+  cursor: not-allowed;
+}
+
 .agent-skills-groups {
   display: grid;
   gap: 16px;
@@ -985,7 +993,7 @@
 }
 
 .skills-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @container (min-width: 900px) {
@@ -1081,20 +1089,15 @@
     min-width: 0;
   }
 
-  .btn.agents-page-menu__trigger {
-    width: 44px;
-    height: 44px;
-  }
-
   /* With the menu in the floating header, no row is left above the tabs. */
   .page-header-actions:has(> .agents-toolbar-actions):not(:has(.agents-page-menu)) {
     display: none;
   }
 }
 
-/* The phone menu carries Refresh even when portaled; the tooltip uses display: contents. */
+/* The phone menu carries Refresh even when portaled. */
 @media (max-width: 640px) {
-  .agents-toolbar-actions > openclaw-tooltip > .agents-refresh-btn {
+  .agents-toolbar-actions > .agents-refresh-btn {
     display: none;
   }
 }

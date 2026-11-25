@@ -42,7 +42,9 @@ const enChatMessageMetadata = {
       actions: "Message actions",
       selectionActions: "Selection actions",
       askInSideChat: "Ask in side chat",
-      addToChat: "Add to message",
+      askInNewSession: "Ask in new session",
+      newSessionOption: "New session",
+      addToChat: "Add to chat",
       annotationEditor: "Comment",
       annotationComment: "Add an optional comment…",
       saveAnnotation: "Save comment",
@@ -65,6 +67,7 @@ const enChatMessageMetadata = {
       tooLargeToDisplay: en.chat.messages.tooLargeToDisplay,
       unknownDate: "Unknown date",
       usageUnavailable: "Token usage and cost unavailable",
+      turnDuration: "Worked for {duration}",
       unattributedSender: en.chat.messages.unattributedSender,
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
@@ -113,9 +116,6 @@ const enChatMessageMetadata = {
       claudeCliTaskNotification: {
         label: "System · background task",
       },
-      pluginSteering: {
-        label: "{plugin} guidance",
-      },
     },
   },
 } satisfies TranslationMap;
@@ -129,7 +129,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
       gatewayRestarted,
       cliHarnessContext,
       claudeCliTaskNotification,
-      pluginSteering,
       ...labels
     } = enChatMessageMetadata.chat.systemNotice;
     Object.assign(en.chat.systemNotice, labels);
@@ -138,7 +137,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
     Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
     Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
     Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
-    Object.assign(en.chat.systemNotice.pluginSteering, pluginSteering);
   },
   { catalog: enChatMessageMetadata },
 );

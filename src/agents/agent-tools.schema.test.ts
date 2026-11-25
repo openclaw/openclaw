@@ -1,8 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
-import { assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createShowWidgetTool } from "../canvas/widget-tool.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -15,6 +19,7 @@ import {
   normalizeFileToolPathParam,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import {
@@ -25,6 +30,7 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const objectSchema = (properties: Record<string, TSchema>) => ({ type: "object", properties });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function runToolCall(
   tool: AnyAgentTool,
@@ -282,7 +288,6 @@ describe("finalized tool parameter schemas", () => {
     const tool = wrapToolWithBeforeToolCallHook(normalized, {
       agentId: "main",
       sessionKey: "e2e-null-args",
-      loopDetection: { enabled: true },
     });
     const { messages, events, streamCalls } = await runToolCall(
       tool,
@@ -312,6 +317,24 @@ describe("finalized tool parameter schemas", () => {
       isError: false,
     });
     expect(JSON.stringify(messages)).not.toContain("Validation failed for tool");
+  });
+
+  it("runs read optional: false through the agent loop as a required read", async () => {
+    const workspaceDir = tempDirs.make("openclaw-read-optional-");
+    await fs.writeFile(path.join(workspaceDir, "SKILL.md"), "present");
+    const read = createOpenClawReadTool(createReadTool(workspaceDir));
+    const resultFor = async (file: string) =>
+      (await runToolCall(read, { path: file, optional: false }, file)).messages.find(
+        (message) => message.role === "toolResult",
+      );
+
+    expect(await resultFor("SKILL.md")).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: "present" }],
+    });
+    const missing = await resultFor("missing.md");
+    expect(missing).toMatchObject({ isError: true });
+    expect(JSON.stringify(missing)).toContain("File not found");
   });
 });
 

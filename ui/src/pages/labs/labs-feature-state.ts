@@ -1,8 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-/** What a lab row writes at its gate. Most gates are booleans; some are modes. */
-type LabFeatureValue = boolean | string;
-type LabFeatureResetScope = "gate" | "parent" | null;
+type LabFeatureResetScope = "gate" | null;
 
 export type LabFeature = {
   id: string;
@@ -10,29 +8,13 @@ export type LabFeature = {
   description: () => string;
   /** Leaf whose value decides whether the row reads as on. */
   configPath: readonly [string, ...string[]];
-  /** Explicit writes preserve gates whose on/off values are modes, not booleans. */
-  onValue: LabFeatureValue;
-  offValue: LabFeatureValue;
-  /** Include broader enabled modes so the toggle never narrows an existing choice. */
-  activeValues: readonly LabFeatureValue[];
-  /** Runtime-owned enablement from the parent, including boolean shorthand. */
-  readEnabled: ((raw: unknown) => boolean) | null;
-  /** Sibling writes pin the recommended variant rather than a bare enable's defaults. */
-  enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
   /** Reset the parent when its presence changes defaults; null retains required gates. */
   resetScope: LabFeatureResetScope;
-  /** Plugin whose own settings page owns this lab's options; Labs links there. */
-  settingsPluginId?: string;
 };
 
 export type LabFeatureDefinition = Omit<LabFeature, "title" | "description">;
 
 export const BOOLEAN_GATE = {
-  onValue: true,
-  offValue: false,
-  activeValues: [true],
-  readEnabled: null,
-  enableAlso: null,
   resetScope: "gate",
 } as const;
 
@@ -49,19 +31,14 @@ function recordAtPath(config: Record<string, unknown>, path: readonly string[]):
 
 function readEnabledFromParent(feature: LabFeatureDefinition, parent: unknown): boolean {
   const key = feature.configPath.at(-1);
-  if (feature.readEnabled) {
-    return feature.readEnabled(parent);
-  }
-  // Feature gates can accept a boolean or mode shorthand as well as the object
-  // form. A registry path ending in `enabled` must reflect every active shape.
-  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
-    return feature.activeValues.includes(parent);
+  if (key === "enabled" && typeof parent === "boolean") {
+    return parent;
   }
   if (!isRecord(parent) || !key) {
     return false;
   }
   const value = parent[key];
-  return feature.activeValues.some((active) => active === value);
+  return value === true;
 }
 
 export function labFeatureOverridePath(
@@ -73,9 +50,6 @@ export function labFeatureOverridePath(
   const parent = recordAtPath(config, parentPath);
   if (!key) {
     return null;
-  }
-  if (feature.resetScope === "parent") {
-    return parent === undefined ? null : parentPath;
   }
   // Boolean/string shorthands own the parent node rather than an `enabled`
   // child. Resetting the child would replace the shorthand with an empty object.

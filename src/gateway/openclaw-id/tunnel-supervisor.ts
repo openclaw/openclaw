@@ -8,12 +8,15 @@
 // binding is installed or rebuilt.
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
 import os from "node:os";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { canAccess } from "../../infra/path-existence.js";
+import type { BoundKeyRefusal } from "./tunnel-child/keyfile.js";
 import {
   parseTunnelToGatewayMessage,
+  TUNNEL_EXIT_KEY_MISMATCH,
+  TUNNEL_EXIT_KEY_MISSING,
   TUNNEL_EXIT_KEY_REFUSED,
   TUNNEL_EXIT_UNAVAILABLE,
   type GatewayToTunnelMessage,
@@ -79,7 +82,9 @@ export type TunnelSupervisorStatus =
       lastExit: string;
     }
   /** `retryInMs` is set while the supervisor waits to probe the transport again. */
-  | { state: "unavailable"; reason: string; retryInMs?: number };
+  | { state: "unavailable"; reason: string; retryInMs?: number }
+  /** No file holds the endpoint key the claw is bound to. Not retried. */
+  | { state: "key_refused"; reason: BoundKeyRefusal };
 
 /** How to launch the child: an entry module and the Node arguments that run it. */
 export type TunnelChildLaunch = { entry: URL; execArgv: string[] };
@@ -100,6 +105,7 @@ export function createTunnelSupervisor(params: {
   const tuning = { ...DEFAULT_TUNNEL_SUPERVISOR_TUNING, ...params.tuning };
   let status: TunnelSupervisorStatus = { state: "stopped" };
   let child: ChildProcess | undefined;
+  let launching: Promise<void> | undefined;
   let wanted = false;
   let failures = 0;
   let restarts = 0;
@@ -137,9 +143,13 @@ export function createTunnelSupervisor(params: {
   };
 
   // Forks one child and wires IPC, logs, health and exit handling.
-  const launch = () => {
+  const launchChild = async () => {
     const entryPath = fileURLToPath(params.launch.entry);
-    if (!existsSync(entryPath)) {
+    const exists = await canAccess(entryPath);
+    if (!wanted) {
+      return;
+    }
+    if (!exists) {
       wanted = false;
       setStatus({
         state: "unavailable",
@@ -234,7 +244,7 @@ export function createTunnelSupervisor(params: {
         }
         return;
       }
-      if (status.state === "running") {
+      if (message.type === "state" && status.state === "running") {
         setStatus({
           ...status,
           relayOnline: message.relayOnline,
@@ -273,6 +283,15 @@ export function createTunnelSupervisor(params: {
         retryTimer.unref();
         return;
       }
+      if (code === TUNNEL_EXIT_KEY_MISSING || code === TUNNEL_EXIT_KEY_MISMATCH) {
+        wanted = false;
+        const reason = code === TUNNEL_EXIT_KEY_MISSING ? "keys_missing" : "key_mismatch";
+        setStatus({ state: "key_refused", reason });
+        params.log.warn(
+          `openclaw-id: endpoint key refused (${reason}); remote access is off, the Gateway keeps running. Restore the original key file, then restart the Gateway`,
+        );
+        return;
+      }
       if (code === TUNNEL_EXIT_KEY_REFUSED) {
         wanted = false;
         setStatus({ state: "unavailable", reason: "endpoint key file is unsafe or corrupt" });
@@ -304,6 +323,13 @@ export function createTunnelSupervisor(params: {
     send(proc, params.startMessage());
   };
 
+  const launch = () => {
+    launching = launchChild().catch((error: unknown) => {
+      wanted = false;
+      setStatus({ state: "unavailable", reason: String(error) });
+    });
+  };
+
   return {
     /** Starts the child if it is not already running. */
     start(): void {
@@ -328,6 +354,7 @@ export function createTunnelSupervisor(params: {
         clearTimeout(retryTimer);
         retryTimer = undefined;
       }
+      await launching;
       const proc = child;
       if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
         setStatus({ state: "stopped" });

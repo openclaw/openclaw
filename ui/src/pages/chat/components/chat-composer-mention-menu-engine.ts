@@ -6,6 +6,7 @@ import {
   resolveGatewayErrorDetailCode,
 } from "../../../api/gateway-connect-errors.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import {
   findMentionTarget,
   type HumanMentionAccess,
@@ -25,6 +26,7 @@ type MentionEngineOwner = {
   timer: ReturnType<typeof setTimeout> | undefined;
   setState: StoreSetter<MentionMenuState>;
   selectedAvatars: Map<string, string>;
+  selectedInviteOptions: Map<string, NonNullable<MentionPerson["inviteAccessOptions"]>>;
   cancelSearch: () => void;
   update: (draft: MentionMenuState, input: MentionInput, intent?: MentionIntent) => void;
   close: (draft: MentionMenuState) => void;
@@ -225,6 +227,15 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
       }),
       {
         profileId: person.profileId,
+        ...(owner.directory?.inviteAccessAvailable && person.inviteAccessOptions?.length
+          ? {
+              access:
+                host
+                  .getMentions()
+                  .find((mention) => mention.profileId === person.profileId && mention.access)
+                  ?.access ?? ("read" as const),
+            }
+          : {}),
         start: target.start + prefix.length,
         end: target.start + prefix.length + label.length,
       },
@@ -241,6 +252,11 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
     } else {
       owner.selectedAvatars.delete(person.profileId);
     }
+    if (owner.directory?.inviteAccessAvailable && person.inviteAccessOptions?.length) {
+      owner.selectedInviteOptions.set(person.profileId, person.inviteAccessOptions);
+    } else {
+      owner.selectedInviteOptions.delete(person.profileId);
+    }
     host.commitDraft(next, mentions);
     const caret = target.start + replacement.length;
     owner.close(draft);
@@ -250,8 +266,8 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
         return;
       }
       const currentTextarea = host.getTextarea();
-      currentTextarea?.focus({ preventScroll: true });
-      currentTextarea?.setSelectionRange(caret, caret);
+      focusComposerInput(currentTextarea, { preventScroll: true });
+      selectComposerInput(currentTextarea, caret, caret);
     });
     return true;
   }

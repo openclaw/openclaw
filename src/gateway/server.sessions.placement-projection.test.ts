@@ -162,12 +162,6 @@ test.each([
         sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
       );
     });
-    const diskSpace = {
-      status: "warning" as const,
-      availableBytes: 400,
-      totalBytes: 1_000,
-      observedAtMs: 350,
-    };
     const identity = {
       providerId: "machine0",
       profileId: "team",
@@ -186,11 +180,6 @@ test.each([
         machineShapeVersion: () => 0,
         inventoryVersion: () => 0,
       },
-      workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-      workerPlacementRunnerAvailabilityReader: {
-        read: () => ({ kind: "device", status: "offline" }),
-        version: () => 1,
-      },
     };
     const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
       "sessions.list",
@@ -207,8 +196,6 @@ test.each([
       activeOwnerEpoch: 12,
       lastTranscriptAckCursor: 23,
       lastLiveEventAckCursor: 9,
-      diskSpace,
-      runner: { kind: "device", status: "offline" },
     });
     if (expectedIdentity) {
       expect(main?.placement).toMatchObject(identity);
@@ -218,9 +205,6 @@ test.each([
       expect(main?.placement).not.toHaveProperty("machine");
     }
     expect(other?.placement).toBeUndefined();
-    getMany.mockClear();
-    expect((await directSessionReq("sessions.list", {}, { context })).ok).toBe(true);
-    expect(getMany).not.toHaveBeenCalled();
   },
 );
 

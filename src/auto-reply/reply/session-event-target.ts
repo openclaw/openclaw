@@ -4,6 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { TurnGrant } from "../../agents/admitted-run-operator-authority.types.js";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -27,21 +28,38 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
+import type { ScheduledRequesterRef } from "../../cron/execution-context.js";
+import { admitScheduledRequesterGrant } from "../../gateway/operator-admission.js";
+import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
+import {
+  restoreScheduledAutomationOperator,
+  type RestoredGatewayOperatorAuthority,
+} from "../../gateway/operator-run-recovery.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+  getInProcessGatewayRequestContext,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
-import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
+import {
+  prepareCommandOwnerAuthority,
+  type PreparedCommandOwnerAuthority,
+} from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
-import { narrowSessionEventSettings } from "./session-event-policy.js";
+import { narrowSessionEventSettings } from "./session-event-policy-inheritance.js";
 
 const targetScopes = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionEvents.targetScopes"),
@@ -51,6 +69,7 @@ const targetScopes = resolveGlobalSingleton(
       {
         env?: NodeJS.ProcessEnv;
         operatorAuthority?: AdmittedRunOperatorAuthority;
+        operatorSource?: RestartRecoveryOperatorSource;
         ownerContinuation?: true;
         hasOriginatingCaller?: true;
         /** The captured requester keys the authority, whose source label is shared by owners. */
@@ -58,8 +77,8 @@ const targetScopes = resolveGlobalSingleton(
           authority: PreparedCommandOwnerAuthority;
           requester: CommandOwnerRequester;
         };
-        /** A scheduled job's recorded requester; see `requesterOwner` on capture. */
-        requesterOwner?: SessionEventRequesterOwner;
+        /** A scheduled job's recorded requester; see `scheduledRequester` on capture. */
+        scheduledRequester?: SessionEventScheduledRequester;
         deletion?: { agentId: string; isBlocked: () => boolean };
       }
     >(),
@@ -105,6 +124,8 @@ export async function captureSessionEventTargetForHost(
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
     /** Original host-issued source; the producer owns its lifetime until enqueue. */
     operatorAuthority?: AdmittedRunOperatorAuthority;
+    /** Deferred requester reference, admitted by the event's start owner. */
+    operatorSource?: RestartRecoveryOperatorSource;
     /** The producing turn held command-owner authority under `operatorAuthority`. */
     ownerContinuation?: true;
     /**
@@ -112,18 +133,13 @@ export async function captureSessionEventTargetForHost(
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
-    /**
-     * The host names the work's originating requester from its own record (a scheduled
-     * job's requester). The turn holds owner tools only while `assertCurrent` passes; a
-     * requester without it is a known non-owner caller, so no session-principal fallback.
-     */
-    requesterOwner?: SessionEventRequesterOwner;
+    /** A source-less scheduled job's requester, admitted when the event starts; a known caller. */
+    scheduledRequester?: SessionEventScheduledRequester["requester"];
   } = {},
 ): Promise<SessionEventTarget> {
   const operatorAuthority = options.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   options.assertCaptureCurrent?.();
   options.assertCurrent?.();
@@ -152,7 +168,6 @@ export async function captureSessionEventTargetForHost(
       ? await prepareGatewayToolCallerAssertion()
       : undefined;
   const assertCaptureCurrent = () => {
-    operatorAuthority?.assertCurrent();
     options.assertCaptureCurrent?.();
     options.assertCurrent?.();
     if (!callerAgentMatches || !caller) {
@@ -160,11 +175,11 @@ export async function captureSessionEventTargetForHost(
     }
     if (preparedCaller) {
       preparedCaller.assertCurrent?.();
-    } else if (
-      caller.receiptAuthority?.() === false ||
-      caller.approvalSignals?.some((signal) => signal.aborted)
-    ) {
-      throw new Error("Session event producer no longer owns its invocation");
+    } else {
+      caller.receiptAuthority?.();
+      if (caller.approvalSignals?.some((signal) => signal.aborted)) {
+        throw new Error("Session event producer no longer owns its invocation");
+      }
     }
   };
   try {
@@ -186,7 +201,11 @@ export async function captureSessionEventTargetForHost(
     let toolsAllow: string[] | undefined;
     if (caller && callerAgentMatches) {
       assertCaptureCurrent();
-      if (caller.sessionEventToolsAllow) {
+      // A session-scoped surface is this session's own policy, so its follow-ups need no ceiling.
+      const sessionScopedSurface =
+        caller.sessionEventToolsAllowSessionScoped === true &&
+        resolveSessionEventKey(agentId, caller.sessionKey) === sessionKey;
+      if (caller.sessionEventToolsAllow && !sessionScopedSurface) {
         if (
           caller.sessionEventToolsAllow.length > 512 ||
           caller.sessionEventToolsAllow.some((name) => name.length > 256)
@@ -244,14 +263,20 @@ export async function captureSessionEventTargetForHost(
     targetScopes.set(target, {
       env,
       operatorAuthority,
-      ...(options.requesterOwner ||
+      operatorSource: options.operatorSource,
+      ...(options.scheduledRequester ||
+      options.operatorSource ||
       (callerAgentMatches &&
         (resolveRequesterPrincipalKey(caller) ||
           requesterCreatorProfileId(caller?.requesterOrigin)))
         ? { hasOriginatingCaller: true as const }
         : {}),
-      ...(options.requesterOwner ? { requesterOwner: options.requesterOwner } : {}),
-      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      ...(options.scheduledRequester
+        ? { scheduledRequester: { requester: options.scheduledRequester } }
+        : {}),
+      ...((operatorAuthority || options.operatorSource) && options.ownerContinuation
+        ? { ownerContinuation: true }
+        : {}),
       ...(requester?.messageProvider &&
       requester.senderId &&
       commandOwner?.source &&
@@ -307,9 +332,9 @@ export async function prepareSessionEventTargetForHost(
   if (!target.agentId || !target.sessionKey || !target.storePath) {
     throw new Error("Session event target has no captured destination");
   }
-  const { prepareSessionGenerationFacts } =
-    await import("../../config/sessions/session-delivery-generation.js");
-  const env = targetScopes.get(target)?.env;
+  const { prepareChatLease } = await import("../../config/sessions/session-delivery-generation.js");
+  const scope = targetScopes.get(target);
+  const env = scope?.env;
   const assertAcceptance = () => {
     options.assertAcceptanceCurrent?.();
     assertSessionEventTargetCurrent(target);
@@ -339,19 +364,17 @@ export async function prepareSessionEventTargetForHost(
       Promise.resolve(),
     );
   }
-  let lease: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let lease: Awaited<ReturnType<typeof prepareChatLease>> | undefined;
+  let restored: RestoredGatewayOperatorAuthority | undefined;
   try {
     try {
       const prepared = await preparation?.preparations[0];
       assertAcceptance();
       prepared?.assertCurrent();
-      lease = await prepareSessionGenerationFacts({
-        agentId: target.agentId,
-        storePath: target.storePath,
-        sessionKey: target.sessionKey,
-        sessionId: target.sessionId || null,
-        lifecycleRevision: target.lifecycleRevision ?? null,
+      const { agentId, storePath, sessionKey } = target;
+      lease = await prepareChatLease(chatRef({ agentId, storePath, sessionKey }), {
         env,
+        ...(target.sessionId ? {} : { absent: true }),
       });
       prepared?.assertCurrent();
       assertAcceptance();
@@ -360,6 +383,49 @@ export async function prepareSessionEventTargetForHost(
     }
     assertAcceptance();
     lease.assertCurrent();
+    // The lease follows the key; later admission pins the chat's current transcript.
+    const current = lease.readSessionSettings();
+    if (current) {
+      target.sessionId = current.sessionId;
+      target.lifecycleRevision = current.lifecycleRevision;
+    }
+    if (scope?.operatorSource) {
+      const context = getInProcessGatewayRequestContext(getGatewayContextResolver(target));
+      if (!context) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+      // Only cron supplies a deferred operator source: the event is a scheduled automation start.
+      restored = await restoreScheduledAutomationOperator({
+        agentId: target.agentId,
+        source: { kind: "gateway", snapshot: scope.operatorSource.snapshot },
+        context,
+        assertCurrent: assertAcceptance,
+      });
+      scope.operatorAuthority = restored.authority;
+    }
+    if (scope?.scheduledRequester) {
+      scope.scheduledRequester = {
+        requester: scope.scheduledRequester.requester,
+        grant: await admitScheduledRequesterGrant(
+          getSessionEventRuntimeConfig(),
+          target.agentId,
+          scope.scheduledRequester.requester,
+        ),
+      };
+    }
+    if (scope?.commandOwner) {
+      const { requester, authority } = scope.commandOwner;
+      const config = getSessionEventRuntimeConfig();
+      const admitted = await prepareCommandOwnerAuthority(
+        config,
+        authority.recoveryReference?.version === 1 ? authority.recoveryReference : requester,
+      );
+      scope.hasOriginatingCaller = true;
+      scope.commandOwner =
+        admitted.source && admitted.isCurrent(config)
+          ? { requester, authority: admitted }
+          : undefined;
+    }
     const retained = lease;
     const assertTargetCurrent = () => {
       assertSessionEventTargetCurrent(target);
@@ -368,19 +434,28 @@ export async function prepareSessionEventTargetForHost(
       assertTargetCurrent();
       retained.assertCurrent();
     };
+    const source = composeSessionSourceAssertion(
+      [target.assertCurrent, retained.assertCurrent],
+      (assertSource) => {
+        assertSource();
+        assertCurrent();
+      },
+    );
     Object.assign(assertCurrent, {
-      prepareSessionSourceEffect: composeSessionSourceAssertion(
-        [target.assertCurrent, retained.assertCurrent],
-        (assertSource) => {
-          assertSource();
-          assertCurrent();
-        },
-      ).prepareSessionSourceEffect,
+      prepareSessionSourceEffect: source.prepareSessionSourceEffect,
+      prepareSessionSourceStorageEffect: source.prepareSessionSourceStorageEffect,
     });
     assertCurrent();
     return {
       ...retained,
       assertCurrent,
+      release: () => {
+        if (scope && restored && scope.operatorAuthority === restored.authority) {
+          scope.operatorAuthority = undefined;
+        }
+        restored?.release();
+        retained.release();
+      },
       readSessionSettings: () => {
         assertTargetCurrent();
         return retained.readSessionSettings();
@@ -398,19 +473,22 @@ export async function prepareSessionEventTargetForHost(
           assertTargetCurrent();
           assertCreationCurrent();
         };
+        const boundSource = composeSessionSourceAssertion(
+          [target.assertCurrent, assertCreationCurrent],
+          (assertSource) => {
+            assertSource();
+            assertBoundCurrent();
+          },
+        );
         return Object.assign(assertBoundCurrent, {
-          prepareSessionSourceEffect: composeSessionSourceAssertion(
-            [target.assertCurrent, assertCreationCurrent],
-            (assertSource) => {
-              assertSource();
-              assertBoundCurrent();
-            },
-          ).prepareSessionSourceEffect,
+          prepareSessionSourceEffect: boundSource.prepareSessionSourceEffect,
+          prepareSessionSourceStorageEffect: boundSource.prepareSessionSourceStorageEffect,
         });
       },
     };
   } catch (error) {
     lease?.release();
+    restored?.release();
     throw error;
   }
 }
@@ -427,13 +505,16 @@ export function readSessionEventTargetOperatorAuthority(
   return targetScopes.get(target)?.operatorAuthority;
 }
 
-/** A host-recorded requester; owner tools last only while `assertCurrent` passes. */
-export type SessionEventRequesterOwner = Readonly<{ assertCurrent?: () => void }>;
+/** A host-recorded requester and the grant the event's start admitted it with. */
+export type SessionEventScheduledRequester = Readonly<{
+  requester: Extract<ScheduledRequesterRef, { kind: "channel" | "profile" }>;
+  grant?: TurnGrant;
+}>;
 
-export function readSessionEventTargetRequesterOwner(
+export function readSessionEventTargetScheduledRequester(
   target: SessionEventTarget,
-): SessionEventRequesterOwner | undefined {
-  return targetScopes.get(target)?.requesterOwner;
+): SessionEventScheduledRequester | undefined {
+  return targetScopes.get(target)?.scheduledRequester;
 }
 
 /** A captured channel guest still has a caller even without a profile grant. */
@@ -493,14 +574,15 @@ export function combineSessionEventTargetsForHost(
       target.sessionId !== first.sessionId ||
       target.lifecycleRevision !== first.lifecycleRevision ||
       target.chatType !== first.chatType ||
+      targetScopes.get(target)?.operatorSource !== targetScopes.get(first)?.operatorSource ||
       readSessionEventTargetOperatorAuthority(target) !==
         readSessionEventTargetOperatorAuthority(first) ||
       readSessionEventTargetOwnerContinuation(target) !==
         readSessionEventTargetOwnerContinuation(first) ||
       hasSessionEventOriginatingCaller(target) !== hasSessionEventOriginatingCaller(first) ||
       commandOwnerRequesterKey(target) !== commandOwnerRequesterKey(first) ||
-      readSessionEventTargetRequesterOwner(target) !==
-        readSessionEventTargetRequesterOwner(first) ||
+      readSessionEventTargetScheduledRequester(target) !==
+        readSessionEventTargetScheduledRequester(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
       throw new Error(
@@ -526,6 +608,7 @@ export function combineSessionEventTargetsForHost(
     deliver: retained.some((target) => target.deliver === false) ? false : first.deliver,
   };
   targetScopes.set(combined, targetScopes.get(first) ?? {});
+  bindGatewayContextResolver(combined, getGatewayContextResolver(first));
   return combined;
 }
 

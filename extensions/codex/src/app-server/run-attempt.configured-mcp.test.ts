@@ -539,9 +539,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
 
       const threadStart = harness.requests.find((request) => request.method === "thread/start");
       expect(threadStart?.params).toMatchObject({
-        developerInstructions: [systemPrompt, mcpMocks.staticDiagnosticNotice]
+        developerInstructions: `<thread_policy>\n${[systemPrompt, mcpMocks.staticDiagnosticNotice]
           .filter(Boolean)
-          .join("\n\n"),
+          .join("\n\n")}\n</thread_policy>`,
       });
       expect(
         harness.requests.some(
@@ -594,7 +594,7 @@ describe("runCodexAppServerAttempt configured MCP creator authority", () => {
           ? {
               ...capability,
               callerOrigin: { kind: "unknown" },
-              managementEntitlement: { source: "channel-owner", isCurrent: () => true },
+              managementEntitlement: { source: "channel-owner" },
             }
           : capability;
 

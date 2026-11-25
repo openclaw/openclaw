@@ -4,23 +4,32 @@ import { t } from "../i18n/index.ts";
 import { registerSessionMenuEnglish } from "../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { sessionAccessRowForBatch } from "../lib/session-method-access.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
+import { fetchPagedSessionRows } from "../lib/sessions/paged-session-rows.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+  resolveUiSessionRowAgentId,
+  isSubagentSessionKey,
+} from "../lib/sessions/session-key.ts";
+import { requestSessionListParams } from "../lib/sessions/session-requests.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
 import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
+import { holdArchive } from "./session-archive-hold.ts";
 import {
   confirmWithBoundAutomations,
   withBoundAutomationNotice,
-} from "./session-automation-confirm.ts";
+} from "./session-automation-confirm.tsx";
 import { isSessionMutationScopeCurrent } from "./session-mutation-scope.ts";
 import {
   patchSessionRows,
+  requireSessionMutationAccess,
   type SessionActionHost,
   type SessionActionRow,
 } from "./session-organizer-batch-mutations.ts";
@@ -69,6 +78,179 @@ export async function promoteSession(
   }
 }
 
+type ArchiveTreeRow = {
+  row: GatewaySessionRow;
+  ancestors: readonly GatewaySessionRow[];
+};
+
+/** Snapshot the same sidebar ancestry for a single session or a whole group. */
+async function collectArchiveTree(
+  roots: readonly GatewaySessionRow[],
+  scope: SidebarSessionMutationScope,
+  isCurrent: () => boolean,
+): Promise<ArchiveTreeRow[] | null> {
+  const rows: ArchiveTreeRow[] = [];
+  const visited = new Set<string>();
+  const pending: ArchiveTreeRow[] = roots.map((row) => ({ row, ancestors: [] }));
+  for (const entry of pending) {
+    const { row, ancestors } = entry;
+    if (visited.has(row.key)) {
+      continue;
+    }
+    const persistent = !isSubagentSessionKey(row.key);
+    if (
+      row.archived ||
+      (persistent && ancestors.length > 0 && (row.sidebarRoot || row.category?.trim()))
+    ) {
+      continue;
+    }
+    visited.add(row.key);
+    if (persistent) {
+      rows.push(entry);
+    }
+    // Fresh Gateway rows already carry the visible child keys. A leaf needs no list read.
+    if (!row.childSessions?.length) {
+      continue;
+    }
+    const children = await fetchChildSessionRows({
+      sessions: scope.sessions,
+      parentKey: row.key,
+      isCurrent,
+    });
+    if (!children || !isCurrent()) {
+      return null;
+    }
+    const nextAncestors = persistent ? [row, ...ancestors] : ancestors;
+    // Child lists include control relationships; archive follows sidebar navigation ancestry.
+    for (const child of children) {
+      if (
+        areUiSessionKeysEquivalent(resolveUiSessionNavigationParentKey(child) ?? row.key, row.key)
+      ) {
+        pending.push({ row: child, ancestors: nextAncestors });
+      }
+    }
+  }
+  if (!isCurrent()) {
+    return null;
+  }
+  if (rows.some(({ row }) => !row.sessionId)) {
+    throw new Error(t("sessionsView.archiveTreeChanged"));
+  }
+  return rows;
+}
+
+function archiveTreeTargets(
+  tree: readonly ArchiveTreeRow[],
+  scope: SidebarSessionMutationScope,
+): SessionActionRow[] {
+  // Descendants settle before their ancestors, including across batch boundaries.
+  return tree.toReversed().map(({ row, ancestors }) => ({
+    key: row.key,
+    agentId: row.agentId,
+    sessionId: row.sessionId,
+    sharingRole: row.sharingRole,
+    label: resolveSessionDisplayName(row.key, row),
+    pinned: row.pinned === true,
+    archived: row.archived,
+    category: row.category,
+    active: hasActiveArchiveWork(row),
+    hasAutomation: row.hasAutomation,
+    archiveGuard: {
+      expectedSidebarRoot: row.sidebarRoot === true,
+      expectedCategory: row.category ?? null,
+      expectedArchived: false,
+      ...(ancestors.length > 0
+        ? {
+            expectedSidebarAncestors: ancestors.map((ancestor) => ({
+              key: ancestor.key,
+              agentId: resolveUiSessionRowAgentId(ancestor, scope.selectedAgentId),
+              expectedSessionId: ancestor.sessionId!,
+              expectedSidebarRoot: ancestor.sidebarRoot === true,
+              expectedCategory: ancestor.category ?? null,
+            })),
+          }
+        : {}),
+    },
+  }));
+}
+
+export async function archiveSessionGroupWithUndo(
+  host: SessionActionHost,
+  group: string,
+  scope: SidebarSessionMutationScope,
+): Promise<void> {
+  const isCurrent = () => host.sessionData.isSessionMutationScopeCurrent(scope);
+  if (!isCurrent()) {
+    return;
+  }
+  const listError = t("sessionsView.archiveGroupListFailed");
+  // Use Gateway group membership, not the visible sidebar window or its filters.
+  const roots = await fetchPagedSessionRows({
+    list: (offset) =>
+      requestSessionListParams(
+        scope.client,
+        { source: "sidebar", group, archived: false, excludeSubagents: true, limit: 100, offset },
+        isCurrent,
+        { signal: scope.signal },
+      ),
+    isCurrent,
+    missingResultError: listError,
+    stalledPaginationError: listError,
+    incompletePaginationError: listError,
+  });
+  if (!roots) {
+    return;
+  }
+  const tree = await collectArchiveTree(
+    roots.filter((row) => row.category === group),
+    scope,
+    isCurrent,
+  );
+  if (!tree) {
+    return;
+  }
+  const rows = archiveTreeTargets(tree, scope).filter(
+    (row) => !scope.sessions.archiveVisibility(row.key),
+  );
+  if (rows.length === 0) {
+    showToast({ severity: "info", message: t("sessionsView.archiveGroupEmpty") });
+    return;
+  }
+  if (
+    !requireSessionMutationAccess(host, scope, {
+      method: "sessions.patchMany",
+      params: { patch: { archived: true } },
+      sessionScope: true,
+      session: sessionAccessRowForBatch(rows),
+    })
+  ) {
+    return;
+  }
+  const count = String(rows.length);
+  const confirmLabel = t("sessionsView.archiveAllSessions", { count });
+  const options = {
+    title: t("sessionsView.archiveGroupPrompt"),
+    message:
+      (rows.length === 1
+        ? t("sessionsView.archiveGroupSessionOne")
+        : t("sessionsView.archiveGroupSessionOther", { count })) +
+      (rows.some((row) => row.active) ? "\n\n" + t("sessionsView.archiveRunningSessions") : ""),
+    confirmLabel,
+    signal: scope.signal,
+  };
+  const confirmed = await confirmWithBoundAutomations(
+    archiveAutomationRequest(rows, scope),
+    (notice) =>
+      showConfirmDialog(
+        notice ? { ...withBoundAutomationNotice(options, notice), confirmLabel } : options,
+      ),
+    Boolean,
+  );
+  if (confirmed) {
+    archiveConfirmedSessionsWithUndo(host, rows, scope);
+  }
+}
+
 /** Discover descendants only for hinted parents; leaf archives keep their existing fast path. */
 export async function confirmSessionArchive(
   session: SessionActionRow,
@@ -113,81 +295,14 @@ export async function confirmSessionArchive(
     if (isSubagentSessionKey(root.key)) {
       throw new Error(t("sessionsView.archiveTreeRootRequired"));
     }
-    // A tree action snapshots complete child windows, never just expanded sidebar rows.
-    const rows: GatewaySessionRow[] = [];
-    const ancestorsByKey = new Map<string, readonly GatewaySessionRow[]>();
-    const visited = new Set<string>();
-    const pending: Array<{ row: GatewaySessionRow; ancestors: readonly GatewaySessionRow[] }> = [
-      { row: root, ancestors: [] },
-    ];
-    while (pending.length > 0) {
-      const { row, ancestors } = pending.shift()!;
-      if (visited.has(row.key)) {
-        continue;
-      }
-      visited.add(row.key);
-      const persistent = !isSubagentSessionKey(row.key);
-      if (
-        row.archived ||
-        (persistent && row !== root && (row.sidebarRoot || row.category?.trim()))
-      ) {
-        continue;
-      }
-      if (persistent) {
-        rows.push(row);
-        ancestorsByKey.set(row.key, ancestors);
-      }
-      const children = await fetchChildSessionRows({
-        sessions: scope.sessions,
-        parentKey: row.key,
-        isCurrent,
-      });
-      if (!isCurrent() || children === null) {
-        return null;
-      }
-      const nextAncestors = persistent ? [row, ...ancestors] : ancestors;
-      pending.push(...children.map((child) => ({ row: child, ancestors: nextAncestors })));
-    }
-    if (!isCurrent()) {
+    const tree = await collectArchiveTree([root], scope, isCurrent);
+    if (!tree) {
       return null;
     }
-    if (rows.some((row) => !row.sessionId)) {
-      throw new Error(t("sessionsView.archiveTreeChanged"));
-    }
-    if (rows.length > 1) {
-      // Descendants settle before their ancestors, which must remain unarchived.
-      const guardedRows: SessionActionRow[] = rows.toReversed().map((row) => ({
-        key: row.key,
-        agentId: row.agentId,
-        sessionId: row.sessionId,
-        sharingRole: row.sharingRole,
-        label: resolveSessionDisplayName(row.key, row),
-        pinned: row.pinned === true,
-        archived: row.archived,
-        category: row.category,
-        active: row.key === session.key && session.active,
-        archiveGuard: {
-          expectedSidebarRoot: row.sidebarRoot === true,
-          expectedCategory: row.category ?? null,
-          expectedArchived: false,
-          expectedSidebarAncestors: (ancestorsByKey.get(row.key) ?? []).map((ancestor) => {
-            if (!ancestor.sessionId) {
-              throw new Error(t("sessionsView.archiveTreeChanged"));
-            }
-            return {
-              key: ancestor.key,
-              agentId: resolveUiSessionRowAgentId(ancestor, scope.selectedAgentId),
-              expectedSessionId: ancestor.sessionId,
-              expectedSidebarRoot: ancestor.sidebarRoot === true,
-              expectedCategory: ancestor.category ?? null,
-            };
-          }),
-        },
-      }));
+    if (tree.length > 1) {
+      const guardedRows = archiveTreeTargets(tree, scope);
       // Only direct children move to the top level; deeper sessions stay under them.
-      const directChildCount = rows.filter(
-        (row) => ancestorsByKey.get(row.key)?.length === 1,
-      ).length;
+      const directChildCount = tree.filter(({ ancestors }) => ancestors.length === 1).length;
       const options = {
         title: t("sessionsView.archiveSessionTitle"),
         message:
@@ -197,23 +312,17 @@ export async function confirmSessionArchive(
               : "sessionsView.archiveSessionNestedOther",
             { count: String(directChildCount), session: session.label },
           ) +
-          (rows.some(hasActiveArchiveWork)
+          (guardedRows.some((row) => row.active)
             ? "\n\n" + t("sessionsView.archiveRunningSessions")
             : ""),
-        confirmLabel: t("sessionsView.archiveAllSessions", { count: String(rows.length) }),
+        confirmLabel: t("sessionsView.archiveAllSessions", { count: String(guardedRows.length) }),
         alternativeLabel: t("sessionsView.archiveThisSession"),
         groupChoicesOnMobile: true,
         signal: scope.signal,
       };
       // The tree choice keeps its own labels; only bound conversations that end up archived pause.
-      const automationTargets = rows.map((row) => ({
-        key: row.key,
-        agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
-        label: resolveSessionDisplayName(row.key, row),
-        hasAutomation: row.hasAutomation,
-      }));
       const choice = await confirmWithBoundAutomations(
-        archiveAutomationRequest(automationTargets, scope),
+        archiveAutomationRequest(guardedRows, scope),
         (notice) =>
           showConfirmChoiceDialog(
             notice
@@ -356,19 +465,19 @@ export function archiveConfirmedSessionsWithUndo(
   // The commit outlives the initiating pane; online work stays connection-scoped and
   // offline work follows its recovery owner.
   const outcomeHost = sessionUndoHost(host, scope);
-  const stopExit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
+  const exit = exitFrom ? startSidebarArchiveExit(exitFrom) : undefined;
   const pending = rows.flatMap((row) => {
     const finish = scope.sessions.beginArchive(row.key, row.sessionId);
     return finish ? [{ row, finish }] : [];
   });
-  stopExit?.();
+  exit?.finishObserving();
   if (pending.length === 0) {
     return;
   }
   const accepted = pending.map(({ row }) => row);
   const single = accepted.length === 1 && !accepted[0]!.archiveGuard ? accepted[0] : undefined;
   holdArchiveForUndo({
-    count: accepted.length,
+    keys: accepted.map((row) => row.key),
     commit: () =>
       single
         ? patchSession(outcomeHost, single, { archived: true }, scope, { sessionScope: true })
@@ -377,6 +486,7 @@ export function archiveConfirmedSessionsWithUndo(
           }),
     publishError: (error) => outcomeHost.sessionData.publishSessionMutationError(scope, error),
     release: () => {
+      exit?.cancel();
       for (const { finish } of pending) {
         finish();
       }
@@ -384,9 +494,6 @@ export function archiveConfirmedSessionsWithUndo(
   });
   return "completed";
 }
-
-const heldArchives = new Set<() => void>();
-let commitsHeldArchivesOnPageHide = false;
 
 /**
  * Archive is a deferred commit. The rows are already hidden; the toast holds the
@@ -397,47 +504,44 @@ let commitsHeldArchivesOnPageHide = false;
  * unarchived and it simply reappears.
  */
 function holdArchiveForUndo(archive: {
-  count: number;
+  keys: readonly string[];
   commit: () => Promise<unknown>;
   publishError: (error: unknown) => void;
   release: () => void;
 }) {
   let settled = false;
-  const settle = (commit: boolean) => {
-    if (settled) {
-      return;
-    }
-    settled = true;
-    heldArchives.delete(commitNow);
-    if (!commit) {
-      archive.release();
-      return;
-    }
-    // Keep the rows hidden until the archive confirms or fails.
-    void archive.commit().catch(archive.publishError).finally(archive.release);
-  };
-  const commitNow = () => settle(true);
-  heldArchives.add(commitNow);
-  if (!commitsHeldArchivesOnPageHide) {
-    commitsHeldArchivesOnPageHide = true;
-    listen(globalThis, "pagehide", () => {
-      // Each commit removes only itself, which Set iteration tolerates.
-      for (const commit of heldArchives) {
-        commit();
+  const toast = new AbortController();
+  const held = {
+    keys: archive.keys,
+    settle: (commit: boolean) => {
+      if (settled) {
+        return;
       }
-    });
-  }
+      settled = true;
+      unhold();
+      if (!commit) {
+        // Undo can come from the session's own banner; retire the notice too.
+        toast.abort();
+        archive.release();
+        return;
+      }
+      // Keep the rows hidden until the archive confirms or fails.
+      void archive.commit().catch(archive.publishError).finally(archive.release);
+    },
+  };
+  const unhold = holdArchive(held);
   showToast({
     severity: "success",
     message:
-      archive.count === 1
+      archive.keys.length === 1
         ? t("sessionsView.sessionArchived")
-        : t("sessionsView.sessionsArchived", { count: String(archive.count) }),
+        : t("sessionsView.sessionsArchived", { count: String(archive.keys.length) }),
     actionLabel: t("common.undo"),
-    onAction: () => settle(false),
+    signal: toast.signal,
+    onAction: () => held.settle(false),
     onDismiss: (reason) => {
       if (reason !== "action") {
-        commitNow();
+        held.settle(true);
       }
     },
   });

@@ -1,7 +1,7 @@
 import { createLegacyPluginSdkProviderProjection } from "../plugins/legacy-sdk-provider-projection.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 
-export { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.js";
+export { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-catalog-augment.js";
 export {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProvider,

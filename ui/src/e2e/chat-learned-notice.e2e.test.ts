@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,6 +17,7 @@ suite.define(() => {
           { role: "user", content: "Check staging and summarize the result.", timestamp: 1000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "toolCall", id: "check", name: "read", arguments: { path: "checks.txt" } },
             ],
@@ -32,6 +34,7 @@ suite.define(() => {
           },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: answerText,
             stopReason: "stop",
             timestamp: 4000,

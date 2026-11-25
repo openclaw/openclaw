@@ -1,3 +1,0 @@
-# Empty-child creation needs operation/authority, async menu-state, and real-Gateway persistence proofs.
-# Includes the independent E2E inventory and lazy pending-state owner contract.
-342

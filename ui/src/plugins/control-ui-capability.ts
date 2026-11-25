@@ -15,6 +15,8 @@ import type {
 export type ControlUiRegistration<T> = {
   key: `${string}/${string}`;
   pluginId: string;
+  /** Display name from the owning module descriptor. */
+  pluginName?: string;
   /** Host-admitted passive SVG data URL from the owning plugin manifest. */
   panelIcon?: string;
   value: T;

@@ -1,4 +1,4 @@
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
@@ -39,6 +39,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
+import type { AgentToolUsageAppend } from "./tool-usage.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -82,6 +83,8 @@ export type SessionActorAppend = (
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
   /** Final prompt text joins its runtime-context carrier at the same durable point. */
   modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
+  /** Tool-only mutations share this append's transaction and final authority grant. */
+  toolUsage?: AgentToolUsageAppend;
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */
@@ -96,6 +99,7 @@ export type SessionActorAppendCommitted = (
     }
 ) & {
   initialEntry?: InitialSessionEntryCommit;
+  toolUsageGeneration?: number;
   header?: SessionMetadataOperations["session.metadata.append"]["output"];
   modelPromptProjection?: {
     result: NonNullable<SessionMessageRewriteCommitted["result"]> & {
@@ -112,34 +116,34 @@ export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pending
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
 };
 
+/** Input turns can select current lifecycle inside the owner; other mutations need a guard. */
+type SessionActorInputTurn =
+  | { turn: SessionTurnPlan; expectedState?: SessionTranscriptTurnExpectedState }
+  | { turn?: never; expectedState: SessionTranscriptTurnExpectedState };
+
 export type SessionActorPhaseInputs = {
   acceptInput: {
-    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-  } & (
-    | {
-        pending: Extract<PendingInputMutation, { kind: "stage" }>;
-        /** Admission and adoption may share a durable point only before an intervening effect. */
-        turn?: SessionTurnPlan;
-        /** A retry adopts canonical pending/transcript identity instead of appending twice. */
-        append?: SessionActorAppend;
-      }
-    | {
-        /** Transcript custody before ACK does not require a queued-input row. */
-        pending?: never;
-        turn: SessionTurnPlan;
-        append?: never;
-      }
-  );
+  } & SessionActorInputTurn &
+    (
+      | {
+          pending: Extract<PendingInputMutation, { kind: "stage" }>;
+          /** A retry adopts canonical pending/transcript identity instead of appending twice. */
+          append?: SessionActorAppend;
+        }
+      | {
+          /** Transcript custody before ACK does not require a queued-input row. */
+          pending?: never;
+          turn: SessionTurnPlan;
+          append?: never;
+        }
+    );
   adoptRun: {
     sessionId: string;
-    expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
     /** Explicit writer adoption; omission preserves the existing lifecycle-only command. */
     runId?: string;
-    /** Consume accepted input and adopt its lifecycle at the same durable point. */
-    turn?: SessionTurnPlan;
-  };
+  } & SessionActorInputTurn;
   appendToolResult:
     | { turn: SessionTurnPlan; append?: never }
     | { append: SessionActorAppend; turn?: never };

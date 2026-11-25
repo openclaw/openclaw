@@ -53,11 +53,17 @@ const { createSessionRowProjectionContext } =
 const { readSessionListSelectionFacts } = await import("../../src/gateway/session-list-target.js");
 const cfg = { agents: { entries: { main: {} } } };
 const runs: ReturnType<SubagentSessionListReadView["runs"]> = new Map();
-const contextOwner = createSessionRowProjectionContext({
-  snapshotIdentity: () => runs,
-  runs: () => runs,
-  prepare: async () => {},
-});
+const contextOwner = createSessionRowProjectionContext(
+  {
+    snapshotIdentity: () => runs,
+    runs: () => runs,
+    prepare: async () => {},
+  },
+  {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  },
+);
 const context = contextOwner.current;
 const identities = context.userProfileIdentityById;
 for (let index = 0; index < 50; index++) {

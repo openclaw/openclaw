@@ -1,8 +1,8 @@
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import {
   createDiagnosticToolExecutionLiveness,
   recordDiagnosticToolExecutionDeadline,
@@ -50,7 +50,7 @@ it("releases closed invocation signals from retained transport resources and fra
   try {
     const control = new WeakRef({});
     await nextTurn();
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(control.deref()).toBeUndefined();
     expect(completed.filter(({ signal }) => signal.deref())).toHaveLength(0);
     expect(completed.filter(({ owner }) => owner.deref())).toHaveLength(0);

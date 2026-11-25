@@ -31,7 +31,9 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 
 export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 
-export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
+export type ChatHistoryHost = ChatState & {
+  sessions: ChatHistorySessions & Pick<SessionCapability, "reconcileMutation">;
+};
 
 export type SessionApprovalReplayState = {
   client: GatewayBrowserClient | null;
@@ -42,6 +44,7 @@ export type SessionApprovalReplayState = {
 };
 
 export type ChatState = StreamCausalBoundaryState & {
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -105,7 +108,11 @@ export type ChatState = StreamCausalBoundaryState & {
   hello: GatewayHelloOk | null;
   selfUser?: AuthenticatedUser | null;
   canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
+  settings?: {
+    chatPersistCommentary?: boolean;
+    chatInlineCommands?: boolean;
+    gatewayUrl?: string | null;
+  };
   sessions?: Partial<SessionCapability>;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;

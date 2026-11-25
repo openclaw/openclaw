@@ -8,8 +8,11 @@ import type {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { captureSqliteNativeRuntimeAdmission } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
 import { SqliteIntegrityError, type SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
+import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
+import type { SqliteWalPeriodicRequest } from "../infra/sqlite-wal-write-admission.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -18,6 +21,7 @@ import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { readActiveOpenClawAgentDatabaseLeasesInDatabase } from "./openclaw-agent-db-lease-inspection.js";
 import { mayShareAgentDatabaseFile } from "./openclaw-agent-db-lease-provenance.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import { runOpenClawAgentWriteTransaction } from "./openclaw-agent-db.js";
 import { AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 
@@ -36,7 +40,7 @@ type MetadataInput =
 export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   openWriter(): OpenClawAgentDatabase;
-  admit(stage: "transaction" | "commit", publication?: unknown): void;
+  admit: (stage: "transaction" | "commit", publication?: unknown) => void;
 }) {
   let preparation:
     | {
@@ -50,7 +54,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     | typeof import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js")
     | undefined;
   let replacements:
-    | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
+    | typeof import("../config/sessions/session-accessor.sqlite-replacement-publication.js")
     | undefined;
   const releasePreparation = () => {
     if (preparation) {
@@ -154,6 +158,23 @@ export function createAgentDatabaseMaintenanceOwner(context: {
   };
   return {
     operations,
+    maintainPeriodic(input: SqliteWalPeriodicRequest) {
+      return (
+        context.openWriter().walMaintenance.maintainPeriodic?.(input, context.admit, () =>
+          runOpenClawAgentWriteTransaction(
+            ({ db }) => {
+              context.admit("transaction");
+              if (!isPostgresSqlConnection(db)) {
+                refreshSqlitePlannerStatistics(db);
+              }
+              context.admit("commit");
+            },
+            context.databaseOptions,
+            { busyTimeoutMs: 0, operationLabel: "agent.planner-statistics" },
+          ),
+        ) ?? { reclaimedPages: 0 }
+      );
+    },
     repairStartupIntegrity(
       receipt: OpenClawAgentDatabaseWorkerLeaseReceipt,
       check: SqliteIntegrityCheck,
@@ -210,7 +231,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     prepare() {
       return Promise.all([
         import("../config/sessions/session-accessor.sqlite-maintenance-transaction.js"),
-        import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+        import("../config/sessions/session-accessor.sqlite-replacement-publication.js"),
       ]).then(([metadata, replacement]) => {
         maintenance = metadata;
         replacements = replacement;

@@ -27,6 +27,7 @@ import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
   type SqliteWalCheckpointOptions,
+  type SqliteWalCheckpointSnapshot,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
 import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
@@ -98,6 +99,9 @@ function sharedCompletedCheckpoint(
 export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
+  /** Internal reply transport checks the cursor before copying a newly recorded snapshot. */
+  readonly checkpointObservedAtNs?: bigint;
+  readonly checkpointSnapshot?: SqliteWalCheckpointSnapshot;
   checkpoint: () => boolean;
   maintainPeriodic?: (
     request: SqliteWalPeriodicRequest,
@@ -203,7 +207,8 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
-function enableWalJournalMode(
+/** Enable WAL without scheduling maintenance; the caller owns this connection. */
+export function enableSqliteWalJournalMode(
   db: DatabaseSync,
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
@@ -308,7 +313,7 @@ export function configureSqliteWalMaintenance(
   if (journalPolicy === "rollback") {
     requireRollbackJournalMode(db, options);
   }
-  if (journalPolicy === "rollback" || !enableWalJournalMode(db, busyTimeoutMs, options)) {
+  if (journalPolicy === "rollback" || !enableSqliteWalJournalMode(db, busyTimeoutMs, options)) {
     return {
       checkpoint: () => true,
       reclaimFreePages: (reclaimOptions = {}) =>
@@ -490,7 +495,12 @@ export function configureSqliteWalMaintenance(
     runInDetachedAsyncContext(() =>
       scope.schedule({
         id: `${maintenanceId}:${phase}`,
-        delayMs: intervalMs,
+        // Spread the default first maintenance wave across 30–60 minutes after open.
+        // Checkpoint ticks and explicitly selected maintenance intervals keep their deadlines.
+        delayMs:
+          phase === "periodic" && options.checkpointIntervalMs === undefined
+            ? intervalMs + Math.floor(Math.random() * intervalMs)
+            : intervalMs,
         everyMs: intervalMs,
         run,
       }),
@@ -593,6 +603,12 @@ export function configureSqliteWalMaintenance(
   return {
     get health() {
       return checkpointOwner.health;
+    },
+    get checkpointObservedAtNs() {
+      return checkpointOwner.observedAtNs;
+    },
+    get checkpointSnapshot() {
+      return checkpointOwner.snapshot;
     },
     checkpoint,
     maintainPeriodic,

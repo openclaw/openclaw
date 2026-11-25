@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { releaseChildSpec } from "./full-release-validation-policy.mjs";
 import {
   releaseChildDispatchInputs,
   releaseChildReuseSha256,
 } from "./lib/full-release-child-request.mjs";
 import { discoverReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import { isWaived } from "./lib/release-validation-waivers.mjs";
 
 const [workflow, ...args] = process.argv.slice(2);
 const kind = process.env.CHILD_WORKFLOW_KIND;
 const role = {
   ci: "normalCi",
+  "stable-client": "stableClientCompatibility",
   "plugin-prerelease":
     process.env.PHASE === "candidate" ? "pluginPrereleaseCandidate" : "pluginPrereleaseIndependent",
   "release-checks":
@@ -19,15 +22,36 @@ const role = {
   performance: "productPerformance",
 }[kind];
 
+if (args[0] === "--waiver-only") {
+  if (releaseChildSpec(role).workflow !== workflow) {
+    throw new Error("Child workflow differs from its release role");
+  }
+  const waived = isWaived({
+    childRole: role,
+    targetSha: process.env.TARGET_SHA,
+    targetVersion: process.env.TARGET_VERSION,
+  });
+  if (waived) {
+    console.log(`Waived ${workflow}; no child run is required.`);
+  }
+  process.exit(waived ? 0 : 3);
+}
+
 let selection;
 try {
   if (releaseChildSpec(role).workflow !== workflow) {
     throw new Error("Child workflow differs from its release role");
   }
-  const source = readFileSync(new URL(`../.github/workflows/${workflow}`, import.meta.url), "utf8");
+  // The P verifier evaluates immutable current-Q waiver data; dispatch inputs
+  // still come from the frozen Q workflow.
+  const sourcePath = process.env.CHILD_WORKFLOW_DIRECTORY
+    ? resolve(process.env.CHILD_WORKFLOW_DIRECTORY, workflow)
+    : new URL(`../.github/workflows/${workflow}`, import.meta.url);
+  const source = readFileSync(sourcePath, "utf8");
   selection = await discoverReusableReleaseChild({
     repository: process.env.GITHUB_REPOSITORY,
     targetSha: process.env.TARGET_SHA,
+    policyTargetVersion: process.env.TARGET_VERSION,
     workflowSha: process.env.PARENT_WORKFLOW_SHA,
     role,
     inputs: releaseChildDispatchInputs(source, args),

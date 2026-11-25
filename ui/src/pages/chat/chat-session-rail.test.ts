@@ -10,7 +10,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatSessionCompanionThreads,
-  requestSessionCompanionAnswer,
+  createSessionCompanionAsk,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import { DirectDictationControl } from "./composer-direct-dictation.ts";
@@ -71,12 +71,12 @@ describe("ChatSessionCompanionThreads", () => {
     const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
 
-    await requestSessionCompanionAnswer(client, "one", "Question", "work");
+    await createSessionCompanionAsk(client, "work")("one", "Question");
 
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.companion.ask",
       { sessionKey: "one", agentId: "work", question: "Question" },
-      { timeoutMs: 70_000 },
+      { timeoutMs: 310_000 },
     );
   });
 
@@ -107,15 +107,12 @@ describe("ChatSessionCompanionThreads", () => {
 
     const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
     const client = { request: request as GatewayBrowserClient["request"] };
-    await requestSessionCompanionAnswer(
+    await createSessionCompanionAsk(
       client,
-      "one",
-      "Question",
       "work",
       undefined,
-      undefined,
       threads.view("one", "work").modelSelection,
-    );
+    )("one", "Question");
     expect(request).toHaveBeenCalledExactlyOnceWith(
       "sessions.companion.ask",
       {
@@ -125,7 +122,7 @@ describe("ChatSessionCompanionThreads", () => {
         thinkingLevel: "high",
         fastMode: false,
       },
-      { timeoutMs: 70_000 },
+      { timeoutMs: 310_000 },
     );
   });
 
@@ -136,7 +133,7 @@ describe("ChatSessionCompanionThreads", () => {
       ts: 1,
     }));
     const client = { request: request as GatewayBrowserClient["request"] };
-    await requestSessionCompanionAnswer(client, "one", "Regarding the selection", "work", [
+    await createSessionCompanionAsk(client, "work")("one", "Regarding the selection", [
       {
         id: "comment",
         mimeType: "text/plain",
@@ -157,7 +154,7 @@ describe("ChatSessionCompanionThreads", () => {
         question: "Regarding the selection",
         selectionContext: expect.stringContaining("User comment:\nWhy does this matter?"),
       },
-      { timeoutMs: 70_000 },
+      { timeoutMs: 310_000 },
     );
     expect(request.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
@@ -357,7 +354,7 @@ describe("ChatSessionRailElement", () => {
 
   it.each([
     { phrases: [], expected: "" },
-    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace…" },
+    { phrases: ["Reviewing the workspace"], expected: "· Reviewing the workspace" },
   ])("uses the theme's pending-answer phrases: $phrases", async ({ phrases, expected }) => {
     const originalBranding = currentThemeBranding();
     setCurrentThemeBranding({ ...originalBranding, workingPhrases: phrases });

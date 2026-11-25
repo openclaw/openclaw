@@ -89,6 +89,41 @@ describe("sandbox health", () => {
     },
   );
 
+  it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          definitions: {
+            guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+          },
+        },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const warnings = await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expect(warnings).toEqual([
+      expect.stringContaining(`Sandbox base image missing: ${DEFAULT_SANDBOX_IMAGE}`),
+    ]);
+    expect(mockPrompter.confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Build base sandbox image now?" }),
+    );
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    expectNote("A gateway role requires a sandbox but Docker is not available");
+    expectNote("gateway.roles.definitions.<role>.sandbox to inherit");
+
+    // Codex's host namespace check still follows sandbox mode, not role requirements.
+    await probeOnLinux(cfg);
+    expectNoCodexProbe();
+  });
+
   it("validates the explicit Podman target before checking images", async () => {
     const cfg = createSandboxConfig("all");
     cfg.agents!.defaults!.sandbox!.backend = "podman";

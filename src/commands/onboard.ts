@@ -588,7 +588,7 @@ export async function setupWizardCommand(
     if (normalizedOpts.reset) {
       const [{ readConfigSnapshotBeforeEngineSelection }, { resolveDatabaseFamilyEngines }] =
         await Promise.all([
-          import("./config-preflight-snapshot.js"),
+          import("../config/io.factory.js"),
           import("../infra/database-engine/registry.js"),
         ]);
       const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {

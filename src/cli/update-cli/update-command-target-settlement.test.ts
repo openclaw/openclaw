@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -90,6 +90,25 @@ it.each(["busy", "corrupt"] as const)(
     expect(enter).not.toHaveBeenCalled();
   },
 );
+
+it("records what admission settled as a warning step of the run", async () => {
+  const warning = "Settled previous package update (publication-not-started).";
+  const reported = new Error("terminal refusal was reported");
+  boundary.report.mockRejectedValue(reported);
+  const step = { name: "package-publication-recovery", command: "settle", cwd: state.root };
+  const { run, inspect } = targetFixture({
+    requestedChannel: "extended-stable",
+    packageActivationSteps: [{ ...step, durationMs: 0, exitCode: 0, warnings: [warning] }],
+  });
+  // The step is in run history before the first target decision can refuse the update.
+  await expect(withCommandProcessScope(() => inspect())).rejects.toBe(reported);
+  expect(getUpdateRun(run.runId, { env: state.env })?.steps).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ step: step.name, status: "completed" }),
+      expect.objectContaining({ step: `warning:${step.name}`, detail: warning }),
+    ]),
+  );
+});
 
 it.each(["forced", "uncertain"] as const)(
   "settles target inspection before reporting preflight refusal (%s)",

@@ -13,6 +13,7 @@ import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/cha
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -42,7 +43,7 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
-import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
+import { resolveZaloRuntimeGroupPolicy, zaloIngressIdentity } from "./group-access.js";
 import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -268,12 +269,7 @@ async function authorizeZaloMessage(
     await core.channel.inbound.ingress.resolveStable({
       channelId: "zalo",
       accountId: account.accountId,
-      identity: {
-        key: "zalo-user-id",
-        normalize: normalizeZaloAllowEntry,
-        sensitivity: "pii",
-        entryIdPrefix: "zalo-entry",
-      },
+      identity: zaloIngressIdentity,
       cfg: config,
       readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
       subject: { stableId: senderId },
@@ -573,6 +569,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
                       webhookUrl,
                       webhookPath,
                       maxBytes: mediaMaxBytes,
+                      mediaAccess: resolveOutboundMediaAccessForConfig(config),
                       proxyUrl,
                     })
                   : mediaUrl;

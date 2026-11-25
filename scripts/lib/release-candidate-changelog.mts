@@ -18,7 +18,7 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
 } from "../render-github-release-notes.mts";
-import { loadChangelogCollection, readReleaseChangelogFiles } from "./release-changelog.mjs";
+import { loadChangelogCollection } from "./release-changelog.mjs";
 
 type StringFields<K extends string> = Record<K, string>;
 
@@ -247,15 +247,16 @@ export function validateCandidateChangelogProvenance({
   };
 }
 
-// Applies pnpm check's changelog-only lints to the candidate's committed changelog
-// artifacts, so a release-notes edit fails here instead of hours into validation.
-function validateCandidateChangelogLints({
-  rootDir,
-  targetSha,
-}: StringFields<"rootDir" | "targetSha">) {
-  const violations = findChangelogAttributionViolations(
-    readReleaseChangelogFiles({ rootDir, ref: targetSha }),
-  );
+// Apply the shared attribution policy only to the selected publication inputs.
+// The standalone repository checker still owns linting the complete archive.
+function validateCandidateChangelogLints(
+  releaseChangelog: ReturnType<typeof loadReleaseNotesForTag>,
+) {
+  const files = [{ path: releaseChangelog.sourcePath, content: releaseChangelog.section }];
+  if (releaseChangelog.record !== null && releaseChangelog.recordPath !== null) {
+    files.push({ path: releaseChangelog.recordPath, content: releaseChangelog.record });
+  }
+  const violations = findChangelogAttributionViolations(files);
   if (violations.length > 0) {
     throw new Error(
       `Forbidden changelog thanks attribution (pnpm check:changelog-attributions): ${violations
@@ -263,6 +264,39 @@ function validateCandidateChangelogLints({
         .join("; ")}. ${CHANGELOG_ATTRIBUTION_NEXT_STEP}`,
     );
   }
+  return files.map((file) => file.path);
+}
+
+// Describe commits after the audited record only when assembling final candidate evidence.
+export function inspectCandidateChangelogRange({
+  rootDir,
+  repository,
+  recordedTarget,
+  targetSha,
+  changelogPaths,
+}: StringFields<"rootDir" | "repository" | "recordedTarget" | "targetSha"> & {
+  changelogPaths: string[];
+}) {
+  const range = `${recordedTarget}..${targetSha}`;
+  const revList = (...args: string[]) =>
+    execFileSync("git", ["rev-list", ...args], { cwd: rootDir, encoding: "utf8" }).trim();
+  const commitCount = recordedTarget === targetSha ? 0 : Number(revList("--count", range));
+  // Walk the commits, including merged branches. A tip-to-tip diff hides reverted changes.
+  const excludedPaths = ["CHANGELOG.md", ...changelogPaths].map(
+    (path) => `:(exclude,literal)${path}`,
+  );
+  const latestChangeOutsideChangelog = commitCount
+    ? revList("--full-history", "--max-count=1", range, "--", ".", ...excludedPaths) || null
+    : null;
+  const compareUrl = `https://github.com/${repository}/compare/${recordedTarget}...${targetSha}`;
+  const count = `${commitCount} commit${commitCount === 1 ? "" : "s"} after the audited record`;
+  const summary =
+    commitCount === 0
+      ? "Contribution record covers the candidate."
+      : latestChangeOutsideChangelog
+        ? `${count}. Review changes outside the selected changelog: ${compareUrl}`
+        : `${count} (selected changelog paths only).`;
+  return { candidate: targetSha, commitCount, latestChangeOutsideChangelog, compareUrl, summary };
 }
 
 export function validateCandidateChangelog({
@@ -271,11 +305,12 @@ export function validateCandidateChangelog({
   tag,
   targetSha,
 }: StringFields<"rootDir" | "repository" | "tag" | "targetSha">) {
-  validateCandidateChangelogLints({ rootDir, targetSha });
   const version = releaseNotesVersionForTag(tag);
   const releaseChangelog = loadReleaseNotesForTag({ rootDir, ref: targetSha, tag, version });
+  const changelogPaths = validateCandidateChangelogLints(releaseChangelog);
   return {
     releaseNotesText: releaseChangelog.section,
+    changelogPaths,
     releaseNotesCheck: validateCandidateReleaseNotes({
       changelog: releaseChangelog.section,
       repository,

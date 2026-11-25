@@ -21,6 +21,7 @@ import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts"
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import { MessageActions, resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { ChatToolOutput } from "./chat-tool-output-view.tsx";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>
@@ -114,6 +115,7 @@ it("localizes retained message copy labels, catalog truncation, and the open out
     ],
     { container },
   );
+  await settleToolBridges(container);
   const button = container.querySelector<HTMLButtonElement>(".chat-copy-btn")!;
   try {
     for (const [locale, notice, copyLabel] of [
@@ -239,9 +241,23 @@ it.each([
 });
 
 it.each([
-  ["\n", ""],
+  ["", "Keep this body"],
+  ["Thinking\n\n", "Thinking\n\nKeep this body"],
+])("unwraps the untrimmed continue-path frame after %j", (prefix, expected) => {
+  // wrapExternalContent without a warning begins with one LF; continue imports
+  // persisted that frame untrimmed before the gateway copy started trimming it.
+  const framed = wrapExternalContent("Keep this body", {
+    source: "unknown",
+    includeWarning: false,
+  });
+  expect(framed.startsWith("\n<<<")).toBe(true);
+  expectDisplay(imported(prefix + framed), expected);
+});
+
+it.each([
+  ["\n\n", ""],
   ["\r\n", ""],
-  ["Thinking\n\n\n", ""],
+  ["Thinking\n\n\n\n", ""],
   ["", "\n"],
   ["", "\r\n"],
 ])("does not unwrap extra separators %j / %j", (prefix, suffix) => {

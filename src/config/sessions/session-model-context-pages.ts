@@ -36,14 +36,15 @@ export function modelContextPageWriteScope(
   };
 }
 
-type ModelContextNavigationRow = {
+export type ModelContextNavigationRow = {
   entry: ContextEntry;
   bytes: number;
   withoutCheckpointBytes: number;
+  /** Payload needs the JavaScript projection owner; cached with the row across warm reads. */
+  exceptional?: true;
 };
 type NavigationPage = {
   token: string | undefined;
-  through: number;
   // One byte per discarded raw row records canonical membership and checkpoint omission.
   // Rewrites can refresh exact prefix costs from their existing page receipt.
   membership?: Uint8Array;
@@ -206,6 +207,13 @@ export function readModelContextNavigationPages(params: {
   through: number;
   anchorId?: string;
   maxEvents?: number;
+  readCompacted?: () =>
+    | {
+        rows: Map<number, ModelContextNavigationRow>;
+        entries: ContextEntry[];
+        observedSeqs: number[];
+      }
+    | undefined;
   readRows: (after: number, through: number) => Iterable<ModelContextNavigationRow>;
 }) {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
@@ -229,38 +237,48 @@ export function readModelContextNavigationPages(params: {
   ) {
     snapshot = undefined;
   }
-  const pages = snapshot?.pages ?? new Map<number, NavigationPage>();
-  const refresh: Array<{ after: number; through: number }> = [];
-  for (let pageIndex = 0; pageIndex * MODEL_CONTEXT_PAGE_SIZE <= through; pageIndex += 1) {
-    const start = pageIndex * MODEL_CONTEXT_PAGE_SIZE;
-    const end = Math.min(start + MODEL_CONTEXT_PAGE_SIZE - 1, through);
-    const token = cacheable
-      ? readSqliteDatabaseScopedWriteToken(database, [modelContextPageWriteScope(sessionId, start)])
-      : undefined;
-    let page = pages.get(pageIndex);
-    if (!page) {
-      page = { token, through: start - 1, bytes: 0 };
-      pages.set(pageIndex, page);
-    } else if (token === undefined || page.token !== token) {
-      page.token = token;
-      page.through = start - 1;
+  const readPageToken = (pageIndex: number) =>
+    readSqliteDatabaseScopedWriteToken(database, [
+      modelContextPageWriteScope(sessionId, pageIndex * MODEL_CONTEXT_PAGE_SIZE),
+    ]);
+  const rememberPage = (pages: Map<number, NavigationPage>, seq: number) => {
+    const pageIndex = Math.floor(seq / MODEL_CONTEXT_PAGE_SIZE);
+    if (!pages.has(pageIndex)) {
+      pages.set(pageIndex, { token: readPageToken(pageIndex), bytes: 0 });
     }
-    if (page.through < end) {
+  };
+  if (snapshot) {
+    const refresh: Array<{ after: number; through: number }> = [];
+    const addRange = (after: number, end: number) => {
       const previous = refresh.at(-1);
-      if (previous?.through === page.through) {
+      if (previous?.through === after) {
         previous.through = end;
       } else {
-        refresh.push({ after: page.through, through: end });
+        refresh.push({ after, through: end });
+      }
+    };
+    // Only pages containing rows need rewrite receipts. Appends can jump across
+    // arbitrarily large sequence gaps, so discover their pages from the new rows.
+    for (const [pageIndex, page] of snapshot.pages) {
+      const token = readPageToken(pageIndex);
+      if (token === undefined || page.token !== token) {
+        page.token = token;
+        addRange(
+          pageIndex * MODEL_CONTEXT_PAGE_SIZE - 1,
+          Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, snapshot.through),
+        );
       }
     }
-  }
-  if (snapshot) {
+    if (through > snapshot.through) {
+      addRange(snapshot.through, through);
+    }
     const appended: ModelContextNavigationRow[] = [];
     for (const range of refresh) {
       const prefixBytes = new Map<number, number>();
       for (const row of readRows(range.after, range.through)) {
         if (row.entry.seq > snapshot.through) {
           appended.push(row);
+          rememberPage(snapshot.pages, row.entry.seq);
         } else {
           const retained = snapshot.rows.get(row.entry.seq);
           if (retained) {
@@ -269,23 +287,20 @@ export function readModelContextNavigationPages(params: {
         }
         const pageIndex = Math.floor(row.entry.seq / MODEL_CONTEXT_PAGE_SIZE);
         const flags =
-          pages.get(pageIndex)!.membership?.[row.entry.seq % MODEL_CONTEXT_PAGE_SIZE] ?? 0;
+          snapshot.pages.get(pageIndex)!.membership?.[row.entry.seq % MODEL_CONTEXT_PAGE_SIZE] ?? 0;
         if (flags) {
           const bytes = rowBytes(row, (flags & 2) !== 0);
           prefixBytes.set(pageIndex, (prefixBytes.get(pageIndex) ?? 0) + bytes);
         }
       }
       for (const [pageIndex, bytes] of prefixBytes) {
-        const page = pages.get(pageIndex)!;
+        const page = snapshot.pages.get(pageIndex)!;
         snapshot.prefixBytes += bytes - page.bytes;
         page.bytes = bytes;
       }
     }
     if (appendRows(snapshot, appended)) {
       snapshot.through = through;
-      for (const [pageIndex, page] of pages) {
-        page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
-      }
       return {
         rows: snapshot.rows,
         entries: snapshot.entries,
@@ -302,23 +317,42 @@ export function readModelContextNavigationPages(params: {
       };
     }
   }
-  // Old anchors, branch/reset/compaction or prompt-series restarts and displaced results need
-  // canonical ancestry once. The resulting compact state serves subsequent ordinary reads.
-  const rows = new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
-  const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
-  const branch = selectSessionTranscriptTreePathNodes(tree, anchorId ?? tree.leafId).map(
-    ({ entry, parentId }) => {
-      entry.parentId = parentId;
-      return entry;
-    },
-  );
-  const entries = normalizeSessionContextEntryBoundaries(branch, tree.nodes);
-  const anchorFound = anchorId === undefined || tree.byId.has(anchorId);
+  const compacted = params.readCompacted?.();
+  const rows =
+    compacted?.rows ?? new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
+  let entries: ContextEntry[];
+  let leafId: string | null;
+  let appendParentId: string | null;
+  let anchorFound: boolean;
+  if (compacted) {
+    entries = compacted.entries;
+    leafId = entries.at(-1)?.id ?? null;
+    // An off-path append parent takes the existing canonical reseed path.
+    appendParentId = leafId;
+    anchorFound = true;
+  } else {
+    // Branch/reset/compaction or prompt restarts need canonical ancestry once.
+    const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
+    const branch = selectSessionTranscriptTreePathNodes(tree, anchorId ?? tree.leafId).map(
+      ({ entry, parentId }) => {
+        entry.parentId = parentId;
+        return entry;
+      },
+    );
+    entries = normalizeSessionContextEntryBoundaries(branch, tree.nodes);
+    leafId = tree.leafId;
+    appendParentId = tree.appendParentId;
+    anchorFound = anchorId === undefined || tree.byId.has(anchorId);
+  }
   if (cacheable && anchorFound) {
-    for (const [pageIndex, page] of pages) {
-      page.through = Math.min((pageIndex + 1) * MODEL_CONTEXT_PAGE_SIZE - 1, through);
-      page.membership = undefined;
-      page.bytes = 0;
+    const pages = new Map<number, NavigationPage>();
+    for (const seq of compacted?.observedSeqs ?? rows.keys()) {
+      rememberPage(pages, seq);
+    }
+    // Reuse the existing snapshot only with receipts for the entire certified prefix.
+    // Unhosted readers without receipts keep the bounded cold path on later calls.
+    if (compacted && [...pages.values()].some((page) => page.token === undefined)) {
+      return { rows, entries, anchorFound, prepared: undefined };
     }
     const requests = collectSessionModelContextRequests(entries);
     const pending = collectSessionPendingBackgroundResultRequests(entries);
@@ -328,8 +362,8 @@ export function readModelContextNavigationPages(params: {
       through,
       maxEvents,
       anchorId,
-      leafId: anchorId ?? tree.leafId,
-      appendParentId: tree.appendParentId,
+      leafId: anchorId ?? leafId,
+      appendParentId,
       pages,
       rows: new Map(
         [...requests, ...pending].map(({ entry }) => [entry.seq, rows.get(entry.seq)!]),

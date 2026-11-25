@@ -11,6 +11,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
   evaluateWorkflow as evaluateWorkflowExpression,
   readCiWorkflow,
@@ -51,14 +52,15 @@ function expectAdmission(
 }
 
 describe("complete CI failure reporting", () => {
-  it("runs the PG16 Gateway smoke on one PR shard after test failure, with successful setup", () => {
+  it("runs the PG16 Gateway smoke on its own PR row after failure, with successful setup", () => {
     const smoke = ciStep("postgres-conformance", "Run PostgreSQL 16 Gateway cron smoke");
     const admitted = {
       ...failedContext,
-      matrix: { shard: "1/3" },
+      matrix: { shard: "pg16-smoke" },
       steps: { node_setup: { outputs: {}, outcome: "success" as const } },
     };
     expectAdmission(smoke.if, admitted, [
+      { ...admitted, matrix: { shard: "1/3" } },
       { ...admitted, matrix: { shard: "2/3" } },
       { ...admitted, matrix: { shard: "3/3" } },
       { ...admitted, eventName: "workflow_dispatch" },
@@ -83,6 +85,31 @@ describe("complete CI failure reporting", () => {
     expectAdmission(coverage.if, admitted);
     expect(ciWorkflow.jobs["ci-gate"].needs).toContain("security-fast");
   });
+
+  it.each(["false", "true"])(
+    "admits the settings cell only through central proof decision %s",
+    (eligible) => {
+      const expected =
+        eligible === "true" ? ["packages", "mlx", "mlx-settings"] : ["packages", "mlx"];
+      const context = {
+        repository: "openclaw/openclaw",
+        preflightOutputs: { run_mlx_native_proof: eligible },
+      };
+      const job = ciWorkflow.jobs["macos-swift-packages"];
+      expect(evaluateWorkflowExpression(job.strategy.matrix.phase, context)).toEqual(expected);
+      const step = ciStep("macos-swift-packages", "MLX retained settings upgrade");
+      expect(
+        evaluateWorkflowExpression(step.if, {
+          ...context,
+          matrix: { phase: "mlx-settings" },
+          steps: {
+            "select-xcode": { outputs: {}, outcome: "success" },
+            "macos-native-assets": { outputs: {}, outcome: "success" },
+          },
+        }),
+      ).toBe(eligible === "true");
+    },
+  );
 
   it.each([
     "check-shard",
@@ -211,7 +238,7 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
     }
     env() {
       while [ "$#" -gt 0 ]; do
-        case "$1" in -u) shift 2 ;; *=*) shift ;; *) break ;; esac
+        case "$1" in -u) shift 2 ;; *=*) printf 'ENV %s\n' "$1"; shift ;; *) break ;; esac
       done
       "$@"
     }
@@ -226,6 +253,7 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
         if [ "$FAIL_SCRIPT" != '' ] && [[ "$2" == *"$FAIL_SCRIPT"* ]]; then return 1; fi
       else
         printf 'CHECK node %s\n' "$*"
+        if [ "$1" = "$FAIL_SCRIPT" ]; then return 1; fi
       fi
     }
     nproc() { printf '8\n'; }
@@ -363,6 +391,29 @@ describe("CI check failure collection", () => {
     expect(result.stdout.match(/^CHECK /gm)).toHaveLength(8);
     expect(result.stdout).toContain("scripts/check-protocol-since.mts");
   });
+  it("runs both main-push regressions under both runtimes after a test failure", () => {
+    const result = runChecks(
+      "security-fast",
+      "Check main push shutdown and suppression regressions",
+      {
+        FAIL_SCRIPT: "scripts/run-vitest.mjs",
+      },
+    );
+    expect(result.status, result.stderr).toBe(1);
+    for (const runtime of ["node", "bun"]) {
+      expect(result.stdout.split(`ENV OPENCLAW_VITEST_RUNTIME=${runtime}\n`)).toHaveLength(3);
+      for (const label of ["shutdown", "lint-suppressions"]) {
+        expect(result.stdout).toContain(`::group::${runtime}-${label}`);
+      }
+    }
+    expect(result.stdout.match(/^CHECK /gm)).toHaveLength(4);
+    for (const file of [
+      "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+      "test/scripts/lint-suppressions.test.ts",
+    ]) {
+      expect(result.stdout.split(file)).toHaveLength(3);
+    }
+  });
   it("finishes legacy native locale checks after a failed native check", () => {
     const result = runChecks("native-i18n", "Verify native app i18n source", {
       FAIL_SCRIPT: "native:i18n:verify",
@@ -450,6 +501,174 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
     ).toBe(true);
   });
 
+  it.each([0, 7])("retains complete OpenClawKit output and exit code %i", (exitCode) => {
+    const root = fixture();
+    const result = run(
+      root,
+      `
+swift() {
+  printf '%10000s' output
+  printf 'package stderr\\n' >&2
+  return ${exitCode}
+}
+export -f swift
+${ciStep("macos-swift-packages", "OpenClawKit tests").run}
+`,
+      { OPENCLAWKIT_SCRATCH: root, OPENCLAWKIT_TEST_EXECUTION: "serial" },
+    );
+    expect(result.status, result.stderr).toBe(exitCode);
+    const log = readFileSync(path.join(root, "openclaw-native-test-logs/openclawkit.log"), "utf8");
+    expect(log).toBe(`${" ".repeat(9994)}outputpackage stderr\n`);
+    expect(result.stdout.length).toBeLessThan(9000);
+    const upload = ciStep("macos-swift-packages", "Upload macOS native test logs");
+    for (const [phase, name] of [
+      ["packages", "macos-package-test-logs"],
+      ["tests", "macos-native-test-logs"],
+    ]) {
+      const context = { failed: exitCode !== 0, matrix: { phase } };
+      expect(evaluateWorkflowExpression(upload.if, context)).toBe(true);
+      expect(evaluateWorkflowExpression(upload.with?.name, context)).toBe(name);
+    }
+  });
+
+  it.each([
+    { phase: "mlx-settings", nativeOwner: false, filters: [] },
+    {
+      phase: "packages",
+      nativeOwner: false,
+      filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],
+    },
+    {
+      phase: "release",
+      nativeOwner: false,
+      filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],
+    },
+    {
+      phase: "tests",
+      nativeOwner: false,
+      filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol..."],
+    },
+    {
+      phase: "tests",
+      nativeOwner: true,
+      filters: ["@openclaw/mermaid-renderer...", "@openclaw/gateway-protocol...", "openclaw..."],
+    },
+  ])("installs the full settings source graph while preserving ordinary filters for %j", (row) => {
+    const root = fixture();
+    if (row.nativeOwner) {
+      const owner = path.join(root, "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift");
+      mkdirSync(path.dirname(owner), { recursive: true });
+      writeFileSync(owner, "// fixture presence only\n");
+    }
+    const result = run(
+      root,
+      `
+pnpm() { printf '%s\\n' "$@" > "$TRACE"; }
+${ciStep("macos-swift-packages", "Install native asset dependencies").run}
+`,
+      { MACOS_NATIVE_PHASE: row.phase },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const args = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
+    expect(args.slice(0, 4)).toEqual([
+      "install",
+      "--frozen-lockfile",
+      "--prefer-offline",
+      "--optional",
+    ]);
+    expect(args.filter((_, index) => args[index - 1] === "--filter")).toEqual(row.filters);
+    expect(args.filter((arg) => arg === "--filter")).toHaveLength(row.filters.length);
+    expect(args).toContain("--config.ignore-scripts=false");
+    expect(args).toContain("--config.enable-pre-post-scripts=true");
+  });
+
+  it.each([
+    { extended: false, exit: 0 },
+    { extended: false, exit: 1 },
+    { extended: true, exit: 0 },
+    { extended: true, exit: 1 },
+  ])("keeps MLX driver failures and its proof path for %j", (row) => {
+    const root = fixture();
+    const check = ciStep("macos-swift-packages", "MLX TTS helper build and tests");
+    expect(check.env?.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
+    const result = run(
+      root,
+      `
+python3() {
+  printf '%s\\n' "$@" >> "$TRACE"
+  return "$DRIVER_EXIT"
+}
+${check.run}
+`,
+      {
+        MLX_NATIVE_PROOF: String(row.extended),
+        NATIVE_STARTED: "1234",
+        DRIVER_EXIT: String(row.exit),
+      },
+    );
+    expect(result.status, result.stderr).toBe(row.exit);
+    const proof = readFileSync(path.join(root, "outputs"), "utf8")
+      .trim()
+      .slice("proof-path=".length);
+    const args = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
+    expect(args).toEqual([
+      "-I",
+      "-S",
+      "scripts/test-macos-mlx-native.py",
+      "--proof-dir",
+      proof,
+      "--started",
+      "1234",
+      ...(row.extended ? ["--extended"] : []),
+    ]);
+    expect(args.includes("--foundation-admission-only")).toBe(false);
+    expect(existsSync(proof)).toBe(true);
+    const upload = ciStep("macos-swift-packages", "Upload MLX TTS resolution");
+    expect(
+      evaluateWorkflowExpression(upload.if, {
+        failed: true,
+        matrix: { phase: "mlx" },
+        steps: { "mlx-helper": { outcome: "failure", outputs: { "proof-path": proof } } },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["workflow_dispatch", true, "scripts/test-macos-mlx-native.py", true],
+    ["workflow_dispatch", true, "test/fixtures/macos-mlx-native/bad.Package.resolved", true],
+    ["workflow_dispatch", true, ".github/workflows/ci.yml", true],
+    ["workflow_dispatch", true, "scripts/ci-changed-scope.mjs", true],
+    ["workflow_dispatch", true, "apps/macos-mlx-tts/Package.swift", true],
+    ["workflow_dispatch", true, "apps/shared/OpenClawMLXTTSProtocol/Sources/Protocol.swift", true],
+    ["workflow_dispatch", true, "src/config/config.ts", true],
+    ["workflow_dispatch", true, "src/config/runtime-source-projection.ts", true],
+    ["workflow_dispatch", true, "src/config/types.queue.ts", false],
+    ["workflow_dispatch", true, "apps/macos/Sources/Settings.swift", false],
+    ["workflow_dispatch", false, "apps/macos-mlx-tts/Package.swift", false],
+    ["pull_request", false, "apps/macos-mlx-tts/Package.swift", false],
+    ["push", false, "apps/macos-mlx-tts/Package.swift", false],
+    ["schedule", false, "apps/macos-mlx-tts/Package.swift", false],
+  ] as const)(
+    "admits model proof only for affected exact-head release gates: %s/%s/%s",
+    (eventName, releaseGate, file, expected) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName,
+        releaseGate,
+        changedPaths: [file],
+        scopeEnv: {
+          OPENCLAW_CI_RUN_MACOS: "false",
+          OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+          OPENCLAW_CI_HISTORICAL_TARGET: "false",
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_mlx_native_proof).toBe(String(expected));
+      expect(manifest.outputs.run_macos_swift).toBe(String(expected));
+      expect(manifest.outputs.run_macos_node).toBe("false");
+    },
+  );
+
   it.each(["macos-swift", "ios-build"])(
     "%s runs formatting after Swift lint fails and retains the failure",
     (job) => {
@@ -516,7 +735,7 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
     ).toBe(row.expected);
   });
 
-  it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
+  it("iOS runs the Access proof after lifecycle tests fail", () => {
     const root = fixture();
     const result = run(
       root,
@@ -527,16 +746,14 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     );
     expect(result.status, result.stderr).not.toBe(0);
     const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(3);
+    expect(commands).toHaveLength(2);
     expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
     expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
-    expect(commands[2]).toContain("OpenClawWatchDeliveryUITests.xcresult");
   });
 
   it.each([
     { task: "test-wear", lint: "true", appLint: "play", benchmark: "false", count: 3 },
     { task: "ktlint", lint: "false", appLint: "third-party", benchmark: "true", count: 3 },
-    { task: "build-play", lint: "false", appLint: "", benchmark: "false", count: 3 },
   ])("Android $task runs trailing commands after the first Gradle failure", (row) => {
     const root = fixture();
     executable(root, "apps/android/gradlew", 'printf "%s\\n" "$*" >> "$TRACE"; exit 7');
@@ -580,16 +797,21 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ],
     ["macos-swift-packages", "OpenClawKit tests", "select-xcode", "packages"],
     ["macos-swift-packages", "Swabble tests", "select-xcode", "packages"],
+    ["macos-swift-packages", "MLX TTS helper build and tests", "select-xcode", "mlx"],
+    ["macos-swift-packages", "MLX retained settings upgrade", "select-xcode", "mlx-settings"],
+    [
+      "macos-swift-packages",
+      "MLX retained settings upgrade",
+      "macos-native-assets",
+      "mlx-settings",
+    ],
     ["ios-build", "Test Watch RTC engine", "watch-rust-toolchain", "tests"],
     ["ios-build", "Install iOS Swift tooling", "node-env", "tests"],
     ["ios-build", "Configure iOS build and report simulator selection", "node-env", "tests"],
     ["ios-build", "Prepare iOS simulator", "ios-configure", "tests"],
     ["ios-build", "Build iOS app", "ios-swift-tools", "tests"],
-    ["ios-build", "Build iOS app (Release)", "ios-swift-tools", "release"],
-    ["ios-build", "Prove native managed document download and export", "ios-swift-tools", "tests"],
     ["ios-build", "Run focused iOS voice cleanup simulator tests", "ios-app-build", "tests"],
     ["ios-build", "Run focused iOS lifecycle simulator tests", "ios-app-build", "tests"],
-    ["ios-build", "Run focused Apple Watch operation simulator tests", "ios-app-build", "tests"],
   ])("%s / %s ignores unrelated failure but requires %s", (job, name, producer, phase) => {
     const setup = Object.fromEntries(
       [
@@ -615,7 +837,11 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       matrix: { phase },
       fileHashes: { "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift": "present" },
       env: { HISTORICAL_TARGET: "false", MACOS_PRIMARY_PHASE: "tests" },
-      preflightOutputs: { run_openclawkit_tests: "true", validation_tier: "full" },
+      preflightOutputs: {
+        run_openclawkit_tests: "true",
+        run_mlx_native_proof: phase === "mlx-settings" ? "true" : "false",
+        validation_tier: "full",
+      },
       steps: { ...setup, "macos-node-tooling": { outputs: {}, outcome: "skipped" as const } },
     };
     expect(ciWorkflow.jobs[job].steps.some((step: WorkflowStep) => step.id === producer)).toBe(
@@ -766,6 +992,20 @@ describe("PR failure reporting", () => {
         ).toEqual({ group: "Release reserved", labels: "ubuntu-24.04" });
       }
     }
+  });
+
+  it("selects the declared Node runtime before executing the sparse failure reporter", () => {
+    const steps: WorkflowStep[] = readCiWorkflow().jobs["pr-failure-report"].steps;
+    const checkout = requiredWorkflowStep(steps, "Checkout CI failure reporter");
+    const setup = requiredWorkflowStep(steps, "Setup Node.js");
+    const report = requiredWorkflowStep(steps, "Classify completed PR failures");
+    expect(checkout.with?.["sparse-checkout"]).toContain(
+      ".github/actions/setup-pnpm-store-cache/ensure-node.sh",
+    );
+    expect(steps.indexOf(checkout)).toBeLessThan(steps.indexOf(setup));
+    expect(steps.indexOf(setup)).toBeLessThan(steps.indexOf(report));
+    expect(setup.env?.REQUESTED_NODE_VERSION).toBe("${{ env.NODE_VERSION }}");
+    expect(setup.run).toContain("openclaw_ensure_node");
   });
 
   it("reports unsuccessful prerequisites with read-only grants for canonical PRs including forks", () => {
@@ -1053,7 +1293,7 @@ describe("PR failure reporting", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "publishes the classification table and machine-readable failures without changing the gate result",
+    "publishes the classification table and machine-readable failures without Node or a checkout",
     () => {
       const gate = readCiWorkflow().jobs["ci-gate"];
       const step = gate.steps.find(
@@ -1065,7 +1305,11 @@ describe("PR failure reporting", () => {
         runAttempt: 2,
       };
       expect(evaluateWorkflowExpression(`\${{ ${step.if} }}`, context)).toBe(false);
-      const summary = "| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\n";
+      expect(
+        gate.steps.some((entry: WorkflowStep) => entry.uses?.startsWith("actions/checkout@")),
+      ).toBe(false);
+      const summary =
+        '| Job | Class |\n| --- | --- |\n| checks-node-example | pre-existing |\nUnicode: 🦞, quotes: "ok", backslash: \\n\n';
       const failures = [
         {
           job: "checks-node-example",
@@ -1087,15 +1331,19 @@ describe("PR failure reporting", () => {
           failureReportOutputs: outputs,
         }),
       ).toBe(true);
-      const result = spawnSync("/bin/bash", ["-c", step.run], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          GITHUB_STEP_SUMMARY: summaryPath,
-          SUMMARY_JSON: outputs.summary_json,
-          FAILURES_JSON: outputs.failures_json,
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `node() { return 99; }; export -f node\n${step.run}`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            SUMMARY_JSON: outputs.summary_json,
+            FAILURES_JSON: outputs.failures_json,
+          },
         },
-      });
+      );
       expect(result.status, result.stderr).toBe(0);
       expect(readFileSync(summaryPath, "utf8")).toBe(summary);
       expect(result.stdout).toContain(summary);

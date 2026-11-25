@@ -14,6 +14,7 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -204,6 +205,60 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   }
   expect(load(2)).toEqual({ ...changed.expectedEntry, label: "newer" });
   expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
+});
+
+it("reports only the last current owner of a captured MCP session, including retained windows", async () => {
+  const { database, key, set, load } = createPlannerStore();
+  for (const name of ["last", "shared", "changed", "history", "uncaptured"]) {
+    set(name, {});
+  }
+  set("alias", {
+    sessionId: load("shared")!.sessionId,
+    previousSessionId: load("history")!.sessionId,
+  });
+  const options = { agentId: "main", path: database.path, env: process.env };
+  const entries = ["last", "shared", "changed", "history", "uncaptured"].map((name) => ({
+    sessionKey: key(name),
+    expectedEntry: load(name)!,
+  }));
+  const [last, shared, changed, history] = entries.map(
+    ({ expectedEntry }) => expectedEntry.sessionId,
+  );
+  set("changed", { label: "newer" });
+  const result = await withSqliteSessionDeletions(
+    options,
+    entries.map(({ sessionKey, expectedEntry: entry }) => ({ sessionKey, entry })),
+    async () =>
+      runSqliteSessionDeletionTransaction(
+        (current) =>
+          finalizeSessionMaintenanceInDatabase(current, {
+            kind: "maintenance-finalize",
+            agentId: "main",
+            databaseOptions: options,
+            entries,
+            materializedPlans: [],
+            retainedMcpSessionIds: [last!, shared!, changed!, history!],
+          }),
+        options,
+      ),
+  );
+  const source = readOpenClawAgentDatabaseIdentity(database);
+  expect(result.value.mcpRelease).toEqual({
+    sessionIds: [last, history],
+    source: {
+      agentId: "main",
+      databaseIdentity: source.identity,
+      databaseBirthtime: source.birthtime,
+    },
+  });
+  expect(load("alias")?.sessionId).toBe(shared);
+  expect(load("changed")?.sessionId).toBe(changed);
+  expect(load("last")).toBeUndefined();
+  expect(
+    database.db
+      .prepare("SELECT entry_valid FROM session_nodes WHERE session_key = ?")
+      .get(key("last")),
+  ).toEqual({ entry_valid: -1 });
 });
 
 it("preserves current provider keys", async () => {
@@ -694,4 +749,32 @@ it("waits for a pending preference write before preparing cleanup", async () => 
   await writer;
   const pins = await preparing;
   expect(pins.sessionKeys).toEqual(["agent:main:pending"]);
+});
+
+it("removes disposable cap rows while ordinary archiving is deferred", async () => {
+  const { storePath, load } = createPlannerStore(2);
+  const disposableKey = "agent:main:subagent:deferred-cap-disposable";
+  replaceSessionEntrySync(
+    { sessionKey: disposableKey, storePath },
+    { sessionId: "deferred-cap-disposable", updatedAt: 3 },
+  );
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [],
+    isPending: () => true,
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const result = await applySessionEntryLifecycleMutation({
+    storePath,
+    maintenanceOverride: {
+      ...resolveMaintenanceConfigFromInput(),
+      archiveDashboardAfterMs: null,
+      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      maxEntries: 1,
+    },
+  });
+  expect(result).toMatchObject({ archived: 0, capped: 1, afterCount: 2 });
+  expect(loadSessionEntry({ storePath, sessionKey: disposableKey })).toBeUndefined();
+  expectUnarchived(load(0));
+  expectUnarchived(load(1));
 });

@@ -4,6 +4,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { ownerRoster } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
+import { seedSidebarOwnerFilter } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const rosterMatch = { includeGlobal: true, ownerFirst: true };
@@ -32,6 +33,12 @@ suite.define(() => {
   it("hydrates the owner-first roster separately from the event subscription", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
+    await seedSidebarOwnerFilter(
+      page,
+      suite.server?.baseUrl ?? "",
+      "profile-ada",
+      "owner:profile-ada",
+    );
     const gateway = await installMockGateway(page, {
       heldMethods: ["sessions.list"],
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],

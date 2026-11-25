@@ -5,7 +5,7 @@ import {
   isUnknownCallStatus,
   normalizeFaceTimeCallEvent,
   normalizeFaceTimeHandle,
-  resolveAuthorizedFaceTimeOwner,
+  resolveAuthorizedFaceTimeCaller,
 } from "../src/call-events.js";
 import type { FaceTimeCallStatusEvent } from "../src/call-events.js";
 import {
@@ -25,7 +25,7 @@ function call(data: Record<string, unknown>) {
 }
 
 const owner = (event: ReturnType<typeof call>, handle = "owner@example.com") =>
-  resolveAuthorizedFaceTimeOwner({ event, ownerHandles: [handle] });
+  resolveAuthorizedFaceTimeCaller({ event, allowedCallers: [handle] });
 
 it("normalizes helper telemetry and authorizes the exact nested handle candidate", () => {
   const event = call({
@@ -42,7 +42,7 @@ it("normalizes helper telemetry and authorizes the exact nested handle candidate
     local_meter_level: 0.37,
   });
   expect(normalizeFaceTimeHandle(event.data.handle)).toBe("display@example.com");
-  expect(owner(event)).toEqual({ senderId: "owner@example.com", senderIsOwner: true });
+  expect(owner(event)).toEqual({ senderId: "facetime:owner@example.com" });
 });
 
 it("fails unknown states closed", () => {
@@ -71,25 +71,25 @@ it.each([0, 3])("keeps an outbound status-%i call pending", (call_status) => {
   expect(isEndedCall(event)).toBe(false);
 });
 
-const ownerHandles = ["Owner@example.com", "+1 (206) 555-0100"];
+const allowedCallers = ["Owner@example.com", "+1 (206) 555-0100"];
 it.each([
   { handle: "owner@example.com", mode: undefined, expected: "audio" },
   { handle: "+12065550100", mode: "video", expected: "video" },
 ])("authorizes $handle with mode $expected", ({ handle, mode, expected }) => {
-  expect(resolveFaceTimeDialRequest({ handle, mode, ownerHandles })).toEqual({
+  expect(resolveFaceTimeDialRequest({ handle, mode, allowedCallers })).toEqual({
     handle,
     mode: expected,
   });
 });
 
 it.each([
-  ["stranger@example.com", undefined, "not an authorized owner handle"],
+  ["stranger@example.com", undefined, "not an allowed caller"],
   ["facetime:owner@example.com", undefined, "must not include a URL scheme"],
   ["owner@example.com?ignored=true", undefined, "unsupported characters"],
   ["owner@example.com\nsecond@example.com", undefined, "unsupported characters"],
   ["owner@example.com", "screen-share", "mode must be audio or video"],
 ])("rejects handle %j with mode %j", (handle, mode, error) => {
-  expect(() => resolveFaceTimeDialRequest({ handle, mode, ownerHandles })).toThrow(error);
+  expect(() => resolveFaceTimeDialRequest({ handle, mode, allowedCallers })).toThrow(error);
 });
 const request = { handle: "owner@example.com", mode: "video" as const };
 it.each([

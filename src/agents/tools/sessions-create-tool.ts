@@ -1,5 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAdmittedUnlinkedChannelRequester } from "../../auto-reply/requester-profile.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { SessionsCreateToolSchema } from "./sessions-create-tool-schema.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
@@ -36,6 +38,20 @@ export function createSessionsCreateTool(opts?: SessionsSpawnToolOptions): AnyAg
         }
       }
       const { message: _message, ...destination } = params;
+      // An unlinked source has no person to select. Ignore only this stray model selector,
+      // never a linked participant refusal or a missing/revoked requester context.
+      const caller = getGatewayToolCallerIdentity();
+      const unlinkedRequester = readAdmittedUnlinkedChannelRequester(
+        caller?.operationalRunInstance,
+      );
+      if (
+        readToolStringParam(params, "user") !== undefined &&
+        !caller?.operatorAuthority &&
+        unlinkedRequester
+      ) {
+        unlinkedRequester();
+        delete destination.user;
+      }
       const message =
         params.message === undefined
           ? undefined

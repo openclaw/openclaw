@@ -60,7 +60,11 @@ export function formatAgentHarnessUserInputPrompt(
     // A numbered header would let markdown renderers merge it and the option
     // lines below into one renumbered list; options number from 1 per question.
     const prefix = questions.length > 1 ? `Question ${index + 1}: ` : "";
-    lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
+    lines.push(
+      "",
+      `${prefix}${formatText(question.header)}`,
+      formatQuestionText(question, formatText),
+    );
     if (question.isSecret) {
       lines.push(
         options.secretWarning ?? "This channel may show your reply to other participants.",
@@ -78,6 +82,22 @@ export function formatAgentHarnessUserInputPrompt(
     }
   });
   return lines.join("\n");
+}
+
+/**
+ * Display formatters escape one line of untrusted text. Text-only channels get
+ * the browser link only from this text, so the line holding exactly the
+ * question's own URL stays literal unless it carries markup or mention characters.
+ */
+function formatQuestionText(
+  question: AgentHarnessUserInputQuestion,
+  formatText: (text: string) => string,
+): string {
+  const literalUrl = /[\s<>@`[\]()*~|]/u.test(question.url ?? " ") ? undefined : question.url;
+  return question.question
+    .split("\n")
+    .map((line) => (line.trim() && line !== literalUrl ? formatText(line) : line))
+    .join("\n");
 }
 
 export async function deliverAgentHarnessUserInputPrompt(
@@ -126,7 +146,7 @@ function buildAgentHarnessQuestionPresentation(params: {
   ].join("\n");
   return {
     blocks: [
-      { type: "text", text: formatText(question.question) },
+      { type: "text", text: formatQuestionText(question, formatText) },
       { type: "text", text: optionGuidance },
       {
         type: "buttons",

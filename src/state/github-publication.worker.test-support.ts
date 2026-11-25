@@ -1,22 +1,11 @@
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import type { SqliteWorkerReply, SqliteWorkerRequest } from "../infra/sqlite-worker-contract.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { publicationRowDefaults } from "./github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
-import type { RepositoryPublicationMutation } from "./github-publication-worker.types.js";
-
-export function publicationCommand(input: RepositoryPublicationMutation) {
-  const operationId = `${input.operation}-${"row" in input ? input.row.request_id : "report"}`;
-  return {
-    type: "githubPublications.repository" as const,
-    input: { ...input, operationId },
-  };
-}
 
 export function repositoryRow(requestId: string): RepositoryGitHubPublicationRow {
   const row: RepositoryGitHubPublicationRow = {
@@ -44,30 +33,7 @@ export function repositoryRow(requestId: string): RepositoryGitHubPublicationRow
   return row;
 }
 
-export async function expectNoMainThreadSql(operation: () => Promise<void>) {
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
-    await operation();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
-}
-
-export async function expectNoWorkerRequests(operation: () => Promise<void>) {
-  using requests = vi.spyOn(Worker.prototype, "postMessage");
-  await operation();
-  expect(requests).not.toHaveBeenCalled();
-}
-
 const heldReplies = new Set<() => void>();
-
-export function releaseHeldGitHubPublicationMessages() {
-  for (const release of heldReplies) {
-    release();
-  }
-}
 
 export function holdNextReply(
   commandType = "githubPublications.repository",
@@ -134,28 +100,6 @@ export function holdNextReply(
       postMessage.mockClear();
       emit.mockClear();
     }
-  };
-  heldReplies.add(release);
-  return { ready: ready.promise, release };
-}
-
-export function holdNextReceipt() {
-  const ready = createDeferredCore();
-  let deliver: (() => void) | undefined;
-  const observe = workerAdmission.observeSqliteWorkerCommittedFacts;
-  vi.spyOn(workerAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
-    (admission, observer) => {
-      observe(admission, (receipt) => {
-        deliver = () => observer(receipt);
-        ready.resolve();
-      });
-    },
-  );
-  const release = () => {
-    const send = deliver;
-    deliver = undefined;
-    heldReplies.delete(release);
-    send?.();
   };
   heldReplies.add(release);
   return { ready: ready.promise, release };

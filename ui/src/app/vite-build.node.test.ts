@@ -143,6 +143,8 @@ afterEach(async () => {
 it("keeps inline recovery executable and its DOM intact after document compaction", async () => {
   const source = `<style>/* fallback */ h1 { color: rgb(255, 0, 0); }</style>
     <h1>Still loading</h1><button>Retry</button>
+    <p><span>Keep</span>
+      <span>spacing</span></p><pre>  code\n  next</pre><textarea>  draft\n  next</textarea>
     <script data-cfasync="false">/* recovery */
       document.querySelector("button").addEventListener("click", function () {
         document.querySelector("h1").textContent = "Retrying";
@@ -161,6 +163,9 @@ it("keeps inline recovery executable and its DOM intact after document compactio
     /[=]>|\b(?:let|const)\b/u,
   );
   expect(compact).not.toContain("/* recovery */");
+  expect(document.querySelector("p")?.textContent).toBe("Keep spacing");
+  expect(document.querySelector("pre")?.textContent).toBe("  code\n  next");
+  expect(document.querySelector("textarea")?.value).toBe("  draft\n  next");
   dom.window.close();
 });
 
@@ -286,47 +291,15 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(html).not.toContain(errorsChunk.fileName);
 });
 
-it("preloads only the selected locale's late Chat catalogs before body parsing", async () => {
+it("preloads only the selected locale's Chat catalogs after the entry graph is admitted", async () => {
   const config = createConfig();
-  const namespaces = [
-    "runtimeErrors",
-    "filePreview",
-    "mcpApp",
-    "worktrees",
-    "newSession",
-    "sessionsView",
-    "mcpServers",
-    "mcpPage",
-    "profilePage",
-    "connection",
-    "attention",
-    "chat",
-  ];
-  const filename = (locale: string, namespace: string) =>
-    namespace === "runtimeErrors"
-      ? `locale-errors-${locale}`
-      : `locale-namespace-${locale}-${namespace}`;
-  await writeRoot("lazy-catalog.js", "export const createCatalog = (value) => value;");
-  for (const locale of ["de", "ar"]) {
-    for (const namespace of namespaces) {
-      await writeRoot(
-        `${filename(locale, namespace)}.js`,
-        `export default "${locale}/${namespace}";`,
-      );
-    }
-    await writeRoot(
-      `${locale}.js`,
-      `import { createCatalog } from "./lazy-catalog.js";
-export default createCatalog({${namespaces.map((namespace) => `${namespace}: () => import("./${filename(locale, namespace)}.js")`).join(",")}});`,
-    );
-  }
   await writeRoot(
     "main.js",
-    'globalThis.locales = [() => import("./de.js"), () => import("./ar.js")];',
+    `globalThis.locales = [${["de", "ar"].map((locale) => `() => import(${JSON.stringify(fileURLToPath(new URL(`../i18n/locales/${locale}.ts`, import.meta.url)))})`).join(",")}];`,
   );
   await writeRoot(
     "index.html",
-    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };</script></head><body><script type="module" src="./main.js"></script></body></html>`,
+    `<html><head><script>globalThis.beforeBody = { body: document.body, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };document.addEventListener("readystatechange",()=>{globalThis.afterParse = { state: document.readyState, hints: [...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.getAttribute("href")) };},{once:true});</script></head><body><script type="module" src="./main.js"></script></body></html>`,
   );
   const { html, output } = await buildOutput(config);
   const emitted = new Set(output.map((asset) => asset.fileName));
@@ -355,7 +328,13 @@ export default createCatalog({${namespaces.map((namespace) => `${namespace}: () 
     try {
       const beforeBody = Reflect.get(page.window, "beforeBody");
       expect(beforeBody.body).toBeNull();
-      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(beforeBody.hints.filter((href: string) => !href.includes("/index-"))).toEqual([]);
+      await new Promise<void>((resolve) => {
+        page.window.document.addEventListener("DOMContentLoaded", () => resolve(), { once: true });
+      });
+      const afterParse = Reflect.get(page.window, "afterParse");
+      expect(afterParse.state).toBe("interactive");
+      const hints = afterParse.hints.filter((href: string) => href.startsWith(`${base}/assets/`));
       expect(hints).toHaveLength(expected ? 14 : 0);
       for (const href of hints) {
         expect(href.startsWith(`${base}/assets/`)).toBe(true);

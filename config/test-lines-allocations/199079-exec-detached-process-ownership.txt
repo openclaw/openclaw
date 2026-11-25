@@ -1,0 +1,2 @@
+# Net regression-test lines for #199079 beyond the allowance: real-process tests for exec survivor hand-off, accounting, caps, reservation, descendant closure, unconfirmed stops and chat/RPC reset cleanup, plus a node exec timeout regression.
+150

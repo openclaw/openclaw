@@ -92,13 +92,16 @@ export function describeGatewayLockHolder(
 export class GatewayLockNamespaceError extends Error {
   constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      `cannot verify Gateway ownership from this process; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
+      `cannot verify Gateway ownership from this process${lockPath ? ` at ${lockPath}` : ""}; heartbeat age does not prove that the holder stopped. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
   }
 }
 
-/** File-lock recovery also covers pre-namespace Windows records from supported upgrades. */
+/**
+ * File-lock recovery also covers pre-namespace (before 2026.10.1) records from supported
+ * upgrades on hosts whose PIDs are kernel-global. Linux PID namespaces keep them unknown.
+ */
 export function classifyGatewayLockProcessNamespace(
   holder:
     | { processNamespace?: unknown; machineIdentity?: unknown; pid?: unknown; startTime?: unknown }
@@ -106,7 +109,12 @@ export function classifyGatewayLockProcessNamespace(
     | undefined,
   lockPath?: string,
 ): "same" | "dead" | "unknown" {
-  if (process.platform === "win32" && holder && holder.processNamespace === undefined && lockPath) {
+  if (
+    (process.platform === "win32" || process.platform === "darwin") &&
+    holder &&
+    holder.processNamespace === undefined &&
+    lockPath
+  ) {
     try {
       // A missing namespace never grants local authority. Only an expired heartbeat
       // plus native proof of process death can retire this legacy file owner.

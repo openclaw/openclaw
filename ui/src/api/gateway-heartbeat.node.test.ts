@@ -85,9 +85,15 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
         willRetry: true,
       }),
     );
-    expect(onReconnectScheduled).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(0);
+    await vi.advanceTimersByTimeAsync(0);
     expect(wsInstances).toHaveLength(2);
+    // The immediate replacement spends no backoff attempt; a failing one backs off as usual.
+    wsInstances[1]!.emitClose(1006, "lost connection");
+    await vi.advanceTimersByTimeAsync(799);
+    expect(wsInstances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(201);
+    expect(wsInstances).toHaveLength(3);
   });
 
   it.each([

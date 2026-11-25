@@ -25,6 +25,7 @@ import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
+import { admitGatewayCronOccurrence } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -74,8 +75,8 @@ export type Fixture = {
   registry: PluginRegistry;
   params: (body?: string) => HandleCommandsParams;
   handler: ReturnType<typeof vi.fn<Handler>>;
-  userInputs: () => Promise<unknown[]>;
-  assistantOutputs: () => Promise<unknown[]>;
+  userInputs: (sessionId?: string) => Promise<unknown[]>;
+  assistantOutputs: (sessionId?: string) => Promise<unknown[]>;
   restrictParentTools: () => Promise<unknown>;
   revokeOwner: () => void;
   demoteOwner: () => void;
@@ -207,10 +208,11 @@ export async function withCommandPlugin(
     const previousSubagentRuns = new Set(subagentRuns.keys());
     let fixtureRef: Fixture | undefined;
     const runSchedulerOwned = createScheduledGatewayRunner(resolveGatewayContext, () => registry);
+    const resolveCronAgent = () => ({ agentId: "main", cfg });
     const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
-      resolveCronAgent: () => ({ agentId: "main", cfg }),
+      resolveCronAgent,
       resolveGatewayContext,
       resolvePluginRegistry: () => registry,
     });
@@ -224,6 +226,7 @@ export async function withCommandPlugin(
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
         runSchedulerOwned,
+        admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
         // Present, as in the Gateway, so a misrouted command schedule would be observed here.
         runSessionEvent: async ({ text }) => {
           sessionEventPrompts.push(text);
@@ -276,12 +279,12 @@ export async function withCommandPlugin(
     );
     await state.writeConfig(cfg);
     const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
-    const transcriptContents = async (role: "user" | "assistant") => {
+    const transcriptContents = async (role: "user" | "assistant", sessionId = "command-parent") => {
       const events = await loadTranscriptEvents({
         agentId: "main",
         sessionKey,
         storePath,
-        sessionId: "command-parent",
+        sessionId,
       });
       return events.flatMap((event) => {
         const record = asOptionalRecord(event);
@@ -335,8 +338,8 @@ export async function withCommandPlugin(
         reloadPlugin,
         params,
         handler,
-        userInputs: () => transcriptContents("user"),
-        assistantOutputs: () => transcriptContents("assistant"),
+        userInputs: (sessionId) => transcriptContents("user", sessionId),
+        assistantOutputs: (sessionId) => transcriptContents("assistant", sessionId),
         restrictParentTools: () =>
           upsertSessionEntryCore(
             { agentId: "main", sessionKey, storePath },

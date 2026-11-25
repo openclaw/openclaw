@@ -10,6 +10,7 @@ import {
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -146,7 +147,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: false,
     requireChannelHealth: false,
     env: params.env,
     onObservation: params.onProgress
@@ -649,14 +649,7 @@ export async function compensateOriginalManagedService(
   return {
     result: {
       ...result,
-      recovery: {
-        ...result.recovery,
-        serviceRestartSafe: false,
-        reason:
-          result.recovery?.serviceRestartSafe === false
-            ? result.recovery.reason
-            : "runtime-verification-failed",
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
       steps: [
         ...result.steps,
         {

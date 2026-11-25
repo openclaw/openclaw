@@ -28,6 +28,7 @@ import {
   settleOpenClawAgentDatabaseWorkerClose,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { readAgentDatabaseExecutionAuthority } from "../../state/openclaw-agent-execution-authority.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  assertSqliteReclamationAuthority,
   markSqliteReclamationSettled,
   SqliteReclamationRequestRefusedError,
   waitForSqliteReclamationCommit,
@@ -133,15 +135,24 @@ async function runColdMutationWorker(
   data: SessionColdWorkerData,
   operationId: number,
 ) {
-  const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
+  const { mutateSessionColdTranscriptInWorker, assertSessionColdSourceCurrent } =
     await import("./session-cold-storage-worker.js");
   const { prepareSessionColdSourceGuard, SessionColdSourceRefusedError } =
     await import("./session-cold-storage-source-guard.worker.js");
-  // Restore materialization must finish before requesting any write admission.
-  const coldRecords =
-    data.plan.kind === "cold-restore"
-      ? await prepareSessionColdRestoreInWorker(data.plan)
-      : undefined;
+  const assertPhysicalSource = () =>
+    assertSessionColdSourceCurrent(data.plan.databaseOptions.path, data.source);
+  const assertSourceCurrent = () => {
+    assertPhysicalSource();
+    assertSqliteReclamationAuthority(data.commitGate, () => {
+      if (
+        data.executionAuthority &&
+        !readAgentDatabaseExecutionAuthority(data.executionAuthority)
+      ) {
+        throw new SqliteReclamationRequestRefusedError("Cold transcript execution owner retired");
+      }
+    });
+  };
+  assertSourceCurrent();
   using sourceGuard = prepareSessionColdSourceGuard(
     data.plan.databaseOptions,
     data.plan.kind === "cold-restore" ? data.plan.guard?.sources : undefined,
@@ -150,60 +161,78 @@ async function runColdMutationWorker(
   const commitGate = data.commitGate;
   let result: SessionColdMutationResult;
   let validation: OpenClawAgentDatabaseValidation | undefined;
-  try {
-    result = await withWorkerWriteAdmission(
+  let transactionDatabase: EngineConnection | undefined;
+  const onCommit: Parameters<typeof mutateSessionColdTranscriptInWorker>[2] = (
+    database,
+    sourceValidation,
+  ) => {
+    transactionDatabase = database.db;
+    // Native admission can service the grant before its message arrives.
+    for (const { index, matches } of data.sourceMatches ?? []) {
+      const match = sourceValidation?.conversationMatches.find((value) => value.index === index);
+      if (!match) {
+        throw new Error("Cold restoration omitted its source alternatives");
+      }
+      for (const alternative of match.alternatives) {
+        Atomics.store(matches, alternative + 1, 1);
+      }
+      Atomics.store(matches, 0, 1);
+    }
+    waitForSqliteReclamationCommit(commitGate, () =>
+      port.postMessage({ type: "commit-request", operationId }),
+    );
+    assertPhysicalSource();
+    assertSqliteReclamationAuthority(commitGate);
+  };
+  const admit = (run: () => SessionColdMutationResult) =>
+    withWorkerWriteAdmission(
       port,
       operationId,
       data.plan.databaseOptions,
-      async (openedDatabase) => {
-        let transactionDatabase: EngineConnection | undefined;
+      (openedDatabase) => {
         try {
-          return mutateSessionColdTranscriptInWorker(
-            data.plan,
-            coldRecords,
-            (database, sourceValidation) => {
-              transactionDatabase = database.db;
-              // Native admission can service the grant before its message arrives.
-              for (const { index, matches } of data.sourceMatches ?? []) {
-                const match = sourceValidation?.conversationMatches.find(
-                  (value) => value.index === index,
-                );
-                if (!match) {
-                  throw new Error("Cold restoration omitted its source alternatives");
-                }
-                for (const alternative of match.alternatives) {
-                  Atomics.store(matches, alternative + 1, 1);
-                }
-                Atomics.store(matches, 0, 1);
-              }
-              waitForSqliteReclamationCommit(commitGate, () =>
-                port.postMessage({ type: "commit-request", operationId }),
-              );
-            },
-            sourceGuard,
-          );
-        } catch (error) {
-          // The native transaction has rolled back before a post-grant refusal is returned.
-          if (error instanceof SessionColdSourceRefusedError) {
-            return {
-              archivedTranscripts: 0,
-              externalizedTranscripts: 0,
-              restored: false,
-              refusedSource: error.refusal,
-            };
-          }
-          throw error;
+          return run();
         } finally {
           validation = getOpenClawAgentDatabaseValidation(openedDatabase);
-          if (
-            transactionDatabase &&
-            (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
-          ) {
-            markSqliteReclamationSettled(commitGate);
-          }
         }
       },
+      assertSourceCurrent,
+      data.plan.kind === "cold-restore",
     );
+  try {
+    try {
+      if (data.plan.kind === "cold-restore") {
+        const { restoreSessionColdTranscriptInWorker } =
+          await import("./session-cold-storage-restore.js");
+        result = await restoreSessionColdTranscriptInWorker(
+          data.plan,
+          admit,
+          onCommit,
+          sourceGuard,
+        );
+      } else {
+        result = await admit(() =>
+          mutateSessionColdTranscriptInWorker(data.plan, undefined, onCommit, sourceGuard),
+        );
+      }
+    } catch (error) {
+      if (!(error instanceof SessionColdSourceRefusedError)) {
+        throw error;
+      }
+      result = {
+        archivedTranscripts: 0,
+        externalizedTranscripts: 0,
+        restored: false,
+        refusedSource: error.refusal,
+      };
+    } finally {
+      if (
+        transactionDatabase &&
+        (!transactionDatabase.isOpen || !transactionDatabase.isTransaction)
+      ) {
+        markSqliteReclamationSettled(commitGate);
+      }
+    }
   } catch (error) {
     const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
     throwReclamationFailure(error, cleanup, commitGate);

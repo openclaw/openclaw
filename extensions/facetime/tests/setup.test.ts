@@ -70,7 +70,7 @@ function commandRunner(ready = true) {
 
 function runSetup(overrides: Partial<Parameters<typeof runFaceTimeSetup>[0]> = {}) {
   return runFaceTimeSetup({
-    config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+    config: resolveFaceTimeConfig({ allowedCallers: ["owner@example.com"] }),
     nativePackageReady: true,
     pluginRoot: "/plugin",
     runCommandWithTimeout: commandRunner() as never,

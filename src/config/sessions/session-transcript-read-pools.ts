@@ -11,7 +11,10 @@ import {
   type UsageCostWorkerInput,
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
+import {
+  resolveSessionHistoryWorkerCount,
+  resolveWorkerPoolSize,
+} from "../../infra/worker-pool-sizing.js";
 import { createOwnedWorkerTaskPool, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
   SessionHistoryWorkerInput,
@@ -22,50 +25,69 @@ const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTrans
 // V8's default young generation lets each idle reader keep ~60 MiB of nursery.
 export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
   maxOldGenerationSizeMb: 512,
-  maxYoungGenerationSizeMb: 32,
+  maxYoungGenerationSizeMb: 16,
 };
 
 export function createSessionTranscriptHistoryPool(
-  maxWorkers = resolveWorkerPoolSize("singleton"),
+  maxWorkers: number | (() => number) = resolveWorkerPoolSize("singleton"),
   onRotationComplete?: () => void,
-  options: { prewarmHistory?: true } = {},
 ) {
   let canCloseNativeResources: boolean | undefined;
-  const pool = createOwnedWorkerTaskPool<
-    SessionHistoryWorkerInput,
-    SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
-  >(
-    {
-      workerUrl,
-      workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
-      maxWorkers,
-      idleTimeoutMs: 0,
-      burstIdleTimeoutMs: 30_000,
-      onRotationComplete() {
-        canCloseNativeResources = undefined;
-        onRotationComplete?.();
-      },
-      prepareWorker: () => {
-        ensureSqliteLibrarySelected();
-        // Early workers stay conservative if native-close qualification was still pending.
-        canCloseNativeResources =
-          captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
-        return {
-          options: {
-            workerData: {
-              databaseEngineSelection: getDatabaseEngineSelection(),
-              ...options,
+  const createPool = () =>
+    createOwnedWorkerTaskPool<
+      SessionHistoryWorkerInput,
+      SessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>
+    >(
+      {
+        workerUrl,
+        workerOptions: { resourceLimits: SESSION_TRANSCRIPT_WORKER_LIMITS },
+        maxWorkers: typeof maxWorkers === "number" ? maxWorkers : maxWorkers(),
+        idleTimeoutMs: 0,
+        burstIdleTimeoutMs: 30_000,
+        onRotationComplete() {
+          canCloseNativeResources = undefined;
+          onRotationComplete?.();
+        },
+        prepareWorker: () => {
+          ensureSqliteLibrarySelected();
+          // Early workers stay conservative if native-close qualification was still pending.
+          canCloseNativeResources =
+            captureSqliteWorkerClosePolicy() && (canCloseNativeResources ?? true);
+          return {
+            options: {
+              workerData: {
+                databaseEngineSelection: getDatabaseEngineSelection(),
+              },
             },
-          },
-        };
+          };
+        },
       },
-    },
-    { databaseAccess: "read-only" },
-  );
+      { databaseAccess: "read-only" },
+    );
+  // Boot installs the database engine after import, so a resolver sizes the pool on first use.
+  type Pool = ReturnType<typeof createPool>;
+  let pool: Pool | undefined;
+  const owned = () => (pool ??= createPool());
   return {
-    ...pool,
+    run: (...args: Parameters<Pool["run"]>) => owned().run(...args),
+    rotate: () => owned().rotate(),
+    runTask: (...args: Parameters<Pool["runTask"]>) => owned().runTask(...args),
+    startTask: (...args: Parameters<Pool["startTask"]>) => owned().startTask(...args),
+    closeResources: (key?: string) => owned().closeResources(key),
+    startCloseResources: (key?: string) => owned().startCloseResources(key),
+    startRotate: () => owned().startRotate(),
+    getSnapshot: () => owned().getSnapshot(),
+    close: (error?: Error) => owned().close(error),
     canCloseNativeResources: () => canCloseNativeResources === true,
   };
+}
+
+/** The foreground history lane sizes by the database engine that boot installs. */
+export function createSessionHistoryLanePool(onRotationComplete: () => void) {
+  return createSessionTranscriptHistoryPool(
+    () => resolveSessionHistoryWorkerCount(getDatabaseEngineSelection()),
+    onRotationComplete,
+  );
 }
 
 export function createUsageCostPool(
@@ -100,6 +122,7 @@ export type SessionDatabaseWorkerLane = {
   native: boolean;
   pending: number;
   idleTimer?: NodeJS.Timeout;
+  idleSince?: number;
   idleCleanupListener?: Disposable;
   rotation?: Promise<void>;
 };

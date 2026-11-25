@@ -9,6 +9,7 @@ import {
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { getPluginLoadedEntry } from "./plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
@@ -56,6 +57,27 @@ function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+// Older Git updaters build the next release below lib/node_modules/openclaw.
+// Node cannot strip plugin TypeScript there, even through a release symlink.
+function resolveNodeModulesBuiltPublicSurface(pluginRoot: string, artifactBasename: string) {
+  const physicalRoot = pluginCacheRealpathSync(pluginRoot);
+  if (
+    !physicalRoot?.split(path.sep).includes("node_modules") ||
+    path.basename(path.dirname(physicalRoot)) !== "extensions"
+  ) {
+    return null;
+  }
+  const packageRoot = path.resolve(physicalRoot, "../..");
+  for (const dist of ["dist", "dist-runtime"]) {
+    const boundaryRoot = path.join(packageRoot, dist, "extensions", path.basename(physicalRoot));
+    const modulePath = path.join(boundaryRoot, artifactBasename);
+    if (pluginCacheExistsSync(modulePath)) {
+      return { modulePath, boundaryRoot };
+    }
+  }
+  return null;
+}
+
 /** Resolves a source-tree public surface artifact path for bundled plugin development. */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
@@ -68,7 +90,14 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
     if (pluginCacheExistsSync(sourceCandidate)) {
-      return sourceCandidate;
+      return (
+        (isTypeScriptPackageEntry(sourceCandidate)
+          ? resolveNodeModulesBuiltPublicSurface(
+              path.resolve(params.sourceRoot, dirName),
+              artifactBasename,
+            )?.modulePath
+          : undefined) ?? sourceCandidate
+      );
     }
   }
   return null;
@@ -80,6 +109,7 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
   artifactBasename: string;
   pluginId?: string;
   entrySource?: string;
+  origin?: PluginOrigin;
 }): { modulePath: string; boundaryRoot: string } | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const record = resolvePluginRuntimeRecord(params);
@@ -131,6 +161,16 @@ export function resolvePluginRootPublicSurfaceLocation(params: {
       }
       checkedPaths.add(candidate);
       if (exists(candidate)) {
+        if (
+          !instance &&
+          (record?.origin ?? params.origin) === "bundled" &&
+          isTypeScriptPackageEntry(candidate)
+        ) {
+          const built = resolveNodeModulesBuiltPublicSurface(pluginRoot, artifactBasename);
+          if (built) {
+            return built;
+          }
+        }
         return { modulePath: candidate, boundaryRoot: pluginRoot };
       }
     }
@@ -147,6 +187,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
   const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
     artifactBasename: params.artifactBasename,
+    origin: "bundled",
   });
   if (resolved !== null) {
     return resolved.modulePath;

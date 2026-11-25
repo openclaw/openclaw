@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
@@ -141,6 +143,8 @@ function applyConfiguredMcpApproval(
 }
 
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+  /** Private host-issued carrier for a committed session store. */
+  storeAdmission?: object;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -148,6 +152,8 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  metadata?: PluginMetadataSnapshot;
+  isTurnTainted?: () => boolean;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
@@ -258,6 +264,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 ): Promise<StaticHarnessMcpTools> {
   const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
@@ -279,6 +286,18 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   const liveRuntime = await materializeBundleMcpToolsForRun({
     ...acquisition,
     agentId: params.agentId,
+    operatorConnect: params.cfg
+      ? {
+          cfg: params.cfg,
+          metadata: params.metadata,
+          senderIsOwner:
+            params.policyContext?.senderIsOwner ?? conversationCapabilityProfile?.sender.isOwner,
+          chatType: params.policyContext?.chatType,
+          isTurnTainted: params.isTurnTainted,
+          toolOverrides: params.toolOverrides,
+          toolDenylist: conversationCapabilityProfile?.policy.explicitToolDenylist,
+        }
+      : undefined,
     reservedToolNames: params.reservedToolNames,
     ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
   });
@@ -332,7 +351,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     ];
     const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
     const bounded = [...new Set(messages)]
-      .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
+      .map((message) => truncateUtf16Safe(message.replaceAll(/\s+/g, " ").trim(), 180))
       .filter(Boolean)
       .slice(0, 4);
     const diagnosticNotice =
@@ -364,6 +383,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,
