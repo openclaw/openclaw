@@ -88,7 +88,6 @@ it("admits main-written ordinary recovery, queued input, and cron state after up
       expect(source.snapshot.version).toBeUndefined();
       const restored = await restoreGatewayOperatorSource({
         snapshot: source.snapshot,
-        source,
         agentId: "main",
         context,
         assertCurrent: () => signal.throwIfAborted(),
