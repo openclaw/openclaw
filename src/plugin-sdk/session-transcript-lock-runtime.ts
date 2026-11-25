@@ -64,6 +64,7 @@ export async function withProjectedSessionTranscriptWriteLock<
     | "withSessionTranscriptWriteLock"
     | "withCodexSessionTranscriptMirrorWriteLock" = "withSessionTranscriptWriteLock",
 ): Promise<T> {
+  const { assertCurrent, ...scope } = params;
   if (mode === "lock") {
     assertLegacyTranscriptPreparation(params);
     warnSessionTranscriptPreparationDeprecation(
@@ -73,7 +74,7 @@ export async function withProjectedSessionTranscriptWriteLock<
         : "withSessionTranscriptWrite",
     );
   }
-  const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
+  const storageTarget = await resolveSessionTranscriptRuntimeTarget(scope, scope.config);
   const agentId = normalizeAgentId(storageTarget.agentId);
   const target: InternalSessionTranscriptTarget = {
     agentId,
@@ -85,7 +86,6 @@ export async function withProjectedSessionTranscriptWriteLock<
     sessionKey: storageTarget.sessionKey,
     targetKind: "runtime-session",
   };
-  const { assertCurrent, ...scope } = params;
   const boundScope = {
     ...scope,
     ...storageTarget,
@@ -143,7 +143,7 @@ export async function withProjectedSessionTranscriptWriteLock<
             whileOpen(() =>
               locked.appendMessage({
                 ...projectSessionTranscriptAppendOptions(options),
-                ...(params.config !== undefined ? { config: params.config } : {}),
+                ...(scope.config !== undefined ? { config: scope.config } : {}),
               }),
             ),
           publishUpdate: (update) =>

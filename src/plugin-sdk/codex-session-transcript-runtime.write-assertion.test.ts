@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionTranscriptWriteAssertion,
@@ -46,6 +46,23 @@ describe("Codex mirror write assertion", () => {
     expect(await readTexts(target)).toEqual(['"text":"settled"']);
   });
 
+  it("retains the admitted locator and assertion when caller options change after entry", async () => {
+    const target = await createUnresolvedTarget();
+    const params = {
+      ...target,
+      assertCurrent: () => {
+        throw new Error("original mirror authority");
+      },
+    };
+    const write = withCodexSessionTranscriptMirrorWrite(params, (transcript) =>
+      transcript.appendMessageWithMessageSequence(appendAssistant("unguarded")),
+    );
+    params.sessionId = "different-session";
+    params.assertCurrent = () => {};
+    await expect(write).rejects.toThrow("original mirror authority");
+    expect(await readTexts(target)).toEqual([]);
+  });
+
   it("rejects authority revoked during awaited callback work before the row commits", async () => {
     const target = await createUnresolvedTarget();
     let revoked = false;
@@ -72,17 +89,18 @@ describe("Codex mirror write assertion", () => {
   it("rejects a foreign ambient transcript owner before reserving the writer", async () => {
     const target = await createUnresolvedTarget();
     const foreign = await createUnresolvedTarget("session-foreign");
+    const write = vi.fn(
+      (transcript: Parameters<Parameters<typeof withCodexSessionTranscriptMirrorWrite>[1]>[0]) =>
+        transcript.appendMessageWithMessageSequence(appendAssistant("foreign")),
+    );
     await expect(
       withSessionTranscriptWriteAssertion(
         { ...foreign, agentId: "main" },
         () => {},
-        () =>
-          withCodexSessionTranscriptMirrorWrite(
-            { ...target, assertCurrent: () => {} },
-            (transcript) => transcript.appendMessageWithMessageSequence(appendAssistant("foreign")),
-          ),
+        () => withCodexSessionTranscriptMirrorWrite({ ...target, assertCurrent: () => {} }, write),
       ),
     ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
+    expect(write).not.toHaveBeenCalled();
     expect(await readTexts(target)).toEqual([]);
   });
 });

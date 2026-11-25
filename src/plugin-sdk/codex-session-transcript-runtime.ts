@@ -260,17 +260,18 @@ async function withMirrorWrite<T>(
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
   mode: "lock" | "sequence",
 ): Promise<T> {
+  const { assertCurrent, ...scope } = params;
   const { withProjectedSessionTranscriptWriteLock } =
     await import("./session-transcript-lock-runtime.js");
   return await withProjectedSessionTranscriptWriteLock(
-    params,
+    { ...scope, assertCurrent },
     run,
     (context, locked) => ({
       ...context,
       appendMessageWithMessageSequence: (options) =>
         locked.appendMessageWithMessageSequence({
           ...options,
-          ...(params.config !== undefined ? { config: params.config } : {}),
+          ...(scope.config !== undefined ? { config: scope.config } : {}),
         }),
       readMessageFacts: async (factParams) => {
         const facts = await locked.readMessageFacts(factParams);
