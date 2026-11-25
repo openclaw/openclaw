@@ -19,7 +19,7 @@ it("preserves startup diagnostics and fails only the Classic health command", as
         forwarded.push(`${mode}:${request.method}`);
       }
       const preflightFailure =
-        mode === "backend" && request.method === "health" && ++backendHealthAttempts === 1;
+        mode === "cli" && request.method === "health" && ++backendHealthAttempts === 1;
       socket.send(
         JSON.stringify({
           type: "res",
@@ -65,7 +65,7 @@ it("preserves startup diagnostics and fails only the Classic health command", as
         response.json(),
       ),
     ).resolves.toEqual({ ready: true });
-    for (const [index, mode] of ["probe", "backend", "backend", "backend"].entries()) {
+    for (const [index, mode] of ["probe", "cli", "cli", "backend"].entries()) {
       const socket = new WebSocket(url.replace("http:", "ws:"));
       try {
         await once(socket, "open", { signal: AbortSignal.timeout(2_000) });
@@ -89,7 +89,7 @@ it("preserves startup diagnostics and fails only the Classic health command", as
         socket.terminate();
       }
     }
-    expect(forwarded).toEqual(["probe:health", "backend:health", "backend:health"]);
+    expect(forwarded).toEqual(["probe:health", "cli:health", "cli:health"]);
     await vi.waitFor(() => expect(output).toContain("QA_ONBOARD_HEALTH_FAULT"));
     expect(output).toContain("QA_ONBOARD_HEALTH_PREFLIGHT_OK");
   } finally {

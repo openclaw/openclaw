@@ -46,8 +46,9 @@ sockets.on("connection", (front) => {
     if (request.type === "req" && request.method === "connect") {
       clientMode = request.params?.client?.mode;
     }
-    // Classic uses probe mode for reachability, then two backend health calls:
-    // diagnostic preflight must succeed before the final health command fails.
+    // The token-auth fixture uses probe mode for reachability and CLI mode for
+    // diagnostic preflight (resolveReadOnlyLocalGatewayAuth). The final health
+    // command uses callGateway's backend mode. Keep preflight retries intact.
     if (
       request.type === "req" &&
       request.method === "health" &&
@@ -65,7 +66,7 @@ sockets.on("connection", (front) => {
       );
       return;
     }
-    if (request.type === "req" && request.method === "health" && clientMode === "backend") {
+    if (request.type === "req" && request.method === "health" && clientMode === "cli") {
       preflightIds.add(request.id);
     }
     if (back.readyState === WebSocket.OPEN) {
