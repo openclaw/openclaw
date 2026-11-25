@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -46,6 +48,7 @@ import {
   readNodeCacheSeed,
   restoreNodeCacheSeed,
   runNodeCacheBenchmark,
+  runQualifiedNodeCacheBenchmark,
   withVitestPairDeadline,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
@@ -589,6 +592,8 @@ describe("Node compile-cache benchmark contract", () => {
     [["--mode", "node-compile-cache"], "--baseline is not supported"],
     [["--workload", "prepared"], "--workload and --seed require"],
     [["--seed", "sealed"], "--workload and --seed require"],
+    [["--qualification", "proof"], "--qualification requires"],
+    [["--mode", "node-cache-qualified-measurement"], "--baseline is not supported"],
   ])("rejects mixed CLI mode arguments before output", (args, error) => {
     const { outputDir, stderr } = runBenchmarkCli(args);
     expect(stderr).toContain(error);
@@ -669,6 +674,40 @@ describe("native Node cache evidence", () => {
       ),
     ).toMatchObject({ read: "invalid", state: "not initialized" });
   });
+});
+
+itUnix("records failed qualification admission without starting a measured child", async () => {
+  const root = realpathSync(tempDirs.make("node-cache-admission-"));
+  const workloadDir = path.join(root, "workload");
+  const qualificationDir = path.join(root, "qualification");
+  const outputDir = path.join(root, "output");
+  const scratchDir = path.join(root, "scratch");
+  mkdirSync(workloadDir);
+  mkdirSync(qualificationDir);
+  let attempts = 0;
+  await expect(
+    runQualifiedNodeCacheBenchmark({
+      workloadDir,
+      qualificationDir,
+      outputDir,
+      scratchDir,
+      pnpmBin: process.execPath,
+      timeoutMs: 10_000,
+      admit: () => {
+        attempts += 1;
+        throw new Error("qualification receipt changed");
+      },
+    }),
+  ).rejects.toThrow("qualification receipt changed");
+  expect(attempts).toBe(1);
+  expect(
+    JSON.parse(readFileSync(path.join(outputDir, "terminal-manifest.json"), "utf8")),
+  ).toMatchObject({
+    status: "failure",
+    error: "qualification receipt changed",
+  });
+  expect(readdirSync(outputDir)).toEqual(["terminal-manifest.json"]);
+  expect(existsSync(scratchDir)).toBe(false);
 });
 
 it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !process.versions.bun)(
@@ -881,6 +920,41 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     expect(readFileSync(path.join(context.outputDir, "terminal-manifest.json"), "utf8")).toBe(
       terminal,
     );
+    // The reader has its own receipt tests; exercise the qualified runner's
+    // output/deadline handoff with this already-prepared process fixture.
+    const qualificationDir = path.join(root, "qualification");
+    mkdirSync(qualificationDir);
+    cpSync(seed, path.join(qualificationDir, "seed"), { recursive: true });
+    const qualifiedOutput = path.join(root, "qualified");
+    await runQualifiedNodeCacheBenchmark({
+      workloadDir: workload,
+      qualificationDir,
+      outputDir: qualifiedOutput,
+      scratchDir: scratch,
+      pnpmBin: process.execPath,
+      timeoutMs: 30_000,
+      admit: () => ({
+        manifest: nodeCacheManifest,
+        preparedSha256: integrity.beforeSha256 as string,
+        provenance: { fixture: true },
+        revalidate: () => {},
+      }),
+    });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "terminal-manifest.json"), "utf8")),
+    ).toMatchObject({ status: "success" });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "qualification.json"), "utf8")),
+    ).toEqual({ fixture: true });
+    expect(
+      JSON.parse(readFileSync(path.join(qualifiedOutput, "analysis.json"), "utf8")),
+    ).toMatchObject({ valid: true });
+    expect(
+      readdirSync(qualifiedOutput).filter((file) =>
+        /^pair-\d+-(disabled|seeded)\.json$/u.test(file),
+      ),
+    ).toHaveLength(40);
+    expect(existsSync(scratch)).toBe(false);
     writeFileSync(path.join(root, "mutate"), "enable ignored-file mutation");
     const mutated = {
       ...context,

@@ -3,6 +3,7 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createComponent, createMemo, merge } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -36,8 +37,11 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { createSnapshotRecord } from "./session-snapshot-record.ts";
 import { agentEvent } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -745,6 +749,67 @@ it.each([false, true])(
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[0]?.[1]).toMatchObject({ messageId: "source-2", limit: 1 });
     expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: "before-two" });
+  },
+);
+
+it.each(["disk", "memory"] as const)(
+  "recovers every source row after reopening a %s-trimmed display projection",
+  async (tier) => {
+    const text = tier === "memory" ? "x".repeat(160 * 1024) : "message";
+    const physical = Array.from({ length: 82 }, (_, index) => {
+      const seq = index + 1;
+      return {
+        ...nativeHistoryMessage(seq, text),
+        __openclaw: {
+          id: `source-${seq}`,
+          seq,
+          transcriptPosition: {
+            source: "history",
+            rawSeq: seq,
+            ...(seq === 8 ? { activity: { afterRawSeq: 1, scopeId: "tool", startOrder: 0 } } : {}),
+          },
+        },
+      };
+    });
+    const snapshot = {
+      messages: composeTranscriptDisplay(physical),
+      sessionId: "current",
+      deltaCursor: "persisted",
+      pagination: pagination(physical.length),
+    };
+    expect(nativeHistorySeq(snapshot.messages[1])).toBe(8);
+    const request = vi.fn(
+      async (_method: string, params: { messageId?: string; cursor?: string }) => {
+        if (params.messageId) {
+          const index = physical.findIndex((row) => row["__openclaw"].id === params.messageId);
+          expect(index).toBeGreaterThan(0);
+          return { messages: [physical[index]], olderCursor: String(index), sessionId: "current" };
+        }
+        return { messages: physical.slice(0, Number(params.cursor)), sessionId: "current" };
+      },
+    );
+    const { pane, state } = createNativeShowEarlierPane(request);
+    const target = { sessionKey: state.sessionKey };
+    let restored: ChatSessionSnapshot | null | undefined;
+    if (tier === "disk") {
+      restored = (await createSnapshotRecord(target.sessionKey, { savedAt: 1, snapshot }))?.record
+        .snapshot;
+    } else {
+      const cache: ChatMessageCache = new Map();
+      cacheChatSessionSnapshot(cache, state, target, snapshot);
+      restored = readChatSessionSnapshot(cache, state, target);
+    }
+    expect(restored?.pagination).toMatchObject({ hasMore: true, needsBoundary: true });
+    expect(restored?.deltaCursor).toBe("persisted");
+    applyChatCacheSnapshot(state, restored!);
+
+    await pane.loadOlderMessages();
+
+    expect(state.chatHistoryPagination.hasMore).toBe(false);
+    expect(state.chatMessages).toHaveLength(physical.length);
+    expect(new Set(state.chatMessages.map(nativeHistorySeq))).toEqual(
+      new Set(physical.map(nativeHistorySeq)),
+    );
   },
 );
 

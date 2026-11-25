@@ -53,17 +53,12 @@ export const OWNER_PRODUCER_FILES = new Set([
   "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
   "src/plugins/registry-runtime.ts", // host trust gate for a plugin's ingress owner claim
   "src/worker/embedded-agent.runtime.ts", // remote worker: its run's grant is not on the protocol
-  // Requests, not turns: owner = the connection's admin scope (OA3 request grant).
-  "src/gateway/openai-compatible-http.ts",
-  "src/gateway/server-methods/conversations.ts",
-  "src/gateway/server-methods/tools-invoke.ts",
-  "src/gateway/session-resource-tool-policy.ts",
-  "src/gateway/talk/client-tool-authority.ts",
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
   "src/auto-reply/command-auth.ts",
   "src/auto-reply/reply/reply-source-admission.ts",
   "src/gateway/agent-turn/agent-run-user-turn.ts",
+  "src/gateway/talk/client-tool-authority.ts", // Talk caller: admin scope + `ownerAllowFrom` match
   // Scheduled and requester-owner continuations (cron creator authority).
   "src/agents/openclaw-plugin-tools.ts",
   "src/agents/openclaw-tools.ts",

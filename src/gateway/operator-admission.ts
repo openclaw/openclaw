@@ -73,7 +73,7 @@ import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.j
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
-import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type OperatorAdmissionContext = Pick<
@@ -243,6 +243,12 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
 
 /** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
 export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
+
+/** A request may do what its admitted run may; a bare connection gets what its scopes decide. */
+export const readGatewayRequestAdmission = (client?: GatewayClient | null) => ({
+  grant:
+    client?.internal?.operatorRunAuthority?.grant ?? decideTurnGrant(client?.connect?.scopes ?? []),
+});
 
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<

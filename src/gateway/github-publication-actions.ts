@@ -33,10 +33,10 @@ type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
-  const marker = before.indexOf("\n\n<!-- openclaw-publication:");
-  const credit = before.indexOf("\n\n## Worked on by\n\n");
   // Preserve the whole original suffix; added lookalike blocks cannot replace its identity.
-  const start = marker < 0 ? credit : credit < 0 ? marker : Math.min(marker, credit);
+  const start = before.search(
+    /\n\n(?:Requested by [^\r\n]* via OpenClaw(?:\n|$)|## Worked on by\n\n|<!-- openclaw-publication:)/u,
+  );
   if (start >= 0 && !after.includes(before.slice(start))) {
     throw new Error("Keep the existing PR attribution, publication marker and footer unchanged.");
   }
