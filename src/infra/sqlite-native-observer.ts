@@ -247,7 +247,11 @@ export function observeSqliteNativeOperations(
     );
   database.prepare = (...prepareArgs) => {
     const statement = native.DatabaseSync.prototype.prepare.call(database, ...prepareArgs);
-    const mutation = classifySqliteMutation(prepareArgs[0], "statement");
+    // Native prepare ignores trailing SQL. Defer the compiled-source read so empty
+    // statements keep the runtime's native prepare/execute error ordering.
+    let mutation: SqliteNativeMutation | undefined;
+    const resolveMutation = () =>
+      (mutation ??= classifySqliteMutation(statement.sourceSQL, "statement"));
     const run = Object.hasOwn(statement, "run") ? statement.run.bind(statement) : undefined;
     const get = Object.hasOwn(statement, "get") ? statement.get.bind(statement) : undefined;
     const all = Object.hasOwn(statement, "all") ? statement.all.bind(statement) : undefined;
@@ -275,7 +279,7 @@ export function observeSqliteNativeOperations(
     const wrap =
       <Result>(resolve: () => Parameters<typeof callStatement<Result>>[0]) =>
       (...bindings: Parameters<typeof callStatement<Result>>[1]): Result =>
-        execute(() => reset(() => callStatement(resolve(), bindings)), mutation);
+        execute(() => reset(() => callStatement(resolve(), bindings)), resolveMutation());
     statement.run = wrap(() => run ?? native.StatementSync.prototype.run.bind(statement));
     statement.get = wrap(() => get ?? native.StatementSync.prototype.get.bind(statement));
     statement.all = wrap(() => all ?? native.StatementSync.prototype.all.bind(statement));
@@ -316,7 +320,7 @@ export function observeSqliteNativeOperations(
           lifetime.finished = false;
           active.add(lifetime);
         }
-        lifetime.observed ??= begin(mutation, "iterate");
+        lifetime.observed ??= begin(resolveMutation(), "iterate");
         activeIterators.add(lifetime);
         const result = nativeNext.apply(this, args);
         if (result.done) {

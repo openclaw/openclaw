@@ -518,6 +518,24 @@ describe("known hourly main failures", () => {
     expect(parseNodeFailureReport(log, true)).toHaveLength(count);
   });
 
+  it("preserves exact named-error signatures with nested project labels", () => {
+    const message = "GatewayClientRequestTimeoutError: gateway request timeout for config.apply";
+    const log = report()
+      .replace("FAIL   gateway  ", "FAIL   gateway (gateway-server-parallel)  ")
+      .replaceAll("AssertionError: expected true to be false", message);
+    expect(parseNodeFailureReport(log, true)).toEqual([
+      { kind: "vitest", file, test: `${title} :: ${message}` },
+    ]);
+    expect(
+      parseNodeFailureReport(
+        log + "\n[shard:gateway] GatewayClientRequestTimeoutError: cleanup failed",
+        true,
+      ),
+    ).toEqual([]);
+    expect(
+      parseNodeFailureReport(log.replaceAll(message, "UnknownFailure: timeout"), true),
+    ).toEqual([]);
+  });
   it.each([
     ["complete mixed invocations", "", 2, 1],
     ["failed-only terminal count", "", 1, 0],

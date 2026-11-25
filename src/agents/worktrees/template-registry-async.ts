@@ -201,13 +201,19 @@ export function reserveTemplateAsync(
   );
 }
 
-type TemplateManifest = { rawManifest: string; manifestRef: string };
+export type TemplateManifest = {
+  rawManifest: string;
+  manifestRef: string;
+  projectionFingerprints?: Buffer | null;
+};
 const compressManifest = promisify(zstdCompress);
 const decompressManifest = promisify(zstdDecompress);
-const templateManifests = new LruCache<{ compressed: Buffer; manifestRef: string; bytes: number }>(
-  1024,
-  { maxBytes: 64 * 1024 * 1024, sizeOf: (entry) => entry.bytes },
-);
+const templateManifests = new LruCache<{
+  compressed: Buffer;
+  manifestRef: string;
+  projectionFingerprints?: Buffer | null;
+  bytes: number;
+}>(1024, { maxBytes: 64 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
 const pendingManifests = new Map<string, Promise<TemplateManifest>>();
 const templateManifestKey = (record: WorktreeTemplateRecord, policyKey: string) =>
   `${JSON.stringify(record.id)}:${JSON.stringify([record.path, record.createdAt, record.sourceCommit, policyKey])}`;
@@ -227,6 +233,7 @@ export async function readTemplateManifest(record: WorktreeTemplateRecord, polic
     cached && {
       rawManifest: (await decompressManifest(cached.compressed)).toString("utf8"),
       manifestRef: cached.manifestRef,
+      projectionFingerprints: cached.projectionFingerprints,
     }
   );
 }
@@ -260,8 +267,13 @@ export async function prepareTemplateManifest(
     }
     const manifest = await capture();
     const compressed = await compressManifest(Buffer.from(manifest.rawManifest));
-    const bytes = compressed.byteLength + 2 * (key.length + manifest.manifestRef.length) + 256;
-    templateManifests.set(key, { compressed, manifestRef: manifest.manifestRef, bytes });
+    const { manifestRef, projectionFingerprints } = manifest;
+    const bytes =
+      compressed.byteLength +
+      (projectionFingerprints?.byteLength ?? 0) +
+      2 * (key.length + manifestRef.length) +
+      256;
+    templateManifests.set(key, { compressed, manifestRef, projectionFingerprints, bytes });
     return manifest;
   })().finally(() => pendingManifests.delete(key));
   pendingManifests.set(key, prepared);

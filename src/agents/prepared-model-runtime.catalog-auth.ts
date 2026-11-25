@@ -18,7 +18,7 @@ import { mergeAuthProfileStores } from "./auth-profiles/persisted.js";
 import { removeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
 import type { AuthProfileCredential, RuntimeAuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderConfigSecretInput } from "./model-auth-provider-config.js";
-import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
+import { captureModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
   ModelServiceTierObservation,
@@ -435,24 +435,26 @@ export async function prepareInitialModelCatalogAuth(
   const providerAuthLabels =
     providers.length === 0
       ? new Map()
-      : await withPreparedAuthStorePathForDisplay(
-          agentFacts.input.agentDir,
-          agentFacts.env,
-          assertCurrent,
-          (authStorePath) =>
-            withPluginRuntimeGenerationScope(
+      : await withPluginRuntimeGenerationScope(
+          {
+            metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+            pluginRegistry: pluginGeneration.pluginRegistry,
+          },
+          () =>
+            captureModelCatalogAuthLabels(
               {
-                metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-                pluginRegistry: pluginGeneration.pluginRegistry,
+                ...agentFacts.input,
+                env: agentFacts.env,
+                store: agentFacts.authStore,
+                providers,
               },
-              () =>
-                prepareModelCatalogAuthLabels({
-                  ...agentFacts.input,
-                  env: agentFacts.env,
-                  authStorePath,
-                  store: agentFacts.authStore,
-                  providers,
-                }),
+              (capture) =>
+                withPreparedAuthStorePathForDisplay(
+                  agentFacts.input.agentDir,
+                  agentFacts.env,
+                  assertCurrent,
+                  capture,
+                ),
             ),
         );
   assertCurrent();

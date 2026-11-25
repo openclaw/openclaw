@@ -60,6 +60,8 @@ export type PendingInputMutation =
       inputId: string;
       messageJson: string;
       originSourceJson?: string;
+      /** Queued owed rows this row's bytes now carry; the same transaction consumes them. */
+      absorbedIdempotencyKeys?: readonly string[];
     })
   | (PendingInputSettlementIdentity & {
       kind: "complete";

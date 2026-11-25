@@ -74,7 +74,6 @@ describe("publication policy inherited by a managed child", () => {
           profileId: "publication-policy-test",
           scopes: ["operator.write"],
           signal: new AbortController().signal,
-          assertCurrent: () => {},
         }),
       },
       () =>

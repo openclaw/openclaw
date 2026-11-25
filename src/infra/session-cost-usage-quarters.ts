@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { usageModelIdentity } from "../shared/usage-aggregates.js";
-import type { UsageCalendar } from "../shared/usage-calendar.js";
+import { includesUsageDay, type UsageCalendar } from "../shared/usage-calendar.js";
 import { computeLatencyStats, type SessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import type { CostUsageTotals } from "./session-cost-usage.types.js";
 
@@ -357,11 +357,13 @@ export type UsageQuarterRange = {
   startMs: number;
   endMs: number;
   dates: string[];
-  slot: (quarterStartMs: number) => number;
+  slot: (quarterStartMs: number, block: UsageCostQuarterBlock, row: number) => number;
 };
 
 const SPLIT_QUARTER = -1;
 const UNKNOWN = -2;
+const OUTSIDE_QUARTER = -3;
+const TRANSITION_QUARTER = -4;
 export const slotHour = (slot: number) => (slot >> 3) & 31;
 export const slotWeekday = (slot: number) => slot & 7;
 
@@ -384,6 +386,18 @@ export function createUsageQuarterRange(params: {
   const keyed = indexed ? undefined : new Map<number, number>();
   const dates: string[] = [];
   const dayIndex = new Map<string, number>();
+  const calendarSlot = (local: ReturnType<UsageCalendar["at"]>): number => {
+    if (!includesUsageDay(local.date, params.calendar.civilDays)) {
+      return OUTSIDE_QUARTER;
+    }
+    let day = dayIndex.get(local.date);
+    if (day === undefined) {
+      day = dates.length;
+      dates.push(local.date);
+      dayIndex.set(local.date, day);
+    }
+    return day * 256 + local.hour * 8 + local.weekday;
+  };
   const compute = (quarterStartMs: number): number => {
     const local = params.calendar.at(quarterStartMs);
     // Modern zone offsets and transitions are quarter-hour aligned; others need transcripts.
@@ -395,36 +409,54 @@ export function createUsageQuarterRange(params: {
     ) {
       return SPLIT_QUARTER;
     }
-    let day = dayIndex.get(local.date);
-    if (day === undefined) {
-      day = dates.length;
-      dates.push(local.date);
-      dayIndex.set(local.date, day);
+    if (
+      local.offset !== params.calendar.at(quarterStartMs + QUARTER_MS).offset &&
+      local.offset !== params.calendar.at(quarterStartMs + QUARTER_MS - 1).offset
+    ) {
+      return TRANSITION_QUARTER;
     }
-    return day * 256 + local.hour * 8 + local.weekday;
+    return calendarSlot(local);
   };
+  function cachedSlot(quarterStartMs: number): number {
+    if (indexed) {
+      const index = quarterStartMs / QUARTER_MS - firstQuarter;
+      if (index >= 0 && index < quarterCount) {
+        let found = indexed[index]!;
+        if (found === UNKNOWN) {
+          found = compute(quarterStartMs);
+          indexed[index] = found;
+        }
+        return found;
+      }
+    }
+    let found = keyed?.get(quarterStartMs);
+    if (found === undefined) {
+      found = compute(quarterStartMs);
+      keyed?.set(quarterStartMs, found);
+    }
+    return found;
+  }
   return {
     startMs,
     endMs,
     dates,
-    slot(quarterStartMs) {
-      if (indexed) {
-        const index = quarterStartMs / QUARTER_MS - firstQuarter;
-        if (index >= 0 && index < quarterCount) {
-          let found = indexed[index]!;
-          if (found === UNKNOWN) {
-            found = compute(quarterStartMs);
-            indexed[index] = found;
-          }
-          return found;
-        }
+    slot(start, block, row) {
+      const slot = cachedSlot(start);
+      if (slot !== TRANSITION_QUARTER) {
+        return slot;
       }
-      let found = keyed?.get(quarterStartMs);
-      if (found === undefined) {
-        found = compute(quarterStartMs);
-        keyed?.set(quarterStartMs, found);
-      }
-      return found;
+      // Only replay when the clock change splits activity inside the stored quarter.
+      const at = (field: number) => {
+        const column = TABLE_OFFSETS[QUARTERS]! + field;
+        return params.calendar.at(
+          start + (sectionOf(block, column)?.[block.offsets[column]! + row] ?? 0),
+        );
+      };
+      const first = at(Q_FIRST);
+      const last = at(Q_LAST);
+      return first.offset === last.offset && first.date === last.date && first.hour === last.hour
+        ? calendarSlot(first)
+        : SPLIT_QUARTER;
     },
   };
 }
@@ -477,7 +509,7 @@ export function usageQuartersNeedTranscript(
     if (
       start + QUARTER_MS > range.startMs &&
       start <= range.endMs &&
-      range.slot(start) === SPLIT_QUARTER
+      range.slot(start, block, row) === SPLIT_QUARTER
     ) {
       return true;
     }

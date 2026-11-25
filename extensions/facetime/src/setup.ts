@@ -89,7 +89,7 @@ const SETUP_ACTIONS = {
     "Verify SIP status, then rerun setup",
     "/usr/bin/csrutil status",
   ),
-  "configure-owner-handles": commandAction("Configure ownerHandles", "openclaw configure"),
+  "configure-allowed-callers": commandAction("Configure allowedCallers", "openclaw configure"),
   "restart-gateway": commandAction(
     "Stop the stale gateway process, then restart OpenClaw",
     "openclaw gateway restart",
@@ -355,15 +355,15 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
   });
 
   checks.push({
-    id: "owner-handles",
-    label: "Owner FaceTime handles",
-    status: params.config.ownerHandles.length > 0 ? "ready" : "action-required",
+    id: "allowed-callers",
+    label: "Allowed FaceTime callers",
+    status: params.config.allowedCallers.length > 0 ? "ready" : "action-required",
     required: true,
     message:
-      params.config.ownerHandles.length > 0
-        ? `${params.config.ownerHandles.length} owner handle${params.config.ownerHandles.length === 1 ? "" : "s"} configured`
-        : "Configure at least one owner email address or phone number",
-    ...(params.config.ownerHandles.length === 0 ? { actionId: "configure-owner-handles" } : {}),
+      params.config.allowedCallers.length > 0
+        ? `${params.config.allowedCallers.length} allowed caller${params.config.allowedCallers.length === 1 ? "" : "s"} configured`
+        : "Configure at least one allowed email address or phone number",
+    ...(params.config.allowedCallers.length === 0 ? { actionId: "configure-allowed-callers" } : {}),
   });
 
   checks.push({

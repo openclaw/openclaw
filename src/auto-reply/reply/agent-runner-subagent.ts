@@ -1,4 +1,7 @@
-import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  readPreparedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -39,6 +42,7 @@ export async function prepareReplySubagentContinuation(
     await import("../../gateway/session-subagent-reactivation.js");
   await reactivateCompletedSubagentSession({
     sessionKey: turn.sessionKey,
+    operatorAuthority: readPreparedRunOperatorAuthority(admission),
     runId,
     // Handoff results continue the original task rather than restating it.
     ...(handoff ? { continuesPausedTask: true as const } : { task: turn.followupRun.prompt }),

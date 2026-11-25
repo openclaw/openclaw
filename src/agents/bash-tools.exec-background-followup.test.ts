@@ -927,11 +927,6 @@ test.for(["completed", "revoked", "missing"] as const)(
       profileId: "original-guest",
       scopes: ["operator.write"],
       signal: revoked.signal,
-      assertCurrent() {
-        if (!references) {
-          throw new Error("original source released");
-        }
-      },
       retain() {
         references++;
         return () => {
@@ -946,7 +941,6 @@ test.for(["completed", "revoked", "missing"] as const)(
     const admin = createTestOperatorAuthority({
       profileId: "another-admin",
       scopes: ["operator.admin"],
-      assertCurrent() {},
     });
     const enqueueFromAdmin = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority: admin },

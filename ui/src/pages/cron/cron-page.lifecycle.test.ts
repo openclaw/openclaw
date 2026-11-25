@@ -403,7 +403,7 @@ it("keeps the periodic inventory recovery visible-only", async () => {
   page.remove();
 });
 
-it("coalesces a cron event burst into one trailing refresh of the current page", async () => {
+it("coalesces an inventory invalidation burst into one trailing refresh of the current page", async () => {
   const freshJob = createCronViewJob("fresh-job", { configRevision: "fresh-config", state: {} });
   const freshRun = createCronViewRun({
     ts: 2,
@@ -430,7 +430,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   await page.settle();
   page.routeSearch = "?activity";
   await page.settle();
-  emitEvent(gateway, "cron", {}, 20);
+  emitEvent(gateway, "cron.inventory.changed", {}, 20);
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
   expect(callsFor(request, "channels.status")).toHaveLength(0);
   resume();
@@ -773,16 +773,19 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   gateway.emitSnapshot({ phase: "stopped" });
   context.agentSelection.setScope("writer");
   gateway.emitSnapshot({ phase: "connected" });
-  emitEvent(gateway, "cron", {}, 20);
+  emitEvent(gateway, "cron.inventory.changed", {}, 20);
   await settle();
   expect(request.mock.calls.filter(([method]) => refreshMethods.includes(method))).toEqual([]);
   expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   visibility("visible");
   globalThis.dispatchEvent(new Event("focus"));
-  await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
+  await waitForCronPage(() => {
+    expect(page.cron.cronStatus).not.toBeNull();
+    expect(page.cron.cronJobsSnapshotRevision).not.toBeNull();
+  });
   await settle();
   expectCalls(request, refreshMethods, 1);
-  expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
+  expect(callsFor(request, "cron.list")[0]?.[1]).toMatchObject({ agentId: "writer" });
   expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   page.remove();
   request.mockClear();
@@ -802,7 +805,7 @@ it.each([true, false])(
     current.cronJobsQuery = "keep my filter";
     current.cronCreateOpen = true;
     current.cronForm.name = "Unsaved automation";
-    emitEvent(gateway, "cron", {}, 20);
+    emitEvent(gateway, "cron.inventory.changed", {}, 20);
     visibility("hidden");
     current.cronRunsQuery = "keep my history filter";
     resume();
@@ -852,5 +855,5 @@ it("rebinds hidden catch-up to the replacement Gateway", async () => {
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(oldRequest).not.toHaveBeenCalled();
-  expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
+  expect(callsFor(request, "cron.list")[0]?.[1]).toMatchObject({ agentId: "writer" });
 });

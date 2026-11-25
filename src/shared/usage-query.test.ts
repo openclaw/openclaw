@@ -14,3 +14,12 @@ it("tokenizes query terms including quoted strings", () => {
     { key: "has", value: "errors", raw: "has:errors" },
   ]);
 });
+
+it("reads doubled quotes in a value and leaves handwritten backslashes literal", () => {
+  const query = String.raw`model:"C:\models\Atlas ""Mini""" tool:\\host\tool label:"path with spaces\"`;
+  expect(extractQueryTerms(query).map((term) => term.value)).toEqual([
+    String.raw`C:\models\Atlas "Mini"`,
+    String.raw`\\host\tool`,
+    "path with spaces\\",
+  ]);
+});

@@ -8,6 +8,7 @@ import type {
   RealtimeVoiceProviderPlugin,
 } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { convertPcmToMulaw8k } from "../talk/audio-codec.js";
 import { makeBridge } from "../talk/session-runtime.test-support.js";
 import {
   createOpenClawTestState,
@@ -78,11 +79,14 @@ async function createFixture(
   let fatal = () => {};
   let transcript = (_text: string) => {};
   let inputAudio = (_audio: Buffer) => {};
-  const sendAudio = vi.fn();
+  const sendAudio = vi.fn<(audio: Buffer) => void>();
+  const closeProvider = vi.fn();
+  const drainInput = vi.fn<() => Buffer | undefined>();
   const disposed = createDeferredCore();
   const sendUserMessage = vi.fn();
   const transport = {
     inputAudioIsolated,
+    drainInput,
     onFatal: (handler) => {
       fatal = handler;
     },
@@ -118,7 +122,12 @@ async function createFixture(
       ...providerMetadata,
       createSession: (request) => {
         transcript = (text) => request.onTranscript?.(text);
-        return { connect: async () => {}, sendAudio, close() {}, isConnected: () => true };
+        return {
+          connect: async () => {},
+          sendAudio,
+          close: closeProvider,
+          isConnected: () => true,
+        };
       },
     };
     handle = await startMeetingAgentRealtimeEngine({ ...common, providers: [provider] });
@@ -133,6 +142,8 @@ async function createFixture(
           },
           triggerGreeting: undefined,
           sendUserMessage,
+          sendAudio,
+          close: closeProvider,
         });
       },
     };
@@ -148,6 +159,8 @@ async function createFixture(
     transcript: (text: string) => transcript(text),
     inputAudio: (audio: Buffer) => inputAudio(audio),
     sendAudio,
+    closeProvider,
+    drainInput,
     stop: async (kind: "stop" | "fatal") => {
       if (kind === "fatal") {
         fatal();
@@ -174,6 +187,42 @@ describe("meeting shutdown", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     await state.cleanup();
+  });
+
+  it("sends partitioned PCM through its final sample before closing transcription", async () => {
+    const fixture = await createFixture();
+    const pcm = Buffer.alloc(384 * 2);
+    for (let i = 0; i < 384; i++) {
+      pcm.writeInt16LE(((i % 32) - 16) * 700, i * 2);
+    }
+    try {
+      fixture.inputAudio(pcm.subarray(0, 1));
+      fixture.inputAudio(pcm.subarray(1, 256));
+      fixture.inputAudio(pcm.subarray(256, 512));
+      fixture.inputAudio(pcm.subarray(512));
+    } finally {
+      await fixture.handle.stop();
+    }
+    fixture.inputAudio(pcm);
+    await fixture.handle.stop();
+    expect(Buffer.concat(fixture.sendAudio.mock.calls.map(([audio]) => audio))).toEqual(
+      convertPcmToMulaw8k(pcm, 24_000),
+    );
+    expect(fixture.closeProvider).toHaveBeenCalledOnce();
+    expect(fixture.sendAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      fixture.closeProvider.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("delivers buffered capture to the voice provider before closing it", async () => {
+    const fixture = await createFixture("voice");
+    const tail = Buffer.from([0x31, 0x25]);
+    fixture.drainInput.mockReturnValue(tail);
+    await fixture.handle.stop();
+    fixture.inputAudio(Buffer.from([0xff]));
+    await fixture.handle.stop();
+    expect(fixture.sendAudio.mock.calls).toEqual([[tail]]);
+    expect(fixture.sendAudio).toHaveBeenCalledBefore(fixture.closeProvider);
   });
 
   it.each([true, false])(

@@ -17,7 +17,7 @@ preparation—not just a passing product decision.
 
 **Whole-parent reuse.** For `rerun_group=all`, `Check for reusable validation evidence`
 selects the newest green full validation matching profile, coverage policy, effective
-soak, inputs, and exact Q/P identities; child closure equivalence does not apply.
+soak, inputs, and exact Q/P identities; the cross-Q child reuse rule below does not apply.
 
 | Policy                            | Eligible target delta                                                                                                                                                                                                                                                            |
 | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -43,18 +43,10 @@ current Q grants, can outlive a failed, cancelled, or active parent:
   receipts per role, two minutes. Nonmatching receipts do not consume the five.
 - Match target, role, nonempty inputs/defaults, and candidate descriptor bytes. Empty
   inputs equal absent inputs (`github.event.inputs` omits them).
-- Require equal Q or authenticated identical workload closure: owning/reusable workflows,
-  local actions, complete scripts tree, root configuration/dependencies. Different Q
-  requires authenticated tooling lineage; missing, unsupported, or changed closure blocks reuse.
-  Only `scripts/lib/release-validation-waivers.json` is excluded from workload identity:
-  a ledger-only Q change permits reevaluation under new Q grants. Control-only intent
-  for other paths is insufficient.
-- Normal CI additionally retains complete `config`, `packages`, `src`, and `test` trees
-  imported by its Q harness; even unrelated changes there invalidate reuse. Other product
-  directories come from C and are excluded. Unrelated parent workflow changes alone do
-  not invalidate normal CI. Other roles retain all workflows and the full root tree;
-  executable shared-script changes invalidate every child; the grant-ledger-only
-  exception does not exclude other scripts or root files.
+- Across Q, authenticate the original producer Q and its tooling lineage (or its
+  binding to C). Child workflows, scripts, and harnesses may change without
+  invalidating a sealed execution. Current Q grants are reevaluated, not inherited
+  from the original verdict. Set `reuse_evidence=false` when the new harness must run.
 - Dispatch logs explain evaluated rejections, reused children, skipped runs, and fresh
   dispatches. Sealing, collectors, and final verification repeat tooling/receipt checks.
 

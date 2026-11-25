@@ -369,9 +369,9 @@ function createServerMcpRuntime(
         const createdSession: BundleMcpSession = {
           serverName,
           client,
-          ...(mcpAppsEnabled && !nativeContext
-            ? { withElicitation: bindMcpClientElicitation(client) }
-            : {}),
+          ...(nativeContext
+            ? {}
+            : { withElicitation: bindMcpClientElicitation(client, mcpAppsEnabled) }),
           transport: transport.transport,
           transportType: transport.transportType,
           requestTimeoutMs: transport.requestTimeoutMs,
@@ -774,7 +774,7 @@ function createServerMcpRuntime(
                 // call, including one shared allowance for pending human input.
                 timeout:
                   session.requestTimeoutMs +
-                  (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+                  (mcpAppsEnabled && session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
                 signal,
               },
             ),

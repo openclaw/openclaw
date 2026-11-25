@@ -1,8 +1,6 @@
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -82,7 +80,7 @@ export async function prepareSessionControlTarget(params: {
       if (!source) {
         return;
       }
-      if (!profile || profile.profileId !== source.authority.profileId || !profile.isCurrent()) {
+      if (!profile || profile.profileId !== source.authority.profileId) {
         throw new ToolAuthorizationError(
           "Session controls require a current authenticated profile.",
         );
@@ -102,13 +100,8 @@ export async function prepareSessionControlTarget(params: {
         },
         currentFacts,
         {
-          policy: resolveOperatorRolePolicyForAssignment(
-            profile.profileId,
-            profile.role,
-            cfg,
-            profile.githubLogin ?? null,
-            operatorRoleSubject(profile),
-          ),
+          // The role this turn was admitted with; a role change applies to the next turn.
+          policy: source.authority.readCurrentRoleFacts?.().policy,
           aliases: new Set(profile.aliases),
         },
       );

@@ -238,6 +238,7 @@ it.each(["options", "shared-observation"] as const)(
       readCurrent: () => ({
         target: { ...replacement, storeKey: replacement.canonicalKey },
         membership: new Set(["profile-cache-test"]),
+        memberAccess: {},
         sourcePath: replacement.storePath,
         sourceAgentId: replacement.agentId,
       }),
@@ -276,7 +277,7 @@ it("keeps admitted personal reads and publication after ingress closes; refuses 
   grant.abort();
   expect(read.currentSession()).toEqual(read.session);
   expect(() => publication.action.assertCurrent()).not.toThrow();
-  await expect(prepare(request)).rejects.toThrow("connection is no longer current");
+  await expect(prepare(request)).rejects.toThrow("connection lost access");
   await expect(
     preparePersonalGitHubSessionActionV2(request, { sessionKey: "main" }),
   ).rejects.toThrow("current authenticated human");

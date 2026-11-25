@@ -302,7 +302,6 @@ it("preserves operator model restrictions for utility fallbacks", async () => {
   const authority = createTestOperatorAuthority({
     profileId: "fixture",
     scopes: ["operator.write"],
-    assertCurrent() {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg,
       policy: { allow: ["local/*", "other/*"], deny: ["other/backup"] },

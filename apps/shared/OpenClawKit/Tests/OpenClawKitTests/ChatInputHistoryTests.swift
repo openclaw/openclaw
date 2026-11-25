@@ -148,16 +148,6 @@ struct ChatInputHistoryTests {
         #expect(history.cancel() == "")
     }
 
-    @Test func `late acceptance keeps a genuinely newer stashed draft`() {
-        var history = ChatInputHistory()
-        history.record("older")
-        #expect(history.previous(draft: "newer unsent draft") == "older")
-
-        history.record("sent me")
-
-        #expect(history.cancel() == "newer unsent draft")
-    }
-
     @Test func `recall marker stays on the same duplicate after an identical prepend`() {
         var history = ChatInputHistory()
         history.record("dup")

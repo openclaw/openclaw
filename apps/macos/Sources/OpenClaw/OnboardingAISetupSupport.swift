@@ -292,6 +292,7 @@ extension OnboardingAISetupModel {
         let kind: String
         let featured: Bool
         let modelTarget: ModelTarget?
+        var actionLabel: String?
     }
 
     struct RecommendedInstall: Identifiable, Equatable, Decodable {
@@ -408,6 +409,12 @@ extension OnboardingAISetupModel {
             self.pendingActivationVerification
     }
 
+    /// A choice the person started while discovery ran; late results must not replace it.
+    var hasSetupAttemptInFlight: Bool {
+        self.phase == .testing || self.manualTesting || self.activeAuthOption != nil ||
+            self.pendingActivationVerification
+    }
+
     func canSelectCandidate(kind: String) -> Bool {
         guard !self.connected, self.activeAuthOption == nil else { return false }
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
@@ -451,7 +458,7 @@ extension OnboardingAISetupModel {
     /// Once setup starts changing inference, its successful result belongs to
     /// OpenClaw rather than the existing-Gateway onboarding bypass.
     var ownsInferenceTransition: Bool {
-        (self.phase == .detecting && self.configuredGatewayBlocker == nil) ||
+        (self.phase == .detecting && self.configuredGatewayBlocker == nil) || self.discovering ||
             self.phase == .testing || self.manualTesting || self.authBusy || self.connected ||
             self.pendingActivationVerification
     }

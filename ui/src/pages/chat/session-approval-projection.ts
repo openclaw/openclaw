@@ -41,11 +41,13 @@ function projectPendingApproval(
   const presentation = approval.presentation;
   const common = {
     id: approval.id,
+    ...(approval.canDecide !== undefined ? { canDecide: approval.canDecide } : {}),
     request: {
       command: presentation.kind === "exec" ? presentation.commandText : presentation.title,
       agentId: presentation.agentId ?? null,
       sessionKey,
       allowedDecisions: presentation.allowedDecisions,
+      ...(approval.turnActor ? { turnActor: approval.turnActor } : {}),
     },
     ...(sourceSessionKey && sourceSessionKey !== sessionKey ? { sourceSessionKey } : {}),
     createdAtMs: approval.createdAtMs,
@@ -84,12 +86,21 @@ function projectPendingApproval(
   };
 }
 
+function readApprovalReplay(value: unknown) {
+  return isSessionApprovalReplay(value) ? value : null;
+}
+
+function readApprovalEvent(value: unknown) {
+  return isSessionApprovalEvent(value) ? value : null;
+}
+
 export function projectSessionApprovalReplay(
-  replay: unknown,
+  value: unknown,
   sessionKey: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] {
-  if (!isSessionApprovalReplay(replay)) {
+  const replay = readApprovalReplay(value);
+  if (!replay) {
     return [];
   }
   if (!approvalStreamMatchesSession(replay.sessionKey, sessionKey, selectedAgentId)) {
@@ -102,12 +113,13 @@ export function projectSessionApprovalReplay(
 
 export function reconcileSessionApprovalEvent(
   queue: readonly ExecApprovalRequest[],
-  event: unknown,
+  value: unknown,
   sessionKey?: string,
   selectedAgentId?: string,
-  onAcceptedEvent?: (event: SessionApprovalEvent) => void,
+  onAcceptedEvent?: (event: Exclude<SessionApprovalEvent, { phase: "participant" }>) => void,
 ): ExecApprovalRequest[] | null {
-  if (!isSessionApprovalEvent(event)) {
+  const event = readApprovalEvent(value);
+  if (!event || event.phase === "participant") {
     return null;
   }
   const presentationSessionKey = sessionKey ?? event.sessionKey;
@@ -170,10 +182,10 @@ export function recordSessionApprovalReplay(
   value: unknown,
   agentId?: string,
 ): void {
-  if (!isSessionApprovalReplay(value)) {
+  const replay = readApprovalReplay(value);
+  if (!replay) {
     return;
   }
-  const replay = value;
   if (!approvalStreamMatchesSession(replay.sessionKey, state.sessionKey, agentId)) {
     return;
   }
@@ -184,6 +196,20 @@ export function recordSessionApprovalReplay(
     agentId: isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined,
     complete: !replay.truncated,
   };
+  if (!replay.truncated) {
+    participantApprovals.delete(state);
+  }
+  for (const event of replay.participantApprovals ?? []) {
+    applyParticipantApprovalEvent(state, event, agentId);
+  }
+  const requests = chatHistoryRequests(state);
+  if (requests.pendingApprovalReplay?.generation === requests.subscriptionGeneration) {
+    for (const event of requests.pendingApprovalReplay.events.values()) {
+      if (event.phase === "participant") {
+        applyParticipantApprovalEvent(state, event, agentId);
+      }
+    }
+  }
 }
 
 export function applySessionApprovalEvent(
@@ -191,6 +217,22 @@ export function applySessionApprovalEvent(
   value: unknown,
   agentId?: string,
 ): boolean {
+  const participant = readApprovalEvent(value);
+  if (participant?.phase === "participant") {
+    if (!applyParticipantApprovalEvent(state, participant, agentId)) {
+      return false;
+    }
+    const requests = chatHistoryRequests(state);
+    const replay = requests.pendingApprovalReplay;
+    const previous = replay?.events.get(participant.approvalId);
+    if (
+      replay?.generation === requests.subscriptionGeneration &&
+      !(previous?.phase === "participant" && previous.status === "terminal")
+    ) {
+      replay.events.set(participant.approvalId, participant);
+    }
+    return true;
+  }
   const queue = reconcileSessionApprovalEvent(
     state.chatSessionApprovalQueue ?? [],
     value,
@@ -215,4 +257,77 @@ export function applySessionApprovalEvent(
   }
   state.chatSessionApprovalQueue = queue;
   return true;
+}
+
+type SessionParticipantApprovalEvent = Extract<SessionApprovalEvent, { phase: "participant" }>;
+
+export type ParticipantApprovalNotice = Pick<
+  SessionParticipantApprovalEvent,
+  "approvalId" | "runId" | "participantId" | "expiresAtMs"
+>;
+
+type ParticipantApprovalScope = Omit<SessionApprovalReplayState, "complete"> & {
+  generation: number;
+  pending: Map<string, ParticipantApprovalNotice>;
+};
+
+const participantApprovals = new WeakMap<object, ParticipantApprovalScope>();
+
+function participantApprovalScope(state: ApprovalReplayHost, agentId?: string) {
+  const current = participantApprovals.get(state);
+  return current?.client === state.client &&
+    current?.connectionEpoch === state.connectionEpoch &&
+    current?.sessionKey === state.sessionKey &&
+    current?.agentId === (isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined) &&
+    current?.generation === chatHistoryRequests(state).subscriptionGeneration
+    ? current
+    : undefined;
+}
+
+function applyParticipantApprovalEvent(
+  state: ApprovalReplayHost,
+  value: SessionParticipantApprovalEvent,
+  agentId?: string,
+): boolean {
+  if (!approvalStreamMatchesSession(value.sessionKey, state.sessionKey, agentId)) {
+    return false;
+  }
+  const { approvalId, runId, participantId } = value;
+  const scope = participantApprovalScope(state, agentId) ?? {
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    agentId: isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined,
+    generation: chatHistoryRequests(state).subscriptionGeneration,
+    pending: new Map<string, ParticipantApprovalNotice>(),
+  };
+  if (value.status === "terminal") {
+    scope.pending.delete(approvalId);
+  } else {
+    scope.pending.set(approvalId, {
+      approvalId,
+      runId,
+      participantId,
+      expiresAtMs: value.expiresAtMs,
+    });
+  }
+  participantApprovals.set(state, scope);
+  return true;
+}
+
+/** Only the initiating participant sees their notice; no full approval is fetched. */
+export function currentParticipantSessionApproval(
+  state: ApprovalReplayHost & { connected?: boolean },
+  agentId: string,
+  participantId: string | null | undefined,
+): ParticipantApprovalNotice | null {
+  if (!participantId || state.connected === false) {
+    return null;
+  }
+  const now = Date.now();
+  return (
+    [...(participantApprovalScope(state, agentId)?.pending.values() ?? [])].find(
+      (approval) => approval.participantId === participantId && approval.expiresAtMs > now,
+    ) ?? null
+  );
 }

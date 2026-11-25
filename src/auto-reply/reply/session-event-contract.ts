@@ -27,6 +27,7 @@ import type {
   SourceDeliveryPlan,
 } from "../../infra/outbound/source-delivery-plan.types.js";
 import type { SystemEvent } from "../../infra/system-events.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -108,6 +109,7 @@ export type SessionEventOptions = {
   sourceTurnId?: string;
   /** Run that started the producer's work; a provenance fact for this turn, never authority. */
   sourceRunId?: string;
+  completedToolCall?: InputProvenance["completedToolCall"];
   deliveryContext?: DeliveryContext;
   abortSignal?: AbortSignal;
   expectedTarget?: SessionEventTarget;
@@ -149,12 +151,10 @@ export type ScheduledSessionAutomation = {
     sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
-  automationAdmin?: true;
   /** Restore the saved requester before an unstarted occurrence is admitted again. */
   readmitOperator?: (
     signal: AbortSignal,
-  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority" | "automationAdmin">>;
+  ) => Promise<Pick<ScheduledSessionAutomation, "operatorAuthority">>;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:

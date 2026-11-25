@@ -355,30 +355,48 @@ describe("runDaemonRestart health checks", () => {
     );
   });
 
-  it("refreshes distinct caller and service config after restart repair", async () => {
+  it("uses published repaired command and config without reopening their stores", async () => {
     loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-before" } } });
     createConfigIO.mockImplementation(({ env }: { env?: NodeJS.ProcessEnv } = {}) => ({
       readBestEffortConfig: async () => ({ gateway: { auth: { token: env?.OPENCLAW_STATE_DIR } } }),
     }));
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-caller-state";
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway-maintenance.service";
-    service.readCommand
-      .mockResolvedValueOnce(
-        gatewayCommand(18789, { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" }),
-      )
-      .mockResolvedValue(
-        gatewayCommand(19001, {
-          OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
-          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
-        }),
-      );
-    repairLoadedGatewayServiceForStart.mockResolvedValue({
-      result: "restarted",
-      message: "Gateway service definition repaired and restarted.",
-      loaded: true,
+    service.readCommand.mockResolvedValue(
+      gatewayCommand(18789, { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" }),
+    );
+    repairLoadedGatewayServiceForStart.mockImplementation(async () => {
+      service.readCommand.mockRejectedValue(new Error("Command custody was handed off."));
+      loadConfig.mockImplementation(() => {
+        throw new Error("Caller config custody was handed off.");
+      });
+      createConfigIO.mockImplementation(() => {
+        throw new Error("Runtime config custody was handed off.");
+      });
+      return {
+        result: "restarted",
+        message: "Gateway service definition repaired and restarted.",
+        loaded: true,
+        lifecycle: {
+          command: gatewayCommand(19001, {
+            OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+            OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+          }),
+          env: {
+            OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+            OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+          },
+          config: { gateway: { auth: { token: "/tmp/openclaw-repaired-state" } } },
+        },
+      };
+    });
+    waitForGatewayHealthyRestart.mockImplementation(async ({ service: observer }) => {
+      expect((await observer.readCommand(process.env))?.environment).toMatchObject({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+      });
+      return createHealthyRestartSnapshot();
     });
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
-      loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-after" } } });
       await params.repairLoadedService?.({
         json: true,
         stdout: process.stdout,
@@ -386,7 +404,7 @@ describe("runDaemonRestart health checks", () => {
         issues: [],
       });
       expect(params.readDriftContext?.()).toMatchObject({
-        config: { gateway: { auth: { token: "caller-after" } } },
+        config: { gateway: { auth: { token: "/tmp/openclaw-repaired-state" } } },
         command: { environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state" } },
       });
       await runRestartPostCheck(params, false);
@@ -426,6 +444,11 @@ describe("runDaemonRestart health checks", () => {
       result: "started",
       message: "Gateway service definition repaired and started.",
       loaded: true,
+      lifecycle: {
+        command: gatewayCommand(19001),
+        env: process.env,
+        config: { gateway: { port: 19001 } },
+      },
     });
     runServiceStart.mockImplementation(
       async (params: {

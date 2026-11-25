@@ -49,18 +49,6 @@ export type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
   params?: GatewayAgentRequestParams;
 };
 
-export function getAgentResultsForChildSession(
-  requests: readonly GatewayRequest[],
-  childSessionKey: string,
-): string[] {
-  return requests
-    .filter((request) => request.params?.inputProvenance?.sourceSessionKey === childSessionKey)
-    .flatMap((request) => {
-      const result = request.params?.internalEvents?.[0]?.result;
-      return result === undefined ? [] : [result];
-    });
-}
-
 export async function settleYieldedCliTurn(params: {
   requesterSessionKey: string;
   requesterSessionId: string;

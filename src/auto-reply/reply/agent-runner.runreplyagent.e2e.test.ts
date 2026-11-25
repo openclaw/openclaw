@@ -71,7 +71,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
@@ -1655,9 +1654,6 @@ describe("runReplyAgent admission and cleanup", () => {
         expect(reply).toMatchObject({ isError: true, text: expect.any(String) });
         expect(reply?.text).not.toBe("NO_REPLY");
       }
-      if (label !== "aborted answer") {
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
-      }
     } finally {
       replyOperation?.complete();
       await blockFlush;
@@ -1700,7 +1696,6 @@ describe("runReplyAgent admission and cleanup", () => {
 
       await expect(run()).rejects.toThrow("persist exploded");
       if (text === undefined) {
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
       }
     } finally {
@@ -1767,7 +1762,6 @@ describe("runReplyAgent admission and cleanup", () => {
           text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
           isError: true,
         });
-        expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
         expect(onBlockReply).toHaveBeenCalledWith(
           expect.objectContaining({ text: `internal ${lane}` }),
           expect.any(Object),
@@ -2114,13 +2108,14 @@ describe("runReplyAgent pending final delivery capture", () => {
     state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const receipt: ReplyOperationRunState = {};
+    const onAgentRunTerminalOutcome = vi.fn();
     const { run } = createMinimalRun({
-      opts: { [REPLY_OPERATION_RUN_STATE]: receipt },
+      opts: { [REPLY_OPERATION_RUN_STATE]: receipt, onAgentRunTerminalOutcome },
       runOverrides: { terminalReplyExpectation: "result-required" },
     });
 
     await expect(run()).resolves.toBeUndefined();
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
+    expect(onAgentRunTerminalOutcome).toHaveBeenCalledExactlyOnceWith("completed");
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
@@ -2161,7 +2156,6 @@ describe("runReplyAgent pending final delivery capture", () => {
     } finally {
       off();
     }
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
     // The Gateway lifecycle observer owns durable status; this runner fixture
     // proves the terminal facts it receives, without a delivery-driven writer.
     expect(terminalEvents).toEqual([

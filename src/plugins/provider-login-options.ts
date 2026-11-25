@@ -1,3 +1,4 @@
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
   resolveManifestDeclaredProviderAuthChoices,
@@ -6,6 +7,7 @@ import {
 
 export type ProviderLoginOption = {
   id: string;
+  pluginId?: string;
   brandId: string;
   label: string;
   hint?: string;
@@ -69,6 +71,22 @@ export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadat
   return loginKind(choice) !== undefined;
 }
 
+export function hasProviderModelSignIn(
+  params: NonNullable<Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0]> & {
+    pluginId: string;
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+): boolean {
+  const { pluginId, ...lookup } = params;
+  const { providers, modelCatalogProviders } = lookup.metadataSnapshot.owners;
+  return resolveManifestDeclaredProviderAuthChoices(lookup).some(
+    (choice) =>
+      choice.pluginId === pluginId &&
+      (providers.has(choice.providerId) || modelCatalogProviders.has(choice.providerId)) &&
+      isProviderLoginChoiceStartable(choice),
+  );
+}
+
 /** CLI API-key logins use the same credential-only runner without changing UI discovery. */
 export function isProviderCliLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
   return (
@@ -103,6 +121,7 @@ export function listProviderLoginOptions(
         return [
           {
             id: formatProviderLoginChoiceRef(choice),
+            pluginId: choice.pluginId,
             brandId: choice.providerId,
             label: choice.choiceLabel,
             hint: choice.choiceHint,

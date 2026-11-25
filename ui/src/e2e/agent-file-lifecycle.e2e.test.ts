@@ -123,6 +123,48 @@ async function prepareFilePage(page: Page, content: string, options: FileOptions
 }
 
 suite.define(() => {
+  it("wraps long workspace and file paths without widening the phone editor", async () => {
+    const workspace = "/worktrees/" + "0123456789abcdef".repeat(4) + "/review";
+    const content = "# Example file";
+    const file = { name: "AGENTS.md", path: workspace + "/AGENTS.md", missing: false };
+    await withFilePage(
+      content,
+      async ({ page, editor }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect.poll(() => editor.inputValue()).toBe(content);
+        for (const [selector, expected] of [
+          [".agent-files-workspace", workspace],
+          [".agent-file-sub", file.path],
+        ] as const) {
+          const label = page.locator(selector);
+          expect(await label.textContent()).toBe(expected);
+          expect(
+            await label.evaluate((element) => {
+              const bounds = element.closest(".settings-section")!.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return Array.from(range.getClientRects()).every(
+                (rect) => rect.left >= bounds.left && rect.right <= bounds.right,
+              );
+            }),
+          ).toBe(true);
+        }
+        expect(
+          await editor.evaluate((element) => {
+            const card = element.closest(".settings-group")!.getBoundingClientRect();
+            return element.getBoundingClientRect().right <= card.right;
+          }),
+        ).toBe(true);
+      },
+      {
+        methodResponses: {
+          "agents.files.list": { agentId: "main", workspace, files: [file] },
+          "agents.files.get": { agentId: "main", workspace, file: { ...file, content } },
+        },
+      },
+    );
+  });
+
   it("does not ask users to load agent files while the inventory read is already running", async () => {
     await withFilePage(
       "# Synthetic agent instructions",

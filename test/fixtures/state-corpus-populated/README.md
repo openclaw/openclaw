@@ -19,10 +19,11 @@ credentials are fake. Snapshots were copied after every writer exited.
 `-blob` is the same snapshot with every TEXT value in non-STRICT tables stored as
 a BLOB (issue #110186), produced by Python's `sqlite3`, not OpenClaw code.
 
-`manifest.json` records the source commit, the expected values each surface
-wrote, and where each value was found (`verification`). Paths inside the
-databases and `openclaw.json` still name `/home/fixture`; tests rewrite the
-config to their temporary directory.
+Frozen JSON manifests preserve the source commit and values each surface
+wrote, and where each value was found (`verification`). Tests reconstruct the
+`2026.7.1-blob` and `2026.7.35` manifests from the frozen `2026.7.1` manifest.
+Paths inside the databases and `openclaw.json` still name `/home/fixture`;
+tests rewrite the config to their temporary directory.
 
 The synthetic device keys (`identity/device.json`, `device_identities`) are
 stored with the PEM marker spelled `PRIVATE_KEY` so the repository
