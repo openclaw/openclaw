@@ -2,15 +2,16 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import * as gatewayLifecycle from "../../../gateway/server-lifecycle-runtime-context.js";
 import { registerPluginSubagentRunFromGateway } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import * as gatewayLifecycle from "../../../gateway/server-recovery-runtime-context.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {
@@ -79,7 +80,7 @@ async function writeRegistrationSession(runId: string, lifecycleRevision?: strin
   return { target, storePath, sessionEntry, childSessionKey: target.sessionKey };
 }
 
-it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
+it.each(["live", "replaced child", "replaced Gateway"] as const)(
   "settles an unstarted plugin registration with a %s owner",
   async (ownerState) => {
     const runId = "unstarted-plugin";
@@ -93,7 +94,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     const context = createContext();
     let currentGateway = context;
     context.getRuntimeConfig = getRuntimeConfig;
-    const { client, revoked, source } = await retainedOperatorFixture(
+    const { client, source } = await retainedOperatorFixture(
       "unstarted-plugin-requester",
       context,
       () => currentGateway,
@@ -108,7 +109,6 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         source: source.authority.source,
         scopes: ["operator.write"],
       });
-      retained?.assertCurrent();
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -119,7 +119,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           params.isChildSessionEffectsAllowed?.(),
         ]).toEqual([false, false]);
       }
-      return ownerState === "replaced Gateway" ? "intentional_non_delivery" : "delivered";
+      return ownerState === "replaced Gateway" ? "undelivered" : "delivered";
     });
     let rejectAdmission: SubagentAdmissionRejection | undefined;
     try {
@@ -136,6 +136,8 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             runId,
             childSessionKey,
             childAgentId: "main",
+            agentDir: path.join(fixture.stateDir, "agents", "main", "agent"),
+            workspaceDir: path.join(fixture.stateDir, "workspace"),
             task: "unstarted operation",
             requester: {
               sessionKey: "agent:main:main",
@@ -143,7 +145,6 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
             },
             gatewayContextResolver: context.resolveGatewayContext,
             assertCurrent: () => {
-              source.authority.assertCurrent();
               return sessionEntry;
             },
             admittedSession: {
@@ -157,9 +158,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           }),
       );
       source.release();
-      if (ownerState === "revoked") {
-        revoked.abort(new Error("requester access revoked"));
-      } else if (ownerState === "replaced child") {
+      if (ownerState === "replaced child") {
         await writeSubagentSessionEntry({
           ...target,
           sessionId: "replacement-session",
@@ -178,17 +177,9 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
-        const entry = expectDefined(subagentRuns.get(runId), "failed registration");
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      if (ownerState !== "replaced Gateway") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
       }
       if (ownerState === "replaced child") {
         expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.suppressSessionEffects).toBe(

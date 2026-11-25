@@ -8,6 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -82,6 +83,11 @@ function ensureProgressSchema(options: OpenClawStateDatabaseOptions): void {
     { operationLabel: "audit.outbound-message-progress.schema.ensure" },
   );
   ensuredDatabases.add(database.db);
+  stageSqliteTransactionState(database.db, {
+    commit: () => {},
+    rollback: () => ensuredDatabases.delete(database.db),
+    invalidate: () => ensuredDatabases.delete(database.db),
+  });
 }
 
 function projectProgressIdentities(db: EngineConnection, input: OutboundMessageProgressInput) {
@@ -258,6 +264,11 @@ function deleteExpiredProgressRows(db: EngineConnection, now: number, limit: num
 }
 
 function pruneProgressAfterInsert(db: EngineConnection, now: number): void {
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => progressRowCounts.delete(db),
+    invalidate: () => progressRowCounts.delete(db),
+  });
   const kysely = progressDb(db);
   const expired = deleteExpiredProgressRows(db, now, OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS);
   const cachedCount = progressRowCounts.get(db);
@@ -273,15 +284,14 @@ function pruneProgressAfterInsert(db: EngineConnection, now: number): void {
     0,
     OUTBOUND_MESSAGE_PROGRESS_MAX_ROWS - OUTBOUND_MESSAGE_PROGRESS_PRUNE_BATCH_ROWS,
   );
-  const overflowCutoff = kysely
+  const overflowIds = kysely
     .selectFrom("outbound_message_progress")
     .select("sequence")
-    .orderBy("sequence", "desc")
-    .offset(retainedRows)
-    .limit(1);
+    .orderBy("sequence", "asc")
+    .limit(Math.max(0, rowCount - retainedRows));
   const pruned = executeSqliteQuerySync(
     db,
-    kysely.deleteFrom("outbound_message_progress").where("sequence", "<=", overflowCutoff),
+    kysely.deleteFrom("outbound_message_progress").where("sequence", "in", overflowIds),
   );
   rowCount = Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n));
   progressRowCounts.set(db, rowCount);

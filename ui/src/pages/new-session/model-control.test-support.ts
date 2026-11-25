@@ -1,5 +1,6 @@
 import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
@@ -12,7 +13,6 @@ import { NewSessionModelControl } from "./model-control.ts";
 type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
 const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
 const openedPickers = new WeakSet<HTMLDetailsElement>();
-const openedProviders = new WeakSet<HTMLButtonElement>();
 const subscribe =
   <T>(listeners: Set<T>) =>
   (listener: T) => {
@@ -60,8 +60,18 @@ export function contextWith(
       source: "defaults",
     },
   };
+  const settingsAgentSelection = createAgentSelectionCapability(
+    {
+      connection: { gatewayUrl: "ws://fixture" },
+      snapshot: { assistantAgentId: "main" },
+      subscribe: () => () => {},
+    },
+    { state: { agentsList: null }, subscribe: () => () => {} },
+  );
+  onTestFinished(() => settingsAgentSelection.dispose());
   const context = {
     navigate,
+    settingsAgentSelection,
     agents: { subscribe: subscribe(ownerListeners.agents) },
     config: { subscribe: subscribe(ownerListeners.config), current: {} },
     gateway: {
@@ -70,7 +80,10 @@ export function contextWith(
       snapshot: {
         phase: "connected",
         client: { request },
-        hello: { features: { methods: featureMethods } },
+        hello: {
+          features: { methods: featureMethods },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        },
       },
     },
     sessions: {
@@ -119,19 +132,6 @@ export function renderControl(
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();
-  }
-  // Owner tests choose models across providers; reveal those rows through the real disclosure.
-  for (const toggle of container.querySelectorAll<HTMLButtonElement>(
-    "[data-chat-model-provider-toggle]",
-  )) {
-    if (openedProviders.has(toggle)) {
-      continue;
-    }
-    openedProviders.add(toggle);
-    if (toggle.getAttribute("aria-expanded") === "false") {
-      toggle.click();
-      flush();
-    }
   }
   return container;
 }

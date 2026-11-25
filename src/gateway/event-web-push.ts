@@ -25,8 +25,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import { QUESTIONS_SCOPE } from "./method-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import {
@@ -128,6 +130,7 @@ function resolveEventWebPushNotification(
 export function createEventWebPushDelivery(
   getRuntimeConfig: () => OpenClawConfig,
   viewers?: Pick<SessionViewerPresenceDeclarations, "isViewedOnDevice">,
+  getSessionRowProjection?: () => Pick<SessionRowProjection, "readCapabilityEntry"> | undefined,
 ) {
   const deliver = (
     notification: EventNotification,
@@ -224,7 +227,7 @@ export function createEventWebPushDelivery(
             ) {
               continue;
             }
-            if (cfg.gateway?.roles && sessionKeys.length === 0) {
+            if (isNamedOperatorRoleEnforcementEnabled(cfg) && sessionKeys.length === 0) {
               // Multi-user events without an authoritative session owner are not broadcast offline.
               continue;
             }
@@ -236,12 +239,35 @@ export function createEventWebPushDelivery(
               // This device already shows the reply; other devices and categories still notify.
               continue;
             }
+            let identifiedBody = notification.identifiedBody;
+            if (
+              notification.category === "agent-finished" &&
+              preferences.detailLevel !== "private" &&
+              sessionKeys.length === 1 &&
+              sessionKey
+            ) {
+              // Read resident metadata only after authorization; never infer a title from content.
+              const authorized = authority.sessions.get(sessionKey)?.target;
+              const entry = authorized
+                ? getSessionRowProjection?.()?.readCapabilityEntry({
+                    agentId: authorized.agentId,
+                    storePath: authorized.storePath,
+                    key: authorized.canonicalKey,
+                  })?.entry
+                : undefined;
+              const completionLabel = normalizeWebPushDisplayLabel(
+                entry?.sessionId === authorized?.entry.sessionId ? entry?.label : undefined,
+              );
+              if (completionLabel) {
+                identifiedBody = `${completionLabel}: ${notification.body}`;
+              }
+            }
             const prefix = preferences.label ? `${preferences.label} · ` : "";
             const title = `${prefix}${notification.title}`;
             const body =
               preferences.detailLevel === "private"
                 ? notification.body
-                : (notification.identifiedBody ??
+                : (identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
             const icon = preferences.detailLevel === "private" ? undefined : agentIcon;
             const key = JSON.stringify({ title, body, icon });

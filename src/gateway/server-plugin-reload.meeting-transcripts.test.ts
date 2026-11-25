@@ -7,6 +7,10 @@ import type { MeetingBrowserRequestCaller } from "../meeting-bot/platform-adapte
 import type { MeetingSessionRecord } from "../meeting-bot/session-types.js";
 import type { MeetingDurableTranscriptBridge } from "../meeting-bot/transcripts-bridge.js";
 import { createMeetingDurableTranscriptBridge } from "../meeting-bot/transcripts-bridge.runtime.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -138,6 +142,11 @@ async function createMeetingReloadFixture() {
   });
   const context = createContext([["browser.request", "operator.admin", "browser", browserRequest]]);
   const resolveGateway = () => context;
+  context.resolveGatewayContext = resolveGateway;
+  const sdkResources = new LegacyPluginSdkResourceHost();
+  bindLegacyPluginSdkResourceHost(resolveGateway, sdkResources);
+  // The reload fixture registers later, so its generations drain before this host closes.
+  cleanups.push(() => sdkResources.close());
   const debug = vi.fn((_message: string) => notify());
   const generations: Array<{
     api: OpenClawPluginApi;

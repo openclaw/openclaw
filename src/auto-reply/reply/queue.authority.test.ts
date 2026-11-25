@@ -2,12 +2,12 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
-  createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
   readPreparedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { resolveRequesterToolPolicies } from "../../agents/requester-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
@@ -27,10 +27,14 @@ import {
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
+import {
+  createOverflowSummaryRetrySource,
+  resolveFollowupDeliveryStorageKey,
+} from "./queue/delivery-context.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
@@ -53,19 +57,12 @@ const webchatRun = (prompt: string, execution: Partial<FollowupRun["run"]> = {})
 function createOperatorAuthority() {
   let references = 1;
   const controller = new AbortController();
-  const authority: AdmittedRunOperatorAuthority = createAdmittedRunOperatorAuthority({
+  const authority: AdmittedRunOperatorAuthority = createTestOperatorAuthority({
     profileId: "guest",
     scopes: ["operator.read", "operator.write"],
     source: {},
     signal: controller.signal,
-    assertCurrent: () => {
-      controller.signal.throwIfAborted();
-      if (references <= 0) {
-        throw new Error("operator source released");
-      }
-    },
     retain: () => {
-      authority.assertCurrent();
       references += 1;
       return () => {
         references -= 1;
@@ -94,64 +91,44 @@ function prepareOperatorAdmission(run: FollowupRun, runId: string) {
 }
 
 describe("followup queue authority", () => {
-  it.each(["collect", "overflow"] as const)(
-    "keeps restart-restricted input separate through a %s drain",
-    async (mode) => {
-      const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
-      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
-      for (const restricted of [true, false]) {
-        const run = webchatRun(restricted ? "interrupted task" : "new task");
-        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
-        if (restricted) {
-          run.forceRestartSafeTools = true;
-          run.forceCodeModeTools = true;
-        }
-        q.add(run);
+  it.each([false, true])(
+    "keeps different requesters separate when requests are identical=%s",
+    async (identical) => {
+      const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+      for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+        q.enqueue(
+          {
+            prompt: identical ? "Summarize report.txt" : `${senderId} request ${index}`,
+            originatingChannel: "telegram",
+            originatingTo: "shared-chat",
+          },
+          {
+            senderId: "shared-receiver",
+            requesterOrigin: {
+              sessionKey: "agent:research:telegram:group:requesters",
+              messageProvider: "telegram",
+              senderId,
+            },
+          },
+        );
       }
-      q.start();
-      await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
-      expect(q.calls).toHaveLength(2);
-      expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
-      expect(q.calls[0]?.prompt).toContain("interrupted task");
-      expect(q.calls[0]?.prompt).not.toContain("new task");
-      expect(q.calls[0]).toMatchObject({
-        forceRestartSafeTools: true,
-        forceCodeModeTools: true,
-      });
-      expect(q.calls[1]?.prompt).toContain("new task");
-      expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
-      expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
+      await q.drain();
+      if (identical) {
+        expect(q.calls.map(({ prompt }) => prompt.match(/Summarize report\.txt/g)?.length)).toEqual(
+          [1, 2],
+        );
+      } else {
+        expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
+          ["alice request 0"],
+          ["bob request 1", "bob request 2"],
+        ]);
+        expect(q.calls[0]?.prompt).not.toContain("bob request");
+        expect(q.calls[1]?.prompt).not.toContain("alice request");
+      }
+      expect(q.calls[0]?.run.requesterOrigin?.senderId).toBe("alice");
+      expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
     },
   );
-
-  it("keeps different original requesters in separate collected turns on the same route", async () => {
-    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
-    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
-      q.enqueue(
-        {
-          prompt: `${senderId} request ${index}`,
-          originatingChannel: "telegram",
-          originatingTo: "shared-chat",
-        },
-        {
-          senderId: "shared-receiver",
-          requesterOrigin: {
-            sessionKey: "agent:research:telegram:group:requesters",
-            messageProvider: "telegram",
-            senderId,
-          },
-        },
-      );
-    }
-    await q.drain();
-    expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
-      ["alice request 0"],
-      ["bob request 1", "bob request 2"],
-    ]);
-    expect(q.calls[0]?.prompt).not.toContain("bob request");
-    expect(q.calls[1]?.prompt).not.toContain("alice request");
-    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
-  });
 
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);
@@ -214,14 +191,14 @@ describe("followup queue authority", () => {
     const authority = source.authority;
     const variants = [
       authority,
-      createAdmittedRunOperatorAuthority({
+      createTestOperatorAuthority({
         ...authority,
         scopes: ["operator.write", "operator.read", "operator.write"],
       }),
-      createAdmittedRunOperatorAuthority({ ...authority, signal: new AbortController().signal }),
-      createAdmittedRunOperatorAuthority({ ...authority, profileId: "maintainer" }),
-      createAdmittedRunOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
-      createAdmittedRunOperatorAuthority({ ...authority, source: {} }),
+      createTestOperatorAuthority({ ...authority, signal: new AbortController().signal }),
+      createTestOperatorAuthority({ ...authority, profileId: "maintainer" }),
+      createTestOperatorAuthority({ ...authority, scopes: ["operator.admin"] }),
+      createTestOperatorAuthority({ ...authority, source: {} }),
       undefined,
       authority,
     ];
@@ -230,10 +207,7 @@ describe("followup queue authority", () => {
     for (const [index, operatorAuthority] of variants.entries()) {
       enqueueFollowupRun(
         key,
-        {
-          ...webchatRun(`request ${index}`),
-          operatorAuthority,
-        },
+        { ...webchatRun(`request ${index}`), operatorAuthority },
         createQueueSettings(),
       );
     }
@@ -272,10 +246,10 @@ describe("followup queue authority", () => {
     expect(source.references()).toBe(0);
   });
 
-  it.for(["older client", "latest client", "operator grant"] as const)(
+  it.for(["older client", "latest client"] as const)(
     "honors %s cancellation ownership after collect admission",
     async (cancellation, { signal }) => {
-      const key = queueKey(`test-collect-operator-revocation-${cancellation}`);
+      const key = queueKey(`test-collect-operator-cancellation-${cancellation}`);
       const source = createOperatorAuthority();
       const firstCancel = new AbortController();
       const secondCancel = new AbortController();
@@ -295,7 +269,7 @@ describe("followup queue authority", () => {
       source.releaseRequest();
       scheduleFollowupDrain(key, async (run) => {
         const abortSignal = resolveFollowupAbortSignal(run);
-        const prepared = prepareOperatorAdmission(run, "collected-operator-revocation");
+        const prepared = prepareOperatorAdmission(run, "collected-operator-cancellation");
         try {
           await admitFollowupRunLifecycle(run);
           const context = await prepared.admit("embedded");
@@ -306,23 +280,12 @@ describe("followup queue authority", () => {
             effects.push(label);
           };
           performEffect("before cancellation");
-          const controller =
-            cancellation === "operator grant"
-              ? source.controller
-              : cancellation === "older client"
-                ? firstCancel
-                : secondCancel;
-          controller.abort();
           if (cancellation === "older client") {
+            firstCancel.abort();
             expect(abortSignal?.aborted).toBe(false);
             performEffect("after older client cancellation");
-            source.controller.abort();
           }
-          expect(abortSignal?.aborted).toBe(true);
-          if (cancellation !== "latest client") {
-            // Original grant revocation still applies after an older client is retired.
-            expect(assertCurrent).toThrow();
-          }
+          secondCancel.abort();
           expect(() => performEffect("after cancellation")).toThrow();
         } catch (error) {
           done.reject(error);
@@ -368,47 +331,68 @@ describe("followup queue authority", () => {
     },
   );
 
-  it("retains an independent operator source hold for a stranded delivery retry", async () => {
-    const key = queueKey("test-operator-delivery-retry");
-    const source = createOperatorAuthority();
-    const parent = createRun({ prompt: "original request" });
-    parent.operatorAuthority = source.authority;
-    parent.turnAdoptionLifecycle = { onAdopted: () => {}, onSettled: source.releaseRequest };
-    const recovery = resolveStrandedReplyRecovery({
-      base: parent,
-      payloads: [],
-      finalText: "The answer is ready.",
-      terminalReply: { disposition: "visible", text: "The answer is ready." },
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
+  it.each([false, true])(
+    "retains independent operator and callback holds for a stranded delivery retry (compacted=%s)",
+    async (compacted) => {
+      const key = queueKey("test-operator-delivery-retry");
+      const source = createOperatorAuthority();
+      const parent = createRun({ prompt: "original request" });
+      parent.operatorAuthority = source.authority;
+      let callbackReferences = 1;
+      parent[replyCallbackCustody] = {
+        retain: () => {
+          callbackReferences++;
+          return () => {
+            callbackReferences--;
+          };
+        },
+      };
+      parent.turnAdoptionLifecycle = {
+        onAdopted: () => {},
+        onSettled: () => {
+          source.releaseRequest();
+          callbackReferences--;
+        },
+      };
+      const recovery = resolveStrandedReplyRecovery({
+        base: compacted ? createOverflowSummaryRetrySource(parent) : parent,
+        payloads: [],
+        finalText: "The answer is ready.",
+        terminalReply: { disposition: "visible", text: "The answer is ready." },
+        sourceReplyDeliveryMode: "message_tool_only",
+        sendPolicyDenied: false,
+        successfulSourceReplyDelivery: false,
 
-      isRoomEvent: false,
-    });
-    if (recovery.kind !== "retry") {
-      throw new Error("expected source delivery recovery");
-    }
-    let delivered = false;
-    const failures: unknown[] = [];
-    enqueueFollowupRun(key, recovery.run, createQueueSettings());
-    completeFollowupRunLifecycle(parent);
-    await parent.controllerInput!.settlement.promise;
-    expect(source.references()).toBe(1);
-    scheduleFollowupDrain(key, async (run) => {
-      try {
-        run.operatorAuthority?.assertCurrent();
-        delivered = run.operatorAuthority?.profileId === "guest";
-      } catch (error) {
-        failures.push(error);
-      } finally {
-        completeFollowupRunLifecycle(run);
+        isRoomEvent: false,
+      });
+      if (recovery.kind !== "retry") {
+        throw new Error("expected source delivery recovery");
       }
-    });
-    await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-    expect(failures).toEqual([]);
-    expect(delivered).toBe(true);
-    expect(source.references()).toBe(0);
-  });
+      let delivered = false;
+      const failures: unknown[] = [];
+      enqueueFollowupRun(key, recovery.run, createQueueSettings());
+      completeFollowupRunLifecycle(parent);
+      await parent.controllerInput!.settlement.promise;
+      expect(source.references()).toBe(1);
+      expect(callbackReferences).toBe(1);
+      expect(recovery.run.turnAdoptionLifecycle).toBeUndefined();
+      scheduleFollowupDrain(key, async (run) => {
+        try {
+          expect(callbackReferences).toBe(1);
+          delivered = run.operatorAuthority?.profileId === "guest";
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          completeFollowupRunLifecycle(run);
+        }
+      });
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+      expect(failures).toEqual([]);
+      expect(delivered).toBe(true);
+      expect(source.references()).toBe(0);
+      expect(callbackReferences).toBe(0);
+    },
+  );
 
   it("splits collect batches when queued authority facts change", async () => {
     const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 3);

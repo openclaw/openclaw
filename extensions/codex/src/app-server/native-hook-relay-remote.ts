@@ -59,6 +59,14 @@ export function createCodexNativeHookRemoteCredential(params: {
           token,
         };
         try {
+          // The app-server write follows links and has no exclusive create. The name
+          // is stable for the generation, so drop whatever was planted there between
+          // turns; removal never follows a link.
+          await params.client.request(
+            "fs/remove",
+            { path: credentialPath, force: true, recursive: false },
+            { timeoutMs: params.timeoutMs, signal: params.signal },
+          );
           await params.client.request(
             "fs/writeFile",
             {

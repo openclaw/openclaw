@@ -5,6 +5,7 @@ import {
 } from "../infra/kysely-sync.js";
 /** Exact execution binding for owner-native outbound message lifecycle facts. */
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -86,6 +87,11 @@ export function ensureTerminalMessageExecutionBindingSchema(
     { operationLabel: "audit.outbound-message.execution-binding.schema.ensure" },
   );
   ensuredTerminalBindingDatabases.add(database.db);
+  stageSqliteTransactionState(database.db, {
+    commit: () => {},
+    rollback: () => ensuredTerminalBindingDatabases.delete(database.db),
+    invalidate: () => ensuredTerminalBindingDatabases.delete(database.db),
+  });
 }
 
 /** Validate queue-loaded token bytes before entering a synchronous write transaction. */

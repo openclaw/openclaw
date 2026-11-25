@@ -45,7 +45,7 @@ export type ConfirmedVisibleMessageParams = {
   deliveryId: string;
   payloadIndex: number;
   signal?: AbortSignal;
-  expectedGeneration?: { sessionKey?: string; sessionId: string; lifecycleRevision?: string };
+  expectedGeneration?: { sessionKey?: string };
   /** Background producer recorded on the history row, when there is one. */
   provenance?: BackgroundSessionResultProvenance;
   assertCurrent?: () => void;
@@ -120,6 +120,7 @@ export async function commitConfirmedVisibleMessage(
     });
   }
   const entry = await readSessionEntryInWorker({
+    agentId,
     sessionKey: destinationKey,
     storePath,
     readConsistency: "latest",
@@ -127,21 +128,11 @@ export async function commitConfirmedVisibleMessage(
   if (!entry) {
     return { ok: false, reason: "destination conversation is unavailable" };
   }
-  // A caller-pinned generation applies only to the conversation it was pinned for.
-  const expected = params.expectedGeneration;
-  const generation =
-    expected && (!expected.sessionKey || toStoreKey(expected.sessionKey) === destinationKey)
-      ? expected
-      : entry;
   // The destination is another conversation, so the producer's write claim must not apply.
   return await runWithoutOwnedSessionTranscriptWrites(() =>
     commitBackgroundPayloadsToSession({
       agentId,
       sessionKey: destinationKey,
-      expectedGeneration: {
-        sessionId: generation.sessionId,
-        lifecycleRevision: generation.lifecycleRevision,
-      },
       payloads: [params.payload],
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
       provenance: params.provenance,

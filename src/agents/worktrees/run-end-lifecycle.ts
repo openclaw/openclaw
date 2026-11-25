@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isNativeError } from "node:util/types";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -9,6 +10,12 @@ import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-wor
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { createPreparedWorktreePathIndex } from "./gc-dependencies.js";
+import {
+  worktreeTemplateMutationKey,
+  type WorktreeWarmPoolRequest,
+  type RecentWorktreeTemplate,
+} from "./template-registry.js";
 
 type RunEndOperation = {
   context: OpenClawStateWorkerContext;
@@ -40,6 +47,8 @@ type MutationAuthority = { validating: boolean };
 const mutationAuthority = new AsyncLocalStorage<MutationAuthority>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
+  const recentTemplates = new Map<string, RecentWorktreeTemplate>();
+  let warmPoolListener: ((request: WorktreeWarmPoolRequest) => void) | undefined;
   let retired = false;
   let uncertain = false;
   const cleanupFailures = new Map<object, unknown>();
@@ -72,6 +81,47 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     return [...selected];
   };
   const owner = {
+    recentTemplates() {
+      const expiresBefore = Date.now() - 24 * 60 * 60_000;
+      for (const [key, recipe] of recentTemplates) {
+        if (recipe.usedAt <= expiresBefore) {
+          recentTemplates.delete(key);
+        }
+      }
+      return recentTemplates;
+    },
+    onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void) {
+      warmPoolListener = listener;
+      return () => {
+        if (warmPoolListener === listener) {
+          warmPoolListener = undefined;
+        }
+      };
+    },
+    requestWarmPool(request: WorktreeWarmPoolRequest) {
+      owner.assertRegistryAdmission();
+      const recipes = owner.recentTemplates();
+      const key = worktreeTemplateMutationKey(request.template.cacheKey);
+      let nextFetchAt = 0;
+      for (const recipe of recipes.values()) {
+        if (recipe.request.template.repoRoot === request.template.repoRoot) {
+          nextFetchAt = Math.max(nextFetchAt, recipe.nextFetchAt);
+        }
+      }
+      recipes.delete(key);
+      recipes.set(key, {
+        request,
+        usedAt: Date.now(),
+        nextFetchAt,
+        targetCommit: request.template.sourceCommit,
+        preparedCommit: request.template.sourceCommit,
+      });
+      if (recipes.size > 32) {
+        recipes.delete(recipes.keys().next().value!);
+      }
+      warmPoolListener?.(request);
+    },
+    prepareSourcePaths: createPreparedWorktreePathIndex(),
     assertRegistryAdmission(settlement = false) {
       const operation = current.getStore();
       if (
@@ -111,9 +161,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
             (revision.version !== version && !ownChange) ||
             [...revision.pending].some((pending) => pending !== ownMutation)
           ) {
-            throw new Error(
-              "Managed worktree registry authority changed; prepare the operation again",
-            );
+            throw new Error("Managed worktree registry changed; prepare the operation again");
           }
         }
       };
@@ -198,6 +246,14 @@ export function captureWorktreeRegistryAuthority(
   return lifetime(context).captureRegistry(changes);
 }
 
+export function prepareWorktreeSourcePaths(
+  context: OpenClawStateWorkerContext,
+  records: Parameters<ReturnType<typeof createPreparedWorktreePathIndex>>[0],
+) {
+  context.admission.assertCurrent();
+  return lifetime(context).prepareSourcePaths(records);
+}
+
 export function captureWorktreeRegistryMutation(
   context: OpenClawStateWorkerContext,
   changes: readonly WorktreeRegistryChange[],
@@ -255,6 +311,22 @@ export function captureWorktreeRunEndContext(env: NodeJS.ProcessEnv): OpenClawSt
   };
 }
 
+/** Per-request service instances notify the maintenance owner of the same state database. */
+export function onWorktreeWarmPoolNeeded(
+  env: NodeJS.ProcessEnv,
+  listener: (request: WorktreeWarmPoolRequest) => void,
+): () => void {
+  return lifetime(captureWorktreeRunEndContext(env)).onWarmPoolNeeded(listener);
+}
+
+export function requestWorktreeWarmPool(env: NodeJS.ProcessEnv, request: WorktreeWarmPoolRequest) {
+  lifetime(captureWorktreeRunEndContext(env)).requestWarmPool(request);
+}
+
+export function recentWorktreeTemplates(env: NodeJS.ProcessEnv) {
+  return lifetime(captureWorktreeRunEndContext(env)).recentTemplates();
+}
+
 export function withWorktreeRunEnd<T>(
   env: NodeJS.ProcessEnv,
   run: () => Promise<T>,
@@ -282,6 +354,7 @@ export function withWorktreeRunEnd<T>(
 export function retainWorktreeRunEndFailure(error: unknown): void {
   const operation = current.getStore();
   if (operation && hasSqliteWorkerOutcomeUnknown(error) && isNativeError(error)) {
+    materializeErrorStack(error);
     operation.uncertain ??= error;
   }
 }

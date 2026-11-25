@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
@@ -20,6 +20,7 @@ const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
 const scheduledMessage = "restart scheduled, gateway will restart momentarily";
+const interruptReason = new DOMException("Command interrupted by SIGINT.", "AbortError");
 function makeTokenConfig() {
   return { gateway: { auth: { token: "config-token" } } };
 }
@@ -287,31 +288,60 @@ it("fails restart with the container hint when no service is installed", async (
   expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
 });
 
-it("runs the service mutation guard before restarting a loaded service", async () => {
-  const beforeServiceMutation = vi.fn();
+it.each(["start", "restart"] as const)(
+  "releases custody reopened by the native %s preflight before dispatch",
+  async (action) => {
+    let custodyHeld = false;
+    const beforeServiceMutation = vi.fn(async () => {
+      custodyHeld = false;
+    });
+    const nativeDispatch = async (args: Parameters<typeof service.start>[0]) => {
+      custodyHeld = true;
+      await args.beforeMutation?.();
+      if (custodyHeld) {
+        throw new Error("Native preflight retained database custody at dispatch.");
+      }
+    };
+    service.start.mockImplementation(nativeDispatch);
+    service.restart.mockImplementation(async (args) => {
+      await nativeDispatch(args);
+      return { outcome: "completed" };
+    });
 
-  await restart({ beforeServiceMutation });
+    await (action === "start" ? start : restart)({ beforeServiceMutation });
 
-  expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
-  expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
-    service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-  );
-});
+    expect(beforeServiceMutation).toHaveBeenCalledTimes(action === "restart" ? 2 : 1);
+    if (action === "restart") {
+      expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
+        service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    }
+  },
+);
 
-it("aborts loaded-service mutation when the service guard rejects", async () => {
-  const repairLoadedService = vi.fn();
-
-  await expect(
-    restart({
-      beforeServiceMutation: () => {
-        throw new Error("service mutation denied");
-      },
-      repairLoadedService,
-    }),
-  ).rejects.toThrow("service mutation denied");
-
-  expectNoCalls(writeGatewayRestartIntentSync, repairLoadedService, service.restart);
-});
+it.each([false, true])(
+  "aborts native mutation when custody release rejects (async=%s)",
+  async (async) => {
+    const repairLoadedService = vi.fn();
+    await expect(
+      restart({
+        beforeServiceMutation: () => {
+          const error = new Error("state custody could not be released");
+          if (async) {
+            return Promise.reject(error);
+          }
+          throw error;
+        },
+        repairLoadedService,
+      }),
+    ).rejects.toThrow("__exit__:1");
+    expectNoCalls(repairLoadedService, service.restart);
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("state custody could not be released"),
+    });
+  },
+);
 
 it("repairs managed port drift before restarting", async () => {
   service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
@@ -347,30 +377,23 @@ it("repairs managed port drift before restarting", async () => {
   });
 });
 
-it("keeps Nix restart available without suggesting a forbidden token reinstall", async () => {
-  await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
-    await expect(
-      runServiceRestart({ ...createServiceRunArgs(true), opts: { json: false } }),
-    ).resolves.toBe(true);
-
-    expect(service.restart).toHaveBeenCalledOnce();
-    const output = lifecycleRuntimeLogs.join("\n");
-    expect(output).toContain("Config token differs from service token");
-    expect(output).toContain("Nix mode detected; service install is disabled.");
-    expect(output).not.toContain("gateway install --force");
-  });
-});
-
-it("compares restart drift against config token even when caller env is set", async () => {
-  command([], { OPENCLAW_GATEWAY_TOKEN: "env-token" });
+it.each(["Nix", "caller token"])("keeps drift warnings scoped to %s", async (mode) => {
+  vi.stubEnv("OPENCLAW_NIX_MODE", mode === "Nix" ? "1" : "");
   vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-
-  await runServiceRestart(createServiceRunArgs(true));
-
-  const payload = readJsonLog();
-  expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
-    true,
-  );
+  const preparedCommand = {
+    programArguments: [],
+    environment: { OPENCLAW_GATEWAY_TOKEN: mode === "Nix" ? "service-token" : "env-token" },
+  };
+  await runServiceRestart({
+    ...createServiceRunArgs(() => ({ command: preparedCommand, config: loadConfig() })),
+    opts: { json: false },
+  });
+  expect(service.restart).toHaveBeenCalledOnce();
+  expect(service.readCommand).toHaveBeenCalledOnce();
+  const output = lifecycleRuntimeLogs.join("\n");
+  expect(output).toContain("Config token differs from service token");
+  expect(output.includes("Nix mode detected; service install is disabled.")).toBe(mode === "Nix");
+  expect(output.includes("gateway install --force")).toBe(mode !== "Nix");
 });
 
 it("skips drift warning when disabled", async () => {
@@ -756,3 +779,48 @@ it.each([
   expect(lifecycleTestRuntime.error).toHaveBeenCalledWith(error);
   expect(lifecycleRuntimeLogs).toContain(`Tip: ${failureHint}`);
 });
+
+it.each([
+  [
+    "start readiness",
+    (scope: AsyncWorkScope) =>
+      start({
+        postStartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    undefined,
+  ],
+  [
+    "restart readiness",
+    (scope: AsyncWorkScope) =>
+      restart({
+        postRestartCheck: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+  [
+    "owned-process restart",
+    (scope: AsyncWorkScope) =>
+      restart({
+        restartOwnedProcess: async () => {
+          scope.beginClose(interruptReason);
+          throw interruptReason;
+        },
+      }),
+    false,
+  ],
+] as const)(
+  "never reports %s as a lifecycle failure after an accepted interrupt",
+  async (_route, run, expected) => {
+    const scope = new AsyncWorkScope();
+
+    await expect(scope.run(() => run(scope))).resolves.toBe(expected);
+    expectNoCalls(lifecycleTestRuntime.error, lifecycleTestRuntime.exit);
+    expect(lifecycleRuntimeLogs).toEqual([]);
+  },
+);

@@ -10,30 +10,31 @@ import { resolveA2aChannelAccount } from "./accounts.js";
 import { a2aChannelPlugin } from "./channel.js";
 import { dispatchA2aInbound } from "./inbound.js";
 import { A2aTaskStore } from "./task-store.js";
+import { createTerminalStoreFixture } from "./task-store.test-support.js";
 
 type InboundParams = Parameters<typeof dispatchA2aInbound>[0];
 type InboundTurn = Parameters<InboundParams["channelRuntime"]["inbound"]["dispatch"]>[0];
-function dispatched(turn: InboundTurn, queuedFinal = false, deferred = false) {
+function dispatched(turn: InboundTurn, deferred?: "steer" | "followup") {
   return {
     admission: { kind: "dispatch" as const },
     dispatched: true,
     ctxPayload: turn.ctxPayload,
     routeSessionKey: turn.route.sessionKey,
     dispatchResult: {
-      ...createA2aDispatchResult(queuedFinal),
-      ...(deferred ? { deferredToActiveRun: "followup" as const } : {}),
+      ...createA2aDispatchResult(),
+      ...(deferred ? { deferredToActiveRun: deferred } : {}),
     },
   };
 }
 
-function createA2aDispatchResult(queuedFinal = true) {
-  return { queuedFinal, counts: { tool: 0, block: 0, final: Number(queuedFinal) } };
+function createA2aDispatchResult() {
+  return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
 }
 
 const stores: A2aTaskStore[] = [];
-afterEach(() => {
+afterEach(async () => {
   for (const store of stores.splice(0)) {
-    store.stop();
+    await store.stop();
   }
   setActivePluginRegistry(createTestRegistry());
 });
@@ -45,7 +46,7 @@ const registerChannel = () =>
 
 function createA2aInboundFixture(peerName = "hermes") {
   const runtime = createPluginRuntimeMock();
-  const store = new A2aTaskStore();
+  const store = new A2aTaskStore(createTerminalStoreFixture());
   stores.push(store);
   const task = store.create("ctx-inbound", peerName, "incoming-message");
   store.start(task.id);
@@ -130,20 +131,22 @@ describe("A2A channel inbound dispatch", () => {
       registerChannel();
       fixture.reply.mockImplementation(async (turn) => {
         if (queued) {
-          return { ...createA2aDispatchResult(false), deferredToActiveRun: "followup" };
+          return { ...createA2aDispatchResult(), deferredToActiveRun: "followup" };
         }
         turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+        await fixture.store.wait(fixture.task, 0);
         const dispatcher = createReplyDispatcher(turn.dispatcherOptions);
         dispatcher.sendFinalReply({ text: "private prompt in provider error", isError: true });
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
-        return createA2aDispatchResult(false);
+        return createA2aDispatchResult();
       });
       await fixture.run();
       if (queued) {
         expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
         const turn = fixture.dispatch.mock.calls[0]![0];
         turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+        await fixture.store.wait(fixture.task, 0);
       }
       expect(fixture.task.status).toMatchObject({
         state: "TASK_STATE_FAILED",
@@ -159,13 +162,18 @@ describe("A2A channel inbound dispatch", () => {
       fixture.params.account.config.peers!.crew = { token: "second-token" };
       const second = fixture.store.create(fixture.task.contextId, peerName, "second");
       fixture.store.start(second.id);
-      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "followup"));
       const config = { session: { dmScope: "per-channel-peer" as const } };
       await Promise.all([
         fixture.run({ config }),
         fixture.run({ config, taskId: second.id, messageId: "second", peerName }),
       ]);
-      const [firstTurn, secondTurn] = fixture.dispatch.mock.calls.map(([turn]) => turn);
+      // Concurrent turns reach dispatch in either order, so find each by the message it carries.
+      const turnFor = (messageId: string) =>
+        fixture.dispatch.mock.calls.find(([turn]) => turn.ctxPayload.MessageSid === messageId)?.[0];
+      const firstTurn = turnFor(fixture.params.messageId);
+      const secondTurn = turnFor("second");
+      expect(fixture.dispatch).toHaveBeenCalledTimes(2);
       expect(firstTurn!.route.sessionKey === secondTurn!.route.sessionKey).toBe(
         peerName === "hermes",
       );
@@ -181,6 +189,137 @@ describe("A2A channel inbound dispatch", () => {
       ]);
     },
   );
+
+  it.each([
+    [
+      "answer",
+      { kind: "completed" as const },
+      [
+        { text: "queued answer" },
+        { text: "host notice", isStatusNotice: true },
+        setReplyPayloadMetadata({ text: "metadata-only notice" }, { hostNotice: true }),
+        { text: "reasoning", isReasoning: true },
+        { text: "private provider error", isError: true },
+        { text: "second paragraph" },
+      ],
+      "TASK_STATE_COMPLETED",
+      "queued answer\n\nsecond paragraph",
+    ],
+    ["silence", { kind: "completed" as const }, [], "TASK_STATE_COMPLETED", undefined],
+    [
+      "failure",
+      { kind: "failed" as const, error: "private provider details" },
+      [],
+      "TASK_STATE_FAILED",
+      undefined,
+    ],
+    ["abort", { kind: "aborted" as const }, [], "TASK_STATE_FAILED", undefined],
+  ])(
+    "settles a queued %s only on its task and never reopens it",
+    async (_label, completion, payloads, state, text) => {
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "followup"));
+      await fixture.run();
+      const other = fixture.store.create(fixture.task.contextId, "hermes", "next-task");
+      fixture.store.start(other.id);
+      const turn = fixture.dispatch.mock.calls[0]![0];
+      const deliver = turn.replyOptions?.onQueuedFollowupReplyBatch;
+      expect(deliver).toBeDefined();
+      const batch = {
+        kind: "queued-followup" as const,
+        runId: "queued-run",
+        originatingChannel: "a2a",
+        payloads,
+      };
+      await deliver?.({ ...batch, completion: { kind: "progress" } });
+      expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
+      await deliver?.({ ...batch, completion });
+      expect(fixture.task.status.state).toBe(state);
+      expect(fixture.task.artifacts).toEqual(
+        text ? [{ artifactId: expect.any(String), parts: [{ text }] }] : [],
+      );
+      // A duplicate/later success must not overwrite a terminal failure or settle the next task.
+      await deliver?.({
+        ...batch,
+        payloads: [{ text: "late answer" }],
+        completion: { kind: "completed" },
+      });
+      expect(fixture.task.status.state).toBe(state);
+      expect(fixture.task.artifacts).toEqual(
+        text ? [{ artifactId: expect.any(String), parts: [{ text }] }] : [],
+      );
+      expect(other.status.state).toBe("TASK_STATE_WORKING");
+    },
+  );
+
+  it.each([
+    ["completes", "completed", "TASK_STATE_COMPLETED", undefined],
+    ["fails", "failed", "TASK_STATE_FAILED", "Agent run failed"],
+    ["is cancelled", undefined, "TASK_STATE_FAILED", "Agent run aborted"],
+  ] as const)(
+    "settles a message steered into the active run when that run %s",
+    async (_l, outcome, state, status) => {
+      const run = Promise.withResolvers<void>();
+      const steered = fixture.store.create(fixture.task.contextId, "hermes", "steered");
+      fixture.store.start(steered.id);
+      fixture.dispatch
+        .mockImplementationOnce(async (turn) => {
+          await run.promise;
+          if (outcome) {
+            turn.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
+          }
+          return dispatched(turn);
+        })
+        .mockImplementationOnce(async (turn) => dispatched(turn, "steer"));
+      const host = fixture.run();
+      await vi.waitFor(() => expect(fixture.dispatch).toHaveBeenCalledTimes(1));
+      const hostTurn = fixture.dispatch.mock.calls[0]![0];
+      // The host's own answer predates the steer; only later answers belong to the steered task.
+      await hostTurn.delivery.deliver({ text: "ONE" }, { kind: "final" });
+      await fixture.run({ taskId: steered.id, messageId: "steered" });
+      expect(steered.status.state).toBe("TASK_STATE_WORKING");
+      await hostTurn.delivery.deliver({ text: "TWO" }, { kind: "final" });
+      run.resolve();
+      await host;
+      expect(steered.status.state).toBe(state);
+      if (outcome === "completed") {
+        expect(steered.artifacts).toEqual([
+          { artifactId: expect.any(String), parts: [{ text: "TWO" }] },
+        ]);
+      } else {
+        expect(steered.artifacts).toEqual([]);
+        expect(steered.status).toMatchObject({ message: { parts: [{ text: status }] } });
+      }
+    },
+  );
+
+  it("settles a message steered into a queued followup's run with that run's batch", async () => {
+    const steered = fixture.store.create(fixture.task.contextId, "hermes", "steered");
+    fixture.store.start(steered.id);
+    fixture.dispatch
+      .mockImplementationOnce(async (turn) => dispatched(turn, "followup"))
+      .mockImplementationOnce(async (turn) => dispatched(turn, "steer"));
+    await fixture.run();
+    const queuedTurn = fixture.dispatch.mock.calls[0]![0];
+    // The queued run starts after its dispatch returned; the next message steers into it.
+    queuedTurn.replyOptions?.onPreparedAgentRunStart?.({
+      runId: "queued-run",
+      transcriptStart: null,
+    });
+    await fixture.run({ taskId: steered.id, messageId: "steered" });
+    expect(steered.status.state).toBe("TASK_STATE_WORKING");
+    await queuedTurn.replyOptions?.onQueuedFollowupReplyBatch?.({
+      kind: "queued-followup",
+      runId: "queued-run",
+      originatingChannel: "a2a",
+      payloads: [{ text: "ONE" }, { text: "TWO" }],
+      completion: { kind: "completed" },
+    });
+    expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+    expect(steered.status.state).toBe("TASK_STATE_COMPLETED");
+    expect(steered.artifacts).toEqual([
+      { artifactId: expect.any(String), parts: [{ text: "ONE\n\nTWO" }] },
+    ]);
+  });
 
   it("propagates dispatch failure to the HTTP owner", async () => {
     const failure = new Error("provider unavailable");

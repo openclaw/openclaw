@@ -25,6 +25,7 @@ import { assertCapturedSessionEntryReadSource } from "../../config/sessions/sess
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { failChatDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
@@ -159,7 +160,7 @@ async function deleteGatewaySessionInScope(
                       "agentHarnessId",
                     ] as const
                   ).every((field) => isDeepStrictEqual(before?.[field], after?.[field])) &&
-                  (p.archivedOnly !== true || after?.archivedAt !== undefined),
+                  (p.archivedOnly !== true || !after || after.archivedAt !== undefined),
               });
             },
             assertActive: () => {
@@ -218,7 +219,7 @@ async function deleteGatewaySessionInScope(
       }
       // archivedOnly is the write-scope archive-then-delete contract, rechecked
       // under the fence so a racing unarchive cannot authorize active deletion.
-      if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+      if (p.archivedOnly === true && entry && entry.archivedAt === undefined) {
         return errorShape(
           ErrorCodes.INVALID_REQUEST,
           `Session ${key} is not archived. Archive it first, then delete it.`,
@@ -538,6 +539,7 @@ async function deleteGatewaySessionInScope(
               // this fence opens, so a same-key successor cannot be mistaken for it.
               const deletedSessionKey = target.canonicalKey ?? key;
               await handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
+              await failChatDeliveries({ agentId: target.agentId, sessionKey: deletedSessionKey });
               // The absent session plus its retained registry binding survive a crash.
               // Keep this mutation and request lifetime through lossless cleanup, but
               // acknowledge archived cleanup once the visible deletion is committed.

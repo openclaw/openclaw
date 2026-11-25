@@ -40,11 +40,17 @@ import {
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
-import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
+import {
+  dispatchableWorkerProfileIds,
+  listWorkerProfilesWithMachines,
+  requireActiveCloudProfile,
+} from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
@@ -73,17 +79,6 @@ async function listSuggestedWorkerProfile(
     providerId: suggestion.profile.provider,
     ...(suggestion.providerDisplayId ? { providerDisplayId: suggestion.providerDisplayId } : {}),
   };
-}
-
-async function requireActiveCloudProfile(context: GatewayRequestContext) {
-  const summaries = await listWorkerProfilesWithMachines(context);
-  const profile = summaries.find((summary) => summary.id === "cloud");
-  if (!profile) {
-    throw new Error(
-      "The cloud worker profile is saved but is not active on this Gateway. Wait for the Gateway to restart, then retry; if it does not restart, restart it manually.",
-    );
-  }
-  return profile;
 }
 
 const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
@@ -221,14 +216,16 @@ async function respondDesktopObserve(params: {
   );
 }
 
-async function respondDesktopLaunch(params: {
-  environmentId: string;
-  app: "browser" | "terminal";
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}) {
-  await respondWorkerDesktop(params, "launch", (service) =>
-    service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
+async function respondDesktopLaunch(
+  options: GatewayRequestHandlerOptions,
+  environmentId: string,
+  app: "browser" | "terminal",
+) {
+  await respondWorkerDesktop(options, "launch", (service) =>
+    service.launchDesktopApp(
+      { environmentId, app },
+      readGatewayRequestMutationAuthority(options).assertCurrent,
+    ),
   );
 }
 
@@ -502,6 +499,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       const profiles = await listWorkerProfilesWithMachines(context);
       const suggestedProfile = await listSuggestedWorkerProfile(context);
       authority.assertCurrent();
+      const dispatchableProfileIds = dispatchableWorkerProfileIds(profiles, options);
       const includeCurrentPreparedDetails =
         includePreparedDetails &&
         authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, client?.connect.scopes ?? []).allowed;
@@ -517,6 +515,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
         true,
         {
           environments,
+          ...(profiles.length > 0 ? { dispatchableProfileIds } : {}),
           ...(suggestedProfile ? { suggestedProfile } : {}),
           ...(context.getRuntimeConfig().cloudWorkers?.requiredProfile
             ? { requiredProfile: context.getRuntimeConfig().cloudWorkers?.requiredProfile }
@@ -580,8 +579,28 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.create": defineEnvironmentMutation(
     "create",
     validateEnvironmentsCreateParams,
-    async ({ params }, service) =>
-      summarizeWorkerEnvironment(await service.create(params.profileId, params.idempotencyKey)),
+    async (options, service) => {
+      const invocation = readGatewayRequestMutationAuthority(options);
+      const captured = await prepareGatewayOperatorRunAuthority({
+        client: options.client,
+        context: options.context,
+        hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: invocation.assertCurrent },
+      });
+      try {
+        return summarizeWorkerEnvironment(
+          await service.createWithRequest({
+            ...options.params,
+            provisionSource: captureQueuedOperatorRecoverySource(captured?.authority) ?? {
+              kind: "unavailable",
+            },
+            beforeProvision: () => invocation.assertCurrent(),
+          }),
+        );
+      } finally {
+        captured?.release();
+      }
+    },
   ),
   "environments.prepare": defineEnvironmentMutation(
     "prepare",
@@ -592,22 +611,27 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.destroy": defineEnvironmentMutation(
     "destroy",
     validateEnvironmentsDestroyParams,
-    async ({ params, context }, service) => {
+    async (options, service) => {
+      const { params, context } = options;
+      const { assertCurrent } = readGatewayRequestMutationAuthority(options);
       const placementService = context.workerPlacementDispatchService;
       if (params.force && !placementService?.forceDestroyEnvironment) {
         throw new Error("cloud worker placement control is unavailable");
       }
       const destroyed = params.force
-        ? await placementService!.forceDestroyEnvironment!(params.environmentId, (error) => {
-            context.logGateway.warn(
-              `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
-            );
-          })
-        : await service.destroyUnattached(params.environmentId);
+        ? await placementService!.forceDestroyEnvironment!(
+            params.environmentId,
+            (error) =>
+              context.logGateway.warn(
+                `worker environment forced teardown cleanup failed: ${formatForLog(error)}`,
+              ),
+            assertCurrent,
+          )
+        : await service.destroyUnattached(params.environmentId, assertCurrent);
       // Destruction is authoritative. Project the dead worker into its owning
       // placement before returning, or immediate session deletion stays fenced.
       try {
-        await context.workerPlacementDispatchService?.reconcileActive?.(params.environmentId);
+        await placementService?.reconcileActive?.(params.environmentId);
       } catch (error) {
         // The provider mutation has committed. Keep its success authoritative;
         // the periodic recovery sweep will retry this projection.
@@ -635,13 +659,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "worker.desktop.launch": defineValidatedGatewayHandler(
     "worker.desktop.launch",
     validateWorkerDesktopLaunchParams,
-    ({ params, respond, context }) =>
-      respondDesktopLaunch({
-        environmentId: params.environmentId,
-        app: params.app,
-        respond,
-        context,
-      }),
+    (options) => respondDesktopLaunch(options, options.params.environmentId, options.params.app),
   ),
   "desktop.observe": defineValidatedGatewayHandler(
     "desktop.observe",
@@ -657,13 +675,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "desktop.launch": defineValidatedGatewayHandler(
     "desktop.launch",
     validateDesktopLaunchParams,
-    ({ params, respond, context }) =>
-      respondDesktopLaunch({
-        environmentId: params.source.environmentId,
-        app: params.app,
-        respond,
-        context,
-      }),
+    (options) =>
+      respondDesktopLaunch(options, options.params.source.environmentId, options.params.app),
   ),
   "desktop.release": defineValidatedGatewayHandler(
     "desktop.release",

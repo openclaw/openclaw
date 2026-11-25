@@ -8,7 +8,8 @@ import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helper
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { getChildLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { enqueueSystemEvent, peekSystemEvents } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
 import { WhatsAppAuthUnstableError, resolveWebCredsPath } from "./auth-store.js";
@@ -168,15 +169,6 @@ function droppedMessage(id: string) {
   });
 }
 
-function appendWindowAt(
-  scripted: ReturnType<typeof createScriptedWebListenerFactory>,
-  index: number,
-) {
-  const options = scripted.listenerFactory.mock.calls[index]?.[0] as ListenerOptions | undefined;
-  assert(options, `Expected listener options at index ${index}`);
-  return options.appendReplyWindow;
-}
-
 async function openOnce(
   tuning?: Parameters<Monitor>[6],
   resolver: Parameters<Monitor>[3] = async () => undefined,
@@ -276,28 +268,13 @@ it.each([
   },
 );
 
-it("widens append catch-up only after reconnecting a recently active listener", async () => {
-  const monitor = startMonitor({ messageTimeoutMs: 30 * 60_000 });
-  const { scripted } = monitor;
-
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
-  expect(appendWindowAt(scripted, 0)).toBeUndefined();
-
-  // The controller records inbound activity before admission; this test only needs that
-  // lifecycle fact and must not start unrelated delivery/session work.
-  await requireOnMessage(scripted.getOnMessage())(droppedMessage("active-before-reconnect"));
-
-  const reconnectStartedAt = Date.now();
-  scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
-  await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
-
-  const appendReplyWindow = appendWindowAt(scripted, 1);
-  expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
-  expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
-  expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
-  expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
-
-  await stopMonitor(monitor);
+it.each([
+  [30 * 60_000, 20 * 60_000],
+  [5 * 60_000, 5 * 60_000],
+  [1, 60_000],
+])("bounds offline catch-up for a %i ms message timeout", async (messageTimeoutMs, expected) => {
+  const options = await openOnce({ messageTimeoutMs });
+  expect(options?.appendReplyMaxAgeMs).toBe(expected);
 });
 
 it.each([
@@ -576,6 +553,23 @@ it("gives a reconnected listener a fresh watchdog window", async () => {
     await Promise.resolve();
     await waitForScriptedListeners(scripted, 3, true);
   });
+});
+
+it("keeps one connection notice queued across reconnects", async () => {
+  resetSystemEventsForTest();
+  const sessionKey = "agent:main:main";
+  const monitor = startMonitor({
+    reconnect: { initialMs: 1, maxMs: 1, maxAttempts: 50, factor: 1 },
+  });
+  const { scripted } = monitor;
+  await waitForScriptedListeners(scripted, 1);
+  for (let i = 0; i < 12; i++) {
+    scripted.resolveClose(i, { status: 499, isLoggedOut: false, error: "watchdog" });
+    await waitForScriptedListeners(scripted, i + 2);
+  }
+  expect(peekSystemEvents(sessionKey)).toEqual(["WhatsApp gateway connected."]);
+  expect(enqueueSystemEvent("hook finished", { sessionKey })).toBe(true);
+  await stopMonitor(monitor);
 });
 
 it("passes live debounce config to the listener", async () => {

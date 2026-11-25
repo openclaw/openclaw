@@ -1,22 +1,13 @@
-import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import { i18n, t } from "../../i18n/index.ts";
-import { zh_CN } from "../../i18n/locales/zh-CN.ts";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
-import { ApplicationProvider } from "../../lib/reactive/context.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import {
@@ -111,44 +102,6 @@ describe("renderAgents", () => {
     );
   });
 
-  it("renders the selected agent's tool catalog loading state", async () => {
-    const mounted = mountConnected(() => {
-      const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
-      const props = createProps();
-      return (
-        <Agents
-          {...props}
-          tools={{ ...props.tools, readCatalog }}
-          readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
-        />
-      );
-    });
-    await vi.dynamicImportSettled();
-
-    await waitForSolid(() =>
-      expect(
-        mounted.container.querySelector(
-          `.settings-loading-skeleton[aria-label="${t("agentTools.loadingCatalog")}"]`,
-        ),
-      ).not.toBeNull(),
-    );
-  });
-
-  it("renders the active agent tab and selects a different panel", () => {
-    const container = document.createElement("div");
-    const onSelectPanel = vi.fn();
-    renderView(
-      { onSelectPanel, readData: () => ({ ...createProps().readData(), agentsPanel: "files" }) },
-      container,
-    );
-
-    expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
-    expectAgentTab(container, "Tools").dispatchEvent(
-      new MouseEvent("click", { detail: 1, bubbles: true }),
-    );
-    expect(onSelectPanel).toHaveBeenCalledWith("tools");
-  });
-
   it("prefills the identity editor from the fetched agent identity", () => {
     const container = document.createElement("div");
     renderView(
@@ -160,9 +113,9 @@ describe("renderAgents", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
-    ).toBe("Fetched Beta");
+    expect(container.querySelector<HTMLInputElement>(".agent-identity-editor__name")?.value).toBe(
+      "Fetched Beta",
+    );
     expect(
       container
         .querySelector(".agent-identity-editor__avatar .identity-avatar__text")
@@ -206,11 +159,6 @@ describe("renderAgents", () => {
     await waitForSolid(() =>
       expect(container.textContent).toContain("Implicit default-agent reminder"),
     );
-    expect(
-      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
-        ?.textContent,
-    ).toContain("1");
-
     const schedulerRows = [...container.querySelectorAll(".settings-row")];
     const jobsRow = schedulerRows.find(
       (row) =>
@@ -288,30 +236,33 @@ describe("renderAgents", () => {
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
     const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>
-      createCronJob(`main-${index}`, { agentId: "alpha" }),
+      createCronJob(`main-${String(index).padStart(2, "0")}`, {
+        agentId: "alpha",
+        state: { nextRunAtMs: index + 1 },
+      }),
     );
     const lastJob = createCronJob("main-50", {
       agentId: "alpha",
       name: "Fifty-first agent reminder",
+      state: { nextRunAtMs: 51 },
     });
-    const request = vi.fn(async () => ({
-      jobs: [lastJob],
-      snapshotRevision,
-      total: 51,
-      offset: 50,
-      limit: 50,
-      nextOffset: null,
-      hasMore: false,
-    }));
+    const request = vi.fn(async (method: string) =>
+      method === "cron.status"
+        ? { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null }
+        : {
+            jobs: [lastJob, ...jobs],
+            snapshotRevision,
+            total: 51,
+            offset: 0,
+            limit: 200,
+            nextOffset: null,
+            hasMore: false,
+          },
+    );
     const client = { request } as unknown as GatewayBrowserClient;
     const cronState = {
       ...createInitialCronState({ client, connected: true }),
       cronAgentId: "alpha",
-      cronJobs: jobs,
-      cronJobsSnapshotRevision: snapshotRevision,
-      cronJobsTotal: 51,
-      cronJobsHasMore: true,
-      cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
     const presenter = createAgentCronPresenter({
@@ -327,37 +278,24 @@ describe("renderAgents", () => {
           cron: {
             ...createProps().cron,
             read: presenter.read,
+            onRefresh: presenter.onRefresh,
             onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),
             agentsPanel: "cron",
-            cron: {
-              ...createProps().readData().cron,
-              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-              cronJobs: cronState.cronJobs,
-              cronJobsTotal: cronState.cronJobsTotal,
-              cronJobsHasMore: cronState.cronJobsHasMore,
-              cronJobsLoadingMore: cronState.cronJobsLoadingMore,
-              cronScopedTotal: 51,
-              cronScopedNextWakeAtMs: null,
-              cronLoading: cronState.cronLoading,
-              cronError: cronState.cronError,
-              cronNotice: cronState.cronNotice,
-            },
+            cron: cronState,
           }),
         },
         container,
       );
     };
-    renderCurrentPage();
+    presenter.onRefresh();
     await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
 
-    expect(
-      expectAgentTab(container, t("agents.tabs.cronJobs")).querySelector(".hub-tab__badge--count")
-        ?.textContent,
-    ).toContain("51");
     expect(container.textContent).not.toContain(lastJob.name);
+    expect(cronState.cronJobs).toEqual(jobs);
+    expect(cronState.cronJobsTotal).toBe(51);
 
     const loadMore = container.querySelector<HTMLButtonElement>(".cron-load-more");
     expect(loadMore?.textContent?.trim()).toBe(t("cron.list.loadMore"));
@@ -365,56 +303,9 @@ describe("renderAgents", () => {
     expect(container.querySelector<HTMLButtonElement>(".cron-load-more")?.disabled).toBe(true);
 
     await vi.waitFor(() => expect(container.textContent).toContain(lastJob.name));
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ agentId: "alpha", limit: 50, offset: 50 }),
-    );
+    expect(cronState.cronJobs).toEqual([...jobs, lastJob]);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
     expect(container.querySelector(".cron-load-more")).toBeNull();
-  });
-
-  it("renders Memory after Automations and scopes the panel to the selected agent", async () => {
-    const container = document.createElement("div");
-    const request = vi.fn(async (method: string) =>
-      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
-    );
-    const client = createTestGatewayClient(request);
-    const context = {
-      gateway: createApplicationGateway({
-        ...createApplicationGateway().gateway.snapshot,
-        client,
-        phase: "connected",
-      }).gateway,
-      runtimeConfig: {
-        state: { configForm: null, configSnapshot: null },
-        ensureLoaded: async () => undefined,
-        subscribe: () => () => undefined,
-      },
-    } as unknown as ApplicationContext;
-    mountSolid(
-      (props: AgentsProps) => (
-        <ApplicationProvider value={context}>
-          <Agents {...props} />
-        </ApplicationProvider>
-      ),
-      createProps({ readData: () => ({ ...createProps().readData(), agentsPanel: "memory" }) }),
-      container,
-    );
-
-    await vi.dynamicImportSettled();
-
-    const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
-      directText(tab),
-    );
-    expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
-    await vi.dynamicImportSettled();
-    await waitForSolid(() =>
-      expect(
-        container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
-      ).not.toBeNull(),
-    );
-    await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
-    );
   });
 
   it("updates the configured primary model selection when the active agent changes", async () => {
@@ -428,7 +319,8 @@ describe("renderAgents", () => {
             "openai/gpt-5.4": {},
           },
         },
-        entries: { alpha: {}, beta: {} },
+        // Even the default agent can explicitly pin the same model a sibling inherits.
+        entries: { alpha: { model: "openai/gpt-5.4" }, beta: {} },
       },
     };
 
@@ -463,200 +355,6 @@ describe("renderAgents", () => {
       '[role="option"][aria-selected="true"]',
     );
     expect(inheritedSelection?.textContent?.trim()).toBe("Inherit default (openai/gpt-5.4)");
-  });
-
-  it("shows canonical model names alongside configured aliases in agent options", async () => {
-    const container = document.createElement("div");
-    const configForm = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-8" },
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "opus" },
-            "anthropic/claude-sonnet-5": { alias: "sonnet" },
-            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
-            "local/unlisted-model": { alias: "My local model" },
-          },
-        },
-        entries: {
-          alpha: {
-            models: {
-              "local/unlisted-model": { alias: "Alpha local model" },
-              "google/gemini-3-flash-preview": { alias: "Alpha Flash" },
-            },
-          },
-          beta: {},
-        },
-      },
-    };
-
-    renderView(
-      {
-        selectedAgentId: "alpha",
-        config: config(configForm),
-        overview: {
-          ...createProps().overview,
-          modelCatalog: [
-            {
-              id: "claude-opus-4-8",
-              alias: "opus",
-              name: "Opus 4.8",
-              provider: "anthropic",
-            },
-            {
-              id: "claude-sonnet-5",
-              alias: "sonnet",
-              name: "Sonnet 5",
-              provider: "anthropic",
-            },
-            {
-              id: "moonshotai/kimi-k2.5",
-              alias: "Kimi K2.5 (NVIDIA)",
-              name: "Kimi K2.5",
-              provider: "nvidia",
-            },
-          ],
-        },
-      },
-      container,
-    );
-
-    await updatePickers(container);
-    const select = primaryModelPicker(container);
-    await openPicker(select!);
-    expect(
-      select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
-    ).toBe("anthropic/claude-opus-4-8");
-    const options = new Map(
-      Array.from(select?.querySelectorAll('[role="option"]') ?? []).map((option) => [
-        option.getAttribute("data-value"),
-        option.querySelector(".picker-select__label")?.textContent?.trim(),
-      ]),
-    );
-
-    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
-    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
-    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
-    expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
-    expect(options.get("google/gemini-3-flash-preview")).toBe(
-      "Alpha Flash (google/gemini-3-flash-preview)",
-    );
-  });
-
-  it("does not display inherited fallback chips for an authored primary", () => {
-    const model = { primary: "openai/gpt-5.4" };
-    const container = document.createElement("div");
-    const fallback = "anthropic/claude-sonnet-4-6";
-
-    renderView(
-      {
-        selectedAgentId: "beta",
-        config: config({
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
-            },
-            entries: { alpha: {}, beta: { model } },
-          },
-        }),
-      },
-      container,
-    );
-
-    const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
-    expect(field).not.toBeNull();
-    expect(field?.querySelectorAll(".multi-select__chip")).toHaveLength(0);
-  });
-
-  it("shows the skills count only for the selected agent's report", async () => {
-    const container = document.createElement("div");
-    renderView(
-      {
-        agentSkills: { ...createProps().agentSkills, filter: "" },
-        readData: () => ({
-          ...createProps().readData(),
-          agentSkillsReport: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [createSkill()],
-          },
-          agentSkillsAgentId: "alpha",
-        }),
-      },
-      container,
-    );
-    await Promise.resolve();
-
-    let skillsTab = expectAgentTab(container, "Skills");
-
-    expect(skillsTab.textContent?.trim()).toBe("Skills");
-
-    renderView(
-      {
-        agentSkills: { ...createProps().agentSkills, filter: "" },
-        readData: () => ({
-          ...createProps().readData(),
-          agentSkillsReport: {
-            workspaceDir: "/tmp/workspace",
-            managedSkillsDir: "/tmp/skills",
-            skills: [createSkill()],
-          },
-          agentSkillsAgentId: "beta",
-        }),
-      },
-      container,
-    );
-    await Promise.resolve();
-
-    skillsTab = expectAgentTab(container, "Skills");
-
-    expect(directText(skillsTab)).toBe("Skills");
-    expect(skillsTab.querySelector(".hub-tab__badge--count")?.textContent).toBe("1");
-  });
-
-  it("localizes agent tabs and the channel refresh never state", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    await i18n.setLocale("zh-CN");
-    const container = document.createElement("div");
-
-    try {
-      renderView(
-        {
-          channels: { ...createProps().channels },
-          readData: () => ({ ...createProps().readData(), agentsPanel: "channels" }),
-          readChannels: () => ({
-            ...createProps().readChannels(),
-            channelsSnapshot: null,
-            channelsRead: null,
-            channelsError: null,
-            channelsLastSuccess: null,
-          }),
-        },
-        container,
-      );
-      await Promise.resolve();
-
-      const tabLabels = Array.from(
-        container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"),
-      ).map((button) => button.textContent?.trim());
-
-      const chinese = flattenTranslations(zh_CN);
-      const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
-      expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
-      const lastRefresh = chinese
-        .get("agents.channels.lastRefresh")
-        ?.replace("{time}", chinese.get("common.never") ?? "");
-      await waitForSolid(() =>
-        expect(
-          Array.from(container.querySelectorAll(".settings-section__desc"), (desc) =>
-            desc.textContent?.replace(/\s+/gu, " ").trim(),
-          ),
-        ).toContain(`${chinese.get("agents.channels.subtitle")} ${lastRefresh}`),
-      );
-    } finally {
-      await i18n.setLocale("en");
-      vi.unstubAllGlobals();
-    }
   });
 });
 
@@ -819,7 +517,7 @@ describe("renderAgentFiles", () => {
     ).map((tab) => directText(tab));
     expect(tabLabels).toStrictEqual(["AGENTS"]);
     expect(container.querySelector(".agent-files-hub-tabs .hub-tab__badge")?.textContent).toBe(
-      "missing",
+      "Missing",
     );
 
     const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
@@ -949,7 +647,7 @@ describe("renderAgents toolbar", () => {
     },
   );
 
-  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
+  it("hides unavailable creation without replacing authorized page content", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
@@ -975,12 +673,8 @@ describe("renderAgents toolbar", () => {
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
       const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
-      expect(createButton).not.toBeNull();
-      expect(createButton?.disabled).toBe(true);
-      expect(createButton?.title).toContain("openclaw.chat");
-      expect(createButton?.title).toContain("operator.admin");
-      expect(createButton?.title).toContain("reconnect");
-      createButton?.click();
+      expect(createButton).toBeNull();
+      expect(container.querySelector("#agents-tab-overview")).not.toBeNull();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();
@@ -1009,7 +703,7 @@ it.each([
   { name: "paused authorized job", enabled: false, canRunCron: true, canRun: true },
   { name: "enabled unauthorized job", enabled: true, canRunCron: false, canRun: false },
 ])(
-  "preserves edit links and gates Run Now for a $name",
+  "preserves edit links and gates Run now for a $name",
   async ({ enabled, canRunCron, canRun }) => {
     const container = document.createElement("div");
     const onCronRunNow = vi.fn();
@@ -1049,7 +743,7 @@ it.each([
       (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === job.name,
     );
     const runNow = [...(jobRow?.querySelectorAll("button") ?? [])].find(
-      (button) => button.textContent?.trim() === "Run Now",
+      (button) => button.textContent?.trim() === "Run now",
     );
     expect(runNow).toBeInstanceOf(HTMLButtonElement);
     expect(runNow?.disabled).toBe(!canRun);

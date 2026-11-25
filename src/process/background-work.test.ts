@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getSkillWorkshopReviewLane, getBackgroundWorkSnapshot } from "./background-work.js";
+import { getBackgroundOwnerLane, getBackgroundWorkSnapshot } from "./background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -85,9 +85,9 @@ function configureBackground(members: string[], lanes?: Capacities, reservations
 
 function expectWorkshopWidth(width: number) {
   if (width === 1) {
-    expect(getSkillWorkshopReviewLane()).toBe("background:core:skill-workshop");
+    expect(getBackgroundOwnerLane("core:skill-workshop")).toBe("background:core:skill-workshop");
   } else {
-    expect(() => getSkillWorkshopReviewLane()).toThrow(
+    expect(() => getBackgroundOwnerLane("core:skill-workshop")).toThrow(
       "already registered with different concurrency",
     );
   }
@@ -116,11 +116,11 @@ afterEach(resetCommandQueueStateForTest);
 it("does not scan sibling lanes while reading registered owner widths", () => {
   const siblings = Array.from({ length: 32 }, (_, index) => `background:core:stable-${index}`);
   configureBackground(siblings, Object.fromEntries(siblings.map((lane) => [lane, 1])));
-  const lane = getSkillWorkshopReviewLane();
+  const lane = getBackgroundOwnerLane("core:skill-workshop");
   expect(state.lanes.size).toBe(siblings.length + 1);
   const unchanged = preserveQueueState();
   const { result: observed, reads } = countLaneReads(() =>
-    Array.from({ length: 1_000 }, () => getSkillWorkshopReviewLane()),
+    Array.from({ length: 1_000 }, () => getBackgroundOwnerLane("core:skill-workshop")),
   );
   expect(observed).toEqual(Array.from({ length: 1_000 }, () => lane));
   unchanged();
@@ -146,12 +146,12 @@ it.each([
     return;
   }
   expect(state.laneGroups.size).toBe(0);
-  expect(getSkillWorkshopReviewLane()).toBe(lane);
+  expect(getBackgroundOwnerLane("core:skill-workshop")).toBe(lane);
   const registered = state.lanes.get(lane);
   const group = state.laneGroups.get("background-work");
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
-  expect(getSkillWorkshopReviewLane()).toBe(lane);
+  expect(getBackgroundOwnerLane("core:skill-workshop")).toBe(lane);
   for (const width of [0, 2, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
     expectWorkshopWidth(width);
@@ -258,7 +258,7 @@ it("preserves admission draining and the newest generation across Gateway restar
 
 it("shares three slots, preserves owner widths and FIFO, and leaves foreground capacity free", async () => {
   const parallel = "background:plugin:parallel";
-  const serial = getSkillWorkshopReviewLane();
+  const serial = getBackgroundOwnerLane("core:skill-workshop");
   configureBackground([parallel, serial], { [parallel]: 3 });
   const gates = Array.from({ length: 3 }, () =>
     park(parallel, undefined, { priority: "background" }),
@@ -290,7 +290,7 @@ it("shares three slots, preserves owner widths and FIFO, and leaves foreground c
 });
 
 it("removes cancelled work immediately without invoking it or reordering its successors", async () => {
-  const owner = getSkillWorkshopReviewLane();
+  const owner = getBackgroundOwnerLane("core:skill-workshop");
   const active = park(owner, undefined, { priority: "background" });
   const controller = new AbortController();
   const cancelledTask = vi.fn(async () => undefined);

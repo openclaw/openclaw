@@ -24,10 +24,10 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 | `MiniMax-M3`                 | Chat (reasoning) | Default hosted reasoning model             |
 | `MiniMax-M3.1-Flash`         | Chat (reasoning) | Adjustable effort, 1M context              |
 | `MiniMax-M3.1-Flash-Preview` | Chat (reasoning) | Legacy Preview id for saved configurations |
-| `MiniMax-M2.7`               | Chat (reasoning) | Previous hosted reasoning model            |
-| `MiniMax-M2.7-highspeed`     | Chat (reasoning) | Faster M2.7 reasoning tier                 |
 | `MiniMax-VL-01`              | Vision           | Image understanding model                  |
 | `image-01`                   | Image generation | Text-to-image and image-to-image editing   |
+| `MiniMax-H3-Image`           | Image generation | Text-to-image and multi-image editing      |
+| `MiniMax-H3-Image-Highspeed` | Image generation | Faster H3 tier with the same parameters    |
 | `music-2.6`                  | Music generation | Default music model                        |
 | `MiniMax-Hailuo-2.3`         | Video generation | Text-to-video and image-to-video flows     |
 
@@ -150,24 +150,6 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
                 contextWindow: 1000000,
                 maxTokens: 131072,
               },
-              {
-                id: "MiniMax-M2.7",
-                name: "MiniMax M2.7",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
-                contextWindow: 204800,
-                maxTokens: 131072,
-              },
-              {
-                id: "MiniMax-M2.7-highspeed",
-                name: "MiniMax M2.7 Highspeed",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
-                contextWindow: 204800,
-                maxTokens: 131072,
-              },
             ],
           },
         },
@@ -176,7 +158,7 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
     ```
 
     <Warning>
-    MiniMax-M2.x's Anthropic-compatible streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks instead of native Anthropic thinking blocks, which leaks internal reasoning into visible output if thinking is left enabled implicitly. OpenClaw disables M2.x thinking by default unless you explicitly set `thinking` yourself. MiniMax-M3 (and forward-compatible M3.x) is exempt: M3 emits proper Anthropic thinking blocks and requires thinking active to produce visible content, so OpenClaw keeps M3 on the provider's adaptive thinking path. See the Thinking defaults section under Advanced configuration below.
+    MiniMax M2.x can emit `reasoning_content` in OpenAI-style streaming deltas on the Anthropic-compatible path, which can expose reasoning in visible output. OpenClaw sends `thinking: { type: "disabled" }` by default when the payload has no `thinking` field, but [MiniMax documents that M2.x accepts and ignores this setting](https://platform.minimax.io/docs/api-reference/text-anthropic-api#thinking-control). The `off` default does not guarantee that upstream reasoning or reasoning output is suppressed. See [Thinking defaults](/providers/minimax#advanced-configuration) below for model-specific behavior.
     </Warning>
 
     <Note>
@@ -214,23 +196,23 @@ MiniMax M3 and M3.1 Flash are preferred [Code Mode](/tools/code-mode) models on 
 
 ### Image generation
 
-The MiniMax plugin registers the `image-01` model for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
+The MiniMax plugin registers `image-01`, `MiniMax-H3-Image` and `MiniMax-H3-Image-Highspeed` for the `image_generate` tool on both `minimax` and `minimax-portal`, reusing the same `MINIMAX_API_KEY` or OAuth auth as the text models.
 
-- Text-to-image generation and image-to-image editing (subject reference), both with aspect ratio control
-- Up to 9 output images per request, 1 reference image per edit request
-- Supported aspect ratios: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`
+- `image-01`: `/v1/image_generation`, up to 9 output images, 1 reference image per edit, aspect ratios `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`
+- H3 models: `/v1/images/generations` and `/v1/images/edits`, up to 16 reference images, any aspect ratio from `1:3` to `3:1`, and `resolution` `1K`, `2K` or `4K` (default `4K`, sent as MiniMax `area`)
+- H3 requests without a configured timeout wait up to 610 seconds, because a 4K image can take minutes
 
 ```json5
 {
   agents: {
     defaults: {
-      mediaModels: { image: { primary: "minimax/image-01" } },
+      mediaModels: { image: { primary: "minimax/MiniMax-H3-Image" } },
     },
   },
 }
 ```
 
-Image generation always uses MiniMax's dedicated image endpoint (`/v1/image_generation`) and ignores `models.providers.minimax.baseUrl`, since that field configures the chat/Anthropic-compatible base URL instead. Set `MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation through the CN endpoint; the default global endpoint is `https://api.minimax.io`.
+Image generation always uses MiniMax's dedicated image endpoints (`/v1/image_generation` for `image-01`, `/v1/images/generations` and `/v1/images/edits` for `MiniMax-H3-Image`) and ignores `models.providers.minimax.baseUrl`, since that field configures the chat/Anthropic-compatible base URL instead. Set `MINIMAX_API_HOST=https://api.minimaxi.com` to route image generation through the CN endpoint; the default global endpoint is `https://api.minimax.io`.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
@@ -312,10 +294,10 @@ The MiniMax plugin registers image understanding separately from the text catalo
 
 | Provider ID      | Default image model | PDF text extraction |
 | ---------------- | ------------------- | ------------------- |
-| `minimax`        | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
-| `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M2.7`      |
+| `minimax`        | `MiniMax-VL-01`     | `MiniMax-M3`        |
+| `minimax-portal` | `MiniMax-VL-01`     | `MiniMax-M3`        |
 
-That is why automatic media routing can use MiniMax image understanding even when the bundled text-provider catalog also includes M3 image-capable chat refs. PDF understanding uses `MiniMax-M2.7` for text extraction only; MiniMax does not register a PDF-to-image conversion path.
+That is why automatic media routing can use MiniMax image understanding even when the bundled text-provider catalog also includes M3 image-capable chat refs. PDF understanding uses `MiniMax-M3` for text extraction only; MiniMax does not register a PDF-to-image conversion path.
 
 ### Web search
 
@@ -351,7 +333,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Thinking defaults">
-    On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models unless an earlier wrapper already set the `thinking` field in the payload. This prevents M2.x's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
+    On `api: "anthropic-messages"` for `minimax` and `minimax-portal`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models when the payload has no `thinking` field. This sets the outbound request only; it does not filter response reasoning. [MiniMax's Thinking Control table](https://platform.minimax.io/docs/api-reference/text-anthropic-api#thinking-control) says M2.x accepts but ignores `disabled` and keeps thinking enabled. The M2.x `off` default is an OpenClaw request-level setting, so upstream reasoning, reasoning tokens, and `reasoning_content` output may still occur.
 
     MiniMax-M3 is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
 
@@ -372,7 +354,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   </Accordion>
 
   <Accordion title="Fallback example">
-    **Best for:** keep your strongest latest-generation model as primary, fail over to MiniMax M2.7. Example below uses Opus as a concrete primary; swap to your preferred latest-gen primary model.
+    **Best for:** keep your strongest latest-generation model as primary, fail over to MiniMax M3. Example below uses Opus as a concrete primary; swap to your preferred latest-gen primary model.
 
     ```json5
     {
@@ -381,11 +363,11 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
         defaults: {
           models: {
             "anthropic/claude-opus-4-6": { alias: "primary" },
-            "minimax/MiniMax-M2.7": { alias: "minimax" },
+            "minimax/MiniMax-M3": { alias: "minimax" },
           },
           model: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["minimax/MiniMax-M2.7"],
+            fallbacks: ["minimax/MiniMax-M3"],
           },
         },
       },
@@ -406,8 +388,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
 ## Notes
 
-- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M3.1-Flash`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
-- Onboarding and direct API-key setup write model definitions for M3 and both M2.7 variants
+- Default chat model: `MiniMax-M3`. Alternate chat model: `MiniMax-M3.1-Flash`. MiniMax retired the M2 generation (M2 through M2.7); requests to those ids return 404, and OpenClaw no longer lists them even though MiniMax's `/models` still does
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking
 - Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M3` or `openclaw models set minimax-portal/MiniMax-M3`
@@ -428,8 +409,8 @@ See [Model providers](/concepts/model-providers) for provider rules.
 
     Make sure the model id is **case-sensitive**:
 
-    - API-key path: `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7`, or `minimax/MiniMax-M2.7-highspeed`
-    - OAuth path: `minimax-portal/MiniMax-M3`, `minimax-portal/MiniMax-M2.7`, or `minimax-portal/MiniMax-M2.7-highspeed`
+    - API-key path: `minimax/MiniMax-M3` or `minimax/MiniMax-M3.1-Flash`
+    - OAuth path: `minimax-portal/MiniMax-M3` or `minimax-portal/MiniMax-M3.1-Flash`
 
     Then recheck with:
 

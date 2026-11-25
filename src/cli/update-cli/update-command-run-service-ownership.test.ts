@@ -33,6 +33,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
@@ -94,6 +95,7 @@ function admissionHome(prefix: string) {
 
 it.each([
   "owned",
+  "owned-command",
   "owned-pending",
   "stale-install",
   "absent",
@@ -120,6 +122,24 @@ it.each([
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
     const serviceEnv = { ...process.env, ...serviceOverrides };
+    if (scenario === "owned-command") {
+      await writePackageRoot(root, "1.0.0");
+      for (const [state, channel] of [
+        [callerState, "stable"],
+        [serviceState, "beta"],
+      ] as const) {
+        fs.mkdirSync(state, { mode: 0o700 });
+        fs.writeFileSync(
+          path.join(state, "openclaw.json"),
+          JSON.stringify({ update: { channel }, database: { engine: "sqlite" } }),
+        );
+      }
+      // An earlier run gives the service profile its state database, so it is not fresh.
+      const { runId: previousRunId } = createUpdateRun({ trigger: "cli" }, { env: serviceEnv });
+      updateRunLedger.finishUpdateRun(previousRunId, { status: "succeeded" }, { env: serviceEnv });
+      closeOpenClawStateDatabaseForTest();
+      vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
+    }
     let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
     if (scenario === "owned-pending") {
       const runId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
@@ -197,18 +217,26 @@ it.each([
       readCommand: (...args) => readSystemdServiceExecStart(...args),
     });
     const expectAdmitted = async (usesServiceState: boolean) => {
-      const run = await admitUpdateCommandRun({ opts: {}, root });
+      const env = await resolveUpdateCommandAdmissionEnv({ opts: {}, root });
+      const run = await admitUpdateCommandRun({ opts: {}, root, env });
       expect(run.env).toMatchObject(usesServiceState ? serviceOverrides : callerOverrides);
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
     };
-    if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
+    if (scenario === "owned-command") {
+      await expectAdmitted(true);
+      expect(
+        fs.existsSync(resolveOpenClawStateSqlitePath({ ...process.env, ...callerOverrides })),
+      ).toBe(false);
+    } else if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
       const usesServiceState = scenario !== "absent";
       await expectAdmitted(usesServiceState);
       expect(fs.existsSync(path.join(usesServiceState ? callerState : serviceState, "state"))).toBe(
         false,
       );
     } else if (scenario === "owned-pending" || scenario === "root-probe-error") {
-      const admission = admitUpdateCommandRun({ opts: {}, root });
+      const admission = resolveUpdateCommandAdmissionEnv({ opts: {}, root }).then((env) =>
+        admitUpdateCommandRun({ opts: {}, root, env }),
+      );
       if (pending) {
         await expect(admission).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
         expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
@@ -389,7 +417,7 @@ it.each([
     const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
     expect(root).toBe(outcome === "unavailable" ? callerRoot : serviceRoot);
     expect(env.OPENCLAW_STATE_DIR).toBe(outcome === "unavailable" ? callerState : serviceState);
-    const run = await admitUpdateCommandRun({ opts: {}, root });
+    const run = await admitUpdateCommandRun({ opts: {}, root, env });
     expect(run.env.OPENCLAW_STATE_DIR).toBe(env.OPENCLAW_STATE_DIR);
     if (outcome === "unavailable") {
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({

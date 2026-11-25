@@ -40,9 +40,6 @@ export async function prepareReplyMessageContinuation(params: {
     ...params.input.caller,
     messageChannel: params.input.caller.originatingChannel,
   });
-  if (!principal || principal !== owner.requesterPrincipalKey) {
-    return { kind: "unsupported" as const };
-  }
   const fingerprint = owner.toolAuthorityFingerprint;
   if (!fingerprint) {
     return { kind: "unsupported" as const };
@@ -50,7 +47,9 @@ export async function prepareReplyMessageContinuation(params: {
   const assertOwner = () => {
     params.assertCurrent();
     if (!fingerprint || owner.toolAuthorityFingerprint !== fingerprint) {
-      throw new MessageInjectionTargetUnavailableError("Reply steering authority changed");
+      throw new MessageInjectionTargetUnavailableError(
+        "The reply target changed. Start a new turn to retry.",
+      );
     }
   };
   assertOwner();
@@ -63,14 +62,17 @@ export async function prepareReplyMessageContinuation(params: {
       assertOwner,
     );
     const observation = selected?.joinObservation;
-    if (!selected || !observation) {
+    if (
+      !selected ||
+      !observation ||
+      (!selected.continuationKind && (!principal || principal !== owner.requesterPrincipalKey))
+    ) {
       // Released snapshots keep their existing complete-policy compatibility path.
       return { kind: "unsupported" as const };
     }
     // Keep delivery ahead of incoming settings/policy so combined failures retain
     // their existing fallback reason. The binding stays selected across the await.
     params.delivery.bindAdmission({
-      recoveryDeliveryClaim: observation.recoveryDeliveryClaim,
       matchesExecutionSettings: (entry, agentId) =>
         isSameReplyExecutionSelection(
           observation.executionSelection,
@@ -111,6 +113,8 @@ export async function prepareReplyMessageContinuation(params: {
     return {
       kind: "prepared" as const,
       fingerprint,
+      continuationKind: selected.continuationKind,
+      allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
       read: () => {
         assertCurrent();
         return fingerprint;
@@ -156,7 +160,7 @@ export async function prepareReplyMessageJoin(params: {
 }) {
   const { followupRun, operation, target, assertCurrent } = params;
   const requesterMismatch = hasReplySteeringRequesterMismatch(followupRun, operation);
-  if (params.continuation && !requesterMismatch) {
+  if (params.continuation) {
     const joined = await prepareReplyMessageContinuation({
       target,
       input: params.continuation,
@@ -174,9 +178,18 @@ export async function prepareReplyMessageJoin(params: {
         automaticFallbackRoute: undefined,
         pendingInputAuthorityFingerprint: undefined,
         collaborativeCaller: undefined,
+        continuationKind: joined.continuationKind,
+        allowPendingUserInputAnswer: joined.allowPendingUserInputAnswer,
         prepareCurrent: joined.prepareCurrent,
       };
     }
+  }
+  if (requesterMismatch && !params.collaborativeCaller) {
+    return {
+      kind: "deferred" as const,
+      reason: "requester-mismatch" as const,
+      errorMessage: undefined,
+    };
   }
   const legacy = await prepareLegacyReplySteeringAuthority(
     followupRun,
@@ -201,6 +214,8 @@ export async function prepareReplyMessageJoin(params: {
     automaticFallbackRoute: legacy.automaticFallbackRoute,
     pendingInputAuthorityFingerprint: legacy.pendingInputAuthorityFingerprint,
     collaborativeCaller: legacy.collaborativeCaller,
+    continuationKind: undefined,
+    allowPendingUserInputAnswer: undefined,
     prepareCurrent: async () => {
       legacy.toolAuthority.read();
     },
@@ -249,7 +264,7 @@ async function prepareLegacyReplySteeringAuthority(
       (operation.toolAuthorityRoute !== activeRoute ||
         operation.toolAuthorityFingerprint !== activeFingerprint)
     ) {
-      throw new Error("Reply steering authority changed during preparation");
+      throw new Error("The reply target changed during preparation. Start a new turn to retry.");
     }
     const authorityMismatch = operation !== undefined && activeFingerprint !== incomingFingerprint;
     const routeOnlyMismatch =
@@ -295,7 +310,7 @@ async function prepareLegacyReplySteeringAuthority(
         operation.toolAuthorityRoute !== activeRoute ||
         operation.toolAuthorityFingerprint !== activeFingerprint
       ) {
-        throw new Error("Reply steering authority changed during preparation");
+        throw new Error("The reply target changed during preparation. Start a new turn to retry.");
       }
       if (projected === activeFingerprint) {
         return {
@@ -307,11 +322,7 @@ async function prepareLegacyReplySteeringAuthority(
                   "Reply steering target is no longer running",
                 );
               }
-              const current = operation.projectToolAuthorityFingerprint(caller);
-              if (!current) {
-                throw new Error("Reply steering authority is no longer current");
-              }
-              return current;
+              return activeFingerprint;
             },
             release() {},
           },

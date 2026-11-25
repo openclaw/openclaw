@@ -17,9 +17,9 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-hel
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -58,7 +58,6 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
-import { estimateProjectedRequestTokenPressure } from "./preemptive-compaction.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
@@ -110,6 +109,8 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    /** Whether stopping at this request boundary leaves the tool batch continuable. */
+    isToolBoundarySafe: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -283,9 +284,10 @@ export function installEmbeddedAttemptStreamGuards(
     toolCallIdMode: transcriptPolicy.toolCallIdMode,
     isOpenAIResponsesApi,
   };
+  let normalizeToolCallIds: Parameters<typeof wrapStreamFnWithMessageTransform>[1] | undefined;
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
-    installStreamWrapper(wrapStreamFnWithMessageTransform, (messages, model) =>
+    normalizeToolCallIds = (messages, model) =>
       sanitizeReplayToolCallIdsForStream({
         messages,
         mode,
@@ -298,8 +300,7 @@ export function installEmbeddedAttemptStreamGuards(
           policy: transcriptPolicy,
         }),
         repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-      }),
-    );
+      });
   }
 
   // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
@@ -331,7 +332,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (
@@ -375,7 +376,7 @@ export function installEmbeddedAttemptStreamGuards(
   const timeoutOptions = {
     cfg: attempt.config,
     runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+    modelRequestTimeoutMs: attempt.model.requestTimeoutMs,
     model: { baseUrl: attempt.model.baseUrl, id: attempt.modelId, provider: attempt.provider },
   };
   const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: attempt.trigger });
@@ -464,10 +465,16 @@ export function installEmbeddedAttemptStreamGuards(
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
   return {
+    normalizeToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
-    onModelRequest: async (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
+    onModelRequest: async (
+      ...args: [
+        ...Parameters<typeof cacheObserver.onModelRequest>,
+        fixedTokenPressure?: FixedRequestTokenPressure,
+      ]
+    ) => {
       const previous = cacheObserver.getContextUsage();
-      const request = await cacheObserver.onModelRequest(...args);
+      const request = await cacheObserver.onModelRequest(args[0], args[1], args[2]);
       const previousRequest =
         previous?.requestIndex === request.requestIndex - 1 &&
         request.prefixUnchanged &&
@@ -476,17 +483,19 @@ export function installEmbeddedAttemptStreamGuards(
         )
           ? previous
           : undefined;
-      if (input.activeContextEngine?.info.ownsCompaction || request.requestIndex > 1) {
-        contextGuards.checkMidTurnPrecheck({ context: args[1], previousRequest });
-      }
+      const pressure = await contextGuards.checkMidTurnPrecheck({
+        context: args[1],
+        fixedTokenPressure: args[3],
+        previousRequest,
+        measuredContextTokens:
+          previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+        boundarySafe: callbacks.isToolBoundarySafe,
+      });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(
           args[0],
           args[1],
-          previousRequest && previousRequest.contextTokens > 0
-            ? estimateProjectedRequestTokenPressure({ context: args[1], previousRequest })
-                .estimatedPromptTokens
-            : undefined,
+          previousRequest && previousRequest.contextTokens > 0 ? pressure : undefined,
         );
       }
       return previousRequest;

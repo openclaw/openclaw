@@ -89,7 +89,15 @@ export function buildSandboxCreateArgs(params: {
     args.push("--read-only");
   }
   for (const entry of params.cfg.tmpfs) {
-    args.push("--tmpfs", entry);
+    const [target, options = ""] = entry.split(":", 2);
+    // Engine defaults scale with host RAM; cold dependency stores must not inherit that budget.
+    const size = target === "/tmp/openclaw-deps" ? "4g" : target === "/tmp" ? "1g" : "256m";
+    args.push(
+      "--tmpfs",
+      /(?:^|,)size=/u.test(options)
+        ? entry
+        : `${target}:${options ? `${options},` : ""}size=${size}`,
+    );
   }
   if (params.cfg.network) {
     args.push("--network", params.cfg.network);
@@ -199,9 +207,6 @@ export async function allocateSandboxContainer(params: {
         })
       : undefined;
   const createCfg = podmanPolicy?.cfg ?? cfg;
-  if (engine.id === "podman") {
-    await ensureContainerImage(engine, cfg.image);
-  }
 
   const { argv: args, env } = buildSandboxCreateArgs({
     name,
@@ -214,10 +219,8 @@ export async function allocateSandboxContainer(params: {
   if (podmanPolicy) {
     args.push(...podmanPolicy.extraCreateArgs);
   }
-  if (engine.id === "docker") {
-    // Creation already resolves the local image; do not inspect it a second time.
-    args.push("--pull=never");
-  }
+  // Creation resolves the local image atomically; a separate preflight only queues more work.
+  args.push("--pull=never");
   args.push("--workdir", cfg.workdir);
   for (const bind of params.mountPlan.skippedBinds) {
     log.warn(
@@ -249,12 +252,10 @@ export async function allocateSandboxContainer(params: {
     args.push("--env-file", envFile, cfg.image, ...command);
     params.assertCurrent?.();
     try {
-      return await execContainer(engine, args);
+      return await execContainer(engine, args, { assertCurrent: params.assertCurrent });
     } catch (error) {
-      if (engine.id === "docker") {
-        // Retain image/daemon guidance while preserving unrelated creation failures.
-        await ensureContainerImage(engine, cfg.image);
-      }
+      // Retain image/daemon guidance while preserving unrelated creation failures.
+      await ensureContainerImage(engine, cfg.image);
       throw error;
     }
   });

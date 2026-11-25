@@ -9,7 +9,7 @@ import {
   createPage,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { cronRpc } from "./cron-rpc.test-support.ts";
+import { catalogModel, cronRpc, emitEvent } from "./cron-rpc.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -25,7 +25,7 @@ it("clears a failed catalog refresh during retry without holding the task draft"
     cronRpc({
       "models.list": () =>
         ++reads === 1
-          ? { models: [{ id: "initial-model" }] }
+          ? { models: [catalogModel("initial-model")] }
           : reads === 2
             ? failed.promise
             : retry.promise,
@@ -33,28 +33,30 @@ it("clears a failed catalog refresh during retry without holding the task draft"
   );
   const page = createPage(createContext(createGateway(client, true)), { render: true });
   try {
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["initial-model"]));
     click(page, '[data-test-id="cron-new-task"]');
-    await waitForCronPage(() => expect(page.querySelector("#cron-name")).not.toBeNull());
-    const name = fillInput(page, "#cron-name", "Retained task draft");
+    await waitForCronPage(() => expect(page.querySelector("#cron-payload-text")).not.toBeNull());
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]));
+    const prompt = fillInput(page, "#cron-payload-text", "Retained task draft");
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(2));
     failed.reject(new Error("Catalog refresh unavailable"));
     await waitForCronPage(() => expect(page.textContent).toContain("Catalog refresh unavailable"));
-    expect(name.value).toBe("Retained task draft");
+    expect(prompt.value).toBe("Retained task draft");
 
     invalidateChatMetadataStore(client);
     await waitForCronPage(() => expect(reads).toBe(3));
     await waitForCronPage(() =>
       expect(page.textContent).not.toContain("Catalog refresh unavailable"),
     );
-    expect(page.querySelector("#cron-name")).toBe(name);
-    fillInput(page, "#cron-name", "Draft edited during retry");
-    await waitForCronPage(() => expect(page.cron.cronForm.name).toBe("Draft edited during retry"));
-    expect(page.cronModelSuggestions).toEqual(["initial-model"]);
-    retry.resolve({ models: [{ id: "updated-model" }] });
-    await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["updated-model"]));
-    expect(name.value).toBe("Draft edited during retry");
+    expect(page.querySelector("#cron-payload-text")).toBe(prompt);
+    fillInput(page, "#cron-payload-text", "Draft edited during retry");
+    await waitForCronPage(() =>
+      expect(page.cron.cronForm.payloadText).toBe("Draft edited during retry"),
+    );
+    expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]);
+    retry.resolve({ models: [catalogModel("updated-model")] });
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/updated-model"]));
+    expect(prompt.value).toBe("Draft edited during retry");
   } finally {
     failed.resolve({ models: [] });
     retry.resolve({ models: [] });
@@ -66,7 +68,7 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
   let refreshFailed = false;
   const client = createTestGatewayClient(
     cronRpc({
-      "models.list": () => ({ models: [{ provider: "fixture", id: "current" }], refreshFailed }),
+      "models.list": () => ({ models: [catalogModel("current")], refreshFailed }),
     }),
   );
   const gateway = createGateway(client, true);
@@ -76,7 +78,8 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
     return () => listeners.delete(listener);
   });
   const page = createPage(createContext(gateway), { render: true });
-  await waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(["fixture/current"]));
+  click(page, '[data-test-id="cron-new-task"]');
+  await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/current"]));
 
   refreshFailed = true;
   for (const listener of listeners) {
@@ -84,8 +87,34 @@ it("refreshes catalog warnings when the shell invalidates after the page receive
   }
   invalidateChatMetadataStore(client);
   await waitForCronPage(() =>
-    expect(page.textContent).toContain(
-      "Some models could not be refreshed. Open Models to try again.",
-    ),
+    expect(page.textContent).toContain("Couldn’t refresh some models. Open Models to try again."),
   );
+});
+
+it("loads the catalogue only for an open editor and retires closed-editor invalidations", async () => {
+  const request = cronRpc({ "models.list": () => ({ models: [catalogModel("editor-model")] }) });
+  const client = createTestGatewayClient(request);
+  const gateway = createGateway(client, true);
+  const page = createPage(createContext(gateway), { render: true });
+  const modelCalls = () => request.mock.calls.filter(([method]) => method === "models.list");
+  try {
+    await page.settle();
+    expect(modelCalls()).toHaveLength(0);
+    emitEvent(gateway, "chat.metadata.changed");
+    await page.settle();
+    expect(modelCalls()).toHaveLength(0);
+    click(page, '[data-test-id="cron-new-task"]');
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/editor-model"]));
+    expect(modelCalls()).toHaveLength(1);
+    page.closePanel();
+    await page.settle();
+    emitEvent(gateway, "chat.metadata.changed");
+    await page.settle();
+    expect(modelCalls()).toHaveLength(1);
+    click(page, '[data-test-id="cron-new-task"]');
+    await waitForCronPage(() => expect(modelCalls()).toHaveLength(2));
+    await waitForCronPage(() => expect(page.cronCatalogModels).toEqual(["fixture/editor-model"]));
+  } finally {
+    page.remove();
+  }
 });

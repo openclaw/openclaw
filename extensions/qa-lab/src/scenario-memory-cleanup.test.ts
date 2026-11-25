@@ -53,7 +53,7 @@ it.each([
       text: "Recall my preference.",
     });
     if (!completionTimesOut) {
-      state.resolvePollCursor({ acknowledgedCursor: state.getSnapshot().cursor });
+      state.recordPollReceipts({ completedEventCursors: [state.getSnapshot().cursor] });
     }
     const before = state.getSnapshot();
     const originalMemorySearch = { rememberAcrossConversations: true, sources: ["sessions"] };

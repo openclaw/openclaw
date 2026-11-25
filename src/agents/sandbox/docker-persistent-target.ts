@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainer,
@@ -58,6 +59,7 @@ export function bindDockerPersistentTarget(
 export async function captureDockerPersistentTarget(): Promise<
   DockerPersistentExecTarget | undefined
 > {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.docker_context");
   const signal = AbortSignal.timeout(30_000);
   const context = process.env.DOCKER_CONTEXT?.trim();
   let endpoint = context ? undefined : process.env.DOCKER_HOST?.trim();
@@ -88,6 +90,7 @@ export async function captureDockerPersistentTarget(): Promise<
     daemonId: "pending",
   });
   const engine = bindDockerPersistentTarget(provisional);
+  phases.mark("attempt.setup.sandbox.backend.docker_daemon");
   const info = await execContainer(engine, ["info", "--format", "{{.ID}}"], { signal });
   return parseDockerPersistentExecTarget({ ...provisional, daemonId: info.stdout.trim() });
 }

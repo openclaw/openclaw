@@ -197,6 +197,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   const explicit = params.aliasMap;
   const aliases = explicit
     ? {
+        packageRoot: undefined,
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
         getAliasMap: () => explicit,
         getSourceTransformAliasMap: () => explicit,
@@ -214,6 +215,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,
+    hostRoot: aliases.packageRoot ?? undefined,
     getAliasMap: aliases.getAliasMap,
     resolveAlias: aliases.resolveAlias,
     tryNative,
@@ -266,24 +268,29 @@ function createPluginModuleLoader(
               Boolean(params.resolveAlias(key))
             );
           },
-          get(_target, key) {
+          get(modules, key) {
             const target = typeof key === "string" ? params.resolveAlias(key) : undefined;
             if (!target) {
               return undefined;
             }
-            const native = tryNativeRequireModule(target, {
-              aliasMap: params.resolveAlias,
-            });
-            if (!native.ok) {
-              throw new Error(
-                `Unable to load host Plugin SDK natively: ${target}. Use a supported native TypeScript loader for a source host, or rebuild the host SDK.`,
-              );
+            // Jiti reads virtual modules before its cache, even for repeated require calls.
+            if (!Object.hasOwn(modules, target)) {
+              const native = tryNativeRequireModule(target, {
+                aliasMap: params.resolveAlias,
+                hostRoot: params.hostRoot,
+              });
+              if (!native.ok) {
+                throw new Error(
+                  `Unable to load host Plugin SDK natively: ${target}. Use a supported native TypeScript loader for a source host, or rebuild the host SDK.`,
+                );
+              }
+              modules[target] = native.moduleExport;
             }
             const instance = pluginInstanceInvocation.getStore()?.instance;
             if (instance && typeof key === "string") {
               recordPluginSdkDeprecatedImport(instance.pluginId, key);
             }
-            return native.moduleExport;
+            return modules[target];
           },
         },
       ),
@@ -309,6 +316,7 @@ function createPluginModuleLoader(
         if (params.tryNative) {
           const native = tryNativeRequireJavaScriptModule(target, {
             aliasMap: resolveNativeAlias,
+            hostRoot: params.hostRoot,
             fallbackOnMissingDependency: true,
           });
           if (native.ok) {

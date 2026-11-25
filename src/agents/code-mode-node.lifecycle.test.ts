@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
@@ -50,7 +50,8 @@ const fixture = vi.hoisted(() => {
     pools: [] as WorkerTaskPool[],
   };
 });
-vi.mock("../infra/runtime-worker-url.js", () => ({
+vi.mock("../infra/runtime-worker-url.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/runtime-worker-url.js")>()),
   resolveRuntimeWorkerUrl: () => new URL(fixture.workerUrl),
 }));
 // mock-isolation: Control worker execution and retirement without starting real worker threads.
@@ -333,8 +334,10 @@ it.each(["idle deadline", "newer completion"] as const)(
     vi.useFakeTimers();
     const reused = await caller.run("completed-turn", warmPool);
     const held = holdRun(reused);
-    const config = { ...input.config, timeoutMs: 120_000 };
-    const active = host.run(() => nodeCodeModeExecutor.execute({ ...input, config }, config));
+    const config = { ...input.config, timeoutMs: 5 * 60_000 };
+    const active = caller.run("active-turn", () =>
+      host.run(() => nodeCodeModeExecutor.execute({ ...input, config }, config)),
+    );
     try {
       await held.started;
       await caller.run("completed-turn", run);
@@ -350,7 +353,7 @@ it.each(["idle deadline", "newer completion"] as const)(
         held.complete(fixture.completed);
         await active;
       }
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
       expect(previous.isClosed).toBe(retirement === "idle deadline");
       held.complete(fixture.completed);
       expect(await active).toMatchObject({ status: "completed" });
@@ -371,34 +374,40 @@ it.each(["idle deadline", "newer completion"] as const)(
   },
 );
 
-it("lets a completed burst retire while serial work keeps one worker warm", async () => {
+it("keeps repeated bursts warm, then retires surplus capacity during serial traffic", async () => {
   vi.useFakeTimers();
   const start = fixture.pools.length;
   await Promise.all(Array.from({ length: 8 }, run));
   const burst = fixture.pools.slice(start);
   expect(burst).toHaveLength(8);
-  for (let turn = 0; turn < 20; turn++) {
-    await vi.advanceTimersByTimeAsync(2000);
+  for (const gap of [45_000, 60_000, 45_000]) {
+    await vi.advanceTimersByTimeAsync(gap);
+    await Promise.all(Array.from({ length: 8 }, run));
+    expect(fixture.pools).toHaveLength(start + 8);
+  }
+  for (let turn = 0; turn < 10; turn++) {
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(await run()).toMatchObject({ status: "completed" });
   }
   expect(fixture.pools).toHaveLength(start + 8);
   expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
 });
 
-it("bounds the warm set and retires every idle pool on memory pressure", async () => {
+it("retires every idle pool on critical memory pressure and admits fresh demand", async () => {
   const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 10 }, run));
-  expect(results.every((result) => result.status === "completed")).toBe(true);
-  const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(8);
-  const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
-  expect(evicted).toHaveLength(2);
-  channel("openclaw.memory.critical").publish({});
+  expect(await Promise.all([run(), run()])).toMatchObject([
+    { status: "completed" },
+    { status: "completed" },
+  ]);
+  const idle = fixture.pools.slice(start);
+  expect(idle).toHaveLength(2);
+  expect(idle.every((pool) => !pool.isClosed)).toBe(true);
+  const pressure = channel("openclaw.memory.critical");
+  pressure.publish({});
   expect(idle.every((pool) => pool.isClosed)).toBe(true);
-  expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
-  const count = fixture.pools.length;
+  expect(pressure.hasSubscribers).toBe(false);
   expect(await run()).toMatchObject({ status: "completed" });
-  expect(fixture.pools).toHaveLength(count + 1);
+  expect(idle).not.toContain(fixture.pools.at(-1));
 });
 
 it.each(["abort", "timeout"] as const)(
@@ -506,6 +515,39 @@ it("retires all old runtime workers before executing against a new entry", async
   expect(sibling.isClosed).toBe(true);
   expect(fixture.pools.at(-1)?.url).toBe(fixture.workerUrl);
 });
+
+it("returns a cell failure without waiting for an unrelated idle worker to retire", async ({
+  signal,
+}) => {
+  vi.useFakeTimers();
+  const reused = await warmPool();
+  const held = holdRun(reused);
+  const config = { ...input.config, timeoutMs: 5 * 60_000 };
+  const active = host.run(() => nodeCodeModeExecutor.execute({ ...input, config }, config));
+  await held.started;
+  const previous = await warmPool();
+  await vi.advanceTimersByTimeAsync(3 * 60_000);
+  const retirement = holdRetirement(previous);
+  held.complete({
+    status: "failed",
+    code: "internal_error",
+    error: "bridge unavailable",
+    failurePhase: "bridge",
+    bridgeDispatchStarted: false,
+    output: fixture.completed.output,
+  });
+  try {
+    await retirement.retiring;
+    expect(await withinTest(active, signal)).toMatchObject({
+      status: "failed",
+      error: "bridge unavailable",
+    });
+    expect(previous.isClosed).toBe(false);
+  } finally {
+    retirement.release();
+    await active;
+  }
+}, 3_000);
 
 it("does not release an excess completed pool after native cleanup fails", async () => {
   const first = await warmPool();

@@ -12,6 +12,7 @@ import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-catalog.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigMetadataKey } from "./config-metadata.js";
+import type { AmbientEnvTriggerPolicy } from "./config-presence.types.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 import {
   hasBundledChannelPackageState,
@@ -21,7 +22,7 @@ import {
 
 export { hasMeaningfulChannelConfig } from "../config/channel-config-activation.js";
 
-export type AmbientEnvTriggerPolicy = "allow" | "suppress";
+export type { AmbientEnvTriggerPolicy } from "./config-presence.types.js";
 
 type ChannelPresenceOptions = {
   channelIds?: readonly string[];

@@ -67,6 +67,7 @@ it.each([
         const result = await appendSessionManagerActor({
           actor,
           toolResult: false,
+          message: { role: "user" },
           assertCurrent() {},
           append: {
             kind: "message",

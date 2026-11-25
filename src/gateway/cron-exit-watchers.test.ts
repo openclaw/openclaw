@@ -8,6 +8,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   createGatewaySchedulerClock,
@@ -111,6 +113,7 @@ async function finish(run: FakeRun | undefined, cancelled = false) {
 }
 
 describe("createCronExitWatchers", () => {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   beforeEach(() => {
     clock = createGatewaySchedulerClock();
     scheduler = createTestGatewayScheduler(clock.clock);
@@ -167,6 +170,8 @@ describe("createCronExitWatchers", () => {
   });
 
   it("fires a historical owner's job after the creating request closes", async () => {
+    const broker = await createBroker();
+    const retainedBroker: boolean[] = [];
     const { supervisor, runs } = makeFakeSupervisor();
     const creatorContext = new AsyncLocalStorage<string>();
     const creatorWork = new AsyncWorkScope();
@@ -177,6 +182,7 @@ describe("createCronExitWatchers", () => {
     const spawn = expectDefined(supervisor.spawn.getMockImplementation(), "supervisor spawn");
     supervisor.spawn.mockImplementationOnce(async (input) => {
       observedContexts.push(creatorContext.getStore());
+      retainedBroker.push(getSpawnBroker() === broker);
       return await spawn(input);
     });
     const order: string[] = [];
@@ -192,12 +198,14 @@ describe("createCronExitWatchers", () => {
         order.push("fire");
       });
     });
-    const w = createWatcherFixture({
-      getDefaultAgentId: () => "research",
-      getProcessSupervisor: () => supervisor as never,
-      reserveExit,
-      fireOnExit,
-    });
+    const w = runWithSpawnBroker(broker, () =>
+      createWatcherFixture({
+        getDefaultAgentId: () => "research",
+        getProcessSupervisor: () => supervisor as never,
+        reserveExit,
+        fireOnExit,
+      }),
+    );
 
     inCreator(() => w.reconcile([{ ...onExitJob("job-a"), agentId: "ops" }]));
     await creatorWork.drain();
@@ -216,6 +224,7 @@ describe("createCronExitWatchers", () => {
     expect(reserveExit).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
     expect(observedContexts).toEqual([undefined, undefined, undefined]);
+    expect(retainedBroker).toEqual([true]);
     await expect(inCreator(() => trackAsyncWork(() => undefined))).rejects.toThrow(
       "Async work scope is closed",
     );

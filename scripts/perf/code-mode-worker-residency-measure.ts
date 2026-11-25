@@ -12,7 +12,11 @@
  * its relative imports stay unchanged. The worker comes from the identified build.
  * Eight concurrent cells precede steady serial traffic; every cell crosses three
  * native tool boundaries and verifies fresh globals and its own tool responses.
- * A second burst runs after timing and optional snapshots to expose restart latency;
+ * Add --burst-interval-ms 45000 to repeat the burst between serial cells. Both
+ * arrival schedules use fixed offsets after the initial burst; executions never
+ * overlap between arrivals. Late starts are reported, never silently skipped.
+ * Worker starts/hour includes the initial cold burst, normalized by measured time.
+ * A final burst runs after timing and optional snapshots to expose restart latency;
  * its eight latency samples are context only and excluded from timed work totals.
  * Default serial p95 has 300 samples; p99 remains context below 1,000 samples.
  * Census samples are unforced heap usage, not retained size. Isolate-seconds use
@@ -42,6 +46,7 @@ const { values, positionals } = parseArgs({
     smoke: { type: "boolean" },
     allocations: { type: "boolean" },
     snapshots: { type: "string" },
+    "burst-interval-ms": { type: "string" },
   },
 });
 assert(positionals[0], "A built root is required");
@@ -50,9 +55,15 @@ const ownerFile = path.resolve(positionals[1] ?? "src/agents/code-mode-node.ts")
 const seconds = Number(positionals[2] ?? 600);
 const intervalMs = Number(positionals[3] ?? 2000);
 const width = Number(positionals[4] ?? 8);
+const burstIntervalMs = values["burst-interval-ms"]
+  ? Number(values["burst-interval-ms"])
+  : undefined;
 assert(Number.isSafeInteger(seconds) && seconds >= (values.smoke ? 1 : 600));
 assert(Number.isSafeInteger(intervalMs) && intervalMs > 0);
 assert(Number.isSafeInteger(width) && width > 0 && width <= 16);
+assert(
+  burstIntervalMs === undefined || (Number.isSafeInteger(burstIntervalMs) && burstIntervalMs > 0),
+);
 const workerFile = path.join(builtRoot, "dist/agents/code-mode-node.worker.js");
 const digest = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const workerHash = digest(workerFile);
@@ -121,6 +132,7 @@ const scheduler = new GatewayScheduler();
 host.bindScheduler(scheduler);
 const burstLatencies: number[] = [];
 const serialLatencies: number[] = [];
+const arrivalDelays: number[] = [];
 const gc = new Map<
   GcSample["kind"],
   { durationMs: number; reclaimedBytes: number; pauses: number[] }
@@ -296,9 +308,23 @@ try {
   sample();
   const serialStartedAt = performance.now();
   const iterations = Math.floor((seconds * 1000) / intervalMs);
-  for (let iteration = 0; iteration < iterations; iteration++) {
-    await setTimeout(Math.max(0, serialStartedAt + iteration * intervalMs - performance.now()));
-    serialLatencies.push(await execute(`serial-${iteration}`));
+  let serial = 0;
+  let burst = 1;
+  for (;;) {
+    const serialOffset = serial < iterations ? serial * intervalMs : Infinity;
+    const burstOffset = burstIntervalMs === undefined ? Infinity : burst * burstIntervalMs;
+    const offset = Math.min(serialOffset, burstOffset);
+    if (offset >= seconds * 1000) {
+      break;
+    }
+    const scheduledAt = serialStartedAt + offset;
+    await setTimeout(Math.max(0, scheduledAt - performance.now()));
+    arrivalDelays.push(Math.max(0, performance.now() - scheduledAt));
+    if (burstOffset <= serialOffset) {
+      burstLatencies.push(...(await runBurst(`burst-${burst++}`)));
+    } else {
+      serialLatencies.push(await execute(`serial-${serial++}`));
+    }
   }
   await setTimeout(Math.max(0, serialStartedAt + seconds * 1000 - performance.now()));
   sample();
@@ -368,10 +394,12 @@ try {
       workerHash,
       seconds,
       intervalMs,
+      burstIntervalMs,
       width,
       smoke: Boolean(values.smoke),
       mode: inspector ? "allocation-diagnostic" : "timing",
-      executions: width + serialLatencies.length,
+      executions: burstLatencies.length + serialLatencies.length,
+      workersStartedPerHour: (timedWorkers.length * 3_600_000) / wallMs,
       bridgeCalls: measuredBridgeCalls,
       wallMs,
       processCpuMs: (cpu.user + cpu.system) / 1000,
@@ -389,6 +417,7 @@ try {
       postWindowRenewedBurst,
       burst: percentiles(burstLatencies),
       serial: percentiles(serialLatencies),
+      arrivalDelay: percentiles(arrivalDelays),
       gc: measuredGc,
       lifecycleBeforeClose: beforeClose.workerLifecycle.filter((entry) => entry.script === script),
       lifecycle: afterClose.workerLifecycle.filter((entry) => entry.script === script),

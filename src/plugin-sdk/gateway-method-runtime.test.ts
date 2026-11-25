@@ -1,10 +1,11 @@
 import { expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
+import { makeGatewayClient } from "../gateway/server-request-context.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { dispatchGatewayMethod } from "./gateway-method-runtime.js";
+import { dispatchGatewayMethod, sendToResolvedSession } from "./gateway-method-runtime.js";
 import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./plugin-test-contracts.js";
 
 const { dispatchRaw } = vi.hoisted(() => ({ dispatchRaw: vi.fn() }));
@@ -42,6 +43,7 @@ it.each([
       }
       return { ok: true, payload: { ok: true } };
     });
+    const respond = vi.fn();
     let invoke: () => ReturnType<typeof dispatchGatewayMethod> | Promise<void> = () =>
       withPluginRuntimeGatewayRequestScope(scope, () =>
         dispatchGatewayMethod("health", {}, { timeoutMs: 500 }),
@@ -57,7 +59,7 @@ it.each([
         register(api) {
           api.registerGatewayMethod(
             "reader.preview",
-            async () => void (await dispatchGatewayMethod("health", {})),
+            async () => (await dispatchGatewayMethod("health", {})).payload,
             { scope: "operator.read" },
           );
         },
@@ -73,7 +75,7 @@ it.each([
             ...requestScope,
             params: {},
             req: { type: "req", id: "reader-test", method: "reader.preview" },
-            respond: vi.fn(),
+            respond,
           }),
         );
     }
@@ -81,6 +83,8 @@ it.each([
       const result = await invoke();
       if (http) {
         expect(result).toEqual({ ok: true, payload: { ok: true } });
+      } else {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, { ok: true }, undefined, undefined);
       }
       const options = { disableSyntheticClient: true, requireScopedClient: true };
       expect(dispatchRaw).toHaveBeenCalledWith(
@@ -94,3 +98,63 @@ it.each([
     }
   },
 );
+
+const destination = { sessionKey: "agent:main:example", sessionId: "original" };
+const send = { target: destination, message: "one turn", idempotencyKey: "request-1" };
+
+it.each([
+  [{ ok: true, payload: { status: "started", runId: "request-1" } }, "accepted"],
+  [{ ok: true, payload: { status: "in_flight", runId: "request-1" } }, "accepted"],
+  [{ ok: true, payload: { status: "started", runId: "other" } }, "unconfirmed"],
+  [{ ok: true, payload: { status: "completed", runId: "request-1" } }, "unconfirmed"],
+  [{ ok: true, payload: null }, "unconfirmed"],
+  [
+    { ok: false, error: { code: "INVALID_REQUEST", message: "The destination was replaced" } },
+    "unconfirmed",
+  ],
+  [{ ok: false, error: { code: "FORBIDDEN" } }, "forbidden"],
+  [new Error("response lost"), "unconfirmed"],
+] as const)(
+  "binds admission to a resolved target and its acknowledged request %#",
+  async (reply, outcome) => {
+    dispatchRaw.mockReset();
+    if (reply instanceof Error) {
+      dispatchRaw.mockRejectedValue(reply);
+    } else {
+      dispatchRaw.mockResolvedValue(reply);
+    }
+    const result = await withPluginRuntimeGatewayRequestScope(
+      {
+        client: makeGatewayClient({
+          connId: "plugin",
+          clientId: "test",
+          scopes: ["operator.write"],
+        }),
+        gatewayMethodDispatchAllowed: true,
+        isWebchatConnect: () => false,
+      },
+      () => sendToResolvedSession(send),
+    );
+    expect(result).toBe(outcome);
+    expect(dispatchRaw).toHaveBeenCalledExactlyOnceWith(
+      "chat.send",
+      {
+        sessionKey: destination.sessionKey,
+        sessionId: destination.sessionId,
+        expectedSessionId: destination.sessionId,
+        message: send.message,
+        idempotencyKey: send.idempotencyKey,
+      },
+      { disableSyntheticClient: true, requireScopedClient: true },
+    );
+  },
+);
+
+it("refuses a missing request scope or incomplete resolved target without dispatch", async () => {
+  dispatchRaw.mockReset();
+  await expect(sendToResolvedSession(send)).resolves.toBe("forbidden");
+  await expect(
+    sendToResolvedSession({ ...send, target: { ...destination, sessionId: "" } }),
+  ).resolves.toBe("unconfirmed");
+  expect(dispatchRaw).not.toHaveBeenCalled();
+});

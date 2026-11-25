@@ -1,13 +1,13 @@
 import { createSignal, Show, useContext } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import "../../../styles/chat/session-diff-sync-mobile.css";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type SessionDiffSyncMobileData = {
   /** Already quoted and assembled by the native diff owner, using this root and branch. */

@@ -14,7 +14,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { makeBridge, makeVoiceProvider } from "../../../talk/session-runtime.test-support.js";
 import { withEnv } from "../../../test-utils/env.js";
 import {
@@ -449,6 +449,14 @@ describe("realtime relay close persistence", () => {
     { changeState: true, createRecord: false, cold: true },
     { changeState: true, permitFails: true },
     { changeState: true, createRecord: false, cold: true, sourceFails: true },
+    {
+      providerAsync: false,
+      fails: true,
+      changeState: true,
+      createRecord: false,
+      cold: true,
+      sourceFails: true,
+    },
     { changeState: true, createRecord: false, cold: true, silent: true },
   ])(
     "settles realtime relay close with overrides %j",
@@ -577,7 +585,7 @@ describe("realtime relay close persistence", () => {
         expect(recordStatus()).toBe("open");
       }
       const emitted = () => broadcastToConnIds.mock.calls.map(([, payload]) => payload);
-      expect(emitted().some((payload) => payload.type === "close")).toBe(!providerAsync);
+      expect(emitted().some((payload) => payload.type === "close")).toBe(!providerAsync && !cold);
       expect(emitted().some((payload) => payload.type === "toolCall")).toBe(false);
       if (providerAsync) {
         if (!fails) {
@@ -590,7 +598,14 @@ describe("realtime relay close persistence", () => {
       } else {
         completion.resolve();
       }
-      if (sourceFails || permitFails) {
+      if (sourceFails && fails) {
+        await expect(closing).rejects.toMatchObject({
+          errors: [
+            failure,
+            expect.objectContaining({ message: expect.stringContaining("regular file") }),
+          ],
+        });
+      } else if (sourceFails || permitFails) {
         await expect(closing).rejects.toThrow(sourceFails ? "regular file" : "admission is closed");
       } else if (fails) {
         await expect(closing).rejects.toBe(failure);

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
@@ -7,9 +6,9 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -23,7 +22,7 @@ import { AUTH_STORE_VERSION, reportCommittedInlineAuthFailure } from "./constant
 import type { InlineAuthFailureOperations } from "./inline-usage-kernel.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
@@ -45,7 +44,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import {
   createAuthProfileUsageReceipt,
@@ -83,52 +82,47 @@ export async function withAuthProfileUsage<T>(
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const selectedDir = resolveRuntimeAuthProfileAgentDir(agentDir);
   const context = captureOpenClawStateWorkerContext({ env });
+  const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
+    (value) => ({ ok: true, value }) as const,
+    (error: unknown) => ({ ok: false, error }) as const,
+  );
   const localPath = selectedDir ? resolveAuthProfileDatabasePath(selectedDir) : undefined;
   const legacyPath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-  const readers = new Map<string, ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Map<string, Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const executions = new Map<
     string,
-    Result<ReturnType<typeof captureOpenClawAgentDatabaseExecution>, unknown>
+    Promise<Result<Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecutionAsync>>, unknown>>
   >();
-  let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
+  const preparation = reserveAuthProfileUsagePreparation([
+    context.admission.identity.key,
+    `path:${context.admission.identity.canonicalPath}`,
+    ...(mode ? [] : [`path:${legacyPath}`]),
+    ...(localPath ? [`path:${localPath}`] : []),
+  ]);
   let committed: AuthProfileUsageReceipt | undefined;
   const executeUsage = async (): Promise<T> => {
     for (const databasePath of new Set([
       ...(mode ? [] : [legacyPath]),
       ...(localPath ? [localPath] : []),
     ])) {
-      const target = {
-        path: databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-        env,
-      };
-      readers.set(
-        databasePath,
-        prepareAgentAuthProfileRowsRead({
-          databasePath,
-          agentId: target.agentId,
-          env,
-        }),
-      );
-      try {
-        executions.set(databasePath, {
-          ok: true,
-          value: captureOpenClawAgentDatabaseExecution(target),
-        });
-      } catch (error) {
-        executions.set(databasePath, { ok: false, error });
+      const reader = await prepareAgentAuthProfileRowsRead({ databasePath, env });
+      readers.set(databasePath, reader);
+      const target = { path: databasePath, agentId: reader.agentId, env };
+      const identity = reader.databaseIdentity;
+      if (!identity) {
+        throw new Error("SQLite worker database path must identify a regular file");
       }
+      executions.set(
+        databasePath,
+        captureOpenClawAgentDatabaseExecutionAsync(
+          target,
+          identity.key.startsWith("file:") ? toAgentExecutionConstraints(identity) : {},
+        ).then(
+          (value) => ({ ok: true, value }) as const,
+          (error: unknown) => ({ ok: false, error }) as const,
+        ),
+      );
     }
-    preparation = reserveAuthProfileUsagePreparation(
-      [
-        context.admission.identity,
-        ...[...readers.keys()].map((pathname) => readDatabasePathIdentitySync(pathname)),
-      ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
-    );
-    const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
-      (value) => ({ ok: true, value }) as const,
-      (error: unknown) => ({ ok: false, error }) as const,
-    );
     await preparation.ready;
     const ownershipResult = await capturedOwnership;
     if (!ownershipResult.ok) {
@@ -172,6 +166,11 @@ export async function withAuthProfileUsage<T>(
       : selected;
     const inherited = useShared && !main;
     const owner = {
+      get databaseIdentity() {
+        return databasePath === context.admission.databasePath
+          ? context.admission.identity
+          : execution?.fileIdentity;
+      },
       databasePath,
       sharedDatabasePath: sharedPath,
       location: ownership.location,
@@ -182,29 +181,29 @@ export async function withAuthProfileUsage<T>(
       env,
     });
     const sourcePaths = new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])]);
+    const capturedExecution = await executions.get(databasePath);
+    if (capturedExecution && !capturedExecution.ok) {
+      throw capturedExecution.error;
+    }
+    const execution = capturedExecution?.value;
     const assertCurrent = () => {
       context.admission.assertCurrent();
       context.maintenanceScope?.assertAdmission();
       for (const sourcePath of sourcePaths) {
         readers.get(sourcePath)?.assertCurrent();
       }
-      const execution = executions.get(databasePath);
-      if (execution) {
-        if (!execution.ok) {
-          throw execution.error;
-        }
-        execution.value.assertCurrent();
-      }
+      execution?.assertCurrent();
       if (resolveSharedAuthStoreOwnership(env) !== ownership) {
         throw new Error("Auth profile shared owner changed before write admission");
       }
       assertAuthProfileMigrationStateAtDatabasePath(databasePath);
-      assertAuthProfileMigrationCandidates({
-        databasePath,
-        candidates,
-        hasCredentials: () => Object.keys(selected.profiles).length > 0,
-      });
     };
+    await prepareAuthProfileMigrationCandidates({
+      databasePath,
+      candidates,
+      hasCredentials: Object.keys(selected.profiles).length > 0,
+      assertCurrent,
+    });
     assertCurrent();
     const providerAliases = resolveProviderAuthAliasMap({ env });
     let recordingStarted = false;
@@ -264,22 +263,13 @@ export async function withAuthProfileUsage<T>(
               },
             );
           }
-          const target = {
-            path: databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-            env,
-          };
-          const captured = executions.get(databasePath)!;
-          if (!captured.ok) {
-            throw captured.error;
-          }
-          const execution = captured.value;
+          const target = { path: databasePath, agentId: execution!.agentId, env };
           return await runOpenClawAgentWriteAdmission(
             target,
             async () => {
               const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
                 target,
-                { execution },
+                { execution: execution! },
                 {
                   moduleUrl: resolveRuntimeWorkerUrl(
                     runtimeProcessEntrypoints.authProfileInlineUsage,
@@ -367,9 +357,12 @@ export async function withAuthProfileUsage<T>(
     try {
       const released = await Promise.allSettled([
         ...[...readers.values()].map((reader) => reader.dispose()),
-        ...[...executions.values()].flatMap((execution) =>
-          execution.ok ? [execution.value.release()] : [],
-        ),
+        ...[...executions.values()].map(async (captured) => {
+          const execution = await captured;
+          if (execution.ok) {
+            await execution.value.release();
+          }
+        }),
       ]);
       const failures = released.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
@@ -389,7 +382,7 @@ export async function withAuthProfileUsage<T>(
         }
       }
     } finally {
-      preparation?.release();
+      preparation.release();
     }
   });
 }

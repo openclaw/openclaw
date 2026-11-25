@@ -22,13 +22,11 @@ import {
   modelCatalogCache,
   modelCatalogEventInvalidation,
   modelCatalogKey,
-  modelCatalogObservers,
   modelCatalogParams,
   publishModelCatalogResult,
   type ModelCatalogReadScope,
   type ModelCatalogInvalidation,
   type ModelCatalogClient,
-  type ModelCatalogCacheUpdate,
   type ModelCatalogRequest,
 } from "./model-catalog-cache.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
@@ -72,28 +70,7 @@ export function readAgentModelCatalog(
   return readModelCatalog(client, agentId ? { agentId } : null);
 }
 
-export function subscribeModelCatalogCache(
-  client: ModelCatalogClient,
-  listener: (update: ModelCatalogCacheUpdate) => void,
-  readScope?: () => ModelCatalogReadScope,
-): () => void {
-  const scopedListener = readScope
-    ? (update: ModelCatalogCacheUpdate) => {
-        const scope = modelCatalogParams(readScope());
-        if (update.matches(scope, modelCatalogKey(scope))) {
-          listener(update);
-        }
-      }
-    : listener;
-  const listeners = modelCatalogObservers.get(client) ?? new Set();
-  modelCatalogObservers.set(client, listeners);
-  listeners.add(scopedListener);
-  return () => {
-    if (listeners.delete(scopedListener) && listeners.size === 0) {
-      modelCatalogObservers.delete(client);
-    }
-  };
-}
+export { subscribeModelCatalogCache } from "./model-catalog-cache.ts";
 
 export function resolveModelCatalogState(
   result: Pick<ModelCatalogResult, "models" | "refreshFailed" | "modelSelectionPolicy"> &

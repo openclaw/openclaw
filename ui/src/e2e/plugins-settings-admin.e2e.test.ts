@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
+import { applyMergePatch } from "../../../src/config/merge-patch.ts";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -21,6 +22,7 @@ import {
   config,
   configMocks,
   pluginResponses,
+  pluginMethods,
 } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,16 +40,6 @@ beforeEach(() => {
   }
 });
 
-const pluginMethods = [
-  "config.get",
-  "config.schema",
-  "config.set",
-  "plugins.inspect",
-  "plugins.list",
-  "plugins.setEnabled",
-  "plugins.uninstall",
-];
-
 async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], baseUrl: string) {
   const response = await page.goto(`${baseUrl}settings/plugins`);
   expect(response?.status()).toBe(200);
@@ -63,7 +55,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
+    const title = document.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");
@@ -117,7 +109,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await workboardRow.waitFor();
   const workboardLink = workboardRow.getByRole("link", { name: /Workboard/iu });
   expect(await workboardLink.getAttribute("href")).toBe("/settings/plugins/workboard");
-  const enabledStatus = workboardRow.locator('.settings-status[data-plugin-state="enabled"]');
+  const enabledStatus = workboardRow.locator('[data-plugin-state="enabled"]');
   expect(await enabledStatus.count()).toBe(1);
   expect(await enabledStatus.getAttribute("title")).toBe("Enabled");
   expect(await workboardRow.getByRole("switch").count()).toBe(0);
@@ -137,8 +129,9 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
-  it("uses installed plugin artwork in the browser sign-in dialog", async () => {
+  it("keeps plugin actions within a narrow phone and retains sign-in artwork", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 720 });
       const linear = { ...workboard, id: "linear", name: "Linear", hasIcon: true };
       await page.route("**/__openclaw__/plugin-icon/linear", (route) =>
         route.fulfill({
@@ -147,7 +140,14 @@ suite.define(() => {
         }),
       );
       const gateway = await installMockGateway(page, {
-        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        featureMethods: [
+          ...pluginMethods,
+          "openclaw.chat",
+          "mcp.authLogin",
+          "wizard.next",
+          "wizard.cancel",
+        ],
+        operatorScopes: ["operator.admin"],
         methodResponses: {
           ...pluginResponses(),
           "plugins.list": { ...inventory, plugins: [linear] },
@@ -177,6 +177,28 @@ suite.define(() => {
         .poll(() => heroIcon.evaluate((image: HTMLImageElement) => image.naturalWidth))
         .toBeGreaterThan(0);
       const iconUrl = await heroIcon.getAttribute("src");
+      const actions = page.locator(".plugin-catalog-detail__actions");
+      await actions
+        .getByRole("button", { name: "Ask OpenClaw", exact: true })
+        .waitFor({ timeout: 3000 });
+      await actions.getByRole("switch", { name: "Linear" }).waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "plugin-actions-phone.png"),
+        });
+      }
+      expect(
+        await actions.evaluate((header) =>
+          Math.max(
+            ...Array.from(
+              header.querySelectorAll("button, a, [role=switch]"),
+              (control) => control.getBoundingClientRect().right,
+            ),
+          ),
+        ),
+      ).toBeLessThanOrEqual(320);
+
       await page
         .getByRole("button", { name: "Sign in to linear-mcp", exact: true })
         .first()
@@ -280,8 +302,8 @@ suite.define(() => {
       pluginId: "brave",
       name: "Brave",
       section: "webSearch",
-      label: "Brave Search API Key",
-      referenceLabel: "Brave Search Base URL",
+      label: "Brave search API key",
+      referenceLabel: "Brave search base URL",
       readOnly,
       pluginConfig: {
         webSearch: {
@@ -294,8 +316,8 @@ suite.define(() => {
       pluginId: "firecrawl",
       name: "Firecrawl",
       section: "webFetch",
-      label: "Firecrawl Fetch API Key",
-      referenceLabel: "Firecrawl Search API Key",
+      label: "Firecrawl fetch API key",
+      referenceLabel: "Firecrawl search API key",
       readOnly: false,
       pluginConfig: {
         webSearch: { apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" } },
@@ -332,66 +354,104 @@ suite.define(() => {
             },
           },
         };
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
-          methodResponses: {
-            ...pluginResponses(),
-            "plugins.list": {
-              ...inventory,
-              plugins: [
-                {
-                  ...workboard,
-                  id: manifest.id,
-                  name,
-                  packageName: `@openclaw/${manifest.id}`,
-                  description: `${name} web tools.`,
-                  origin: "bundled",
-                },
-              ],
-            },
-            "plugins.inspect": {
-              ...inspection,
-              catalog: undefined,
-              components: undefined,
-              source: { kind: "npm", packageName: `@openclaw/${manifest.id}` },
-              plugin: { ...inspection.plugin, id: manifest.id, name, origin: "bundled" },
-            },
-            "config.get": {
-              ...configMocks["config.get"],
-              config: credentialConfig,
-              raw: JSON.stringify(credentialConfig),
-            },
-            "config.schema": {
-              ...configMocks["config.schema"],
-              schema: {
-                type: "object",
-                properties: {
-                  plugins: {
-                    type: "object",
-                    properties: {
-                      entries: {
-                        type: "object",
-                        properties: {
-                          [manifest.id]: {
-                            type: "object",
-                            properties: { config: manifest.configSchema },
+        let persistedConfig: Record<string, unknown> = structuredClone(credentialConfig);
+        let currentHash = configMocks["config.get"].hash;
+        const configReads: Record<string, unknown>[] = [];
+        const gateway = await installMockGateway(
+          page,
+          {
+            featureMethods: pluginMethods,
+            operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
+            methodResponses: {
+              ...pluginResponses(),
+              "plugins.list": {
+                ...inventory,
+                plugins: [
+                  {
+                    ...workboard,
+                    id: manifest.id,
+                    name,
+                    packageName: `@openclaw/${manifest.id}`,
+                    description: `${name} web tools.`,
+                    origin: "bundled",
+                  },
+                ],
+              },
+              "plugins.inspect": {
+                ...inspection,
+                catalog: undefined,
+                components: undefined,
+                source: { kind: "npm", packageName: `@openclaw/${manifest.id}` },
+                plugin: { ...inspection.plugin, id: manifest.id, name, origin: "bundled" },
+              },
+              "config.get": {
+                ...configMocks["config.get"],
+                config: credentialConfig,
+                raw: JSON.stringify(credentialConfig),
+              },
+              "config.schema": {
+                ...configMocks["config.schema"],
+                schema: {
+                  type: "object",
+                  properties: {
+                    plugins: {
+                      type: "object",
+                      properties: {
+                        entries: {
+                          type: "object",
+                          properties: {
+                            [manifest.id]: {
+                              type: "object",
+                              properties: { config: manifest.configSchema },
+                            },
                           },
                         },
                       },
                     },
                   },
                 },
+                uiHints: Object.fromEntries(
+                  Object.entries(uiHints).map(([key, hint]) => [
+                    `plugins.entries.${manifest.id}.config.${key}`,
+                    hint,
+                  ]),
+                ),
               },
-              uiHints: Object.fromEntries(
-                Object.entries(uiHints).map(([key, hint]) => [
-                  `plugins.entries.${manifest.id}.config.${key}`,
-                  hint,
-                ]),
-              ),
             },
           },
-        });
+          {
+            requestHandlers: {
+              "config.get": () => {
+                const snapshot = structuredClone(persistedConfig);
+                configReads.push(snapshot);
+                return {
+                  ...configMocks["config.get"],
+                  config: snapshot,
+                  raw: JSON.stringify(snapshot),
+                  hash: currentHash,
+                  configRevisionHash: currentHash,
+                };
+              },
+              "config.patch": (params) => {
+                const request = asRecord(params);
+                if (request.baseHash !== currentHash) {
+                  return {
+                    __mockError: { code: "INVALID_REQUEST", message: "Config hash changed" },
+                  };
+                }
+                const patch: unknown = JSON.parse(String(request.raw));
+                if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+                  throw new Error("Expected a config object patch");
+                }
+                persistedConfig = asRecord(
+                  applyMergePatch(persistedConfig, patch, { mergeObjectArraysById: true }),
+                );
+                currentHash += "-saved";
+                return { ok: true, config: structuredClone(persistedConfig), hash: currentHash };
+              },
+            },
+          },
+        );
         await page.goto(`${suite.server.baseUrl}settings/plugins/${manifest.id}#configuration`);
         await page
           .locator(".plugin-editor")
@@ -417,14 +477,27 @@ suite.define(() => {
         if (readOnly) {
           expect(await reference.isDisabled()).toBe(true);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
           return;
         }
         await apiKey.pressSequentially("synthetic-credential", { delay: 30 });
         expect(await apiKey.inputValue()).toBe("synthetic-credential");
         expect(await apiKey.getAttribute("type")).toBe("password");
-        await apiKey.press("Tab");
-        const save = await gateway.waitForRequest("config.set");
-        expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
+        await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().focus();
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        const fieldLabel = await apiKey.getAttribute("aria-label");
+        await page.getByRole("button", { name: `Save: ${fieldLabel}`, exact: true }).click();
+        const save = asRecord((await gateway.waitForRequest("config.patch")).params);
+        expect(save.baseHash).toBe(configMocks["config.get"].hash);
+        expect(JSON.parse(String(save.raw))).toEqual({
+          plugins: {
+            entries: {
+              [manifest.id]: { config: { [section]: { apiKey: "synthetic-credential" } } },
+            },
+          },
+        });
+        const expectedConfig = {
           ...credentialConfig,
           plugins: {
             ...credentialConfig.plugins,
@@ -439,11 +512,17 @@ suite.define(() => {
               },
             },
           },
-        });
+        };
         await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
+        expect(persistedConfig).toEqual(expectedConfig);
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(1);
+        const readsBeforeReload = configReads.length;
         await page.reload();
         await gateway.waitForRequest("config.get");
+        await expect.poll(() => configReads.length).toBeGreaterThan(readsBeforeReload);
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
+        expect(configReads.at(-1)).toEqual(expectedConfig);
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
         if (captureUiProof) {
@@ -478,14 +557,7 @@ suite.define(() => {
       expect(await securityAudit.getAttribute("href")).toBe(
         "https://clawhub.ai/openclaw/plugins/workboard/security-audit",
       );
-      expect(await securityAudit.getAttribute("class")).toContain(
-        "plugin-catalog-detail__security--pass",
-      );
-      expect(await securityAudit.getByText("Clean", { exact: true }).count()).toBe(1);
-      expect(
-        await securityAudit.locator(".plugin-catalog-detail__security-score > span").count(),
-      ).toBe(3);
-      expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
+      await page.getByText("Clean", { exact: true }).waitFor();
       expect(await page.getByRole("tab").count()).toBe(0);
       await page
         .locator(".plugin-catalog-detail__actions")
@@ -494,7 +566,7 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().waitFor();
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       await page
         .getByRole("checkbox", { name: "Read conversation context", exact: true })
         .waitFor();
@@ -585,8 +657,11 @@ suite.define(() => {
       });
       await openWorkboard(page, suite.server.baseUrl);
 
-      const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
+      const toggle = page.getByRole("switch", { name: "Workboard", checked: true, exact: true });
       const connections = (await gateway.getRequests("connect")).length;
+      await gateway.deferNext("plugins.setEnabled");
+      await toggle.click();
+      await gateway.waitForRequest("plugins.setEnabled");
       const disabledConfig = structuredClone(config);
       disabledConfig.plugins.entries.workboard.enabled = false;
       await gateway.setMethodResponse("plugins.list", {
@@ -606,10 +681,9 @@ suite.define(() => {
         hash: "workboard-disabled",
         appliedConfigHash: "workboard-disabled",
       });
-      await toggle.click();
-      await gateway.waitForRequest("plugins.setEnabled");
+      await gateway.resolveDeferred("plugins.setEnabled");
 
-      await page.getByRole("button", { name: "Enable Workboard", exact: true }).waitFor();
+      await page.getByRole("switch", { name: "Workboard", checked: false, exact: true }).waitFor();
       expect(await page.locator(".plugins-row-message.oc-banner-success").count()).toBe(0);
       expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
@@ -667,6 +741,7 @@ suite.define(() => {
       const catalogRequests = (await gateway.getRequests("plugins.list")).length;
       const workspaceInspections = (await gateway.getRequests("plugins.inspect")).length;
       await workspace.fill("Release planning");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await workspace.press("Tab");
       const save = await gateway.waitForRequest("config.set");
@@ -723,7 +798,7 @@ suite.define(() => {
       await search.fill("Allow prompt changes");
       await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
       expect(await page.locator(".plugin-editor__empty").count()).toBe(0);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       const permission = permissionRow.getByRole("checkbox");
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
@@ -748,7 +823,7 @@ suite.define(() => {
           entries: {
             workboard: {
               enabled: false,
-              hooks: { allowPromptInjection: true },
+              hooks: { allowPromptModification: true },
               config: { refreshMinutes: 15, notifications: false },
             },
           },
@@ -764,7 +839,7 @@ suite.define(() => {
       await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
       await page.getByRole("dialog").waitFor();
       await page
-        .locator(".exec-approval-actions")
+        .locator("openclaw-modal-actions")
         .getByRole("button", { name: "Remove", exact: true })
         .click();
       await gateway.waitForRequest("plugins.uninstall", { after: uninstallCount });
@@ -796,7 +871,7 @@ suite.define(() => {
       await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
-      await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
+      await page.getByRole("switch", { name: "Workboard", checked: true, exact: true }).click();
       await gateway.waitForRequest("plugins.inspect", { after: inspections });
 
       const configuration = page
@@ -836,6 +911,9 @@ suite.define(() => {
       await advancedTitles.getByText("Plugin system enabled", { exact: true }).waitFor();
       await advancedTitles.getByText("Allowed plugin IDs", { exact: true }).waitFor();
       await advancedTitles.getByText("Blocked plugin IDs", { exact: true }).waitFor();
+      for (const closed of await page.locator("details.cfg-object:not([open]) > summary").all()) {
+        await closed.click();
+      }
       await advancedTitles.getByText("Additional plugin load paths", { exact: true }).waitFor();
       await expect
         .poll(() =>
@@ -855,7 +933,9 @@ suite.define(() => {
       expect(
         await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
       ).toBe(0);
-      const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
+      await page.getByText("workboard_list", { exact: true }).waitFor();
+      expect(await page.getByRole("switch", { name: "Allow workboard_list" }).count()).toBe(0);
+      const toggle = page.getByRole("switch", { name: "Workboard", checked: true, exact: true });
       await page
         .locator(".plugin-catalog-detail__actions")
         .getByRole("link", { name: "Settings", exact: true })
@@ -926,7 +1006,7 @@ suite.define(() => {
         .click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(
-        await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).count(),
+        await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).count(),
       ).toBe(0);
 
       await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
@@ -934,7 +1014,7 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", configMocks["config.get"]);
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await page.getByLabel("Workspace label", { exact: true }).waitFor();
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
     });
   });

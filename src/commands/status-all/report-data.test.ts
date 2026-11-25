@@ -2,7 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../../gateway/auth-token-source-conflict.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -83,6 +85,38 @@ describe("statusAllCommand report data", () => {
     );
   });
 
+  it("shows the whole token conflict fix text while masking secret values", async () => {
+    const secretValue = ["ghp", "R3alLook1ngT0kenValue9xQ2mZ7pL4vK8sW1"].join("_");
+    const fixText =
+      resolveGatewayAuthTokenSourceConflict({
+        cfg: { gateway: { auth: { token: secretValue } } },
+        env: { OPENCLAW_GATEWAY_TOKEN: `${secretValue}-env` },
+      })?.diagnostic ?? "";
+    // Console output passes through the logging redactor too.
+    expect(redactSensitiveText(fixText)).toBe(fixText);
+    // ...and still masks a real secret value after the same key.
+    expect(redactSensitiveText(`gateway.auth.token: ${secretValue}`)).toBe(
+      "gateway.auth.token: ghp_R3…8sW1",
+    );
+    // Local diagnostics stay bounded: 16 + 384 = 400 UTF-16 units survive.
+    const overLimit = `long diagnostic ${"x".repeat(400)} TAIL`;
+    const output = await reportText({
+      overview: {
+        secretDiagnostics: [fixText, `gateway.remote.token: ${secretValue}`, overLimit],
+      },
+    });
+    expectReport(
+      output,
+      [
+        "Remove OPENCLAW_GATEWAY_TOKEN from the shell",
+        "if the environment variable should supply the token.",
+        "gateway.remote.token: ***",
+        `long diagnostic ${"x".repeat(384)}`,
+      ],
+      [secretValue, "x".repeat(385), "TAIL"],
+    );
+  });
+
   const success = "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).";
   const runLine = `Update run: ${success}`,
     restartLine = `Update restart: ${success}`;
@@ -97,7 +131,7 @@ describe("statusAllCommand report data", () => {
     ${"different-run"}    | ${"finished"} | ${"ok"}      | ${"1e36e13e-8cbf-4c33-bd2b-03adbd8f7a64"} | ${[runLine, restartLine]}
     ${"same-prose"}       | ${"finished"} | ${"ok"}      | ${null}                                   | ${[runLine, restartLine]}
     ${"generic-sentinel"} | ${"finished"} | ${"restart"} | ${null}                                   | ${[runLine]}
-    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."]}
+    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: ⚠️ OpenClaw update failed: post-update-failed."]}
   `(
     "keeps current availability alongside $history history without observing config",
     async ({ phase, sentinel, reference, expected }) => {

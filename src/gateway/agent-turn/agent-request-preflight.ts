@@ -21,7 +21,6 @@ import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isExecCompletionInputProvenance,
-  isMainSessionRestartRecoveryInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -63,8 +62,11 @@ export async function prepareAgentRequestPreflight(params: {
     return undefined;
   };
   const cfg = params.context.getRuntimeConfig();
+  // The declared mode is caller-chosen; only in-process or handshake-attested local backends qualify.
   const canUseInternalRuntimeHandoff =
-    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
+    params.client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    (params.client.internal?.syntheticClient === true ||
+      params.client.internal?.localBackendClient === true);
   const requestSessionKey = request.sessionKey?.trim();
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)
@@ -176,7 +178,6 @@ export async function prepareAgentRequestPreflight(params: {
   }
   const allowModelOverride =
     hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
-  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
     expectedExistingSessionId: request.expectedExistingSessionId,
@@ -222,6 +223,14 @@ export async function prepareAgentRequestPreflight(params: {
   if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
   }
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "restart" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
+  }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
@@ -264,28 +273,6 @@ export async function prepareAgentRequestPreflight(params: {
       delete inputProvenance.sourceRole;
     }
   }
-  const isRestartRecoveryResumeRun =
-    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
-  if (
-    (request.internalExecutionIdentityRetry !== undefined ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
-    !isRestartRecoveryResumeRun
-  ) {
-    return rejectInvalidRequest(
-      "internal execution identity recovery fields are reserved for main-session restart recovery.",
-    );
-  }
-  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
-  const canUseRestartRecoveryToolPolicy =
-    isRestartRecoveryResumeRun ||
-    (canUseInternalRuntimeHandoff &&
-      inputProvenance?.kind === "internal_system" &&
-      inputProvenance.sourceTool === "subagent_restart_recovery" &&
-      requestSessionKey !== undefined &&
-      inputProvenance.sourceSessionKey === requestSessionKey);
-  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
-    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
-  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -302,7 +289,6 @@ export async function prepareAgentRequestPreflight(params: {
     runId,
     allowModelOverride,
     canUseInternalRuntimeHandoff,
-    canUseCronRunContinuation,
     expectedSession: expectedSessionResult.constraint,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
@@ -314,7 +300,6 @@ export async function prepareAgentRequestPreflight(params: {
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

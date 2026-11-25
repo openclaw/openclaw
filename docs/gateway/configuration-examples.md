@@ -320,7 +320,7 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so each model attemp
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+        { provider: "openai", model: "gpt-transcribe", capabilities: ["audio"] },
         { provider: "google", model: "gemini-3-flash-preview", capabilities: ["video"] },
       ],
       audio: { enabled: true, maxBytes: 20971520, timeoutSeconds: 120 },
@@ -639,7 +639,7 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
       workspace: "~/.openclaw/workspace",
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.7"],
+        fallbacks: ["minimax/MiniMax-M3"],
       },
     },
   },

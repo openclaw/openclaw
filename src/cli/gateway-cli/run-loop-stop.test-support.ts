@@ -4,10 +4,8 @@ import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
-import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import {
-  createActiveWorkSnapshot,
   createLifecycleGate,
   createUpdateRespawnChild,
   advanceWithoutCalls,
@@ -85,7 +83,6 @@ export function registerHostedUpdateStopTests(f: UpdateRespawnFixtures) {
 }
 
 export function registerForegroundUpdateStopTests({
-  waitForGatewayActiveWork: waitForWork,
   requestManagedServiceUpdateHandoffPark: parkUpdate,
   consumeGatewayRestartIntent: consumeRestart,
   managedUpdateSuccessorOwner: updateOwner,
@@ -103,8 +100,7 @@ export function registerForegroundUpdateStopTests({
   consumeGatewayRestartIntentPayload: consumeIntent,
   commitManagedServiceUpdateHandoff: commitUpdate,
   flushLogger,
-  waitForGatewayHealthyRestart: waitForHealthy,
-  respawnHealth,
+  waitForGatewayHttpReadiness: waitForHealthy,
   markUpdateRestartSentinelFailure: markRestartFailure,
   writeGatewayRestartHandoff: writeHandoff,
   isGatewayWorkAdmissionClosed: admissionClosed,
@@ -398,25 +394,15 @@ export function registerForegroundUpdateStopTests({
   );
 
   it.each([
-    { phase: "drain", signal: "SIGINT", restartIntent: false },
-    { phase: "server-close", signal: "SIGTERM", restartIntent: false },
-    { phase: "drain", signal: "SIGTERM", restartIntent: true },
+    { signal: "SIGINT", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: false },
+    { signal: "SIGTERM", restartIntent: true },
   ] as const)(
-    "retains pre-close foreground $signal during $phase (restart intent: $restartIntent)",
-    async ({ phase, signal, restartIntent }) => {
+    "retains foreground $signal during close (restart intent: $restartIntent)",
+    async ({ signal, restartIntent }) => {
       const preClose = createLifecycleGate();
       const { updater } = prepareRespawn();
-      waitForWork.mockImplementationOnce(async () => {
-        if (phase === "drain") {
-          await preClose.wait();
-        }
-        return { drained: true, snapshot: createActiveWorkSnapshot() };
-      });
-      const close = vi.fn(async () => {
-        if (phase === "server-close") {
-          await preClose.wait();
-        }
-      });
+      const close = vi.fn(preClose.wait);
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { start, runtime, exited } = await startStopLoop(close, 18789);
         try {
@@ -426,6 +412,7 @@ export function registerForegroundUpdateStopTests({
           if (restartIntent) {
             consumeIntent.mockResolvedValueOnce({ reason: "update.run" });
           }
+          captureSignal(signal)();
           captureSignal(signal)();
           await setImmediate();
           expectCallCount(0, runtime.exit, respawnUpdate);
@@ -454,9 +441,13 @@ export function registerForegroundUpdateStopTests({
     { phase: "log-flush", signal: "SIGINT" },
   ] as const)("retains $signal stop intent during foreground $phase", async ({ signal, phase }) => {
     const { updater, child } = prepareRespawn();
-    const readiness = createDeferred<GatewayRestartResult>();
+    const readiness = createDeferred<{ healthz: number | null; readyz: number | null }>();
     const flush = createLifecycleGate();
-    flushLogger.mockImplementationOnce(flush.wait);
+    flushLogger.mockImplementation(async () => {
+      if (waitForHealthy.mock.calls.length > 0) {
+        await flush.wait();
+      }
+    });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, runtime, exited } = await startStopLoop(undefined, 18789);
       waitForHealthy.mockImplementationOnce(() => readiness.promise);
@@ -474,7 +465,7 @@ export function registerForegroundUpdateStopTests({
             "fresh Gateway readiness observation did not start",
           );
           if (phase === "log-flush") {
-            readiness.resolve(respawnHealth());
+            readiness.resolve({ healthz: 200, readyz: 200 });
             await withTimeout(flush.entered, 4_000);
           }
         }
@@ -488,7 +479,7 @@ export function registerForegroundUpdateStopTests({
         } else {
           expect(child.kill).toHaveBeenCalledExactlyOnceWith(signal);
         }
-        readiness.resolve(respawnHealth());
+        readiness.resolve({ healthz: 200, readyz: 200 });
         flush.release();
         if (!stoppingUpdater) {
           await setImmediate();
@@ -505,7 +496,7 @@ export function registerForegroundUpdateStopTests({
         expectCallCount(0, commitUpdate, markRestartFailure, writeHandoff);
       } finally {
         updater.resolve({ respawn: false });
-        readiness.resolve(respawnHealth({ healthy: false, waitOutcome: "stopped-free" }));
+        readiness.resolve({ healthz: null, readyz: null });
         flush.release();
         child.exitCode = 0;
         child.emit("exit", 0, null);

@@ -23,7 +23,11 @@ import {
 } from "../server-model-catalog-auth.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
+import {
+  createModelsListTestContext,
+  listModels,
+  providerCatalogEntry,
+} from "./models-list-result.openai-routes.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -162,6 +166,69 @@ it.each(["profile", "direct"] as const)(
     expect(read()).not.toHaveProperty("serviceTierObservations");
     expect(read()).toMatchObject({ serviceTiers: advertisedTiers });
   },
+);
+it.each(["profile", "direct"] as const)(
+  "offers %s API keys only the tiers their account advertises for each model",
+  (source) =>
+    withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "api-key-tiers-",
+        agentEnv: "main",
+        env: WITHOUT_OPENAI_ENV_AUTH,
+      },
+      async (state) => {
+        // GPT-6 Cyber advertises no speed tier, GPT-6 Sol only Fast; one model has no row.
+        const ids = ["synthetic-standard-only", "synthetic-fast-only", "synthetic-unadvertised"];
+        const profileId = source === "profile" ? "openai:api-fixture" : undefined;
+        const cfg = modelConfig(ids);
+        if (source === "direct") {
+          cfg.models = {
+            providers: {
+              openai: { ...platformRoute, auth: "api-key", apiKey: apiCredential.key, models: [] },
+            },
+          };
+        }
+        const read = async (outcomeProfileId = profileId) => {
+          const result = await listModels({
+            agentDir: state.agentDir("main"),
+            workspaceDir: state.workspaceDir,
+            cfg,
+            catalog: ids.map((id) => catalogModel(id)),
+            preparedOnly: true,
+            includeDefaultModels: false,
+            preparedAuthStore: {
+              version: 1,
+              profiles: profileId ? { [profileId]: apiCredential } : {},
+            },
+            routeResolverFactory: routeResolverFactory(dualRoutes),
+            catalogDiagnostics: {
+              providerOutcomes: [
+                {
+                  provider: "openai",
+                  ...(outcomeProfileId ? { profileId: outcomeProfileId } : {}),
+                  status: "ready",
+                  modelServiceTiers: [
+                    [ids[0], []],
+                    [ids[1], ["priority"]],
+                  ].map(([modelId, serviceTiers]) => ({
+                    modelId: modelId as string,
+                    runtimeId: "openclaw",
+                    api: platformRoute.api,
+                    baseUrl: platformRoute.baseUrl,
+                    serviceTiers: serviceTiers as string[],
+                  })),
+                },
+              ],
+            },
+          });
+          return ids.map((id) => result.models.find((model) => model.id === id)?.serviceTiers);
+        };
+        expect(await read()).toEqual([[], ["priority"], advertisedTiers]);
+        // Another account's listing says nothing about this key.
+        expect(await read("openai:other-account")).toEqual(ids.map(() => advertisedTiers));
+      },
+    ),
 );
 it.for(["codex", "openclaw"] as const)(
   "filters Codex tiers with %s selected while retaining account scope",
@@ -358,5 +425,47 @@ it("publishes provider tier restrictions through the model catalog projection", 
       supportsFastMode,
       serviceTiers,
     });
+  }
+});
+
+it("asks speed policy about the implicit OpenClaw runtime a row will use", async () => {
+  const provider = "example-router";
+  const ids = ["synthetic-priority-route", "synthetic-standard-route"];
+  const pluginRegistry = createEmptyPluginRegistry();
+  // Bundled speed policies answer only for the runtime that maps the request.
+  pluginRegistry.providers.push({
+    pluginId: provider,
+    source: "test",
+    provider: {
+      id: provider,
+      label: "Example router",
+      auth: [],
+      resolveFastModeSupport: ({ modelId, runtimeId }) =>
+        runtimeId === "openclaw" ? modelId === ids[0] : undefined,
+    },
+  });
+  const context = createModelsListTestContext({
+    pluginRegistry,
+    cfg: { agents: { defaults: { model: `${provider}/${ids[0]}` } } },
+    catalog: ids.map((id) => providerCatalogEntry(provider, id)),
+    preparedAuthStore: {
+      version: 1,
+      profiles: {
+        [`${provider}:fixture`]: { type: "api_key", provider, key: "synthetic-api-key" },
+      },
+    },
+  });
+  const models = (await preparePublic(context)).read().models;
+  for (const [index, supportsFastMode] of [
+    [0, true],
+    [1, false],
+  ] as const) {
+    const row = models.find((candidate) => candidate.id === ids[index]);
+    expect(row?.agentRuntime).toMatchObject({
+      id: "openclaw",
+      source: "implicit",
+      cloudPlacementExecutionMode: "worker-turn",
+    });
+    expect(row?.supportsFastMode).toBe(supportsFastMode);
   }
 });

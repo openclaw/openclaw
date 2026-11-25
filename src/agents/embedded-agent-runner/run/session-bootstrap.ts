@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  claimConversationProviderState,
+  type ProviderStateScope,
+} from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { assertRequiredWorkerSelection } from "../../../config/required-worker-profile.js";
@@ -21,7 +25,6 @@ import {
   readSessionEntrySummariesInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
-  runWithSessionSourceScope,
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
@@ -43,7 +46,6 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isCurrentSessionControllerOperation } from "../../../sessions/session-controller.identity.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
-import { lifecycleAdmissionByOperation } from "../../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -564,42 +566,32 @@ async function claimPersistedAgentSessionWriter(
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const adoptInput = operation && lifecycleAdmissionByOperation.get(operation)?.adoptInput;
-  let claimed: InternalSessionEntry | null;
-  if (adoptInput) {
-    claimed = await runWithSessionSourceScope(
-      snapshot.assertActive,
-      () => adoptInput({ runId: params.runId, assertCurrent: snapshot.assertActive }),
-      { checkAfter: false },
-    );
-  } else {
-    claimed = await applySessionEntryOperation(
-      {
-        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-        sessionKey: snapshot.sessionKey,
-        storePath: snapshot.storePath,
-      },
-      {
-        kind: "fields",
-        expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
-        patch: { activeWriterRunId: params.runId },
-      },
-      {
-        skipMaintenance: true,
-        preserveActivity: true,
-        ...sessionEntryCommitGuardOptions(snapshot.assertActive),
-      },
-    );
-    if (
-      claimed &&
-      (claimed.sessionId !== expectedSessionId ||
-        claimed.lifecycleRevision !== expectedLifecycleRevision)
-    ) {
-      throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
-    }
-    if (!claimed || claimed.activeWriterRunId !== params.runId) {
-      throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
-    }
+  const claimed = await applySessionEntryOperation(
+    {
+      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+      sessionKey: snapshot.sessionKey,
+      storePath: snapshot.storePath,
+    },
+    {
+      kind: "fields",
+      expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
+      patch: { activeWriterRunId: params.runId },
+    },
+    {
+      skipMaintenance: true,
+      preserveActivity: true,
+      ...sessionEntryCommitGuardOptions(snapshot.assertActive),
+    },
+  );
+  if (
+    claimed &&
+    (claimed.sessionId !== expectedSessionId ||
+      claimed.lifecycleRevision !== expectedLifecycleRevision)
+  ) {
+    throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+  }
+  if (!claimed || claimed.activeWriterRunId !== params.runId) {
+    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
   }
   if (previousWriterRunId && previousWriterRunId !== params.runId) {
     // The replacement must own the durable row before the incumbent is made
@@ -661,4 +653,16 @@ export async function claimAgentSessionWriter(
 ): Promise<AgentSessionWriterFence | undefined> {
   const snapshot = await assertAgentHarnessRunAdmission(params);
   return snapshot ? claimPersistedAgentSessionWriter(params, snapshot) : undefined;
+}
+
+/**
+ * The run that writes the conversation owns its provider state (continuation, pooled sockets).
+ * Detached runs (forks, memory flush) share its affinity but never write, so they own none.
+ */
+export function claimRunProviderState(
+  params: Pick<RunEmbeddedAgentParams, "sessionId" | "sessionPersistence">,
+): ProviderStateScope | undefined {
+  return params.sessionPersistence === "detached"
+    ? undefined
+    : claimConversationProviderState(params.sessionId);
 }

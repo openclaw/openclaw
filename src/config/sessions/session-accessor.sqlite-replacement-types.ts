@@ -1,3 +1,4 @@
+import type { LegacyOpenClawIdMemberRoleImport } from "../../gateway/openclaw-id/member-source-role-import.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
@@ -10,7 +11,9 @@ import type {
   SessionEntryReplacement,
   TranscriptEvent,
 } from "./session-accessor.types.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionEntry } from "./types.js";
@@ -20,6 +23,13 @@ export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
 };
 
 export type SessionEntryReplacementCommit = {
+  memberSourceRoleImport?: LegacyOpenClawIdMemberRoleImport;
+  creationOperation?: SessionCreationOperation;
+  fieldPatch?: {
+    fields: readonly (keyof SessionEntry)[];
+    guardFields: readonly (keyof SessionEntry)[];
+    snapshotFields?: readonly SessionEntrySnapshotField[];
+  };
   sources?: SessionSourcePredicate[];
   nativeBindings?: SessionNativeBindingParticipants;
   expectedRows: Map<string, ResolvedSessionEntryRow>;
@@ -40,6 +50,7 @@ export type SessionEntryReplacementCommit = {
 };
 
 export type SessionEntryReplacementCommitted = {
+  patchDiffBaselines?: SessionEntryReplacementPublication["patchDiffBaselines"];
   pendingArchiveRecovery: boolean;
   previous: Map<string, SessionEntry>;
   current: Map<string, SessionEntry>;
@@ -62,4 +73,8 @@ export type SessionEntryWorkerLifecycle<T = unknown> = {
   ) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
   onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  onCommittedEntries?: (
+    entries: ReadonlyMap<string, SessionEntry>,
+    patchDiffBaselines?: SessionEntryReplacementPublication["patchDiffBaselines"],
+  ) => void;
 };

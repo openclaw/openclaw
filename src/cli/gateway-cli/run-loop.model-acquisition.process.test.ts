@@ -88,6 +88,7 @@ it
         expect(output).not.toContain("process proof: acquisition-joined");
         expect(output).toContain("shutdown deadline reached");
         expect(elapsed, output).toBeGreaterThanOrEqual(shutdownTimeoutMs);
+        // Unsettled acquisition keeps cleanup joined until the native watchdog exits.
         expect(output).not.toContain("process-exit:");
       }
     } finally {

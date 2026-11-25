@@ -2,15 +2,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  resolveAdmittedRunActiveAssertion,
-} from "../../agents/admitted-run-context.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { bindCronManagementGrant } from "../../agents/cron-creator-authority-context.js";
 import * as hostFileWrite from "../../agents/host-file-write.js";
 import { makeSettledChild } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.test-support.js";
@@ -27,8 +20,7 @@ import {
 } from "../../agents/subagents/requester-cron-authority.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveExecApprovalsPath } from "../../infra/exec-approvals-config.js";
@@ -97,14 +89,7 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
       ? {
           runId: originalRunId,
           callerOrigin: { kind: "unknown" as const },
-          managementEntitlement: {
-            source: "channel-owner" as const,
-            isCurrent: () =>
-              isConfiguredCommandOwner(getRuntimeConfig(), {
-                channel: "discord",
-                senderId: "owner-1",
-              }),
-          },
+          managementEntitlement: { source: "channel-owner" as const },
         }
       : admission(originalRunId, requester);
   if (admin === "channel-owner") {
@@ -277,9 +262,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("keeps recovery reads scoped and withholds a record when authority closes during its read", async ({
-    signal,
-  }) => {
+  it("keeps scheduler notice reads scoped to the current conversation", async () => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
     setRuntimeConfigSnapshot(config);
     const fixture = createCronFixture(undefined, config);
@@ -306,7 +289,7 @@ describe("requester continuation persisted automation management", () => {
           },
         },
       );
-    const own = await addOwnedJob(SESSION, "Recovery-visible record");
+    const own = await addOwnedJob(SESSION, "Owned automation record");
     const foreign = await addOwnedJob("agent:main:another-conversation", "Private foreign record");
     const responses = vi.fn<RespondFn>();
     const get = expectDefined(coreGatewayHandlers["cron.get"], "cron.get handler");
@@ -322,29 +305,16 @@ describe("requester continuation persisted automation management", () => {
           }),
       });
 
-    await inRun("recovery-inspection", undefined, async (_identity, admitted) => {
+    await inRun("automation-inspection", undefined, async (_identity, admitted) => {
       bindGatewayContextResolver(admitted, () => fixture.context);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const readJob = cron.readJob.bind(cron);
-      let holdRead = false;
-      const readSpy = vi.spyOn(cron, "readJob").mockImplementation(async (id) => {
-        const recorded = await readJob(id);
-        if (holdRead) {
-          expect(recorded?.id).toBe(own.id);
-          entered.resolve();
-          await withinTest(release.promise, signal);
-        }
-        return recorded;
-      });
-      let pending: Promise<unknown> | undefined;
       try {
         const tools = await createCreatorTransportTools({
           transport: "embedded",
           config,
           admitted,
           senderIsOwner: false,
-          forceRestartSafeTools: true,
+          trigger: "event",
+          inputProvenance: { kind: "internal_system", sourceTool: "cron" },
         });
         const inspect = (jobId: string) =>
           tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId });
@@ -358,29 +328,7 @@ describe("requester continuation persisted automation management", () => {
         );
         await expect(inspect(foreign.id)).rejects.toThrow("cron job not found");
         expect(responses).toHaveBeenLastCalledWith(false, undefined, expect.anything());
-        responses.mockClear();
-
-        holdRead = true;
-        pending = inspect(own.id);
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, pending, "Read settled before its owner gate"),
-          signal,
-        );
-        expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(true);
-        release.resolve();
-        await expect(pending).rejects.toThrow(/authority|admitted run/i);
-        expect(responses).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            message: expect.stringMatching(/authority|admitted run/i),
-          }),
-        );
       } finally {
-        release.resolve();
-        await pending?.catch(() => undefined);
-        readSpy.mockRestore();
         clearGatewayContextResolver(admitted);
       }
     });
@@ -507,13 +455,20 @@ describe("requester continuation persisted automation management", () => {
       ]);
       expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
     } else {
-      // An absent or wrong-method grant stops at the method-scope fence.
-      expect(error).toMatchObject({ message: "missing scope: operator.admin" });
+      // Write now passes the method fence, but cannot bypass job ownership or grant binding.
+      expect(error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining(
+          admin
+            ? "Automation admin grant is missing, expired, or already used."
+            : "Automation not found: " + fixture.before[0]!.id,
+        ),
+      });
       expect(await fixture.read()).toEqual(fixture.before);
     }
   });
 
-  it.each(["fresh user turn", "session reset", "global owner removal"])(
+  it.each(["fresh user turn", "session reset"])(
     "rejects %s during update validation",
     async (reason) => {
       const entered = createDeferred();
@@ -527,10 +482,7 @@ describe("requester continuation persisted automation management", () => {
         return [];
       });
       hold = true;
-      const update = withSuccessor(
-        reason === "global owner removal" ? "channel-owner" : true,
-        fixture.update,
-      );
+      const update = withSuccessor(true, fixture.update);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -538,9 +490,7 @@ describe("requester continuation persisted automation management", () => {
           "Update returned before service validation",
         );
         expect(await fixture.read()).toEqual(fixture.before);
-        if (reason === "global owner removal") {
-          setRuntimeConfigSnapshot(cfg);
-        } else if (reason === "fresh user turn") {
+        if (reason === "fresh user turn") {
           const requester = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
           requester.internal = {};
           admission("new-user-turn", requester);

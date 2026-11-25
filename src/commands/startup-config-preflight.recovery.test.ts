@@ -7,9 +7,13 @@ import {
 } from "../cli/gateway-cli/pre-bootstrap.js";
 import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { ExitError } from "../runtime.js";
-import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import {
+  deleteConfigMachineState,
+  writeConfigMachineState,
+} from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -71,7 +75,7 @@ async function expectLeaseReleased(
   heartbeat?.mockClear();
   await vi.advanceTimersByTimeAsync(60_000);
   expect(heartbeat).not.toHaveBeenCalled();
-  expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+  expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
 }
 
 afterEach(() => {
@@ -142,7 +146,7 @@ it.each(["current", "webhook-repair"] as const)(
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
         expect(await fs.readFile(configPath, "utf8")).toBe(replacement);
       }
-      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+      expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     });
   },
 );
@@ -165,6 +169,24 @@ it("records no-pin completion with a read-only included config and skips it on r
     });
     expect(await fs.readFile(configPath, "utf8")).toBe(original);
     expect(await fs.readFile(includedPath, "utf8")).toBe(included);
+  });
+});
+
+it("skips a channel startup completed after Doctor left it pending", async () => {
+  await withPreflightHome(async (_home, _stateDir, configPath) => {
+    const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+    const original = JSON.stringify({
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+      meta: { migrations: { webhookListeners: doctorRecord } },
+    });
+    await fs.writeFile(configPath, original);
+    writeConfigMachineState(`webhookListeners:${configPath}`, { ...doctorRecord, msteams: [] });
+    const registry = await import("../plugins/doctor-contract-registry.js");
+    const migrations = vi.spyOn(registry, "applyPluginDoctorCompatibilityMigrations");
+    expect((await runStartupConfigPreflight({ gateway: true })).snapshot.valid).toBe(true);
+    expect(migrations).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
   });
 });
 
@@ -261,7 +283,7 @@ it("restores the admitted backup after database readiness exceeds the lease TTL"
     expect(delayed).toBe(true);
     expect(result.snapshot.valid).toBe(true);
     expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(backupConfig);
-    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+    expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
     const completedHeartbeats = heartbeats;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(heartbeats).toBe(completedHeartbeats);

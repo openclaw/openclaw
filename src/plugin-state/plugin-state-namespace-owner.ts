@@ -10,9 +10,11 @@ import {
   pluginStatePublication,
 } from "./plugin-state-publication.js";
 import {
+  assertPluginStateKey,
   PLUGIN_STATE_NAMESPACE_MAX_BYTES,
   PLUGIN_STATE_NAMESPACE_MAX_ROWS,
   pluginStateNamespaceRowBytes,
+  resolvePluginStateExpiresAtMs,
   rowToEntry,
   type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
@@ -162,6 +164,33 @@ export function ensurePluginStateNamespace(
 
 export function livePluginStateRow(row: PluginStateReadRow | undefined, now = Date.now()) {
   return row?.expires_at != null && row.expires_at <= now ? undefined : row;
+}
+
+/** An occupied claim is read-only only when its namespace has no expiry cleanup due. */
+export function canRejectResidentPluginStateClaim(
+  rows: ReadonlyMap<string, PluginStateReadRow>,
+  params: { key: string; namespace: string; ttlMs?: number },
+  path: string,
+  postgres: boolean,
+): boolean {
+  const now = Date.now();
+  if (!livePluginStateRow(rows.get(toUSVString(params.key)), now)) {
+    return false;
+  }
+  assertPluginStateKey(postgres, params.key, "register");
+  resolvePluginStateExpiresAtMs({
+    ...params,
+    ttlMs: params.ttlMs,
+    now,
+    operation: "register",
+    path,
+  });
+  for (const row of rows.values()) {
+    if (!livePluginStateRow(row, now)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function listResidentPluginStateEntries(

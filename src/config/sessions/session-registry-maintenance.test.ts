@@ -1,14 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
 import * as lifecycleProjection from "./session-accessor.sqlite-projection.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as childRead from "./session-entry-children-read.js";
@@ -88,10 +89,9 @@ async function cronCase(name: string, extra: Partial<SessionEntry> = {}) {
 }
 
 async function createStore(entries: Record<string, SessionEntry>): Promise<string> {
-  const dir = await fixtureSuite.createCaseDir("store");
-  const storePath = path.join(dir, "sessions.json");
+  const storePath = path.join(await fixtureSuite.createCaseDir("store"), "sessions.json");
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
   }
   return storePath;
 }
@@ -261,7 +261,7 @@ it("archives the transcript when pruning stale cron-run sessions", async () => {
   expect(read()).toBeUndefined();
   const files = await archives();
   expect(files).toHaveLength(1);
-  expect(readSessionArchiveContentSync(files[0] ?? "")).toContain(event.data);
+  expect(readSessionArchiveText(files[0] ?? "")).toContain(event.data);
   await expect(transcripts()).resolves.toEqual([]);
 });
 
@@ -294,12 +294,10 @@ it("previews pruning without transferring or changing ordinary entries", async (
     [ordinaryKey]: ordinaryEntry,
   });
   appendTranscriptEventSync({ sessionKey, sessionId, storePath }, event);
-
   inspectPages((entries) => {
     expect(entries.map(({ sessionKey: key }) => key)).toEqual([sessionKey]);
   });
   const result = await maintain(storePath, { apply: false });
-
   expect(result).toMatchObject({ preservedRunning: 0, pruned: 1 });
   expect(loadSessionEntry({ sessionKey, storePath })).toEqual(
     sessionEntry(sessionId, now - 8 * DAY_MS),

@@ -3,6 +3,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stripOpenClawMcpToolPrefix } from "../../../../src/agents/tool-display-call.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -61,6 +62,7 @@ function resultBlock(card: ToolCard): Record<string, unknown> {
     details: card.details,
     isError: card.isError,
     exitCode: card.exitCode,
+    subagentCollectionErrors: card.subagentCollectionErrors,
     __openclaw: {
       id: card.resultMessageId,
       toolOutput: card.toolOutput,
@@ -184,6 +186,9 @@ function readProjections(item: MessageItem, index: number): Projection[] {
         ...(card?.details !== undefined ? { details: card.details } : {}),
         ...(!call && card?.isError !== undefined ? { isError: card.isError } : {}),
         ...(!call && card?.exitCode !== undefined ? { exitCode: card.exitCode } : {}),
+        ...(!call && card?.subagentCollectionErrors
+          ? { subagentCollectionErrors: card.subagentCollectionErrors }
+          : {}),
       },
     };
   });
@@ -242,12 +247,15 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     projection.runId ??= owners?.size === 1 ? owners.values().next().value : undefined;
     return buildToolStreamIdentity(projection.runId ?? "", projection.id);
   };
+  // Native history retains the loopback prefix; live activity names the Gateway tool.
+  const nameOf = (projection: Projection) =>
+    stripOpenClawMcpToolPrefix(projection.name).toLowerCase();
   const names = new Map<string, Set<string>>();
   for (const projection of projections) {
     const key = identity(projection);
     const known = names.get(key) ?? new Set<string>();
     if (projection.name !== "tool") {
-      known.add(projection.name.toLowerCase());
+      known.add(nameOf(projection));
     }
     names.set(key, known);
   }
@@ -260,7 +268,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     const name =
       projection.name === "tool" && knownNames.size === 1
         ? knownNames.values().next().value
-        : projection.name.toLowerCase();
+        : nameOf(projection);
     const invocationKey = JSON.stringify([key, name]);
     const invocation = invocations.get(invocationKey) ?? {
       first: projection.source.index,
@@ -286,7 +294,11 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   const rows = new Map<number, ProjectedItem[]>();
   const bundles = new Map<string, { item: ProjectedItem; index: number; inputs: unknown[] }>();
   const memoInputs = new Map<ProjectedItem, { owner: object; inputs: unknown[] }>();
-  const unchanged = new Set(sources.values());
+  // Commentary beside a call always splits into its own row, even when the
+  // call needs no merging, so no tool row renders outside its activity group.
+  const unchanged = new Set(
+    [...sources.values()].filter(({ remaining }) => remaining.length === 0),
+  );
   for (const invocation of invocations.values()) {
     const owners = new Set(invocation.projections.map((projection) => projection.source));
     if (
@@ -297,16 +309,23 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       owners.forEach((source) => unchanged.delete(source));
     }
   }
+  const unchangedKeys = new Map<Source, string>();
   for (const invocation of invocations.values()) {
     const owner = invocation.call ?? invocation.result!;
+    // Hydration adds facts, not a new row. The unmerged source uses the same
+    // scoped invocation key as its eventual merged projection from the outset.
+    const itemKey = `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`;
     if (unchanged.has(owner.source)) {
+      if (!unchangedKeys.has(owner.source)) {
+        unchangedKeys.set(owner.source, itemKey);
+      }
       continue;
     }
     const message = owner.source.message;
     const metadata = asRecord(message["__openclaw"]);
-    // History already composed durable activity. An earlier live echo must not
-    // drag it across an intervening stream or above its parent call.
-    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)?.activity
+    // Durable placement owns both the call and its children. An earlier live echo
+    // must not move a parent ahead of the narration in its persisted message.
+    const index = readTranscriptDisplayPosition(metadata?.transcriptPosition)
       ? owner.source.index
       : invocation.first;
     const result = invocation.result;
@@ -325,7 +344,18 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     // Batch only calls with the same message-scoped rendering metadata. Separate
     // result refs or completion states need separate rows, never sibling flags.
+    // Prose between calls also separates them, so it keeps its position below.
+    const ownerContent = Array.isArray(owner.source.message.content)
+      ? owner.source.message.content
+      : [];
+    const ownerAt = ownerContent.findIndex(
+      (block) => resolveToolBlockId(asRecord(block) ?? {}, owner.source.message) === owner.id,
+    );
+    const proseBefore = ownerContent
+      .slice(0, Math.max(0, ownerAt))
+      .filter((block) => owner.source.remaining.includes(block)).length;
     const renderingKey = JSON.stringify([
+      proseBefore,
       owner.runId,
       Boolean(invocation.live),
       completed,
@@ -333,6 +363,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       itemEnded,
       transcript,
       invocation.live?.["__openclawToolStreamDiffStat"],
+      invocation.live?.["__openclawToolStreamLiveOutput"],
       invocation.live?.["__openclawToolStreamReceivedAt"],
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
@@ -350,7 +381,12 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     ];
     const bundle = bundles.get(bundleKey);
     const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
-    for (const source of [message, invocation.live, result?.source.message]) {
+    const activitySources = [message, invocation.live, result?.source.message];
+    // An empty prepared projection means hidden calls; sources without one keep raw cards.
+    const ownsActivity = activitySources.some((source) =>
+      Array.isArray(asRecord(source)?.activity),
+    );
+    for (const source of activitySources) {
       const activityItems = readPreparedActivity(source).filter(
         (activity) =>
           (activity.toolCallId ?? activity.itemId) === owner.id &&
@@ -375,28 +411,42 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
     if (bundle) {
       bundle.inputs.push(...inputs);
       bundle.item.message.content.push(...content);
-      bundle.item.message.activity = [
-        ...readPreparedActivity(bundle.item.message),
-        ...prepared.values(),
-      ];
+      if (invocation.attachments.length > 0) {
+        bundle.item.message.role = "toolResult";
+      }
+      if (ownsActivity || Array.isArray(bundle.item.message.activity)) {
+        bundle.item.message.activity = [
+          ...readPreparedActivity(bundle.item.message),
+          ...prepared.values(),
+        ];
+      }
       bundle.index = Math.min(bundle.index, index);
       continue;
     }
     const item: ProjectedItem = {
       ...owner.source.item,
-      key: `${owner.source.item.key}:invocation:${identity(owner)}:${owner.name}`,
+      key: itemKey,
       message: {
         ...message,
-        role: invocation.call ? "assistant" : message.role,
+        // Result media stays tool-owned when the invocation moves to its call row.
+        role:
+          invocation.attachments.length > 0
+            ? "toolResult"
+            : invocation.call
+              ? "assistant"
+              : message.role,
         runId: owner.runId,
         content,
-        activity: [...prepared.values()],
+        activity: ownsActivity ? [...prepared.values()] : undefined,
         ...(transcript ? { messageId: transcript } : {}),
         ...(invocation.live
           ? {
               __openclawToolStreamLive: true,
               __openclawToolStreamResultReceived: resultReceived,
               __openclawToolStreamItemEnded: itemEnded,
+              __openclawToolStreamLiveOutput: completed
+                ? undefined
+                : invocation.live["__openclawToolStreamLiveOutput"],
               __openclawToolStreamDiffStat: completed
                 ? undefined
                 : invocation.live["__openclawToolStreamDiffStat"],
@@ -415,60 +465,72 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   }
   const result = items.flatMap((item, index) => {
     const source = sources.get(index);
-    if (!source || unchanged.has(source)) {
+    if (!source) {
       return [item];
     }
+    if (unchanged.has(source)) {
+      return [{ ...item, key: unchangedKeys.get(source)! }];
+    }
     const row = rows.get(index) ?? [];
-    if (source.remaining.length > 0) {
-      // Keep surrounding prose/media at its original position even when all
-      // tool blocks in this projection were already represented elsewhere.
-      if (row.length > 0) {
-        const pending = row.map((entry) => ({
-          message: entry.message,
-          blocks: entry.message.content,
-        }));
-        pending.forEach(({ message }) => {
-          message.content = [];
-        });
-        let current = pending[0]!;
-        const blocks = Array.isArray(source.message.content) ? source.message.content : [];
-        for (const block of blocks) {
-          if (source.remaining.includes(block)) {
-            current.message.content.push(block);
-            continue;
-          }
-          const raw = asRecord(block) ?? {};
-          const id = resolveToolBlockId(raw, source.message);
-          for (const target of pending) {
-            const matches = target.blocks.filter((entry) => {
-              const record = asRecord(entry);
-              return record?.id === id && (!raw.name || raw.name === record?.name);
-            });
-            if (matches.length > 0) {
-              target.message.content.push(...matches);
-              target.blocks = target.blocks.filter((entry) => !matches.includes(entry));
-              current = target;
-            }
-          }
-        }
-        pending.forEach((entry) => entry.message.content.push(...entry.blocks));
-      } else {
-        row.unshift({
-          ...source.item,
-          message: {
-            ...source.message,
-            content: source.remaining,
-            toolCallId: undefined,
-            tool_call_id: undefined,
-            toolUseId: undefined,
-            tool_use_id: undefined,
-            toolName: undefined,
-            tool_name: undefined,
-          },
-        });
+    if (source.remaining.length === 0) {
+      return row;
+    }
+    // Prose and media keep their original position as their own rows, so
+    // commentary never carries a tool call: every call joins the tool rows
+    // that its activity group summarizes.
+    const prose = (content: unknown[], segment: number): ProjectedItem => {
+      const projected: ProjectedItem = {
+        ...source.item,
+        key: segment === 0 ? source.item.key : `${source.item.key}:prose:${segment}`,
+        message: {
+          ...source.message,
+          content,
+          activity: undefined,
+          toolCallId: undefined,
+          tool_call_id: undefined,
+          toolUseId: undefined,
+          tool_use_id: undefined,
+          toolName: undefined,
+          tool_name: undefined,
+        },
+      };
+      // Prose belongs to the same immutable source as its invocation projection.
+      memoInputs.set(projected, {
+        owner: source.originalMessage,
+        inputs: [source.originalMessage, source.originalMessage.content],
+      });
+      return projected;
+    };
+    const ordered: ProjectedItem[] = [];
+    let pendingProse: unknown[] = [];
+    const flushProse = () => {
+      if (pendingProse.length > 0) {
+        ordered.push(prose(pendingProse, ordered.length));
+        pendingProse = [];
+      }
+    };
+    const unplaced = new Set(row);
+    for (const block of Array.isArray(source.message.content) ? source.message.content : []) {
+      if (source.remaining.includes(block)) {
+        pendingProse.push(block);
+        continue;
+      }
+      const raw = asRecord(block) ?? {};
+      const id = resolveToolBlockId(raw, source.message);
+      const target = [...unplaced].find((entry) =>
+        entry.message.content.some((part) => {
+          const record = asRecord(part);
+          return record?.id === id && (!raw.name || raw.name === record?.name);
+        }),
+      );
+      if (target) {
+        flushProse();
+        ordered.push(target);
+        unplaced.delete(target);
       }
     }
-    return row;
+    flushProse();
+    return [...ordered, ...unplaced];
   });
   // Assembly and prose/media interleaving are complete. Only messages are
   // reused: duplicate grouping can still mutate the returned item wrappers.
@@ -519,7 +581,7 @@ export function coalesceToolActivityMessages(
         return;
       }
       owner ??= message;
-      inputs.push(item.kind, item.key, message, item.duplicateCount, item.startsTurn);
+      inputs.push(item.kind, item.key, message, item.startsTurn);
       // Preserve the content-replacement contract of the tool-card owner too.
       inputs.push(message.content);
       if (Array.isArray(message.content)) {
@@ -564,4 +626,44 @@ export function coalesceToolActivityMessages(
   }
   appendTurn(turn);
   return result;
+}
+
+/**
+ * A run that ends or hands off swaps its live tool rows for their stored
+ * copies, which arrive under other message keys. Disclosure ids stay scoped to
+ * their message, so what the reader had opened is carried across by tool call,
+ * and only where one disclosure names that call on each side.
+ */
+export function carryMovedDisclosures(
+  state: { expanded: Map<string, boolean>; explicit: ReadonlySet<string> },
+  previous: ReadonlyMap<string, string> | undefined,
+  current: ReadonlyMap<string, string>,
+  // The expansion owner records versions and explicit choices through its writer.
+  writeExpansion: (
+    values: Map<string, boolean>,
+    key: string,
+    open: boolean,
+    explicit: boolean,
+  ) => void,
+): void {
+  if (!previous) {
+    return;
+  }
+  const { expanded, explicit } = state;
+  const single = (calls: ReadonlyMap<string, string>) => {
+    const ids = new Map<string, string | null>();
+    for (const [id, call] of calls) {
+      ids.set(call, ids.has(call) ? null : id);
+    }
+    return ids;
+  };
+  const targets = single(current);
+  for (const [call, source] of single(previous)) {
+    const target = targets.get(call);
+    const open = source ? expanded.get(source) : undefined;
+    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
+      continue;
+    }
+    writeExpansion(expanded, target, open, explicit.has(source));
+  }
 }

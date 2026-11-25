@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { isAgentInputRecoveryPending } from "../../state/agent-input-recovery-context.js";
+import { expectCollected, expectLiveObjects } from "../../test-utils/retention.js";
 import { createPluginMetadataSnapshotFixture } from "../plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { markPluginRegistryRetired } from "../registry-lifecycle.js";
@@ -33,9 +31,12 @@ function expectExpiredRegistry() {
   expect(requireActivePluginRegistry).toThrow("Plugin registry scope is no longer available");
 }
 
-function serviceType(id: string) {
+function serviceType(id: string, references: WeakRef<object>[]) {
   return class {
     id = id;
+    constructor() {
+      references.push(new WeakRef(this));
+    }
     start() {}
   };
 }
@@ -50,7 +51,7 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
 
-  it("enters a repeated Gateway scope once with recovery in the same store", () => {
+  it("enters a repeated Gateway scope once in the same store", () => {
     const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     const runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
     try {
@@ -66,48 +67,6 @@ describe("gateway request scope", () => {
       runs.mockRestore();
     }
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBeUndefined();
-  });
-
-  it("isolates recovery owners across sibling scopes and restores them after rejection", async () => {
-    const { withPluginRuntimeGenerationScope } = await import("./generation-scope.js");
-    const scope = (pending: string): PluginRuntimeGatewayRequestScope => ({
-      isWebchatConnect: () => false,
-      resolveGatewayContext: () =>
-        ({
-          inputRecovery: { isPending: (agentId: string) => agentId === pending },
-        }) as NonNullable<PluginRuntimeGatewayRequestScope["context"]>,
-    });
-    const failure = new Error("scope failure");
-    await runtimeScope.withPluginRuntimeGatewayRequestScope(scope("parent"), async () => {
-      await Promise.all(
-        ["left", "right"].map(async (name) => {
-          await expect(
-            runtimeScope.withPluginRuntimeGatewayRequestScope(scope(name), async () => {
-              await Promise.resolve();
-              expect(isAgentInputRecoveryPending(name)).toBe(true);
-              expect(isAgentInputRecoveryPending("parent")).toBe(false);
-              throw failure;
-            }),
-          ).rejects.toBe(failure);
-          expect(isAgentInputRecoveryPending("parent")).toBe(true);
-          expect(isAgentInputRecoveryPending(name)).toBe(false);
-        }),
-      );
-      await withPluginRuntimeGenerationScope(
-        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
-        async () => {
-          const inherited = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
-          inherited.resolveGatewayContext = scope("generation").resolveGatewayContext;
-          await runtimeScope.withPluginRuntimeGatewayRequestScope(inherited, async () => {
-            await Promise.resolve();
-            expect(isAgentInputRecoveryPending("generation")).toBe(true);
-            expect(isAgentInputRecoveryPending("parent")).toBe(false);
-          });
-          expect(isAgentInputRecoveryPending("parent")).toBe(true);
-        },
-      );
-    });
-    expect(isAgentInputRecoveryPending("parent")).toBe(false);
   });
 
   it("keeps Gateway routing bound to the exact owner across wrappers and cleanup", async () => {
@@ -158,34 +117,6 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getGatewayContextResolver(owner)).toBeUndefined();
     runtimeScope.bindGatewayContextResolver(owner, resolver);
     expect(runtimeScope.getGatewayContextResolver(owner)).toBe(resolver);
-  });
-
-  it("matches nested Gateway bindings without invoking execution resolvers", async () => {
-    const gateway = vi.fn(() => TEST_SCOPE.context);
-    const first = vi.fn(() => undefined);
-    const second = vi.fn(() => undefined);
-    const otherGateway = vi.fn(() => TEST_SCOPE.context);
-    runtimeScope.bindGatewayContextResolver(first, gateway);
-    runtimeScope.bindGatewayContextResolver(second, first);
-    const owner = {};
-    runtimeScope.bindGatewayContextResolver(owner, second);
-
-    expect(runtimeScope.hasGatewayContextOwner(owner, gateway)).toBe(true);
-    expect(runtimeScope.hasGatewayContextOwner(owner, otherGateway)).toBe(false);
-    for (const resolver of [gateway, first, second, otherGateway]) {
-      expect(resolver).not.toHaveBeenCalled();
-    }
-  });
-
-  it("retains terminal Gateway lifetime independently of another resolver", async () => {
-    const first = () => TEST_SCOPE.context;
-    const second = () => TEST_SCOPE.context;
-    const lifetime = runtimeScope.getGatewayContextLifetime(first);
-    lifetime.abort();
-
-    expect(runtimeScope.getGatewayContextLifetime(first)).toBe(lifetime);
-    expect(runtimeScope.getGatewayContextLifetime(first).signal.aborted).toBe(true);
-    expect(runtimeScope.getGatewayContextLifetime(second).signal.aborted).toBe(false);
   });
 
   it("drops generation ownership for re-admission and restores the caller afterward", async () => {
@@ -275,14 +206,14 @@ describe("gateway request scope", () => {
 
   it("keeps an empty prepared selection through collection instead of selecting active plugins", async () => {
     const generation = await import("./generation-scope.js");
-    const ActiveService = serviceType("active-service");
+    const references: WeakRef<object>[] = [];
+    const ActiveService = serviceType("active-service", references);
     const active = serviceRegistry(new ActiveService());
     setActivePluginRegistry(active);
     await generation.withPluginRuntimeGenerationScope(
       { metadataSnapshot: createPluginMetadataSnapshotFixture() },
       async () => {
-        await setImmediate();
-        expect(queryObjects(ActiveService)).toBe(1);
+        await expectLiveObjects(references, 1);
         const selected = generation.getPluginRuntimeGenerationRegistry();
         expect(selected).toBeDefined();
         expect(requireActivePluginRegistry()).toBe(selected);
@@ -294,7 +225,8 @@ describe("gateway request scope", () => {
   it.each(["fulfilled", "rejected", "thenable"] as const)(
     "owns the registry only until a direct async callback settles: %s",
     async (outcome) => {
-      const PendingService = serviceType("pending-scope");
+      const references: WeakRef<object>[] = [];
+      const PendingService = serviceType("pending-scope", references);
       const gate = createDeferredCore();
       const failure = new Error("scope callback failed");
       const resources: AsyncResource[] = [];
@@ -332,8 +264,7 @@ describe("gateway request scope", () => {
         });
       })();
       try {
-        await setImmediate();
-        expect(queryObjects(PendingService)).toBe(1);
+        await expectLiveObjects(references, 1);
         gate.resolve();
         if (outcome === "rejected") {
           await expect(pending).rejects.toBe(failure);
@@ -342,8 +273,7 @@ describe("gateway request scope", () => {
         }
         const expectedThenAccesses = outcome === "thenable" ? 1 : 0;
         expect([thenReads, thenCalls]).toEqual([expectedThenAccesses, expectedThenAccesses]);
-        await setImmediate();
-        expect(queryObjects(PendingService)).toBe(0);
+        await expectCollected(...references);
         const resource = resources[0];
         assert.ok(resource);
         resource.runInAsyncScope(expectExpiredRegistry);
@@ -362,7 +292,8 @@ describe("gateway request scope", () => {
   it.each(["registry", "resolver-copy", "plugin-copy"] as const)(
     "releases retired registries inherited by native async resources through %s",
     async (copy) => {
-      const RetainedService = serviceType("runtime-scope-retention");
+      const references: WeakRef<object>[] = [];
+      const RetainedService = serviceType("runtime-scope-retention", references);
       const resources = Array.from({ length: 4 }, () => {
         const registry = serviceRegistry(new RetainedService());
         const capture = () => new AsyncResource("plugin-runtime-retention");
@@ -380,8 +311,7 @@ describe("gateway request scope", () => {
       const replacement = createEmptyPluginRegistry();
       setActivePluginRegistry(active);
       try {
-        await setImmediate();
-        expect(queryObjects(RetainedService)).toBe(0);
+        await expectCollected(...references);
         for (const resource of resources) {
           resource.runInAsyncScope(() => {
             expectExpiredRegistry();

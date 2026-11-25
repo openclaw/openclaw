@@ -7,10 +7,12 @@ import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migratio
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
 import { captureScopes } from "../infra/update-recovery-backup-reader.js";
+import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
-import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { isUpdateRunVerificationConfirmed } from "../infra/update-run-verification.js";
 import {
   parseUpdateRecoveryBackupManifest,
   type UpdateRecoveryBackupManifest,
@@ -20,13 +22,39 @@ import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
 
-/** A rollback original is superseded only after a later update succeeded. */
+/** A verified healthy update supersedes the rollback sources it, or anything earlier, left behind. */
+export function isVerifiedSuccessfulUpdate(run: UpdateRunRecord): boolean {
+  return (
+    run.status === "succeeded" &&
+    run.finishedAtMs !== null &&
+    isUpdateRunVerificationConfirmed(run.verification)
+  );
+}
+
+export function isUnchangedUpdate(run: UpdateRunRecord): boolean {
+  return run.status === "skipped" && run.reason === "already-current" && run.finishedAtMs !== null;
+}
+
+/** A rollback original is superseded after a later update succeeded or a verified one finished. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
-    const [latest] = listUpdateRuns({ limit: 1, succeeded: true }, { env });
+    const completed = listUpdateRuns({ limit: 100, succeeded: true }, { env });
+    const [latest] = completed;
+    const verified = completed.find(
+      (run) => run.finishedAtMs !== null && isUpdateRunVerificationConfirmed(run.verification),
+    );
+    const verifiedSuccess = completed.find(isVerifiedSuccessfulUpdate);
+    const runs = listUpdateRuns({ limit: 100 }, { env });
     return {
-      runs: listUpdateRuns({ limit: 100 }, { env }),
+      runs,
       latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
+      latestVerifiedStartedAt: verified?.createdAtMs ?? 0,
+      latestVerifiedFinishedAt: verifiedSuccess?.finishedAtMs ?? 0,
+      latestVerifiedSuccessStartedAt: verifiedSuccess?.createdAtMs ?? 0,
+      hasUnfinishedRun: runs.some((run) => run.status === "running" || run.finishedAtMs === null),
+      hasPendingRecovery: inspectUpdateRecoveries({ env }).some(({ record }) =>
+        isUpdateRecoveryPending(record),
+      ),
     };
   } catch {
     // Missing/unreadable update history cannot release rollback originals.
@@ -34,7 +62,7 @@ export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   }
 }
 
-function logicalBytes(directory: string): number {
+export function logicalBytes(directory: string): number {
   let bytes = 0;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
@@ -47,6 +75,8 @@ function classifyCapture(
   directory: string,
   run: UpdateRunRecord,
   latestCompletedStartedAt: number,
+  latestVerifiedStartedAt: number,
+  latestVerifiedSuccessStartedAt: number,
   env: NodeJS.ProcessEnv,
 ): Pick<RecoveryCleanupArtifact, "outcome" | "reason"> {
   if (run.status === "running" || run.finishedAtMs === null) {
@@ -56,10 +86,28 @@ function classifyCapture(
   if (recovery && isUpdateRecoveryPending(recovery)) {
     return { outcome: "protected", reason: "pending-update-recovery" };
   }
+  // A failure that never activated left the original state live; its copy restores nothing.
+  if (isNeverActivatedFailedUpdate(run)) {
+    return { outcome: "candidate", reason: "never-activated-update-capture" };
+  }
+  // An already-current run finished without activating anything; its copy restores nothing.
+  if (isUnchangedUpdate(run)) {
+    return { outcome: "candidate", reason: "unchanged-update-capture" };
+  }
   const sealed =
     fs.existsSync(path.join(directory, "manifest.json")) &&
     !fs.existsSync(path.join(directory, "manifest.json.partial"));
   const capture = run.origin.updateRecoveryCapture;
+  // A verified successful update that started after this failed run finished supersedes
+  // its sealed recovery source; other captures keep their existing rules below.
+  if (
+    sealed &&
+    (run.status === "failed" || run.status === "rolled-back") &&
+    latestVerifiedSuccessStartedAt > run.createdAtMs &&
+    latestVerifiedSuccessStartedAt >= run.finishedAtMs
+  ) {
+    return { outcome: "candidate", reason: "superseded-by-verified-update" };
+  }
   // A sealed baseline from a failed update is its manual recovery source until resolved.
   // Succeeded and skipped (already-current) runs completed without needing it.
   if (
@@ -71,12 +119,21 @@ function classifyCapture(
   ) {
     return { outcome: "protected", reason: "unresolved-failed-update" };
   }
-  if (!(latestCompletedStartedAt > run.finishedAtMs)) {
-    return { outcome: "protected", reason: "awaiting-later-completed-update" };
+  // An incomplete copy may still contain the only pre-failure bytes. A bare
+  // success label without Gateway verification cannot supersede that evidence.
+  if ((sealed ? latestCompletedStartedAt : latestVerifiedStartedAt) > run.finishedAtMs) {
+    return {
+      outcome: "candidate",
+      reason: sealed ? "superseded-update-capture" : "unsealed-update-capture",
+    };
+  }
+  // Its Gateway verified the migrated state, so the copy restores nothing that is still needed.
+  if (isVerifiedSuccessfulUpdate(run)) {
+    return { outcome: "candidate", reason: "verified-update-capture" };
   }
   return {
-    outcome: "candidate",
-    reason: sealed ? "superseded-update-capture" : "unsealed-update-capture",
+    outcome: "protected",
+    reason: sealed ? "awaiting-later-completed-update" : "awaiting-later-verified-update",
   };
 }
 
@@ -86,6 +143,7 @@ export function collectUpdateCaptureInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
+  measureBytes?: boolean;
 }) {
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
@@ -108,6 +166,7 @@ function collectCaptureRootInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
+  measureBytes?: boolean;
 }) {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
@@ -151,7 +210,6 @@ function collectCaptureRootInventory(params: {
     const directory = path.join(root, entry.name);
     const item: RecoveryCleanupArtifact = {
       kind: "update-capture",
-      captureSource: entry.name.startsWith("doctor-") ? "doctor" : "update",
       path: directory,
       runs: [],
       bytes: 0,
@@ -163,7 +221,12 @@ function collectCaptureRootInventory(params: {
       item.bytes = entry.isFile() ? fs.lstatSync(directory).size : 0;
       continue;
     }
-    item.bytes = params.scan ? params.scan.logicalBytes(directory) : logicalBytes(directory);
+    item.bytes =
+      params.measureBytes === false
+        ? 0
+        : params.scan
+          ? params.scan.logicalBytes(directory)
+          : logicalBytes(directory);
     // The producer names each capture by run id and marks it before staging any payload.
     if (
       !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
@@ -173,6 +236,7 @@ function collectCaptureRootInventory(params: {
     ) {
       continue;
     }
+    item.captureSource = entry.name.startsWith("doctor-") ? "doctor" : "update";
     if (!history) {
       item.reason = "unreadable-update-history";
       continue;
@@ -183,11 +247,26 @@ function collectCaptureRootInventory(params: {
         getUpdateRun(entry.name, { env: params.env });
       const doctor = standalone.get(directory);
       if (!run && !doctor) {
-        // Doctor owns its namespace, including incomplete or unrecognized captures.
-        if (
-          entry.name.startsWith("doctor-") ||
-          fs.existsSync(path.join(directory, "manifest.json.partial"))
-        ) {
+        const incomplete =
+          !fs.existsSync(path.join(directory, "manifest.json")) ||
+          fs.existsSync(path.join(directory, "manifest.json.partial"));
+        if (incomplete) {
+          item.detail =
+            "No matching run; explicit retirement requires a later verified successful update and settled recovery.";
+          // Missing history is not success. Explicit retirement needs a verified
+          // successor newer than the capture, with no recovery still pending.
+          if (
+            !history.hasPendingRecovery &&
+            history.latestVerifiedStartedAt > fs.lstatSync(directory).mtimeMs
+          ) {
+            item.reason = "superseded-unsealed-capture";
+            item.detail =
+              "Historical incomplete capture superseded by a later verified successful update. Retire only with an explicit --include-unmanifested path.";
+          }
+          continue;
+        }
+        // Sealed standalone originals remain under Doctor's retention policy.
+        if (entry.name.startsWith("doctor-")) {
           continue;
         }
         if (params.scan && !params.scan.metadata(path.join(directory, "manifest.json"))) {
@@ -212,7 +291,14 @@ function collectCaptureRootInventory(params: {
         item,
         doctor
           ? { outcome: doctor.eligible ? "candidate" : "protected", reason: doctor.reason }
-          : classifyCapture(directory, run!, history.latestCompletedStartedAt, params.env),
+          : classifyCapture(
+              directory,
+              run!,
+              history.latestCompletedStartedAt,
+              history.latestVerifiedStartedAt,
+              history.latestVerifiedSuccessStartedAt,
+              params.env,
+            ),
       );
       if (item.outcome === "candidate") {
         item.detail = doctor ? "standalone Doctor capture" : `update ${run!.status}`;
@@ -232,11 +318,16 @@ function collectCaptureRootInventory(params: {
   return { artifacts, identities };
 }
 
-/** Caller holds the cleanup maintenance lock and passes identities from the confirmed selection. */
+/**
+ * Removes whole capture and database snapshot directories. Caller holds the cleanup
+ * maintenance lock and passes identities from the confirmed selection.
+ */
 export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  /** Releases what the directory alone records; a failure keeps the directory. */
+  beforeRemove?: (item: RecoveryCleanupArtifact) => Promise<void>;
   onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
   for (const [index, item] of params.selected.entries()) {
@@ -252,8 +343,10 @@ export async function retireUpdateCaptures(params: {
         current.dev !== expected.dev ||
         current.ino !== expected.ino
       ) {
-        throw new Error("update capture changed after selection");
+        throw new Error("directory changed after selection");
       }
+      await params.beforeRemove?.(item);
+      params.assertCurrent();
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {
         if (name !== UPDATE_CAPTURE_PRIVACY_MARKER) {
@@ -265,10 +358,10 @@ export async function retireUpdateCaptures(params: {
       await fs.promises.rm(item.path, { recursive: true });
       item.outcome = "removed";
       item.removedBytes = item.bytes;
-      item.reason = "update-capture-retired";
+      item.reason = `${item.kind}-retired`;
     } catch (error) {
       item.outcome = "failed";
-      item.reason = "update-capture-retirement-failed";
+      item.reason = `${item.kind}-retirement-failed`;
       item.detail = String(error);
     }
   }

@@ -22,7 +22,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as sessionTranscript from "../../config/sessions/transcript.js";
-import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
 import {
   cleanupManagedOutgoingMediaRecords,
@@ -30,7 +29,6 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { buildRestartSafeChatTranscriptState } from "../../gateway/server-methods/chat-restart-recovery.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -39,6 +37,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
@@ -82,17 +81,21 @@ afterEach(() => {
 
 describe("WebChat message tool internal source reply", () => {
   it.each([
-    { sessionKey: "agent:main:dashboard:recovered-cli", delivers: true },
-    { sessionKey: "agent:main:webchat:dm:recovered-cli", delivers: true },
-    { sessionKey: "agent:main:telegram:direct:123", delivers: false },
+    { sessionKey: "agent:main:dashboard:cli", currentChannelProvider: "webchat", delivers: true },
+    { sessionKey: "agent:main:webchat:dm:cli", currentChannelProvider: "webchat", delivers: true },
+    {
+      sessionKey: "agent:main:telegram:direct:123",
+      currentChannelProvider: "telegram",
+      delivers: false,
+    },
   ])(
-    "keeps targetless recovered CLI progress internal for $sessionKey",
-    async ({ sessionKey, delivers }) => {
+    "keeps targetless WebChat progress internal for $sessionKey",
+    async ({ sessionKey, currentChannelProvider, delivers }) => {
       await withOpenClawTestState(
-        { layout: "state-only", prefix: "recovered-cli-source-" },
+        { layout: "state-only", prefix: "cli-source-" },
         async (state) => {
-          const sessionId = "recovered-cli-session";
-          const runId = "recovery-run";
+          const sessionId = "cli-session";
+          const runId = "progress-run";
           const storePath = path.join(
             state.stateDir,
             "agents",
@@ -101,40 +104,18 @@ describe("WebChat message tool internal source reply", () => {
             "sessions.json",
           );
           const scope = { agentId: "main", sessionKey, sessionId, storePath };
-          const { sessionLifecyclePatch } = buildRestartSafeChatTranscriptState({
-            admission: { requestFingerprint: "cli-chat-request" },
-            clientRunId: "interrupted-cli-run",
-            startedAt: 1,
-            sourceIngress: "internal",
-          });
-          const entry = {
-            ...sessionLifecyclePatch,
-            sessionId,
-            updatedAt: 2,
-            restartRecoveryDeliveryRunId: runId,
-          };
-          await replaceSessionEntry(scope, entry);
-          const recovery = resolveAgentRestartRecoveryContext({
-            isRestartRecoveryResumeRun: true,
-            canUseInternalRuntimeHandoff: true,
-            expectedExistingSessionId: sessionId,
-            resolvedSessionId: sessionId,
-            resolvedSessionKey: sessionKey,
-            runId,
-            sessionEntry: entry,
-          });
-          expect(recovery?.pinnedWidgetAuthoring).toBeUndefined();
+          await replaceSessionEntry(scope, { sessionId, updatedAt: 2 });
           const tool = createCurrentSourceMessageTool({
             agentSessionKey: sessionKey,
             runSessionKey: sessionKey,
             sessionId,
             agentId: "main",
             runId,
-            currentChannelProvider: recovery?.messageChannel,
+            currentChannelProvider,
           });
-          const send = tool.execute("recovered-progress", {
+          const send = tool.execute("current-progress", {
             action: "send",
-            message: "Still working after restart.",
+            message: "Still working.",
             final: false,
           });
           if (!delivers) {
@@ -151,9 +132,7 @@ describe("WebChat message tool internal source reply", () => {
             .map(readTranscriptEventMessage)
             .filter((message) => message?.role === "assistant");
           expect(assistants).toHaveLength(1);
-          expect(assistants[0]?.content).toEqual([
-            { type: "text", text: "Still working after restart." },
-          ]);
+          expect(assistants[0]?.content).toEqual([{ type: "text", text: "Still working." }]);
           expect(assistants[0]).toMatchObject({
             __openclaw: { runId },
             openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
@@ -388,32 +367,95 @@ describe("WebChat message tool internal source reply", () => {
     },
   );
 
-  it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
-    const tool = createCurrentSourceMessageTool({
-      agentSessionKey: "agent:main:main",
-      sourceReplyDeliveryMode: "message_tool_only",
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: "agent:main:subagent:child",
-        sourceTool: "sessions_send",
-      },
-    });
+  it("reports an inter-session send in an externally bound session as a transcript record", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "inter-session-external-" },
+      async (state) => {
+        const sessionKey = "agent:main:main";
+        const sessionId = "whatsapp-main";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          {
+            sessionId,
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "whatsapp", to: "+15550001111" },
+            }),
+          },
+        );
+        const tool = createCurrentSourceMessageTool({
+          agentSessionKey: sessionKey,
+          agentId: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "sessions_send",
+          },
+        });
 
-    const toolResult = await tool.execute("message-call", {
-      action: "send",
-      message: "Child task finished.",
-    });
+        const toolResult = await tool.execute("message-call", {
+          action: "send",
+          message: "Child task finished.",
+        });
 
-    expect(toolResult.details).toMatchObject({
-      target: "current-run",
-      sourceReplySink: "internal-ui",
-    });
-    expect(toolResult.content).toEqual([
-      {
-        type: "text",
-        text: "Recorded reply in the current session transcript via internal-ui. This send did not deliver it to an external channel.",
+        expect(toolResult.details).toMatchObject({
+          target: "current-run",
+          sourceReplySink: "internal-ui",
+        });
+        expect(toolResult.content).toEqual([
+          {
+            type: "text",
+            text: "Recorded reply in the current chat history via internal-ui. This send did not deliver it to an external channel.",
+          },
+        ]);
+        expect(
+          readEmbeddedMessageDeliveryFact(asOptionalRecord(toolResult.details)?.messageDelivery)
+            ?.sourceReplyDelivered,
+        ).toBeUndefined();
       },
-    ]);
+    );
+  });
+
+  it("answers a Control UI user from an inter-session result turn", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "inter-session-dashboard-" },
+      async (state) => {
+        const sessionKey = "agent:main:dashboard:settle";
+        const sessionId = "dashboard-settle";
+        const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, updatedAt: 1, delivery: { kind: "internal" } },
+        );
+        const tool = createCurrentSourceMessageTool({
+          agentSessionKey: sessionKey,
+          agentId: "main",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceTool: "subagent_announce",
+          },
+        });
+
+        const toolResult = await tool.execute("message-call", {
+          action: "send",
+          message: "Your dates are corrected.",
+        });
+
+        expect(toolResult.content).toEqual([
+          {
+            type: "text",
+            text: "Sent visible reply to the current source conversation via internal-ui.",
+          },
+        ]);
+        expect(
+          readEmbeddedMessageDeliveryFact(asOptionalRecord(toolResult.details)?.messageDelivery)
+            ?.sourceReplyDelivered,
+        ).toBe(true);
+      },
+    );
   });
 
   it("stages a trusted HTML buffer before acknowledging the current-source send", async () => {

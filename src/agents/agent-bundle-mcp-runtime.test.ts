@@ -54,6 +54,7 @@ import {
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js";
+import { refreshMcpCatalog } from "./agent-bundle-mcp-recovery.test-support.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { startRequesterScopedMcpProofServer } from "./agent-bundle-mcp-requester.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
@@ -491,18 +492,16 @@ async function startSessionExpiryServer(stateful: boolean) {
           res.writeHead(404).end("Session not found");
         } else if (message.method === "notifications/initialized") {
           res.writeHead(202).end();
+        } else if (message.method === "tools/list") {
+          reply({
+            tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
+          });
+        } else if (stateful && message.method === "tools/call") {
+          reply({
+            content: [{ type: "text", text: `recovered ${sessionId}` }],
+          });
         } else {
-          if (message.method === "tools/list") {
-            reply({
-              tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-            });
-          } else if (stateful && message.method === "tools/call") {
-            reply({
-              content: [{ type: "text", text: `recovered ${sessionId}` }],
-            });
-          } else {
-            res.writeHead(405).end();
-          }
+          res.writeHead(405).end();
         }
       })().catch(() => res.destroy());
     }
@@ -886,63 +885,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).not.toContain(secret);
   });
 
-  it.each([
-    {
-      policy: "server include/exclude",
-      serverName: "docs",
-      tools: ["search_docs", "read_docs", "admin_delete"],
-      server: { toolFilter: { include: ["*_docs", "admin_*"], exclude: ["admin_*"] } },
-      capabilities: { tools: {} },
-      expectedTools: ["read_docs", "search_docs"],
-      expectedServer: { toolCount: 2, tools: { filteredCount: 1 } },
-    },
-    {
-      policy: "session denials including synthetic tools",
-      serverName: "docs",
-      tools: ["search_docs", "read_docs"],
-      server: {},
-      toolOverrides: { mcpToolsDeny: { docs: ["read_docs", "resources_read"] } },
-      capabilities: { tools: {}, resources: {} },
-      expectedTools: ["search_docs"],
-      expectedServer: { toolCount: 1 },
-      expectedDenied: [{ serverName: "docs", toolName: "read_docs", deniedBySession: true }],
-      expectedMaterialized: ["docs__resources_list", "docs__search_docs"],
-    },
-    {
-      policy: "own-property session denials",
-      serverName: "constructor",
-      tools: ["slow_tool"],
-      server: {},
-      toolOverrides: { mcpToolsDeny: { docs: ["slow_tool"] } },
-      capabilities: { tools: {} },
-      expectedTools: ["slow_tool"],
-      expectedServer: { toolCount: 1 },
-    },
-  ])("filters the MCP catalog with $policy", async (row) => {
-    const { runtime } = await stdioRuntime(
-      row.serverName,
-      {
-        capabilities: row.capabilities,
-        tools: row.tools.map((name) => toolDefinition(name)),
-      },
-      {
-        inWorkspace: true,
-        server: row.server,
-        toolOverrides: "toolOverrides" in row ? row.toolOverrides : undefined,
-      },
-    );
-    const catalog = await runtime.getCatalog();
-    expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual(row.expectedTools);
-    expect(catalog.servers[row.serverName]).toMatchObject(row.expectedServer);
-    if (row.expectedDenied) {
-      expect(catalog.sessionDeniedTools).toMatchObject(row.expectedDenied);
-    }
-    if ("expectedMaterialized" in row) {
-      const materialized = await materializeTools({ runtime });
-      expect(materialized.tools.map((tool) => tool.name)).toEqual(row.expectedMaterialized);
-    }
-  });
-
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
     const safePrefix = "x".repeat(1_199);
     const { runtime } = await stdioRuntime("metadata", {
@@ -954,24 +896,20 @@ describe("session MCP runtime", () => {
   });
 
   it("retires sessions that exit during catalog refresh", async ({ signal }) => {
-    const {
-      runtime,
-      logPath,
-      file: fixtureFile,
-    } = await stdioRuntime("child", ({ file }) => ({
+    const { runtime, logPath, file } = await stdioRuntime("child", ({ file: pathFor }) => ({
       capabilities: { tools: { listChanged: true } },
       notifyListChangedAfterFirstList: true,
-      notifyListChangedReleasePath: file("notify.release"),
+      notifyListChangedReleasePath: pathFor("notify.release"),
       exitOnListCall: 2,
     }));
     expect((await runtime.getCatalog()).tools).toHaveLength(1);
-    await fs.writeFile(fixtureFile("notify.release"), "release", "utf8");
+    await fs.writeFile(file("notify.release"), "release", "utf8");
     await withinTest(receipts.waitFor(logPath, "notify tools/list_changed"), signal);
+    await fs.rm(file("notify.release"));
     await waitForInvalidation(runtime, signal);
-    const refreshedCatalog = await runtime.getCatalog();
+    const refreshedCatalog = await refreshMcpCatalog(runtime, signal);
     expectToolNames(refreshedCatalog, ["slow_tool"]);
     expect(refreshedCatalog.diagnostics ?? []).toEqual([]);
-    // Refresh exposes only the replacement generation, never stale failure diagnostics.
     await expectHealthyCall(runtime, "child");
   });
 
@@ -2468,8 +2406,8 @@ describe("disposeSession timeout", () => {
         "notify tools/list_changed during tools/call",
       );
       await waitForInvalidation(runtime, signal);
-      const now = Date.now;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 5_001);
+      const realNow = performance.now.bind(performance);
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => realNow() + 5_001);
       let retriedCatalog;
       try {
         await runtime.getCatalog();

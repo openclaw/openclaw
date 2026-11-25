@@ -8,18 +8,10 @@ import { createAnchorFixture } from "./anchor-protocol.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Preload injected into the anchor subprocess via `--import`; it wraps Date.now
-// so that a marker file (written by the test after cleanup starts) sustains a
-// persistent wall-clock offset for the whole retirement window. performance.now
-// is untouched, which is exactly the split the fix relies on.
 const CLOCK_STEP_PRELOAD = fileURLToPath(
   new URL("./service-child-group-anchor.clock-step.preload.mjs", import.meta.url),
 );
 
-// The anchor command keeps a descendant that ignores SIGTERM alive, so after the
-// root command exits the process group is still non-empty and the anchor's
-// cleanup loop keeps re-reading the retirement budget instead of draining
-// immediately. This is what makes a pre-fix wall-clock deadline observable.
 const PERSIST_GROUP_SCRIPT = `
 const { spawn } = require("child_process");
 spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000);"], { stdio: "ignore" });
@@ -66,11 +58,6 @@ async function runClockStep(offsetMs: number) {
   return { result, closingAfterCancel };
 }
 
-// Integration-level regression through the real anchor subprocess: a sustained
-// forward wall-clock jump during cleanup must not collapse the retirement
-// budget. Post-fix the anchor closes only after the full ~5s term grace
-// (monotonic time); pre-fix the Date.now deadline collapses ~0.5s after the
-// jump and SIGKILLs early. Skipped on Windows (POSIX process-group model).
 describe("service-child-group-anchor clock-step regression", () => {
   it.skipIf(process.platform === "win32")(
     "keeps retirement on monotonic time under a forward wall-clock jump",

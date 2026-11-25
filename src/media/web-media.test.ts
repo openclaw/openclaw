@@ -13,10 +13,10 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { readImageMetadataFromHeader } from "./image-header-metadata.js";
 import {
   createImageProcessor,
   getImageMetadata,
-  readImageMetadataFromHeader,
   readImageProbeFromHeader,
   resizeToJpeg,
 } from "./media-services.js";
@@ -380,6 +380,38 @@ describe("loadWebMedia", () => {
       media.loadWebMediaRaw(file, { maxBytes: 1024 * 1024, localRoots: [allowed] }),
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "hands staged files under a missing folder of a symlinked root to host readers (#194406)",
+    async () => {
+      const base = tempDirs.make("staged-host-read-", fixtureRoot);
+      const real = path.join(base, "real");
+      const alias = path.join(base, "alias");
+      await fs.mkdir(path.join(real, "workspace"), { recursive: true });
+      await fs.symlink(real, alias);
+      const root = path.join(alias, "workspace");
+      const staged = path.join(root, "outbound", "staged.png");
+      const readFile = vi.fn(async () => TINY_PNG);
+
+      const result = await media.loadWebMedia(staged, {
+        maxBytes: 1024 * 1024,
+        localRoots: [root],
+        readFile,
+      });
+      expect([result.kind, result.buffer]).toEqual(["image", TINY_PNG]);
+      expect(readFile).toHaveBeenCalledWith(staged);
+
+      readFile.mockClear();
+      await expectAccessError(
+        media.loadWebMedia(path.join(alias, "outbound", "staged.png"), {
+          maxBytes: 1024 * 1024,
+          localRoots: [root],
+          readFile,
+        }),
+      );
+      expect(readFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves home-relative paths through allowed local roots", async () => {
     await withEnvAsync({ OPENCLAW_HOME: fixtureRoot }, async () => {

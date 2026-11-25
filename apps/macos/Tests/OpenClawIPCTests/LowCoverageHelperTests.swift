@@ -88,6 +88,28 @@ struct LowCoverageHelperTests {
         #expect(result.stderr.contains("stderr-1999"))
     }
 
+    @Test(arguments: [#"abc\377"#, #"abc\342\234"#])
+    func `shell executor keeps valid output around malformed utf8`(bytes: String) async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "printf '\(bytes)'; printf '\(bytes)' 1>&2"],
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+        #expect(result.success == true)
+        #expect(result.stdout == "abc\u{FFFD}")
+        #expect(result.stderr == "abc\u{FFFD}")
+    }
+
+    @Test func `shell executor keeps output before a split character on timeout`() async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", #"printf 'building \342\234'; sleep 5"#],
+            cwd: nil,
+            env: nil,
+            timeout: 1)
+        #expect(result.timedOut == true)
+        #expect(result.stdout == "building \u{FFFD}")
+    }
+
     @Test func `shell executor finishes when a descendant retains output handles`() async {
         let startedAt = ContinuousClock.now
         let result = await ShellExecutor.runDetailed(
@@ -165,6 +187,9 @@ struct LowCoverageHelperTests {
             + "-o ExitOnForwardFailure=yes -n -N -L 18789:127.0.0.1:18789 -- user@host"
         #expect(PortGuardian.isTunnelCommand(full, localPort: 18789))
         #expect(PortGuardian.isTunnelCommand("ssh -N -L18789:127.0.0.1:18789 user@host", localPort: 18789))
+        // v2026.11.1 shares this ledger and drops receipts it cannot match, so the matcher stays exactly its
+        // shape and RemotePortTunnel never names a bind address.
+        #expect(!PortGuardian.isTunnelCommand("ssh -N -L 127.0.0.1:18790:127.0.0.1:18790 user@host", localPort: 18790))
 
         // Wrong local port, missing -N (interactive forward), other binaries, or a
         // forward to a non-loopback host are not ours to kill.

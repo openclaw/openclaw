@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
+import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
@@ -16,8 +17,8 @@ const userTextMessage = (text: string, seq = 1) => ({
   content: [{ type: "text", text }],
   __openclaw: { seq },
 });
-const internalMessage = (text: string, sourceTool: string) => ({
-  ...userTextMessage(text),
+const internalMessage = (text: string, sourceTool: string, seq = 1) => ({
+  ...userTextMessage(text, seq),
   provenance: { kind: "internal_system", sourceTool },
 });
 const mediaMessage = (text: string, seq: number, url: string) => ({
@@ -157,9 +158,77 @@ it.each([
       ]
     : [];
   const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
-  expectProjection([completion, ...controls, answer], [...controls, answer]);
+  const continued =
+    sourceTool === "subagent_settle"
+      ? { ...answer, __openclaw: { ...answer["__openclaw"], continuation: { source: "subagent" } } }
+      : answer;
+  expectProjection([completion, ...controls, answer], [...controls, continued]);
   expect(completion).toEqual(original);
 });
+
+it.each([
+  ["heartbeat", { role: "user", content: [{ type: "text", text: HEARTBEAT_PROMPT }] }],
+  ["exec completion", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 2)],
+])("keeps a %s boundary on a tool-shaped user row", (name, hidden) => {
+  const toolResult = {
+    role: "user",
+    content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }],
+    __openclaw: { seq: 3 },
+  };
+  const toolEnvelope = { ...userTextMessage("done", 5), toolCallId: "tool-1" };
+  const answer = assistantTextMessage("Disk usage crossed 95 percent.", 4);
+  for (const toolRow of [toolResult, toolEnvelope]) {
+    expectProjection(
+      [hidden, toolRow, answer],
+      [
+        {
+          ...toolRow,
+          __openclaw: {
+            ...toolRow["__openclaw"],
+            turnBoundary: true,
+            ...(name === "heartbeat" ? {} : { continuation: { source: "exec" } }),
+          },
+        },
+        answer,
+      ],
+    );
+  }
+});
+
+it.each([
+  ["exec", internalMessage("Exec completed (amber-ri, code 0) :: output", "exec", 3), true],
+  ["restart", internalMessage("Gateway restarted; continue.", "restart", 3), true],
+  [
+    "subagent",
+    {
+      ...userTextMessage("child finished", 3),
+      provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+    },
+    false,
+  ],
+  ["heartbeat", userTextMessage(HEARTBEAT_PROMPT, 3), true],
+] as const)(
+  "marks the row after a hidden %s wake as continuing or starting a turn",
+  (source, wake, turnBoundary) => {
+    const earlier = assistantTextMessage("long final answer", 2);
+    const followUp = assistantTextMessage("should I fix points 1-4?", 4);
+    // The earlier answer stays its own row; only the wake's own work continues the turn.
+    expectProjection(
+      [earlier, { ...wake, timestamp: 100 }, followUp],
+      [
+        earlier,
+        {
+          ...followUp,
+          __openclaw: {
+            seq: 4,
+            ...(turnBoundary ? { turnBoundary: true } : {}),
+            ...(source === "heartbeat" ? {} : { continuation: { source } }),
+          },
+        },
+      ],
+    );
+  },
+);
 
 it.each(["no_r", "NO_R", "No_Repl"])("keeps ordinary %s replies visible", (text) => {
   const messages = [
@@ -201,6 +270,29 @@ it("hides heartbeat prompt and ok acknowledgements from visible history", () => 
       answer,
     ],
     [{ ...answer, __openclaw: { seq: 4, turnBoundary: true } }],
+  );
+});
+
+it.each([false, true])("preserves separate reasoning items after a heartbeat: %s", (heartbeat) => {
+  const reasoning = ["first-item", "second-item"].map((itemId, index) => ({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: "Checking the next step." }],
+    stopReason: "stop",
+    __openclaw: { id: itemId, seq: index + 2, runId: "run-1" },
+  }));
+  const answer = assistantTextMessage("Finished.", 4);
+  expectProjection(
+    [...(heartbeat ? [userTextMessage(HEARTBEAT_PROMPT)] : []), ...reasoning, answer],
+    [
+      heartbeat
+        ? {
+            ...reasoning[0],
+            __openclaw: { id: "first-item", seq: 2, runId: "run-1", turnBoundary: true },
+          }
+        : reasoning[0],
+      reasoning[1],
+      answer,
+    ],
   );
 });
 
@@ -344,3 +436,68 @@ it.each(["state_contention", "unknown"])(
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   },
 );
+
+it("projects recorded subagent completions without exposing the private continuation", () => {
+  const completion = { runId: "child-run", sessionKey: "agent:main:subagent:w", label: "W" };
+  const input = buildPersistedUserTurnMessage({
+    text: "PRIVATE CHILD RESULT",
+    timestamp: 10,
+    idempotencyKey: "completion-turn:user",
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "subagent_announce",
+      sourceSessionKey: completion.sessionKey,
+    },
+    subagentCompletions: [completion],
+    display: false,
+  });
+  const projected = projectChatDisplayMessages([input]);
+  expect(projected).toMatchObject([
+    { role: "assistant", phase: "commentary", subagentCompletions: [completion] },
+  ]);
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE");
+  expect(projectChatDisplayMessages(projected)).toEqual(projected);
+  // A settle wake's receipt keeps the wake's continuation, so the resumed run stays in its turn.
+  const settle = { ...input, provenance: { ...input.provenance, sourceTool: "subagent_settle" } };
+  expect(projectChatDisplayMessages([settle])).toMatchObject([
+    { subagentCompletions: [completion], __openclaw: { continuation: { source: "subagent" } } },
+  ]);
+  // The completion row follows activity nested under the preceding answer.
+  const at = (message: object, rawSeq: number, activity?: object) => ({
+    ...message,
+    __openclaw: {
+      ...(message as Record<string, object>)["__openclaw"],
+      id: rawSeq,
+      transcriptPosition: { source: "reader-generation", rawSeq, activity },
+    },
+  });
+  const positioned = projectChatDisplayMessages([
+    at({ role: "assistant", content: "Before." }, 1),
+    at(input, 2),
+    at({ role: "assistant", content: "After." }, 3),
+    at({ role: "toolResult", toolName: "read", content: "Nested." }, 4, {
+      afterRawSeq: 1,
+      scopeId: "nested-scope",
+      startOrder: 0,
+    }),
+  ]);
+  expect(
+    composeTranscriptDisplay(positioned).map((m) => (m["__openclaw"] as { id: number }).id),
+  ).toEqual([1, 4, 2, 3]);
+  // A direct agents_wait result keeps its completion facts but not the private child output.
+  const collected = { ...completion, status: "done", result: "private-result".repeat(4_000) };
+  const mixed = { completed: [collected], errors: [{ runId: "gone", error: "not_found" }] };
+  const direct = projectChatDisplayMessages([
+    {
+      role: "toolResult",
+      toolName: "agents_wait",
+      toolCallId: "direct-collect",
+      content: [{ type: "text", text: JSON.stringify(mixed) }],
+      details: mixed,
+    },
+  ])[0]!;
+  expect(direct.subagentCompletions).toEqual([completion]);
+  expect(direct.subagentCollectionErrors).toBe(1);
+  expect(JSON.stringify(direct)).not.toContain(collected.result);
+  expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
+});

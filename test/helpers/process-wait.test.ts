@@ -106,6 +106,28 @@ it("observes real process death before and after abort", async ({ signal, onTest
   ).resolves.toBeUndefined();
 });
 
+it("rejects an abort event without rechecking an unobserved process exit", async ({ signal }) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(fsSync, "readFileSync").mockReturnValue("State:\tS (sleeping)\nThreads:\t1\n");
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+  const cancelled = cancellation(signal);
+  const remove = vi.spyOn(cancelled.signal, "removeEventListener");
+  const waiting = waitForDead(42, cancelled.signal, "reject");
+  const rejected = expect(waiting).rejects.toMatchObject({
+    message: "process still alive: 42",
+    cause: cancelled.reason,
+  });
+  kill.mockImplementation(() => {
+    throw Object.assign(new Error("process missing"), { code: "ESRCH" });
+  });
+  cancelled.abort();
+  await rejected;
+  expect(kill).toHaveBeenCalledTimes(1);
+  expect(remove).toHaveBeenCalledTimes(1);
+  // Initial observation still wins for an already-dead PID and aborted signal.
+  await expect(waitForDead(42, cancelled.signal, "reject")).resolves.toBeUndefined();
+});
+
 it("stops waiting when a Linux process is a zombie", async ({ signal }) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(process, "kill").mockImplementation(() => true);

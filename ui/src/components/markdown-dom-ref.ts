@@ -1,7 +1,11 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
+import type { ChatRowDisplay } from "../lib/chat/row-display-facts.ts";
 import type { MarkdownContent } from "../lib/markdown-content.ts";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
+import {
+  MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR,
+  registerSessionTitleTarget,
+} from "./markdown-link-display.ts";
 
 export type MarkdownContentValue =
   | MarkdownContent
@@ -20,9 +24,12 @@ export function createMarkdownRef(
     content: MarkdownContentValue;
     media?: MarkdownDomMedia;
     incremental?: boolean;
+    /** Finish a layout-dependent sanitized projection in the same DOM commit. */
+    prepareContent?: (content: MarkdownContent) => MarkdownContent;
     connected?: boolean;
     onUpdate?: () => void;
   },
+  display?: (() => ChatRowDisplay | undefined) | null,
 ): (element: ParentNode) => void {
   // Fragment consumers attach during construction; ordinary element refs run unowned.
   const [owner, setOwner] = createSignal<MarkdownDomReconciler | undefined>(undefined, {
@@ -33,7 +40,9 @@ export function createMarkdownRef(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pendingPreview = false;
   const cancel = () => {
-    clearTimeout(timer);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
     timer = undefined;
     pendingPreview = false;
   };
@@ -74,7 +83,11 @@ export function createMarkdownRef(
       }
       cancel();
       if (typeof content === "string" || "fragment" in content) {
-        reconciler.updateHtml(content, value.media, value.incremental);
+        reconciler.updateHtml(
+          value.prepareContent ? value.prepareContent(content) : content,
+          value.media,
+          value.incremental,
+        );
       } else {
         reconciler.update(content.messageKey, content.source, parts!, value.media);
       }
@@ -104,7 +117,13 @@ export function createMarkdownRef(
     cancel();
     current?.dispose();
     // Create the boundary synchronously so a fragment caller can return its markers.
-    current = new MarkdownDomReconciler(element, registerSessionTitleTarget);
+    current = new MarkdownDomReconciler(
+      element,
+      display
+        ? (target, label) => registerSessionTitleTarget(target, label, display())
+        : registerSessionTitleTarget,
+      display ? MARKDOWN_LINK_DISPLAY_TARGET_SELECTOR : undefined,
+    );
     setOwner(current);
   };
 }

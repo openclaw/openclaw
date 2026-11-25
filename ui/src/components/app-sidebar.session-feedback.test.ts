@@ -39,6 +39,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 import "./app-sidebar.tsx";
+import { setSessionsGrouping } from "./session-organizer-menu.runtime.ts";
 
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
@@ -293,13 +294,13 @@ describe("sidebar session feedback", () => {
     );
     await selectFilter(sidebar, "status:all");
     sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = keys[0]!;
+    sidebar.sessionKey = keys.at(-1)!;
     await settleLitElement(sidebar);
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).not.toBeNull());
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     const focusedButton = button();
     focusedButton.focus();
-    sidebar.sessionKey = keys[1]!;
+    sidebar.sessionKey = keys.at(-2)!;
     await settleLitElement(sidebar);
     expect(button()).toBe(focusedButton);
     expect(document.activeElement).toBe(focusedButton);
@@ -317,7 +318,12 @@ describe("sidebar session feedback", () => {
     expect(harness.list).toHaveBeenCalledTimes(1);
     expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(SIDEBAR_SESSION_PAGE_SIZE);
     expect(button().textContent).toContain("Loading");
-    const localMore = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!;
+    // Show more renders once its lazy module loads.
+    const localMore = await vi.waitFor(() => {
+      const more = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
+      expect(more).not.toBeNull();
+      return more!;
+    });
     expect(localMore.disabled).toBe(false);
     localMore.click();
     await settleLitElement(sidebar);
@@ -340,6 +346,40 @@ describe("sidebar session feedback", () => {
     });
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).toBeNull());
     expect(sidebar.querySelector('[data-session-key="agent:main:last"]')).not.toBeNull();
+  });
+
+  it("does not expand a new grouping when a previous grouping's roster page settles", async () => {
+    const keys = Array.from({ length: 40 }, (_, index) => `agent:main:page-${index}`);
+    const harness = createSessionsHarness("main", keys);
+    harness.list.mockResolvedValue({
+      ...harness.sessions.state.result!,
+      hasMore: true,
+      nextOffset: 40,
+    });
+    const { sidebar } = await mountSidebar(
+      createGateway({} as GatewayBrowserClient),
+      harness.sessions,
+    );
+    await selectFilter(sidebar, "status:all");
+    // Flat view may auto-load the visible page before the click; either path
+    // must wait on this pending page.
+    const pending = createDeferred<typeof harness.sessions.state.result>();
+    harness.list.mockImplementation(async () => (await pending.promise)!);
+    setSessionsGrouping(sidebar.sessionOrganizer, "none");
+    await settleLitElement(sidebar);
+    sidebar.querySelector<HTMLButtonElement>(pagination)!.click();
+    setSessionsGrouping(sidebar.sessionOrganizer, "category");
+    await settleLitElement(sidebar);
+    pending.resolve({
+      ...harness.sessions.state.result!,
+      hasMore: false,
+      nextOffset: 41,
+      sessions: [{ key: "agent:main:page-last", kind: "direct", updatedAt: 1 }],
+    });
+    await vi.waitFor(() => expect(sidebar.querySelector(pagination)).toBeNull());
+    expect(
+      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
+    ).toHaveLength(15);
   });
 
   it("waits for catalog hydration, refresh, and hidden pages before explaining an empty list", async () => {

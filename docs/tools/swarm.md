@@ -418,31 +418,15 @@ relevant config key in the error.
 
 ## Observe a Swarm
 
-Keep the parent session open in Chat while a swarm is active. The Control UI and
-native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
-between the transcript and composer.
+In the Control UI, open **Subagents** from the parent chat’s side panel to
+follow available swarm workers. Select a worker to open its transcript.
+The parent turn’s activity keeps the launch and collector results even after
+worker sessions expire.
 
-In the Control UI, cards show queued, running, completed, and **failed or stopped**
-counts with visible status markers. The combined count includes failures, timeouts,
-and cancelled children; the summary does not report these outcomes separately.
-Click or tap **Child details**, or activate it with the keyboard, to expand available child names, status icons, and run durations. The
-view shows up to four active groups plus the latest completed group, with an
-explicit count when more groups are active. Each card displays at most 64 markers
-and 64 child details. Its counts include every accepted group member.
-
-The latest completed group's counts remain visible after the children finish,
-including when the parent fails before writing its final response. Groups whose
-children all succeed use a compact completion row. Activate the row to expand
-child details and the final-response reminder. Groups with running, queued,
-failed, or stopped children keep their visible status markers and counts. These
-are child outcomes, not confirmation that the parent produced a synthesis. Counts
-come from retained collector records, so reloading the page or cleaning up a
-child session does not reduce the reported total. They expire with the existing
-collector retention policy. This is not a permanent execution archive.
-
-Native Android, iOS, and macOS chat surfaces still show active-only phase-grouped
-grids, capped at 256 markers per phase with an overflow count. Accessible labels
-identify each child's status. Native clients present killed and timed-out children
+Native Android, iOS, and macOS chat surfaces show active-only phase-grouped
+grids between the transcript and composer, capped at 256 markers per phase with
+an overflow count. Accessible labels identify each child's status.
+Native clients present killed and timed-out children
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
@@ -614,6 +598,13 @@ type AgentsWaitResult = {
   }>;
 };
 ```
+
+`not_found` means no collector run with that ID is visible to the caller. When
+every requested ID is your own announcing child (started without `collect=true`
+and with completion messages enabled), the call is rejected as an input error
+instead: its result arrives as a completion message to your session, so continue
+other work or end the turn. Mixed batches keep their other results and report
+those children as `not_found`.
 
 A completed item can contain partial `structured` data and still have
 `status: "failed"` when the provider or runtime fails afterward. In that case,

@@ -2,8 +2,8 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { createReplyActorFixture } from "./reply-actor.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 export async function getRawExecuteAgentTurnForTest() {
   const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
@@ -14,7 +14,7 @@ export async function getRawExecuteAgentTurnForTest() {
     if (params.replyOperation || !sessionKey) {
       return await execute(...args);
     }
-    let actor: ReturnType<typeof createReplyRecoveryActorFixture> | undefined;
+    let actor: ReturnType<typeof createReplyActorFixture> | undefined;
     try {
       return await withSessionTurn(
         {
@@ -28,7 +28,7 @@ export async function getRawExecuteAgentTurnForTest() {
             return await execute(...args);
           }
           const { run } = params.followupRun;
-          actor = createReplyRecoveryActorFixture({
+          actor = createReplyActorFixture({
             operation: replyOperation,
             agentId: run.agentId,
             sessionKey,

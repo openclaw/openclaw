@@ -2,6 +2,11 @@ import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { validateSessionsAssignOwnerParams } from "../index.js";
+import {
+  validateSessionMemberAddParams,
+  validateSessionMemberRemoveParams,
+  validateSessionMemberSetAccessParams,
+} from "../validators/sessions.js";
 import { schemaValidation } from "./protocol-validation.test-support.js";
 import * as Catalog from "./sessions-catalog.js";
 import { SessionRowSchema } from "./sessions-row.js";
@@ -44,6 +49,16 @@ const catalog = {
 };
 const listed = (overrides: object) => ({ catalogs: [{ ...catalog, ...overrides }] });
 describe("session catalog schemas", () => {
+  it("requires list and read on a discovered route", () => {
+    const methods = { list: "notebook.list", read: "notebook.read" };
+    checkCatalog(
+      Catalog.SessionsCatalogRouteResultSchema,
+      { catalogId: "notebook", routeSegment: "notes", methods },
+      [{ methods: { list: methods.list } }, { methods: { read: methods.read } }],
+    );
+    expect(Value.Check(Catalog.SessionsCatalogRouteResultSchema, null)).toBe(true);
+  });
+
   it("accepts only the closed prefix-search contract", () => {
     checkCatalog(Catalog.SessionCatalogShareRouteSchema, SHARE_ROUTE, [
       { kind: "future-route" },
@@ -94,6 +109,28 @@ describe("session catalog schemas", () => {
         shareRoute: SHARE_ROUTE,
         hosts: [{ ...host, canStartTerminal: true, sessions: [session] }],
       }),
+    );
+  });
+
+  it("bounds a source-owned explanation for unavailable continuation", () => {
+    checkCatalog(
+      Catalog.SessionCatalogSessionSchema,
+      {
+        threadId: "thread-1",
+        status: "stored",
+        archived: false,
+        canContinue: false,
+        canArchive: false,
+        continuationUnavailableReason: "Release this source before continuing.",
+        continuationUnavailableReasonCode: "source-handoff-required",
+      },
+      [
+        { continuationUnavailableReason: "" },
+        { continuationUnavailableReason: "x".repeat(385) },
+        { continuationUnavailableReason: true },
+        { continuationUnavailableReasonCode: "unknown" },
+        { continuationUnavailableReasonCode: true },
+      ],
     );
   });
 
@@ -190,6 +227,7 @@ describe("SessionRowSchema", () => {
     const row = {
       ...baseRow,
       lastRunId: "run-settled",
+      backgroundProcessCount: 1,
       snapshotAt: 200,
       activeLeafEntryId: "leaf-rendered",
       activeModel: "fixture-model",
@@ -209,7 +247,6 @@ describe("SessionRowSchema", () => {
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
-      restartRecoveryStatus: "tombstoned",
       permissionMode: "workspace",
       sandboxMode: "off",
       communication: { receive: "ask" },
@@ -224,6 +261,9 @@ describe("SessionRowSchema", () => {
       { permissionMode: "unrestricted" },
       { lastRunId: "" },
       { archiveReason: "unknown" },
+      { backgroundProcessCount: 0 },
+      { backgroundProcessCount: -1 },
+      { backgroundProcessCount: 1.5 },
     ]);
     rows.accepts(
       baseRow,
@@ -310,6 +350,32 @@ describe("session sharing protocol", () => {
         { identityId: "mixed", addedBy: "profile-ada", addedByState: "unknown", addedAt: 4 },
       ],
       allowedVisibilities: [],
+    });
+  });
+
+  it("validates explicit access without allowing removal to assign grants", () => {
+    const member = { ...target, identityId: "alice" };
+    expect(validateSessionMemberAddParams(member)).toBe(true);
+    expect(validateSessionMemberRemoveParams(member)).toBe(true);
+    expect(validateSessionMemberSetAccessParams(member)).toBe(false);
+    for (const access of ["read", "suggest", "send"]) {
+      expect(validateSessionMemberAddParams({ ...member, access })).toBe(true);
+      expect(validateSessionMemberSetAccessParams({ ...member, access })).toBe(true);
+      expect(validateSessionMemberRemoveParams({ ...member, access })).toBe(false);
+      evidenceEvent.accepts({
+        ...baseEvent,
+        action: "member-access-changed",
+        identityId: "alice",
+        identityLabel: "Alice Collaborator",
+        access,
+      });
+    }
+    expect(validateSessionMemberAddParams({ ...member, access: "admin" })).toBe(false);
+    expect(validateSessionMemberSetAccessParams({ ...member, access: "admin" })).toBe(false);
+    schemaValidation(Sharing.SessionMemberPermissionSchema).accepts({
+      identityId: "alice",
+      level: "suggest",
+      options: ["read", "suggest", "send"],
     });
   });
 

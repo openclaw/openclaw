@@ -6,6 +6,7 @@ import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../../infra/diagnostic-events.js";
@@ -37,11 +38,6 @@ const success = (text = "ok", durationMs = 0) => ({
 });
 function captureContent(enabled = true) {
   setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: enabled } } });
-}
-async function flushDiagnosticEvents() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 function captureLifecycle(runId: string) {
@@ -83,7 +79,7 @@ function captureLifecycle(runId: string) {
           callback,
         );
       } finally {
-        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
       }
     },
   };
@@ -256,7 +252,7 @@ describe("Claude CLI run diagnostics", () => {
       ),
     ).rejects.toThrow("managed session cleanup failed");
     commentary("After error.");
-    await flushDiagnosticEvents();
+    await waitForDiagnosticEventsDrained();
     expect(diagnostics.types().toSorted()).toEqual([
       "agent.commentary",
       "harness.run.error",

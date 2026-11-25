@@ -1,8 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { expect, it } from "vitest";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { expect, inject, it } from "vitest";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -10,14 +11,23 @@ import {
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
   startServerBeforeBrowser: true,
+  startServer() {
+    const root = inject("controlUiE2eDeploymentAssets")?.root;
+    return root ? startBuiltControlUiE2eServer(root) : startControlUiE2eServer();
+  },
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
@@ -74,15 +84,14 @@ const catalogSuite = createControlUiE2eSuite({
       const tags = { models: [{ name: inventoryModel, capabilities }] };
       response.end(JSON.stringify(request.url === "/api/show" ? modelDetails : tags));
     });
-    const inventoryPort = await getFreePort();
-    await new Promise<void>((resolve) => {
-      inventory.listen(inventoryPort, "127.0.0.1", resolve);
-    });
+    const inventoryUrl = await listenLoopback(inventory);
     catalogInstance = await createOpenClawTestInstance({
       name: "agents-catalog-publication",
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
-        gateway: { controlUi: { enabled: true } },
+        gateway: {
+          controlUi: { enabled: true, root: inject("controlUiE2eDeploymentAssets")?.root },
+        },
         agents: {
           defaults: {
             model: "fixture/anchor",
@@ -91,7 +100,7 @@ const catalogSuite = createControlUiE2eSuite({
         },
         models: {
           providers: {
-            ollama: { api: "ollama", baseUrl: `http://127.0.0.1:${inventoryPort}` },
+            ollama: { api: "ollama", baseUrl: inventoryUrl },
             fixture: {
               api: "openai-completions",
               apiKey: "synthetic-catalog-key",
@@ -132,6 +141,12 @@ catalogSuite.define(() => {
   it("refreshes an open Agents editor after catalog publication without losing drafts", async () => {
     const owner = catalogInstance;
     const requireRecord = createRequireRecord("record", "expected-object-value");
+    // Gateway RPC can be ready before its dashboard document is available for pairing.
+    const document = await waitForControlUiDocument({
+      url: catalogSuite.server.baseUrl,
+      timeoutMs: 60_000,
+    });
+    expect(document.ready, JSON.stringify(document)).toBe(true);
     const handoff = await owner.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
     const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
@@ -170,17 +185,13 @@ catalogSuite.define(() => {
       expect(result.code, result.stderr || result.stdout).toBe(0);
       return JSON.parse(result.stdout);
     };
-    const publishInventory = async (id: string, checkOutput = true) => {
+    const publishInventory = async (id: string) => {
       inventoryModel = id;
-      const result = await refreshInventory();
       commands.push({
         method: "models.list",
         params: inventoryParams(true),
-        publishedInventory: result,
+        publishedInventory: await refreshInventory(),
       });
-      if (checkOutput) {
-        expect(JSON.stringify(result)).toContain(id);
-      }
     };
     try {
       await publishInventory("inventory-before");
@@ -230,24 +241,29 @@ catalogSuite.define(() => {
           await page.goto(url.toString());
           await waitForControlUiGatewayReady(page);
           const editor = page.locator("openclaw-agents-page");
-          const picker = editor.locator(
-            'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
-          );
+          const picker = editor.locator("openclaw-select-picker:has(#agent-primary-model)");
           const option = (id: string) => picker.locator(`[role="option"][data-value="${id}"]`);
           const waitForOption = (id: string) => expect.poll(() => option(id).count()).toBe(1);
           await openPicker(picker);
           await waitForOption("fixture/retiring");
-          const identityName = editor.getByRole("textbox", { name: "Display name", exact: true });
+          const identity = editor.locator(".agent-identity-editor");
+          const identityName = identity.getByRole("textbox", { name: "Display name", exact: true });
+          const draftName = "Keep this identity draft";
           // Identity hydration can replace the selection between fill's browser and keyboard steps.
           await expect.poll(() => identityName.inputValue()).toBe("Assistant");
-          await identityName.fill("Keep this identity draft");
-          expect(await identityName.inputValue()).toBe("Keep this identity draft");
+          await identityName.fill(draftName);
+          expect(await identityName.inputValue()).toBe(draftName);
+          // Identity autosave refreshes config and temporarily disables the model picker.
+          await identityName.blur();
+          await expect.poll(() => readConfig("agents.entries.main.name")).toBe(draftName);
+          await identity.getByRole("status").waitFor({ state: "hidden" });
+          await expect.poll(() => picker.locator(".picker-select__trigger").isEnabled()).toBe(true);
           await openPicker(picker);
           await option("fixture/selected").click();
           const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => readConfig("agents.entries.main.model")).toBe("fixture/selected");
-          const fallbacks = editor.locator("openclaw-multi-select.agent-fallbacks");
+          const fallbacks = await openAgentFallbackChain(editor);
           const fallbackInput = fallbacks.locator("input");
           await expect.poll(() => fallbackInput.isEnabled()).toBe(true);
           await fallbackInput.fill("fixture/anchor");
@@ -280,9 +296,9 @@ catalogSuite.define(() => {
           expect(await option("ollama/inventory-before").count()).toBe(0);
 
           holdCatalog = true;
-          await publishInventory("inventory-held", false);
+          await publishInventory("inventory-held");
           await expect.poll(() => heldCatalogs.length).toBeGreaterThan(0);
-          await publishInventory("inventory-latest", false);
+          await publishInventory("inventory-latest");
           await expect.poll(() => receivedLatestCatalog).toBe(true);
           holdCatalog = false;
           for (const release of heldCatalogs.splice(0)) {
@@ -305,9 +321,9 @@ catalogSuite.define(() => {
           await waitForOption("fixture/recovered");
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
-          expect(await identityName.inputValue()).toBe("Keep this identity draft");
+          expect(await identityName.inputValue()).toBe(draftName);
           expect(
-            await editor
+            await fallbacks
               .locator(".multi-select__chip")
               .evaluateAll((chips) => chips.map((chip) => chip.getAttribute("data-value"))),
           ).toContain("fixture/anchor");

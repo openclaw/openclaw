@@ -195,7 +195,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     window.clearTimeout(timer);
     timer = undefined;
     readyToScroll = false;
-    label?.classList.remove("hover-marquee--scrolling");
+    label?.classList.toggle("hover-marquee--scrolling", false);
   };
   const active = () =>
     host &&

@@ -23,13 +23,8 @@ export type PendingFinalDeliveryPayload = {
   terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
-type SubagentDeliveryDisposition =
-  | "delivered"
-  | "session_queued"
-  | "intentional_non_delivery"
-  | "retryable"
-  | "ambiguous"
-  | "permanent_failure";
+// Rows written by older builds may still carry retired values; nothing reads them.
+type SubagentDeliveryDisposition = "delivered" | "session_queued";
 
 export type SubagentCompletionDeliveryState = {
   status:
@@ -45,6 +40,14 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  /** Requester transcript custody, independent of an external reply or retry policy. */
+  requesterDelivery?: (
+    | { state: "waiting"; runId?: string }
+    | { state: "consumed"; runId: string }
+  ) & {
+    at?: number;
+    blockingRunId?: string;
+  };
   /** Exact requester turn and completed child batch that already produced its visible final. */
   requesterVisibleFinal?: { requesterTurnRunId: string; batchRunIds: string[] };
   lastAttemptAt?: number;
@@ -123,8 +126,7 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
-    /** Retained after restart settlement; an interrupted execution is not a task failure. */
-    interruptionReason?: "gateway-restart";
+    /** Recorded execution timing remains readable for retained task history. */
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;

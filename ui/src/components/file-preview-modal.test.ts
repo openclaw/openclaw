@@ -1,12 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./file-preview-modal.tsx";
-import { Icon } from "./solid/icon.tsx";
 
 type FilePreviewModalElement = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 
@@ -65,24 +63,31 @@ describe("openclaw-file-preview-modal", () => {
     delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
-  it("uses the composer skill glyph for skill files but keeps ordinary Markdown icons", async () => {
-    const modal = await renderPreview({
-      activePath: "SKILL.md",
-      previewFiles: [
-        { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
-        { path: "README.md", size: "1 KB", contents: "Documentation" },
-      ],
-    });
-    const reference = document.createElement("div");
-    mountSolid(() => createComponent(Icon, { name: "pencilSparkles" }), { container: reference });
-    const paths = (element: Element | null | undefined) =>
-      [...(element?.querySelectorAll("path") ?? [])].map((path) => path.getAttribute("d"));
-    const expectedIcon = paths(reference.querySelector("svg"));
-    const skillIcon = modal.querySelector('[data-path="SKILL.md"] .item-icon svg');
-    const markdownIcon = modal.querySelector('[data-path="README.md"] .item-icon svg');
-    expect(paths(skillIcon)).toEqual(expectedIcon);
-    expect(paths(markdownIcon)).not.toEqual(expectedIcon);
-  });
+  it.each(["files", "document"] as const)(
+    "lists %s layout rows by filename without a file-kind icon",
+    async (layout) => {
+      const modal = await renderPreview({
+        layout,
+        activePath: "SKILL.md",
+        previewFiles: [
+          { path: "SKILL.md", size: "1 KB", contents: "Skill instructions" },
+          { path: "README.md", size: "1 KB", contents: "Documentation" },
+          { path: "scripts/run.sh", size: "1 KB", contents: "echo hi" },
+        ],
+      });
+      const rows = [...modal.querySelectorAll<HTMLElement>(".item")];
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row.querySelector("svg")).toBeNull();
+        expect(row.firstElementChild?.classList.contains("item-name")).toBe(true);
+      }
+      expect(rows.map((row) => row.querySelector(".item-name")?.textContent)).toEqual(
+        layout === "document"
+          ? ["SKILL.md", "README.md", "run.sh"]
+          : ["SKILL.md", "README.md", "scripts/run.sh"],
+      );
+    },
+  );
 
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();

@@ -31,7 +31,7 @@ export function compileViteConfigConsumers(source, filePath) {
     const viteSource =
       vitePath === controlUiVitePath ? controlUiViteSource : fs.readFileSync(vitePath, "utf8");
     for (const [, alias, specifier] of viteSource.matchAll(
-      /\bconst\s+\{\s*module(?:\s*:\s*(\w+))?(?:\s*,\s*dependencies)?\s*\}\s*=\s*await\s+runnerImport<\s*typeof import\("([^"\r\n]+)"\)\s*>/gu,
+      /\bconst\s+\{\s*module(?:\s*:\s*(\w+))?(?:\s*,\s*dependencies(?:\s*:\s*\w+)?)?\s*\}\s*=\s*await\s+runnerImport<\s*typeof import\("([^"\r\n]+)"\)\s*>/gu,
     )) {
       if (specifier !== moduleSpecifier) {
         continue;
@@ -56,21 +56,30 @@ export function compileViteConfigConsumers(source, filePath) {
     }
   }
   // Solid's named lazy export is selected by a string rather than a property
-  // read. Derive the edge from the live loader so deleting it stays detectable.
-  const lazyPath = path.resolve("ui/src/components/settings-sidebar-lazy.tsx");
-  const lazySource = fs.readFileSync(lazyPath, "utf8");
-  for (const [, specifier, name] of lazySource.matchAll(
-    /\blazy\(\(\) => import\("([^"\r\n]+)"\),\s*\{\s*export:\s*"(\w+)"/gu,
-  )) {
-    const relative = path
-      .relative(
-        path.dirname(path.resolve(filePath)),
-        path.resolve(path.dirname(lazyPath), specifier),
-      )
-      .replaceAll("\\", "/");
-    imports.push(
-      `import { ${name} as __solidLazy${imports.length} } from ${JSON.stringify(relative)};`,
-    );
+  // read. Derive the edges from every live production loader in the UI so
+  // deleting a loader stays detectable and a new loader needs no registration.
+  const lazyLoaderPattern =
+    /\blazy\(\s*\(\) => import\("([^"\r\n]+)"\),\s*\{\s*export:\s*"(\w+)"/gu;
+  for (const entry of fs.readdirSync("ui/src", { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/u.test(entry.name) || /\.test\.tsx?$/u.test(entry.name)) {
+      continue;
+    }
+    const lazyPath = path.resolve(entry.parentPath, entry.name);
+    const lazySource = fs.readFileSync(lazyPath, "utf8");
+    if (!lazySource.includes("export:")) {
+      continue;
+    }
+    for (const [, specifier, name] of lazySource.matchAll(lazyLoaderPattern)) {
+      const relative = path
+        .relative(
+          path.dirname(path.resolve(filePath)),
+          path.resolve(path.dirname(lazyPath), specifier),
+        )
+        .replaceAll("\\", "/");
+      imports.push(
+        `import { ${name} as __solidLazy${imports.length} } from ${JSON.stringify(relative)};`,
+      );
+    }
   }
   return `${source}\n${imports.join("\n")}`;
 }

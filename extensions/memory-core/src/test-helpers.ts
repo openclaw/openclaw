@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -8,12 +9,17 @@ import {
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+  prepareAgentDatabaseStartupVerification,
+  readOpenClawDatabaseQuarantineFailure,
+  verifyAgentDatabaseStartupIntegrity,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, beforeAll, vi } from "vitest";
+import { afterAll, beforeAll, expect, vi } from "vitest";
 import { consolidateMemory } from "./dreaming-consolidation.js";
 import { readDailyIngestionState, readSessionIngestionState } from "./dreaming-ingestion-state.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
@@ -99,10 +105,40 @@ export function seedMemoryForgetTombstones(
   return recordMemorySessionTombstonesInDatabase(db, params);
 }
 
-export async function seedMemoryIndexWithOrphanedProvenance(
-  env: NodeJS.ProcessEnv,
-): Promise<string> {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+export async function verifyMemoryDatabaseCorruptionForTest(pathname: string): Promise<void> {
+  // Replaced files cannot reuse the original connection's clean integrity receipt.
+  const replacementPath = `${pathname}.replacement`;
+  await fs.copyFile(pathname, replacementPath);
+  await fs.rename(replacementPath, pathname);
+  const env = { ...process.env };
+  const controller = new AbortController();
+  openOpenClawStateDatabase({ env });
+  // A failed synchronous FULL open only latches locally; startup publishes durable quarantine.
+  const verification = prepareAgentDatabaseStartupVerification(
+    { agentId: "main", paths: [pathname], env, signal: controller.signal },
+    {
+      isCurrent: () => !controller.signal.aborted,
+      verifyIntegrity: verifyAgentDatabaseStartupIntegrity,
+    },
+    createPermitPool(1),
+  );
+  try {
+    expect(verification).toBeDefined();
+    await verification!.verify();
+    expect(
+      readOpenClawDatabaseQuarantineFailure("agent", pathname, { env, fresh: true }),
+    ).toMatchObject({
+      name: "SqliteIntegrityError",
+      message: expect.stringContaining("foreign_key_check"),
+    });
+  } finally {
+    verification?.revoke();
+    controller.abort();
+  }
+}
+
+export async function seedMemoryIndexWithOrphanedProvenance(): Promise<string> {
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
   database.db.exec(`
     PRAGMA foreign_keys = OFF;
     INSERT INTO memory_index_chunks (
@@ -117,11 +153,14 @@ export async function seedMemoryIndexWithOrphanedProvenance(
     DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
     PRAGMA foreign_keys = ON;
   `);
-  closeOpenClawAgentDatabasesForTest();
-  // Replaced files cannot reuse the original connection's clean integrity receipt.
-  const replacementPath = `${database.path}.replacement`;
-  await fs.copyFile(database.path, replacementPath);
-  await fs.rename(replacementPath, database.path);
+  expect(database.db.prepare("PRAGMA foreign_key_check").all()).toEqual([
+    expect.objectContaining({
+      table: "memory_index_chunk_provenance",
+      parent: "memory_index_chunks",
+    }),
+  ]);
+  await closeOpenClawAgentDatabasesAsync();
+  await verifyMemoryDatabaseCorruptionForTest(database.path);
   return database.path;
 }
 

@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS as CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
@@ -9,6 +9,7 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
 import { requestSessionPatchMany } from "../lib/sessions/session-mutation-operations.runtime.ts";
+import { showToast } from "../lib/toast.ts";
 import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import type {
@@ -92,6 +93,9 @@ export function createHarness(
   const finishArchive = vi.fn();
   const mocks = {
     finishArchive,
+    create: vi.fn(async (): Promise<string | null> => "agent:main:nested-child"),
+    selectSession: vi.fn(),
+    acknowledgeHiddenRuns: vi.fn(async () => []),
     beginArchive: vi.fn(() => finishArchive),
     patch: vi.fn(async (key: string) => ({ ok: true, key })),
     reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
@@ -119,10 +123,12 @@ export function createHarness(
     },
     gateway: { snapshot },
     sessions: {
+      create: mocks.create,
       beginArchive: mocks.beginArchive,
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
       patch: mocks.patch,
+      acknowledgeHiddenRuns: mocks.acknowledgeHiddenRuns,
       patchMany: (
         targets: SessionsPatchManyParams["targets"],
         patchParams: SessionsPatchManyParams["patch"],
@@ -143,6 +149,7 @@ export function createHarness(
       refreshSidebarSessions: vi.fn(),
     },
     sidebarSessionStatusFilter: () => "active",
+    selectSession: mocks.selectSession,
     pruneSidebarSessionEntry: mocks.pruneSidebarSessionEntry,
     replaceCurrentSession: mocks.replaceCurrentSession,
   } as unknown as SessionOrganizerDependencies;
@@ -164,4 +171,11 @@ export function createHarness(
 
 function targetIdentity(target: SessionsPatchManyParams["targets"][number]) {
   return target.agentId ? { key: target.key, agentId: target.agentId } : { key: target.key };
+}
+
+/** Ends the latest held archive's Undo window as its toast timer would. Callers mock `showToast`. */
+export async function endArchiveUndoWindow(harness: ReturnType<typeof createHarness>) {
+  const finished = harness.finishArchive.mock.calls.length;
+  vi.mocked(showToast).mock.calls.at(-1)?.[0].onDismiss?.("timeout");
+  await vi.waitFor(() => expect(harness.finishArchive.mock.calls.length).toBeGreaterThan(finished));
 }

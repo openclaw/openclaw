@@ -16,13 +16,16 @@ import {
   agentIdPattern,
   canonicalJson,
   effectiveBinding,
+  coveringGrant,
   parseMembership,
+  grantsRevision,
   readStoresSection,
   storesRevision,
+  type ConversationGrants,
   type Membership,
   type Policy,
 } from "./stores-config.js";
-import type { StoreState } from "./stores-contract.js";
+import type { GrantAccess, StoreState } from "./stores-contract.js";
 
 const reloaded = () =>
   new KnowledgeRestartError(
@@ -38,16 +41,20 @@ export type Opened =
   | { kind: "ready"; runtime: StoreRuntime; access: VaultAccess; binding: string }
   | { kind: Exclude<StoreState, "ready">; agentId: string; binding?: string; message: string };
 type Host = Pick<OpenClawPluginApi, "runtime">;
+const NO_GRANTS: ConversationGrants = Object.freeze({});
 
 /** Main-thread owner of store resolution (spec §5, §6). Membership comes from
  * the registry's reconciled copy of configuration; physical stores come from
  * registry bindings; each physical store gets one lazily started runtime. */
 export class Stores {
   readonly registry: RegistryClient;
+  /** One activation per service lifetime, including use of cached registry facts. */
+  onFirstUse?: () => void;
   private readonly runtimes = new Map<string, StoreRuntime>();
   private readonly provisioning = new Map<string, Promise<RegistrySnapshot>>();
   private readonly fenced = new Set<string>();
   private memo?: Membership;
+  private grantsMemo?: { revision: string; section: ConversationGrants };
   private syncing?: Promise<void>;
   // Revisions config.current() may report until the host publishes our write.
   private readonly lagging = new Set<string>();
@@ -88,6 +95,21 @@ export class Stores {
     }
     return this.memo;
   }
+  /** Owner conversation grants, as the registry last published them. A grant
+   * selects a partition of an agent's own store, never a physical store, and
+   * every principal re-resolves it at each live check, so a change applies as
+   * soon as its registry write returns. Empty until the registry first loads;
+   * every store resolution awaits that load first. */
+  grants(): { revision: string; section: ConversationGrants } {
+    const section = this.registry.current?.grants ?? NO_GRANTS;
+    if (this.grantsMemo?.section !== section) {
+      this.grantsMemo = { section, revision: grantsRevision(section) };
+    }
+    return this.grantsMemo;
+  }
+  /** The grant covering a conversation session key (bound for passing as a lookup). */
+  readonly grantFor = (sessionKey: string): GrantAccess | undefined =>
+    coveringGrant(this.grants().section, sessionKey);
   /** Physical store currently serving an agent, if any. */
   vaultFor(agentId: string): string | undefined {
     const binding = effectiveBinding(this.membership(), agentId);
@@ -102,6 +124,9 @@ export class Stores {
    * against the new assignment. */
   async ensure(): Promise<RegistrySnapshot> {
     this.assertLive(this.epoch);
+    const firstUse = this.onFirstUse;
+    this.onFirstUse = undefined;
+    firstUse?.();
     if (!this.registry.current) {
       await this.registry.load();
     }
@@ -228,7 +253,7 @@ export class Stores {
     }
     await this.retireUnused();
   }
-  // A runtime stops once its store serves no agent (no idle timer; spec §5.3).
+  // Assignment retirement releases runtimes whose stores serve no agent (spec §5.3).
   private async retireUnused() {
     const inUse = new Set(this.agents().map((agent) => this.vaultFor(agent)));
     await Promise.all(
@@ -386,14 +411,11 @@ export class Stores {
           vaultId,
           publicationId: store.publicationId,
           writesEnabled: this.policy.writesEnabled,
+          hubPercentile: this.policy.hubPercentile,
         },
-        this.changed,
+        this.policy.operatorRead ? this.changed : undefined,
       );
       this.runtimes.set(vaultId, runtime);
-      // Change hints carry no data; operator reads reconcile through authorized calls.
-      if (this.policy.operatorRead) {
-        runtime.live.start();
-      }
     }
     return runtime;
   }
@@ -429,6 +451,7 @@ export class Stores {
     this.current = true;
   }
   stop(settled: Promise<unknown> = Promise.resolve()): Promise<void> {
+    this.onFirstUse = undefined;
     ++this.epoch;
     this.current = false;
     const runtimes = [...this.runtimes.values()];

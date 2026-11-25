@@ -3,6 +3,7 @@ import {
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { McpCurrentConversationOrigin } from "../gateway/mcp-grant-store.js";
 import { resolveFirstBoundAccountId } from "../routing/bound-account-read.js";
@@ -150,4 +151,23 @@ export function resolveSpawnRequesterConversationTarget(source: SpawnRequesterCo
       normalizeOptionalString(source.currentChannelId),
     threadId: normalizeOptionalThreadValue(source.currentThreadTs),
   };
+}
+
+/** Thread for delayed requester delivery; a top-level Slack message's reply anchor is not a thread. */
+export function resolveRequesterDeliveryThreadId(source: {
+  agentChannel?: string;
+  agentThreadId?: string | number;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
+  replyToMode?: ReplyToMode;
+}): string | number | undefined {
+  if (
+    source.agentChannel === "slack" &&
+    source.replyToMode === "off" &&
+    source.currentThreadTs !== undefined &&
+    source.currentThreadTs === source.currentMessageId
+  ) {
+    return undefined;
+  }
+  return source.currentThreadTs ?? source.agentThreadId;
 }

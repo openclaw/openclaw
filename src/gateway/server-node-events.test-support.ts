@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -34,15 +35,17 @@ export const buildSessionLookup = (
 });
 
 const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
+  agentCommandFromGatewayIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
   enqueueSystemEventEntry: vi.fn(),
-  captureSessionEventTargetForHost: vi.fn(async (agentId: string, sessionKey: string) => ({
-    agentId,
-    sessionKey,
-    sessionId: `sid-${sessionKey}`,
-    generation: "node-event-test-generation",
-  })),
+  captureSessionEventTargetForHost: vi.fn<typeof captureSessionEventTargetForHost>(
+    async (agentId, sessionKey) => ({
+      agentId,
+      sessionKey,
+      sessionId: `sid-${sessionKey}`,
+      generation: "node-event-test-generation",
+    }),
+  ),
   enqueueSessionEventForHost: vi.fn(() => ({
     id: "node-event-test-receipt",
     cancel: () => true,
@@ -112,7 +115,7 @@ vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
 
 vi.mock("../commands/agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/agent.js")>()),
-  agentCommandFromIngress: runtimeMocks.agentCommandFromIngress,
+  agentCommandFromGatewayIngress: runtimeMocks.agentCommandFromGatewayIngress,
 }));
 
 vi.mock("../config/io.js", async (importOriginal) => ({

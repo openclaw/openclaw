@@ -12,9 +12,16 @@ import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 const rootDir = resolveRepoRoot(import.meta.url);
-const VALID_PHASES = new Set(["build", "copy"]);
+const VALID_PHASES = new Set(["build", "copy", "package"]);
 
-type AssetPhase = "build" | "copy";
+type AssetPhase = "build" | "copy" | "package";
+class PluginAssetHookError extends Error {
+  readonly exitCode: number;
+  constructor(phase: AssetPhase | undefined, exitCode: number) {
+    super(`Plugin asset ${phase} hook failed (exit ${exitCode})`);
+    this.exitCode = exitCode;
+  }
+}
 type AssetOptions = {
   phase?: AssetPhase;
   plugins?: string[];
@@ -82,7 +89,7 @@ function resolveAssetCommand(packageJson: Record<string, unknown>, phase: AssetP
 }
 
 /**
- * Reads bundled plugin asset hook commands for a build or copy phase.
+ * Reads bundled plugin asset hooks for development builds and release packaging.
  */
 export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
   const repoRoot = options.rootDir ?? rootDir;
@@ -140,6 +147,12 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
     if (!command) {
       continue;
     }
+    if (
+      phase === "package" &&
+      !(await pathExists(path.join(repoRoot, "dist", "extensions", entry.name, "package.json")))
+    ) {
+      continue;
+    }
 
     hooks.push({
       aliases: [...aliases].toSorted((left, right) => left.localeCompare(right)),
@@ -156,30 +169,50 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
 
 /**
  * Runs bundled plugin asset hook commands for the selected phase/plugins.
+ * Release packagers print machine-readable results on stdout, so hook progress
+ * goes to stderr.
  */
 export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
   const phase = options.phase;
   const hooks = await readBundledPluginAssetHooks(options);
   if (hooks.length === 0) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
-    console.log(`No bundled plugin asset ${phase} hooks${scope}; skipping.`);
+    console.error(`No bundled plugin asset ${phase} hooks${scope}; skipping.`);
     return;
   }
-  if (phase === "copy") {
+  if (phase === "copy" || phase === "package") {
     assertRealOutputRoot(path.join(options.rootDir ?? rootDir, "dist"));
   }
 
-  for (const hook of hooks) {
-    console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
-    const status = await runPluginAssetCommand({
-      command: hook.command,
-      cwd: hook.pluginDir,
-      pluginId: hook.pluginId,
-      phase: hook.phase,
-    });
-    if (status !== 0) {
-      process.exit(status);
+  // Build hooks write only their own package's assets; each is a short compiler
+  // process, so run a few at once. Copy hooks stage into dist/ and stay serial.
+  const queue = [...hooks];
+  let failure = 0;
+  const worker = async () => {
+    for (let hook = queue.shift(); hook && !failure; hook = queue.shift()) {
+      console.error(`[${hook.pluginId}] ${phase}: ${hook.command}`);
+      const status = await runPluginAssetCommand({
+        command: hook.command,
+        cwd: hook.pluginDir,
+        pluginId: hook.pluginId,
+        phase: hook.phase,
+      }).catch((error: unknown) => {
+        failure ||= 1;
+        throw error;
+      });
+      failure ||= status;
     }
+  };
+  // Join every running hook before reporting, so no child outlives the step.
+  const settled = await Promise.allSettled(
+    Array.from({ length: phase === "build" ? 4 : 1 }, worker),
+  );
+  const rejected = settled.find((result) => result.status === "rejected");
+  if (rejected) {
+    throw rejected.reason;
+  }
+  if (failure !== 0) {
+    throw new PluginAssetHookError(phase, failure);
   }
 }
 
@@ -290,6 +323,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
+    process.exit(error instanceof PluginAssetHookError ? error.exitCode : 1);
   }
 }

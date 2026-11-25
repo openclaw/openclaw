@@ -11,6 +11,7 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -35,6 +36,7 @@ import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
 import { createGemmaToolCallRecoverer } from "./openai-completions-gemma.js";
+import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import { getCompat } from "./openai-transport-params.js";
 import {
   isOpenAICompletionsThinkingEnabled,
@@ -78,7 +80,11 @@ function extractToolCallThoughtSignature(toolCall: unknown): string | undefined 
     readNonEmptyStringPreservingWhitespace(
       (tc.function as { thought_signature?: unknown } | undefined)?.thought_signature,
     ) ??
-    readNonEmptyStringPreservingWhitespace(tc.thought_signature)
+    readNonEmptyStringPreservingWhitespace(tc.thought_signature) ??
+    // LiteLLM proxies return Gemini signatures here.
+    readNonEmptyStringPreservingWhitespace(
+      asOptionalRecord(tc.provider_specific_fields)?.thought_signature,
+    )
   );
 }
 
@@ -413,15 +419,27 @@ export async function processCompletionsStream(
       continue;
     }
     const chunk = rawChunk as OpenAICompatibleChatCompletionChunk;
-    output.responseId ||= chunk.id;
-    // Retain the provider-returned model when it differs from the requested id so
-    // routed/alias responses are not misattributed, matching the direct provider
-    // stream and the anthropic/responses managed transports.
-    if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-      output.responseModel ||= chunk.model;
-    }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
+    const rawChoiceDelta = choice?.delta ?? choice?.message;
+    // Transport heartbeats can carry placeholder ids/models. Attribute only
+    // chunks with response evidence, before buffering or hiding reasoning.
+    const hasResponseEvidence = Boolean(
+      choice?.finish_reason ||
+      (rawChoiceDelta &&
+        (rawChoiceDelta.tool_calls?.length || hasOpenAICompletionsDeltaContent(rawChoiceDelta))) ||
+      asNonNegativeFiniteNumber(usage?.prompt_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.total_tokens) !== undefined ||
+      asNonNegativeFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens) !== undefined,
+    );
+    if (hasResponseEvidence) {
+      output.responseId ||= chunk.id;
+      // Preserve actual routed/alias models without reporting the requested id twice.
+      if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
+        output.responseModel ||= chunk.model;
+      }
+    }
     // llama.cpp attaches final timings to the usage-only chunk when requested.
     if (
       chunk.timings !== undefined &&
@@ -453,7 +471,6 @@ export async function processCompletionsStream(
         state: terminalUsage && completeCounts ? "available" : "unavailable",
       };
     }
-    const rawChoiceDelta = choice?.delta ?? choice?.message;
     if (!choice) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       continue;
@@ -697,10 +714,19 @@ function warnMissingStreamingUsage(model: OpenAIModeModel) {
 export function shouldEmitOpenAICompletionsReasoning(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
+  mode: "direct" | "managed" = "managed",
 ) {
+  // Effort controls generation, not the reasoning needed to replay a tool turn.
+  if (
+    model.compat?.requiresReasoningContentOnAssistantMessages ||
+    requiresReasoningContentReplay(model.id)
+  ) {
+    return true;
+  }
   if (!model.reasoning) {
     return false;
   }
-  const effort = options?.reasoningEffort ?? options?.reasoning ?? "high";
-  return Boolean(effort) && isOpenAICompletionsThinkingEnabled(effort);
+  const effort =
+    options?.reasoningEffort ?? (mode === "managed" ? (options?.reasoning ?? "high") : undefined);
+  return Boolean(effort && isOpenAICompletionsThinkingEnabled(effort));
 }

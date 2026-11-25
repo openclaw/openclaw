@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore, lazy } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore, lazy, onSettled } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -14,11 +14,13 @@ import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsDesktopLoading } from "./chat-details-loading.tsx";
+import "../../../styles/chat/details-desktop.css";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -45,6 +47,13 @@ const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
 const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
   export: "ChatOutputsDesktop",
 });
+
+// Disclosure choices outlive keyed remounts (pane eviction, Gateway restarts) for this page
+// load only: a new session or a reload starts from the defaults, and nothing is persisted.
+const sectionChoicesBySession = new Map<
+  string,
+  Partial<Record<ChatDetailsDesktopSectionId, boolean>>
+>();
 
 type Props = {
   props?: ChatDetailsProps;
@@ -100,6 +109,8 @@ function DetailsAutomations(props: Props) {
           : ""
       }
       presented={props.presented}
+      cached={props.desktop ? props.props?.cachedDetails?.automations : undefined}
+      onDetailsSnapshot={props.desktop ? props.props?.onDetailsSnapshot : undefined}
     />
   );
 }
@@ -146,11 +157,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     });
     return (
       <Show when={identity()} keyed>
-        {(_identity) => {
+        {(sessionIdentity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
           const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
-          >({});
+          >({ ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity) });
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
@@ -166,6 +177,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             setSectionChoices((choices) => {
               choices[section] = expanded;
+            });
+            setSessionCacheValue(sectionChoicesBySession, sessionIdentity, {
+              ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity),
+              [section]: expanded,
             });
             props.props?.desktopDisclosures?.onExpandedChange(section, expanded);
           };
@@ -193,7 +208,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const session = () => props.props?.selectedSession;
+          const session = createMemo(() => {
+            const selected = props.props?.selectedSession;
+            const cached = !props.props?.sessionFactsReady && props.props?.cachedDetails?.session;
+            return selected && cached ? { ...selected, ...cached } : selected;
+          });
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
           const OwnerAttribution = () => (
@@ -206,17 +225,15 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
-          const partialPeople = () =>
-            session()?.participantCount === undefined || count() > people().length;
+          // The Gateway omits the count when the owner-excluded participant list is empty.
+          const partialPeople = () => count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
-            const projectedActors = actors.flatMap((actor): SessionParticipant[] =>
-              actor?.identity
-                ? [{ identity: actor.identity, label: actor.label, avatarUrl: actor.avatarUrl }]
-                : [],
-            );
-            for (const person of [...projectedActors, ...people()]) {
+            for (const person of [...actors, ...people()]) {
+              if (!person?.identity) {
+                continue;
+              }
               const key = sessionParticipantIdentityKey(person.identity);
               const previous = union.get(key);
               union.set(key, {
@@ -227,6 +244,19 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             return [...union.values()];
           });
+          const selfOnlyPeople = () => {
+            const viewer = gateway?.read().snapshot.selfUser?.identity;
+            const associatedPeople = desktopPeople();
+            return (
+              viewer &&
+              props.props?.sessionFactsReady &&
+              !partialPeople() &&
+              [owner(), session()?.createdActor].every((actor) => !actor || actor.identity) &&
+              associatedPeople.length === 1 &&
+              associatedPeople[0]!.identity.type === viewer.type &&
+              associatedPeople[0]!.identity.id === viewer.id
+            );
+          };
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
             const snapshot = props.props?.outputs;
             if (!snapshot) {
@@ -316,12 +346,41 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               compact: true,
             };
           });
+          const publishedRequests = () =>
+            props.props?.displayPullRequests ?? props.props?.pullRequests ?? [];
+          const outputsCount = () => {
+            const data = outputs();
+            return data ? getChatOutputsCount(data) : null;
+          };
+          const displayedCount = () => outputsCount() ?? props.props?.cachedDetails?.outputs;
+          const receipt = createMemo(() => {
+            const selected = props.props?.sessionFactsReady ? session() : undefined;
+            const facts = selected && {
+              createdActor: selected.createdActor,
+              participantCount: selected.participantCount,
+            };
+            return props.props?.onDetailsSnapshot && (facts || outputsCount() !== null)
+              ? {
+                  patch: {
+                    ...(outputsCount() !== null ? { outputs: outputsCount()! } : {}),
+                    ...(facts ? { session: facts } : {}),
+                  },
+                  write: props.props.onDetailsSnapshot,
+                }
+              : undefined;
+          });
           return (
             <Show when={props.props}>
               <section
                 class="chat-details-session"
                 data-details-desktop={props.desktop ? "" : undefined}
               >
+                <Show when={receipt()} keyed>
+                  {(value) => {
+                    onSettled(() => value.write(value.patch));
+                    return null;
+                  }}
+                </Show>
                 <Show
                   when={desktopPresentation()}
                   fallback={
@@ -393,7 +452,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(presentation) => (
                     <>
                       <Show
-                        when={desktopPeople().length > 0 || count() > 0 || creatorName() || owner()}
+                        when={
+                          !selfOnlyPeople() &&
+                          (desktopPeople().length > 0 || count() > 0 || creatorName() || owner())
+                        }
                       >
                         <ChatDetailsDesktopSection
                           section="people"
@@ -457,7 +519,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                   {(requests) => (
                     <Show
                       when={
-                        requests().pullRequests.length > 0 ||
+                        publishedRequests().length > 0 ||
                         requests().publication?.result?.status === "published"
                       }
                     >
@@ -478,7 +540,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                                 );
                               }}
                             >
-                              <ChatPullRequests {...requests()} publishedOnly />
+                              <ChatPullRequests
+                                {...requests()}
+                                pullRequests={publishedRequests()}
+                                publishedOnly
+                              />
                             </ChatDetailsDesktopSection>
                           }
                         >
@@ -493,10 +559,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           >
                             <summary class="chat-details__caption">
                               {t("chat.sessionDetails.pullRequests")}
-                              <span>{props.props?.pullRequests?.length || null}</span>
+                              <span>{publishedRequests().length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>
-                            <ChatPullRequests {...requests()} publishedOnly />
+                            <ChatPullRequests
+                              {...requests()}
+                              pullRequests={publishedRequests()}
+                              publishedOnly
+                            />
                           </details>
                         </Show>
                       </div>
@@ -514,6 +584,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -523,7 +594,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>
                   {(data) => (
-                    <Show when={hasChatDesktopOutputs(data())}>
+                    <Show when={hasChatDesktopOutputs(data()) || (displayedCount() ?? 0) > 0}>
                       <ChatDetailsDesktopSection
                         section="outputs"
                         title={desktopPresentation()!.outputsLabel}
@@ -531,7 +602,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         presented={active()}
                         onExpandedChange={(expanded) => changeSection("outputs", expanded)}
                         metadata={
-                          <Show when={getChatOutputsCount(data()) !== null}>
+                          <Show when={displayedCount() !== undefined}>
                             <span class="chat-details-desktop-section__count">
                               <span
                                 class="chat-details-desktop-section__count-separator"
@@ -539,7 +610,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                               >
                                 ·
                               </span>
-                              {getChatOutputsCount(data())}
+                              {displayedCount()}
                             </span>
                           </Show>
                         }
@@ -588,14 +659,18 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
   return (
-    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+    <>
+      <Show
+        when={props.props?.sessionFactsReady === false && !props.props.cachedDetails?.environment}
+      >
+        <ChatDetailsDesktopLoading />
+      </Show>
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
         dismissed={props.dismissed}
-        scrollport={scrollport()}
+        scrollport={props.scrollport}
         desktop
       />
       <Show when={props.props?.progressCard}>
@@ -612,9 +687,9 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           {t("sessionProgressCard.widgetAccessDenied")}
         </div>
       </Show>
-      {/* Its separate inventory can arrive after the session. Append it so
-          loading automation rows never displaces the existing sections. */}
+      {/* Keep the automation slot after Progress while its inventory revalidates. */}
       <DetailsAutomations props={props.props} presented={props.presented} desktop />
-    </ChatDetailsDesktopBody>
+      <p class="chat-details-desktop-empty">{t("chat.sessionDetails.empty")}</p>
+    </>
   );
 }

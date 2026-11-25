@@ -12,28 +12,27 @@
  * --gc-log pointing at redirected stdout. --lock accepts the baseline locked.ts
  * with its relative imports resolved to the same checkout. All other code stays
  * identical. --read likewise accepts a baseline ops-read.ts with resolved imports.
- * Compare revisionDigest, publications, operations, and hashComputations.
+ * Compare rowDigest, publications, operations, and listPreparations.
+ * coldRead includes initial store admission and full first-page preparation.
+ * mainThreadCpuMsPerOperation separates owner CPU from loader/worker threads.
+ * Row snapshots are retained for the current inventory; report cold and warm costs.
  * Decide on allocation/operation and CPU/operation with GC, promotion, latency,
  * loop tails and maxima under the campaign's absolute-materiality thresholds.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { writeSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import {
-  constants,
-  monitorEventLoopDelay,
-  PerformanceObserver,
-  type PerformanceEntry,
-} from "node:perf_hooks";
+import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -105,7 +104,8 @@ const stores = Array.from({ length: 2 }, (_, storeIndex) => {
   return state;
 });
 let publications = 0;
-let hashComputations = 0;
+let listPreparations = 0;
+let rowDigest = createHash("sha256");
 let revisionDigest = createHash("sha256");
 async function run(operation: number) {
   const state = stores[operation % stores.length]!;
@@ -125,31 +125,43 @@ async function run(operation: number) {
   });
   const page = await listPage(state, { sortBy: "name", limit: 25, query: values.query });
   if (state.readSnapshot?.lists[0] !== previousList) {
-    hashComputations++;
+    listPreparations++;
   }
   assert.equal(page.total, 200);
   assert.equal(page.jobs.length, 25);
   revisionDigest.update(page.snapshotRevision);
-  revisionDigest.update(JSON.stringify(page.jobs.map((job) => [job.id, job.state.lastRunAtMs])));
+  rowDigest.update(JSON.stringify(page.jobs.map((job) => [job.id, job.state.lastRunAtMs])));
 }
+global.gc?.();
+const coldHeap = process.memoryUsage().heapUsed;
+const coldCpu = process.cpuUsage();
+const coldStart = performance.now();
+for (let i = 0; i < stores.length; i++) {
+  await run(i);
+}
+const coldElapsedMs = performance.now() - coldStart;
+const coldUsedCpu = process.cpuUsage(coldCpu);
+global.gc?.();
+const coldRead = {
+  operations: stores.length,
+  elapsedMs: coldElapsedMs,
+  cpuMs: (coldUsedCpu.user + coldUsedCpu.system) / 1000,
+  retainedHeapBytes: process.memoryUsage().heapUsed - coldHeap,
+};
 const warmup = 100;
 for (let i = 0; i < warmup; i++) {
   await run(i);
 }
 publications = 0;
-hashComputations = 0;
+listPreparations = 0;
 revisionDigest = createHash("sha256");
+rowDigest = createHash("sha256");
 const profilePath = `${output}.heapprofile`;
-const marker = (phase: string) =>
-  writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
 if (values.mode === "promotion") {
   assert(values["gc-log"] && global.gc, "promotion requires --gc-log and --expose-gc");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 function distribution(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
@@ -165,22 +177,12 @@ function distribution(samples: number[]) {
 const collections: { kind: number; ms: number }[] = [];
 let measuredStart = Infinity;
 let measuredEnd = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= measuredStart && entry.startTime < measuredEnd) {
-      const detail = (entry as PerformanceEntry & { detail: { kind: number } }).detail;
-      collections.push({ kind: detail.kind, ms: entry.duration });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, measuredStart, measuredEnd),
+);
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 observer.observe({ entryTypes: ["gc"] });
 const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -189,8 +191,9 @@ await delay(10);
 loop.reset();
 const outsideLoad = loadavg();
 const cpu = process.cpuUsage();
+const mainCpu = process.threadCpuUsage();
 const latencies: number[] = [];
-marker("heap-start");
+writeGatewayGcTraceMarker("heap-start", profilePath);
 measuredStart = performance.now();
 for (let i = 0; i < operations; i++) {
   const started = performance.now();
@@ -199,8 +202,9 @@ for (let i = 0; i < operations; i++) {
   await nextTurn();
 }
 measuredEnd = performance.now();
-marker("heap-stop");
+writeGatewayGcTraceMarker("heap-stop", profilePath);
 const usedCpu = process.cpuUsage(cpu);
+const usedMainCpu = process.threadCpuUsage(mainCpu);
 loop.disable();
 await nextTurn();
 await nextTurn();
@@ -244,10 +248,14 @@ const report = {
   warmup,
   operations,
   publications,
-  hashComputations,
+  listPreparations,
+  coldRead,
+  memory: process.memoryUsage(),
+  rowDigest: rowDigest.digest("hex"),
   revisionDigest: revisionDigest.digest("hex"),
   outsideLoad,
   elapsedMs: measuredEnd - measuredStart,
+  mainThreadCpuMsPerOperation: (usedMainCpu.user + usedMainCpu.system) / 1000 / operations,
   cpuMsPerOperation: (usedCpu.user + usedCpu.system) / 1000 / operations,
   latency: distribution(latencies),
   gc: {

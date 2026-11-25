@@ -1,17 +1,4 @@
-export type CapabilityTransport = "local" | "gateway";
-
-export type CapabilityEnvelope = {
-  ok: boolean;
-  capability: string;
-  transport: CapabilityTransport;
-  provider?: string;
-  model?: string;
-  attempts: Array<Record<string, unknown>>;
-  inputs?: Array<Record<string, unknown>>;
-  outputs: Array<Record<string, unknown>>;
-  ignoredOverrides?: Array<Record<string, unknown>>;
-  error?: string;
-};
+import type { CapabilityTransport } from "./result-types.js";
 
 const IMAGE_GENERATION_FLAGS = [
   "--prompt",
@@ -44,6 +31,8 @@ export const CAPABILITY_METADATA: {
     transports: ["local", "gateway"],
     flags: [
       "--prompt",
+      "--prompt-file",
+      "--prompt-stdin",
       "--file",
       "--model",
       "--thinking",

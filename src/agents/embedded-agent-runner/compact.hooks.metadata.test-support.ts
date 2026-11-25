@@ -6,6 +6,7 @@ import {
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
@@ -13,9 +14,37 @@ import type {
 import type { AuthStorage } from "../sessions/auth-storage.js";
 
 export type CompactHooksQueuedCompaction = (
-  params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
-  host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
-) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
+  params: Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[0],
+  host?: Partial<
+    Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[1]
+  >,
+) => ReturnType<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>;
+
+/** Entry points with the session model the real callers pass, plus a default source authority. */
+export function wrapCompactHooksEntryPoints(
+  compactModule: typeof import("./compact.js"),
+  compactQueuedModule: typeof import("./compact.queued.js"),
+): {
+  compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
+  compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
+} {
+  const model = { provider: "openai", model: "fake-model" } as const;
+  return {
+    compactEmbeddedAgentSessionDirect: (params) =>
+      compactModule.compactEmbeddedAgentSessionDirect({ ...model, ...params }),
+    compactEmbeddedAgentSession: (params, host = {}) =>
+      compactQueuedModule.compactQueuedEmbeddedAgentSession(
+        { ...model, ...params },
+        {
+          ...host,
+          sourceAuthority: host.sourceAuthority ?? {
+            assertActive: host.assertActive ?? (() => {}),
+            operatorAuthority: undefined,
+          },
+        },
+      ),
+  };
+}
 
 const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
@@ -69,27 +98,25 @@ export async function acquireCompactHooksPreparedModelRuntime(
   input: PreparedModelRuntimeInput,
   _options?: PreparedModelRuntimeLeaseOptions,
 ) {
-  return {
-    snapshot: withEmptyRuntimeStores({
-      isCurrent: () => true,
-      agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
-    }),
-    [Symbol.asyncDispose]: vi.fn(async () => {}),
-  };
+  return createCompactHooksPreparedModelRuntimeLease({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    config: input.config,
+    workspaceDir: input.workspaceDir,
+    metadataSnapshot: { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir },
+  });
 }
 
-export function createCompactHooksPreparedModelRuntime(
-  input: Required<
-    Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir">
-  > & {
+export function createCompactHooksPreparedModelRuntimeLease(
+  input: Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir"> & {
     metadataSnapshot: PluginMetadataSnapshot;
   },
 ) {
-  return withEmptyRuntimeStores(input);
+  return {
+    snapshot: withEmptyRuntimeStores({ isCurrent: () => true, ...input }),
+    run: <T>(run: () => T): T => run(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
+  };
 }
 
 export function createCompactHooksResolvedModel(
@@ -137,3 +164,8 @@ export type MockResolvedModel = {
   authStorage: Pick<AuthStorage, "setRuntimeApiKey" | "getApiKey">;
   modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
 };
+
+export function createDefaultCompactionAuthStore(): AuthProfileStore {
+  const profile = { type: "api_key", provider: "openai", key: "test" } as const;
+  return { version: 1, profiles: { "openai:test": profile }, order: { openai: ["openai:test"] } };
+}

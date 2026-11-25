@@ -20,7 +20,7 @@ import type {
   ProjectedLifecycleMutation,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
@@ -138,11 +138,10 @@ export type SessionLifecyclePlanningOperations = {
     output: LifecycleProjectionPreparation;
   };
   finish: {
-    input: LifecycleProjectionPreparation & {
+    input: Pick<LifecycleProjectionPreparation, "store" | "selected"> & {
       archiveDirectory: string;
-      upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"];
     };
-    output: ProjectedLifecycleMutation;
+    output: ReturnType<typeof finishProjectedLifecycleRemovalPlans>;
   };
 };
 
@@ -175,7 +174,7 @@ export function bindSqliteWorkerBackend(
             input.removals.length === 0 &&
             input.upserts.length === 1 &&
             upsert &&
-            !upsert.relatedSessionKeys?.length
+            !upsert.relatedSessionKeys?.some((key) => key !== upsert.sessionKey.trim())
               ? prepareSessionActorEntryPatch(database, upsert.sessionKey.trim())?.snapshot()
               : undefined;
           // Related-parent builders still require their complete multi-entry projection.
@@ -205,7 +204,6 @@ export function bindSqliteWorkerBackend(
           input.archiveDirectory,
           input.store,
           input.selected,
-          input.upsertedEntries,
         );
       };
       // Without removals, bounded row reads share this worker without yielding.

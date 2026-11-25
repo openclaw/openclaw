@@ -1,14 +1,18 @@
+import { execFile, spawn } from "node:child_process";
 import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
 
 const native = vi.hoisted(() => ({
   start: vi.fn(),
+  platform: "linux",
   versions: { node: "26.6.0", bun: undefined as string | undefined },
   conflict: vi.fn(() => false),
   mainThread: true,
-  platform: "linux" as NodeJS.Platform,
+  kernel: vi.fn(),
 }));
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
@@ -16,10 +20,10 @@ vi.mock("node:v8", async (original) => ({
 }));
 vi.mock("node:process", async (original) => ({
   ...(await original<typeof import("node:process")>()),
-  versions: native.versions,
   get platform() {
     return native.platform;
   },
+  versions: native.versions,
 }));
 vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
@@ -31,6 +35,10 @@ vi.mock("./diagnostic-profile.js", async (original) => ({
   ...(await original<typeof import("./diagnostic-profile.js")>()),
   hasProfilerConflict: native.conflict,
 }));
+vi.mock("./diagnostic-stall-kernel.js", async (original) => ({
+  ...(await original<typeof import("./diagnostic-stall-kernel.js")>()),
+  createStallKernelRecorder: native.kernel,
+}));
 
 const recorders: ReturnType<typeof createStallFlightRecorder>[] = [];
 const getBuiltinModule = process.getBuiltinModule.bind(process);
@@ -41,11 +49,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 beforeEach(() => {
+  native.platform = "linux";
   native.start.mockReset();
   native.conflict.mockReset().mockReturnValue(false);
   native.versions.node = "26.6.0";
   native.mainThread = true;
-  native.platform = "linux";
+  native.kernel.mockReset();
   vi.spyOn(process, "getBuiltinModule").mockImplementation((id) =>
     id === "inspector"
       ? { url: () => undefined }
@@ -77,16 +86,123 @@ function fixture(firstProfile?: string) {
     handles[0]!.stop.mockReturnValue(firstProfile);
   }
   recorders.push(recorder);
-  const sampleAt = (value: number, stall?: Parameters<typeof recorder.sample>[0] | null) => {
+  const sampleAt = (
+    value: number,
+    stall: { startedAt: number; endedAt: number; task?: string } | null = {
+      startedAt: value - 1_500,
+      endedAt: value,
+    },
+  ) => {
     time = value;
-    return recorder.sample(
-      stall === null ? undefined : (stall ?? { startedAt: value - 1_500, endedAt: value }),
-    );
+    return recorder.sample(stall ?? undefined);
   };
   return { recorder, handles, warn, sampleAt, elapse: (ms: number) => (time += ms) };
 }
-it.each(["linux", "win32"] as const)(
-  "rotates without a sampling gap and reports recent stall frames on %s",
+function capture(json: string) {
+  const fixtureState = fixture(json);
+  return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
+}
+it("keeps live kernel evidence when sampled stacks exhaust the shared report budget", () => {
+  const evidence = ` kernel=${JSON.stringify([{ state: "D", wchan: "filemap_fault", stack: "x".repeat(1_300) }])}`;
+  native.kernel.mockReturnValue({ take: () => ({ kernelSummary: evidence }), stop: vi.fn() });
+  const { result } = capture(profile(0, "x".repeat(230)));
+  expect(result).toContain(evidence);
+  expect(result).toContain("reportTruncated=true");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
+it("retains the recorded async task when the sampled stack ends in a dependency", () => {
+  const dependencyUrl = new URL(
+    "../../node_modules/@openclaw/fs-safe/dist/write.js",
+    import.meta.url,
+  ).href;
+  const { sampleAt } = fixture(profile(0, "runPinnedWriteNative", dependencyUrl));
+  const result = sampleAt(1_500, {
+    startedAt: 0,
+    endedAt: 1_500,
+    task: "schema-store:write",
+  });
+  expect(result).toContain("[async task:schema-store:write]");
+  expect(result).toContain("runPinnedWriteNative@node_modules/@openclaw/fs-safe");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+});
+
+it.each([false, true])(
+  "identifies sampled leaves below shared ancestors within the log cap (long=%s)",
+  (long) => {
+    const frame = (id: number, name: string, url: string, children?: number[]) => ({
+      id,
+      callFrame: { functionName: name, url, lineNumber: 9, columnNumber: 0, scriptId: 1 },
+      children,
+    });
+    const appUrl = new URL("../agents/admitted-run-context.ts", import.meta.url).href;
+    const dependencyUrl = new URL(
+      "../../node_modules/@openclaw/fs-safe/dist/write.js",
+      import.meta.url,
+    ).href;
+    const suffix = long ? "x".repeat(200) : "";
+    const depth = long ? 24 : 12;
+    const nodes = Array.from({ length: depth }, (_, i) =>
+      frame(
+        i,
+        `shared${i}${suffix}`,
+        i === 0 ? appUrl : dependencyUrl,
+        i < depth - 1 ? [i + 1] : Array.from({ length: 12 }, (_leaf, j) => j + depth),
+      ),
+    );
+    nodes.push(
+      ...Array.from({ length: 12 }, (_, i) => frame(i + depth, `probe${i}${suffix}`, "node:fs")),
+    );
+    const { result, warn } = capture(
+      JSON.stringify({
+        startTime: 0,
+        endTime: 1_500_000,
+        nodes,
+        samples: Array.from({ length: 12 }, (_, i) => i + depth),
+        timeDeltas: Array.from({ length: 12 }, () => 100_000),
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(result).toContain("self=");
+    const self = JSON.parse(result!.match(/ self=(.*) deepest=/)![1]!) as Array<
+      [string, number, number, string]
+    >;
+    const deepest = JSON.parse(result!.split(" deepest=")[1]!) as Array<[number, string[]]>;
+    expect(self[0]).toEqual([
+      expect.stringContaining("probe0"),
+      1,
+      100,
+      expect.stringContaining("shared0"),
+    ]);
+    expect(deepest[0]?.[1][0]).toContain("shared0");
+    expect(deepest[0]?.[1].at(-1)).toContain("probe0");
+    expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+    if (long) {
+      expect(result).toContain("reportTruncated=true");
+      expect(deepest[0]?.[1]).toContain("[...]");
+    }
+  },
+);
+it("keeps interrupted stack capture without starting a native profiler on macOS", () => {
+  native.platform = "darwin";
+  const { sampleAt, recorder, warn } = fixture();
+  expect(sampleAt(6_500)).toBeUndefined();
+  const hook = Symbol.for("openclaw.stallFlightRecorder.capture");
+  const captureStack: unknown = Reflect.get(globalThis, hook);
+  expect(typeof captureStack === "function" && captureStack()).toMatchObject({
+    windows: [],
+    stacks: [expect.objectContaining({ frames: expect.any(Array) })],
+  });
+  expect(native.kernel).toHaveBeenCalledWith(warn, expect.any(String), true);
+  recorder.stop();
+  expect(Reflect.has(globalThis, hook)).toBe(false);
+  expect(native.start).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "stall flight recorder using interrupted stacks: macos-native-profiler-deadlock-risk",
+  );
+});
+
+it.each(["linux", "win32"])(
+  "rotates without a sampling gap on %s and reports only the recent stall's inclusive frames",
   (platform) => {
     native.platform = platform;
     const { recorder, handles, sampleAt } = fixture();
@@ -137,7 +253,6 @@ function sampleWindow(earlier: number[], block: number[], later: number[]) {
   );
 }
 
-// This test uses the real sampler; do not bypass the macOS safety exclusion with a mock.
 it.skipIf(
   process.platform === "darwin" || typeof getBuiltinModule("v8").startCpuProfile !== "function",
 )(
@@ -237,32 +352,35 @@ it.each([
     profile(0, "placeholder").replace('"placeholder"', '"private"name\\with\ncontrols"'),
     'inclusive=[["[redacted]@node:timers:10",2]]',
   ],
-  ...[
-    'quoted"file.js',
-    String.raw`windows\file.js`,
-    "line\nbreak.js",
-    'json-{"key":"value"}-file.js',
-  ].map((filename) => [
-    filename,
-    // V8's native serializer writes these strings verbatim, without JSON escaping.
+])("redacts %s without losing safe frames", (_kind, json, expected) => {
+  const { result, warn } = capture(json);
+  expect(result).toContain(expected);
+  expect(result).not.toMatch(/secretAccount|private|person/);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it.each([
+  'quoted"file.js',
+  String.raw`windows\file.js`,
+  "line\nbreak.js",
+  'json-{"key":"value"}-file.js',
+])("keeps trusted caller attribution when native script names contain %j", (filename) => {
+  // V8's native serializer writes these strings verbatim, without JSON escaping.
+  const { result, warn, sampleAt } = capture(
     profile(0, "secretAccount")
       .replace('"functionName":"(root)"', '"functionName":"trustedCaller"')
       .replace('"url":"node:timers"', `"url":"file:///private/${filename}"`)
       .replace('"url":""', '"url":"node:timers"'),
-    'inclusive=[["trustedCaller@node:timers:0",2]]',
-  ]),
-])("redacts %s without losing safe frames or later samples", (_kind, json, expected) => {
-  const { warn, sampleAt } = fixture(json);
-  const result = sampleAt(1_500);
-  expect(result).toContain(expected);
-  expect(result).not.toMatch(/secretAccount|private|person|quoted|windows|break/);
+  );
+  expect(result).toContain('inclusive=[["trustedCaller@node:timers:0",2]]');
+  expect(result).not.toMatch(/secretAccount|private|quoted|windows|break/);
   expect(warn).not.toHaveBeenCalled();
   expect(sampleAt(6_500)).toContain("work1@node:timers:10");
 });
 
 it("caps oversized windows and disables failed capture without failing the sampler", () => {
-  const { recorder, handles, warn, sampleAt } = fixture(" ".repeat(1_048_577));
-  expect(sampleAt(1_500)).toContain("truncated=true inclusive=[]");
+  const { recorder, handles, warn, result } = capture(" ".repeat(1_048_577));
+  expect(result).toContain("truncated=true inclusive=[]");
   native.start.mockImplementation(() => {
     throw new Error("native failure");
   });
@@ -272,20 +390,162 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
-it.each(["runtime", "profiler", "worker", "macOS"])("never starts the sampler for %s", (kind) => {
-  native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
-  native.conflict.mockReturnValue(kind === "profiler");
-  native.mainThread = kind !== "worker";
-  native.platform = kind === "macOS" ? "darwin" : "linux";
-  const { recorder, sampleAt, warn } = fixture();
-  expect(sampleAt(5_000, null)).toBeUndefined();
-  expect(sampleAt(6_500)).toBeUndefined();
-  recorder.stop();
-  expect(sampleAt(12_000)).toBeUndefined();
-  expect(native.start).not.toHaveBeenCalled();
-  expect(warn.mock.calls).toEqual(
-    kind === "macOS"
-      ? [["stall flight recorder unavailable: macos-native-profiler-deadlock-risk"]]
-      : [],
-  );
+it.each(["unsupported", "failed"])("preserves kernel evidence when CPU capture is %s", (kind) => {
+  const evidence = ' kernel=[{"at":1100,"state":"S","wchan":"futex_wait","syscall":"202"}]';
+  native.kernel.mockReturnValue({
+    take: (stall: unknown) => ({ kernelSummary: stall ? evidence : "" }),
+    stop: vi.fn(),
+  });
+  native.versions.node = kind === "unsupported" ? "24.22.1" : "26.6.0";
+  const { handles, sampleAt } = fixture();
+  handles[0]!.stop.mockImplementation(() => {
+    throw new Error("native capture failed");
+  });
+  const result = sampleAt(1_500);
+  expect(result).toContain(evidence);
+  expect(result).toContain("windowMs=1500");
+  expect(result).toContain("cpuProfile=unavailable");
+  expect(result).not.toContain("intervalMs=");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+  expect(sampleAt(3_000, null)).toBeUndefined();
 });
+
+it.each(["runtime", "profiler", "worker"])(
+  "leaves an unsupported or conflicting %s alone",
+  (kind) => {
+    native.versions.node = kind === "runtime" ? "24.19.0" : "26.6.0";
+    native.conflict.mockReturnValue(kind === "profiler");
+    native.mainThread = kind !== "worker";
+    const { recorder } = fixture();
+    expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
+    expect(native.start).not.toHaveBeenCalled();
+  },
+);
+
+it.skipIf(
+  Boolean(process.versions.bun) ||
+    (process.platform !== "darwin" && Number(process.versions.node.split(".")[0]) >= 26),
+)("reports the interrupted CPU owner without running queued microtasks", async () => {
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      import.meta.resolve("tsx"),
+      "--input-type=module",
+      "-e",
+      `
+      import { createStallFlightRecorder } from ${JSON.stringify(new URL("./diagnostic-stall-flight-recorder.ts", import.meta.url).href)};
+      import { stallCpuOwner } from ${JSON.stringify(new URL("./diagnostic-stall-cpu.test-support.ts", import.meta.url).href)};
+      const recorder = createStallFlightRecorder(console.warn);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        let reentered = false;
+        queueMicrotask(() => { reentered = true; });
+        const startedAt = performance.now();
+        stallCpuOwner();
+        const endedAt = performance.now();
+        console.log(JSON.stringify({reentered, report: recorder.sample({startedAt, endedAt})}));
+      } finally { recorder.stop(); }
+      `,
+    ],
+    { timeout: 12_000 },
+  );
+  const { reentered, report } = JSON.parse(stdout.trim());
+  expect(reentered).toBe(false);
+  expect(report).toContain("sampleMode=interrupt");
+  expect(report).toContain(
+    "stallCpuOwner@openclaw:src/logging/diagnostic-stall-cpu.test-support.ts",
+  );
+  expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
+});
+
+it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
+  "captures the main thread's live futex wait three times within the profile byte cap",
+  async () => {
+    // Vitest runs in a worker; a subprocess exercises the real main-thread recorder.
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        "--input-type=module",
+        "-e",
+        `
+      import { createStallFlightRecorder } from ${JSON.stringify(new URL("./diagnostic-stall-flight-recorder.ts", import.meta.url).href)};
+      let ready = Promise.resolve();
+      process.once('worker', worker => {
+        worker.ref();
+        ready = new Promise(resolve => worker.once('online', () => { worker.unref(); resolve(); }));
+      });
+      const recorder = createStallFlightRecorder(message => { throw new Error(message); });
+      try {
+        await new Promise(setImmediate);
+        await ready;
+        const startedAt = performance.now();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3600);
+        const endedAt = performance.now();
+        console.log(recorder.sample({ startedAt, endedAt }));
+      } finally { recorder.stop(); }
+    `,
+      ],
+      { timeout: 12_000 },
+    );
+    const report = stdout.trim();
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
+    const samples = JSON.parse(report.match(/ kernel=(.*?) inclusive=/)![1]!) as Array<{
+      at: number;
+      state: string;
+      wchan: string;
+      syscall: string;
+      io: number[];
+      ctxt: number[];
+    }>;
+    expect(samples).toHaveLength(3);
+    for (const sample of samples) {
+      expect(sample.state).toBe("S");
+      expect(sample.wchan).toMatch(/futex/);
+      expect(sample.syscall).toBe(process.arch === "arm64" ? "98" : "202");
+      expect(sample.at).toBeGreaterThan(0);
+      expect(sample.at).toBeLessThan(3_600);
+      expect(sample.io).toHaveLength(7);
+      expect(sample.ctxt).toHaveLength(2);
+    }
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) < 26)(
+  "reports the spinning function from the observer before the main thread can return",
+  async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        fileURLToPath(new URL("./diagnostic-stall-spin.test-support.ts", import.meta.url)),
+        "--fast",
+      ],
+      { timeout: 5_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    let report = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      report += chunk.toString();
+      if (report.includes("main-thread stall in progress:") && report.endsWith("\n")) {
+        child.kill("SIGKILL");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+    expect(output).toContain("spin-entered");
+    expect(report).toContain("main-thread stall in progress:");
+    expect(report).toContain(
+      "stallProbeSpin@openclaw:src/logging/diagnostic-stall-spin.test-support.ts",
+    );
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_200);
+  },
+);

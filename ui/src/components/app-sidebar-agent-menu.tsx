@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, mapArray, merge, Show } from "solid-js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForAgentPanel } from "../app-route-paths.ts";
@@ -12,6 +12,7 @@ import { SidebarDropdown } from "./app-sidebar-dropdown.tsx";
 import { COMMAND_VALUE_PREFIX } from "./sidebar-identity-menu-links.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 import {
   createMenuControls,
   type MenuControls,
@@ -33,6 +34,8 @@ type SidebarAgentMenuSwitcherParams = {
   resolveAvatarUrl: (url: string) => string | null;
   avatarErrorHandler: (url: string) => () => void;
   agentUnreadCount: (agentId: string) => number;
+  /** Absent while this connection cannot turn an agent into a Template. */
+  onAgentShare?: (agentId: string) => void;
   onAgentSettings: (agentId: string) => void;
 };
 
@@ -70,34 +73,57 @@ function renderAgentAvatar(
 }
 
 function renderAgentGroupAvatar(
-  agents: readonly GatewayAgentRow[],
+  agents: () => readonly GatewayAgentRow[],
   params: SidebarAgentMenuSwitcherParams,
 ) {
-  const visibleAgents = agents.slice(0, agents.length > 4 ? 3 : 4);
+  const visibleAgents = createMemo(() => agents().slice(0, agents().length > 4 ? 3 : 4));
   return (
     <span
       class={[
         "sidebar-agent-menu__agent-avatar sidebar-agent-menu__avatar-group",
         {
-          "sidebar-agent-menu__avatar-group--pair": agents.length === 2,
-          "sidebar-agent-menu__avatar-group--triple": agents.length === 3,
+          "sidebar-agent-menu__avatar-group--pair": agents().length === 2,
+          "sidebar-agent-menu__avatar-group--triple": agents().length === 3,
         },
       ]}
       aria-hidden="true"
     >
-      <For each={visibleAgents}>
+      <For each={visibleAgents()} keyed={(agent) => agent.id}>
         {(agent) => (
-          <span class="sidebar-agent-menu__group-item">
-            {renderAgentAvatar(() => agent, params)}
-          </span>
+          <span class="sidebar-agent-menu__group-item">{renderAgentAvatar(agent, params)}</span>
         )}
       </For>
-      {agents.length > 4 ? (
+      {agents().length > 4 ? (
         <span class="sidebar-agent-menu__group-item sidebar-agent-menu__group-count">
-          {agents.length - visibleAgents.length}+
+          {agents().length - visibleAgents().length}+
         </span>
       ) : undefined}
     </span>
+  );
+}
+
+function AgentRowAction(props: {
+  controls?: MenuControls;
+  icon: "share" | "settings";
+  label: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      ref={props.controls?.ref()}
+      type="button"
+      class={["sidebar-agent-menu__action", `sidebar-agent-menu__${props.icon}`]}
+      aria-label={props.label}
+      tabindex="-1"
+      data-form-control
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onSelect();
+      }}
+    >
+      <Icon name={props.icon} />
+    </button>
   );
 }
 
@@ -154,21 +180,22 @@ function renderAgentRow(
               <span class="btn__spinner" aria-hidden="true" />
             </span>
           ) : (
-            <button
-              ref={controls?.ref()}
-              type="button"
-              class="sidebar-agent-menu__settings"
-              aria-label={t("agentChip.namedSettings", { name: label() })}
-              tabindex="-1"
-              data-form-control
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                params.onAgentSettings(agentId());
-              }}
-            >
-              <Icon name="settings" />
-            </button>
+            <>
+              <Show when={params.onAgentShare}>
+                <AgentRowAction
+                  controls={controls}
+                  icon="share"
+                  label={t("agentChip.namedShare", { name: label() })}
+                  onSelect={() => params.onAgentShare?.(agentId())}
+                />
+              </Show>
+              <AgentRowAction
+                controls={controls}
+                icon="settings"
+                label={t("agentChip.namedSettings", { name: label() })}
+                onSelect={() => params.onAgentSettings(agentId())}
+              />
+            </>
           )}
         </span>
       </span>
@@ -179,7 +206,7 @@ function renderAgentRow(
 function renderSidebarAgentMenuSwitcher(
   params: SidebarAgentMenuSwitcherParams,
   controls?: MenuControls,
-): MenuEntry[] {
+): () => MenuEntry[] {
   const agents = createMemo(() => {
     const pending = params.pendingAgent;
     const roster = pending
@@ -196,49 +223,46 @@ function renderSidebarAgentMenuSwitcher(
       ? (agents().find((agent) => normalizeAgentId(agent.id) === params.activeId) ?? agents()[0])
       : undefined,
   );
-  const entries: MenuEntry[] = [];
-  if (agents().length === 0) {
-    return entries;
-  }
-  if (agents().length > 1) {
-    entries.push({
-      id: "scope:all",
-      get label() {
-        return t("agentChip.showAll");
-      },
-      class: [
+  const allAgents: MenuItem = {
+    id: "scope:all",
+    get label() {
+      return t("agentChip.showAll");
+    },
+    get class() {
+      return [
         "sidebar-customize-menu__item sidebar-agent-menu__agent-switch",
         { "sidebar-agent-menu__agent-switch--active": params.allAgentsScope },
-      ],
-      attributes: {
+      ];
+    },
+    get attributes(): MenuItem["attributes"] {
+      return {
         "aria-current": params.allAgentsScope ? "true" : undefined,
         "data-initial-focus": autofocusAll() ? "" : undefined,
-      },
-      content: (
-        <span class="sidebar-agent-menu__agent-row">
-          {renderAgentGroupAvatar(agents(), params)}
-          <span class="agent-select__option-copy">
-            <span class="agent-select__option-label">{t("agentChip.showAll")}</span>
-          </span>
+      };
+    },
+    content: (
+      <span class="sidebar-agent-menu__agent-row">
+        {renderAgentGroupAvatar(agents, params)}
+        <span class="agent-select__option-copy">
+          <span class="agent-select__option-label">{t("agentChip.showAll")}</span>
         </span>
-      ),
-    });
-  }
-  for (const agent of agents()) {
-    entries.push(
-      renderAgentRow(
-        () => agent,
-        params,
-        () => agent === autofocusAgent(),
-        controls,
-      ),
-    );
-  }
-  return entries;
+      </span>
+    ),
+  };
+  // Embedded controls share their agent row's lifetime, not an inventory refresh.
+  const rows = mapArray(
+    agents,
+    (agent) => renderAgentRow(agent, params, () => agent() === autofocusAgent(), controls),
+    { keyed: (agent) => agent.id },
+  );
+  return () => [...(agents().length > 1 ? [allAgents] : []), ...rows()];
 }
 
 export function renderSidebarAgentMenu(
-  params: Omit<SidebarAgentMenuSwitcherParams, "allAgentsScope" | "onAgentSettings"> & {
+  params: Omit<
+    SidebarAgentMenuSwitcherParams,
+    "allAgentsScope" | "onAgentShare" | "onAgentSettings"
+  > & {
     position: { x: number; top: number; placement?: "right-start" };
     anchor?: HTMLElement;
     basePath: string;
@@ -250,6 +274,7 @@ export function renderSidebarAgentMenu(
     onPointerLeave: () => void;
     onAfterShow: () => void;
     onSwitchAgent: (agentId: string) => void;
+    onShareAgent?: (agentId: string) => void;
     onClose: (restoreFocus?: boolean) => void;
     onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
     ref?: (handle: MenuHandle) => void;
@@ -268,7 +293,7 @@ export function renderSidebarAgentMenu(
   const menuLabel = createMemo(() =>
     t(params.rosterMode ? "agentChip.workspaceMenuLabel" : "agentChip.menuLabel"),
   );
-  const agentsTitle = <div class="sidebar-customize-menu__title">{t("agentChip.agents")}</div>;
+  const agentsTitle = <MenuHeading label={t("agentChip.agents")} />;
   const createAgentItem: MenuItem = {
     id: `${COMMAND_VALUE_PREFIX}new-agent`,
     get label() {
@@ -304,6 +329,30 @@ export function renderSidebarAgentMenu(
       </span>
     ),
   };
+  const switcherItems = renderSidebarAgentMenuSwitcher(
+    merge(params, {
+      get allAgentsScope() {
+        return params.rosterMode && hasMultipleAgents();
+      },
+      get onAgentShare() {
+        const share = params.onShareAgent;
+        return (
+          share &&
+          ((agentId: string) => {
+            params.onClose(false);
+            share(agentId);
+          })
+        );
+      },
+      onAgentSettings: (agentId: string) => {
+        params.onClose(false);
+        params.onNavigate("agents", {
+          pathname: pathForAgentPanel(agentId, null, params.basePath),
+        });
+      },
+    }),
+    controls,
+  );
   const items = createMemo<MenuEntry[]>(() => [
     ...(params.agents.length > 0
       ? [
@@ -319,19 +368,7 @@ export function renderSidebarAgentMenu(
       kind: "group",
       id: "agents",
       class: "sidebar-agent-menu__agent-list",
-      items: renderSidebarAgentMenuSwitcher(
-        {
-          ...params,
-          allAgentsScope: params.rosterMode && hasMultipleAgents(),
-          onAgentSettings: (agentId) => {
-            params.onClose(false);
-            params.onNavigate("agents", {
-              pathname: pathForAgentPanel(agentId, null, params.basePath),
-            });
-          },
-        },
-        controls,
-      ),
+      items: switcherItems(),
     },
   ]);
 

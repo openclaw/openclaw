@@ -67,10 +67,8 @@ function directiveParams(
     }),
     ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
     modelState: createModelSelectionStateFixture({ agentCfg: {}, provider: "openai", model }),
-    initialModelLabel: `openai/${model}`,
     formatModelSwitchEvent: (label) => label,
     effectiveModelDirective: undefined,
-    typing: createMockTypingController(),
     ...overrides,
   };
 }
@@ -83,25 +81,17 @@ async function runRuntimePolicyDirective(
     typeof import("./directive-handling.impl.js")
   >("./directive-handling.impl.js");
   using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatusAsync");
+  const prepared = directiveParams("/elevated on");
   const sessionEntry = { sessionId: "runtime-policy", updatedAt: 1 };
   try {
     return await handleDirectiveOnly({
+      ...prepared,
+      ...prepared.modelState,
       ...params,
-      directives: parseInlineSessionDirectives("/elevated on"),
       sessionEntry,
       sessionStore: { [params.sessionKey]: sessionEntry },
       elevatedEnabled: false,
       elevatedAllowed: false,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      provider: "openai",
-      model: "gpt-5.5",
-      initialModelLabel: "openai/gpt-5.5",
-      formatModelSwitchEvent: (label) => label,
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      allowedModelKeys: new Set(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
     });
   } finally {
     expect(runtime).toHaveBeenCalledOnce();
@@ -124,6 +114,17 @@ function expectRejectedDirective(
 }
 
 describe("applyInlineDirectiveOverrides", () => {
+  it("does not read command-only payload fields for an ordinary message", async () => {
+    const params = directiveParams("ordinary message");
+    const formatModelSwitchEvent = vi.fn(() => (label: string) => label);
+    Object.defineProperty(params, "formatModelSwitchEvent", {
+      enumerable: true,
+      get: formatModelSwitchEvent,
+    });
+    expect(await applyInlineDirectiveOverrides(params)).toMatchObject({ kind: "continue" });
+    expect(formatModelSwitchEvent).not.toHaveBeenCalled();
+  });
+
   it.each(["thinking", "catalog"] as const)(
     "cancels a reply directive during %s discovery without consuming its late result",
     async (stage) => {

@@ -47,6 +47,20 @@ describe("MSTeams message mentions", () => {
     expect(result.text).toContain("`@[表示名](ユーザーID)`");
   });
 
+  it.each(["@[a", "@[", "@[a\\", "@[a](b"])(
+    "parses long unclosed %j runs in linear time",
+    (unit) => {
+      // Each shape took seconds at this size when every `@[` rescanned the tail.
+      const tail = unit.repeat(32_000);
+      const startedAt = performance.now();
+      const result = buildMSTeamsMessageActivity(`@[Bot](29:abc) ${tail}`);
+
+      expect(performance.now() - startedAt).toBeLessThan(250);
+      expect(result.text).toBe(`<at>Bot</at> ${tail}`);
+      expect(requireMentionEntity(result)).toMatchObject({ mentioned: { id: "29:abc" } });
+    },
+  );
+
   it("accepts Bot Framework IDs with non-hex payloads (29:xxx)", () => {
     const result = buildMSTeamsMessageActivity("@[Bot](29:08q2j2o3jc09au90eucae)");
     expect(requireMentionEntity(result)).toMatchObject({

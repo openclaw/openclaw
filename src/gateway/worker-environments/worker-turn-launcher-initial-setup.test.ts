@@ -179,8 +179,13 @@ describe("initial worker setup admission", () => {
       await fixture.operation;
       if (mode === "worker-turn") {
         await expect(run).rejects.toThrow("does not match its attached environment");
-        expect(environments.get).toHaveBeenCalledOnce();
-        expectUncalled(runLocal);
+        expectUncalled(
+          runLocal,
+          environments.ensureRetainedRunning,
+          environments.startTunnel,
+          environments.acquireTurnCredential,
+        );
+        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       } else {
         await expect(run).resolves.toMatchObject({ meta: { durationMs: 1 } });
         expect(runLocal).toHaveBeenCalledOnce();
@@ -318,7 +323,7 @@ describe("initial worker setup admission", () => {
       authority.revoke();
       fixture.finish.resolve();
       await fixture.operation;
-      await expect(run).rejects.toThrow(/authority/);
+      await expect(run).rejects.toThrow(/authority revoked|no longer active/);
       expectUncalled(resolveWorkspace, environments.startTunnel, runLocal);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },

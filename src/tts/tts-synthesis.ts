@@ -1,12 +1,12 @@
 import { resolveChannelTtsVoiceDelivery } from "../channels/plugins/tts-capabilities.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
-import { transcodeAudioBuffer } from "../media/media-services.js";
+import { transcodeAudioBuffer } from "../media/audio-transcode.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
-import type { TtsDirectiveOverrides } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { normalizeSpeechText } from "./speech-text.js";
-import type { TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
+import { resolveTtsSynthesisTarget, shouldDeliverTtsAsVoice } from "./tts-delivery.js";
+import type { TtsDirectiveOverrides, TtsResult, TtsSynthesisResult } from "./tts-runtime-types.js";
 import {
   executeTtsProviderAttempts,
   sanitizeTtsErrorForLog,
@@ -19,56 +19,6 @@ export type TtsAudioPersistence = (params: {
   fileExtension: string;
   outputFormat?: string;
 }) => Promise<string>;
-
-export function supportsNativeVoiceNoteTts(channel: string | undefined): boolean {
-  return resolveChannelTtsVoiceDelivery(channel) !== undefined;
-}
-
-export function supportsTranscodedVoiceNoteTts(channel: string | undefined): boolean {
-  const delivery = resolveChannelTtsVoiceDelivery(channel);
-  return delivery?.synthesisTarget === "voice-note" && delivery.transcodesAudio === true;
-}
-
-export function resolveTtsSynthesisTarget(
-  channel: string | undefined,
-): "audio-file" | "voice-note" {
-  return resolveChannelTtsVoiceDelivery(channel)?.synthesisTarget ?? "audio-file";
-}
-
-export function shouldDeliverTtsAsVoice(params: {
-  channel: string | undefined;
-  target: "audio-file" | "voice-note" | undefined;
-  voiceCompatible: boolean | undefined;
-  fileExtension?: string;
-  outputFormat?: string;
-}): boolean {
-  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
-  if (!delivery) {
-    return false;
-  }
-  if (delivery.synthesisTarget === "audio-file") {
-    if (params.target !== "audio-file") {
-      return false;
-    }
-    const { fileExtension, outputFormat } = params;
-    const formats = new Set(
-      delivery.audioFileFormats?.map((format) => format.trim().toLowerCase()),
-    );
-    if (formats.size === 0) {
-      return false;
-    }
-    const extension = fileExtension?.trim().toLowerCase();
-    if (extension && formats.has(extension.replace(/^\./, ""))) {
-      return true;
-    }
-    const normalizedOutputFormat = outputFormat?.trim().toLowerCase();
-    return normalizedOutputFormat ? formats.has(normalizedOutputFormat) : false;
-  }
-  if (params.target !== "voice-note") {
-    return false;
-  }
-  return params.voiceCompatible === true || delivery.transcodesAudio === true;
-}
 
 export async function textToSpeechCore(
   params: SpeechSynthesisParams,
@@ -86,42 +36,34 @@ export async function textToSpeechCore(
   }
 
   const transcodeChannel = params.channel;
-  const transcodeTarget = synthesis.target;
-  const transcodeBuffer = synthesis.audioBuffer;
-  const transcodeExtension = synthesis.fileExtension;
-  const transcoded = await (async () => {
-    if (transcodeTarget !== "audio-file") {
-      return undefined;
-    }
+  let audioBuffer = synthesis.audioBuffer;
+  let fileExtension = synthesis.fileExtension;
+  let outputFormat = synthesis.outputFormat;
+  if (synthesis.target === "audio-file") {
     const delivery = resolveChannelTtsVoiceDelivery(transcodeChannel);
     const preferred = delivery?.preferAudioFileFormat?.trim().toLowerCase();
-    if (!preferred) {
-      return undefined;
-    }
-    const sourceExt = transcodeExtension.trim().toLowerCase().replace(/^\./, "");
-    if (sourceExt === preferred) {
-      return undefined;
-    }
-    const outcome = await transcodeAudioBuffer({
-      audioBuffer: transcodeBuffer,
-      sourceExtension: sourceExt,
-      targetExtension: preferred,
-    });
-    if (!outcome.ok) {
-      if (outcome.reason === "transcoder-failed") {
-        // Surface only the case where the host actually attempted the transcode
-        // and it broke. The other reasons are by-design skips and would just be log noise.
-        logVerbose(
-          `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${transcodeChannel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
-        );
+    if (preferred) {
+      const sourceExt = fileExtension.trim().toLowerCase().replace(/^\./, "");
+      if (sourceExt !== preferred) {
+        const outcome = await transcodeAudioBuffer({
+          audioBuffer,
+          sourceExtension: sourceExt,
+          targetExtension: preferred,
+        });
+        if (outcome.ok) {
+          audioBuffer = outcome.buffer;
+          fileExtension = `.${preferred}`;
+          outputFormat = preferred;
+        } else if (outcome.reason === "transcoder-failed") {
+          // Surface only the case where the host actually attempted the transcode
+          // and it broke. The other reasons are by-design skips and would just be log noise.
+          logVerbose(
+            `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${transcodeChannel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
+          );
+        }
       }
-      return undefined;
     }
-    return { audioBuffer: outcome.buffer, fileExtension: `.${preferred}`, outputFormat: preferred };
-  })();
-  const audioBuffer = transcoded ? transcoded.audioBuffer : synthesis.audioBuffer;
-  const fileExtension = transcoded ? transcoded.fileExtension : synthesis.fileExtension;
-  const outputFormat = transcoded ? transcoded.outputFormat : synthesis.outputFormat;
+  }
   const metadata = {
     latencyMs: synthesis.latencyMs,
     provider: synthesis.provider,

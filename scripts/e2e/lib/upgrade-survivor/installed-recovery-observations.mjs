@@ -3,6 +3,61 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export const fileDigest = (file) => sha256(fs.readFileSync(file));
+export const fileIdentity = (file) => {
+  const stat = fs.lstatSync(file, { bigint: true });
+  return `${stat.dev}:${stat.ino}`;
+};
+
+// Only the scheduler's setgid evidence tree shares reads with the host. The
+// private outer directory remains host-only; package/config modes are unrelated.
+export function installedRecoveryEvidenceMode(directory, isDirectory = false) {
+  const parent = fs.lstatSync(directory);
+  assert(parent.isDirectory(), "Evidence parent must be a physical directory");
+  const mode = parent.mode & 0o7777;
+  const shared = mode === 0o2770 || mode === 0o2750;
+  return shared ? (isDirectory ? 0o2750 : 0o640) : isDirectory ? 0o700 : 0o600;
+}
+
+export function openInstalledRecoveryEvidence(file) {
+  const mode = installedRecoveryEvidenceMode(path.dirname(file));
+  const fd = fs.openSync(file, "wx", mode);
+  try {
+    fs.fchmodSync(fd, mode); // Creation umask must not remove the host's read access.
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+}
+
+export function writeInstalledRecoveryEvidence(file, value) {
+  const temporary = `${file}.tmp`;
+  const fd = openInstalledRecoveryEvidence(temporary);
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(temporary, file);
+}
+
+export function startInstalledRecoveryRun(artifacts, cut) {
+  const summary = path.join(artifacts, "installed-recovery.json");
+  // Invalidate an earlier PASS before install or helper preparation can fail.
+  // Keep prior attempt files separate; only this current pointer is replaced.
+  writeInstalledRecoveryEvidence(summary, { status: "running" });
+  const directory = fs.mkdtempSync(path.join(artifacts, "installed-recovery-"));
+  fs.chmodSync(directory, installedRecoveryEvidenceMode(artifacts, true));
+  writeInstalledRecoveryEvidence(summary, {
+    status: "running",
+    runDirectory: path.basename(directory),
+    selectedCuts: [cut],
+  });
+  return { directory, summary };
+}
+
 // These checkpoints observe direct renames, including in-tree hardlink aliases.
 // Keep every entry (even npm caches); never follow links outside the package.
 export function capturePackageTree(root, { maxEntries = 100_000, maxBytes = 4 * 1024 ** 3 } = {}) {
@@ -102,9 +157,10 @@ export function assertPackageTree(expected, actual, { tightenPermissions = false
         changed(relative, field === "content" && prior.kind === "link" ? "link target" : field);
       }
     }
-    // Current full-fingerprint publication clears exactly group/other access.
-    // A writable fixture must not silently accept failed or partial tightening.
-    const mode = tightenPermissions && prior.kind !== "link" ? prior.mode & 0o7700 : prior.mode;
+    // Current full-fingerprint publication clears exactly group/other write access.
+    // It keeps read/execute, so a non-root service can still run a root-owned install.
+    // A writable fixture must not silently accept failed, partial, or excess tightening.
+    const mode = tightenPermissions && prior.kind !== "link" ? prior.mode & 0o7755 : prior.mode;
     if (mode !== observed.mode) {
       changed(
         relative,

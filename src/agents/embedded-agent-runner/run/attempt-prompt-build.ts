@@ -14,6 +14,7 @@ import { buildInterSessionPromptContext } from "../../../sessions/input-provenan
 import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import type { McpToolCatalogDiagnostic } from "../../agent-bundle-mcp-catalog.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -25,6 +26,7 @@ import {
 } from "../../internal-runtime-context.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { wrapUntrustedPromptDataBlock } from "../../sanitize-for-prompt.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import {
   appendModelIdentitySystemPrompt,
@@ -63,7 +65,6 @@ import {
   buildSystemUpdateMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
-import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type HookRunner = ReturnType<typeof getGlobalHookRunner>;
@@ -241,11 +242,22 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const authorizedHookResult =
     preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
-      : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
-          toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
-          activeToolNames: callableToolNames,
-          assertHostActive,
-        });
+      : await hookRunner.runAuthorizedPromptBuild(
+          {
+            ...promptEvent,
+            // The embedded runner owns its transcript; there is no native binding to invalidate.
+            continuity:
+              promptBuildMessages.length > 0
+                ? { state: "resumed", history: "included" }
+                : { state: "fresh", history: "none" },
+          },
+          hookCtx,
+          {
+            toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
+            activeToolNames: callableToolNames,
+            assertHostActive,
+          },
+        );
   const promptBeforeResolvedToolFinalization = effectivePrompt;
   effectivePrompt = applyResolvedToolPromptFinalizer({
     prompt: effectivePrompt,
@@ -349,22 +361,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
 type PromptContextAttempt = Pick<
   EmbeddedRunAttemptParams,
-  | "chatType"
   | "config"
   | "contextTokenBudget"
   | "currentInboundContext"
   | "currentInboundEventKind"
   | "internalEvents"
-  | "messageChannel"
-  | "messageProvider"
   | "fallbackActive"
-  | "requireExplicitMessageTarget"
-  | "messageToolFinalByDefault"
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
   | "sessionTarget"
-  | "sourceReplyDeliveryMode"
   | "suppressNextUserMessagePersistence"
   | "skipPreparedUserTurnMessage"
   | "userTurnTranscriptRecorder"
@@ -395,6 +401,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
   systemPromptRuntimeContextFragments?: readonly RuntimeContextFragment[];
+  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
@@ -457,18 +464,17 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
 
   const escapedProjection = !input.isRawModelRun && usesEscapedRuntimeContext(input.sessionVersion);
   const eventFragments: RuntimeContextFragment[] = [
-    ...buildTurnDeliveryContextFragments({
-      config: attempt.config,
-      sessionKey: attempt.sessionKey,
-      chatType: attempt.chatType,
-      channel: attempt.messageChannel ?? attempt.messageProvider,
-      sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-      requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
-      messageToolFinalByDefault: attempt.messageToolFinalByDefault,
-    }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
     ...(input.systemPromptRuntimeContextFragments ?? []),
+    ...(input.mcpDiagnostics ?? []).map((diagnostic): RuntimeContextFragment => ({
+      kind: "conversation-data",
+      text: wrapUntrustedPromptDataBlock({
+        label: "MCP server availability",
+        text: `MCP server ${diagnostic.serverName} unavailable: ${diagnostic.message}. Check server reachability or retry on a later turn.`,
+        maxChars: 2_000,
+      }),
+    })),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments

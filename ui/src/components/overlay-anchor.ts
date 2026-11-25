@@ -91,6 +91,7 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
   let trackedAnchor: AnchorElement | undefined;
   let releaseTracking: (() => void) | undefined;
   let refreshIntersection: (() => void) | undefined;
+  let refreshAnimations: (() => void) | undefined;
   let animations: Animation[] = [];
   let positionedCrossRoot: boolean | undefined;
   let proxyLeft = Number.NaN;
@@ -147,6 +148,7 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     releaseTracking?.();
     releaseTracking = undefined;
     refreshIntersection = undefined;
+    refreshAnimations = undefined;
     trackedAnchor = undefined;
     animations = [];
   };
@@ -167,6 +169,9 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
         stop();
         return;
       }
+      const refresh = refreshAnimations;
+      refreshAnimations = undefined;
+      refresh?.();
       // A live cross-root binding can move into the surface root between frames.
       if (crossRoot(activeBinding) !== positionedCrossRoot) {
         apply();
@@ -196,7 +201,7 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     let observedHeight = Number.NaN;
     let viewportWidth = doc.documentElement.clientWidth;
     let viewportHeight = doc.documentElement.clientHeight;
-    const captureAnimations = () => {
+    const readAnimations = () => {
       animations = anchorAncestors
         .flatMap((element) => element.getAnimations())
         .filter((animation) => {
@@ -228,6 +233,12 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
               )
           );
         });
+    };
+    const captureAnimations = () => {
+      // Animation enumeration can flush style; coalesce observer notifications
+      // with the frame that already measures the anchor.
+      refreshAnimations = readAnimations;
+      queueFrame();
     };
     const invalidate = () => {
       if (!active) {

@@ -7,7 +7,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
-import { Icon } from "../solid/icon.tsx";
+import { IconButton } from "../solid/icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import "../tooltip.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
@@ -133,20 +133,15 @@ function FullscreenButton(props: { controller: DesktopFullscreen }) {
           : "desktop.fullscreenUnavailable",
     );
   return (
-    <openclaw-tooltip prop:content={label()}>
-      <button
-        class="bp-icon desktop-fullscreen-button"
-        type="button"
-        aria-label={label()}
-        aria-pressed={props.controller.active() ? "true" : "false"}
-        aria-disabled={props.controller.supported() ? "false" : "true"}
-        onClick={(event) => void props.controller.toggle(event.currentTarget)}
-      >
-        <span class="desktop-fullscreen-icon" aria-hidden="true">
-          <Icon name={props.controller.active() ? "minimize" : "maximize"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
+    <IconButton
+      size={28}
+      class="rail-header__action bp-icon desktop-fullscreen-button"
+      label={label()}
+      icon={props.controller.active() ? "minimize" : "maximize"}
+      pressed={props.controller.active()}
+      aria-disabled={props.controller.supported() ? "false" : "true"}
+      onClick={(event) => void props.controller.toggle(event.currentTarget)}
+    />
   );
 }
 

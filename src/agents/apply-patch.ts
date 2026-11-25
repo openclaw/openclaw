@@ -93,12 +93,13 @@ export function createApplyPatchTool(
     containmentSource?: ApplyPatchContainmentSource;
     abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
+    prepareHostFileMutation?: ApplyPatchFileOptions["prepareHostFileMutation"];
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const root = options.root ?? cwd;
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly !== false;
+  const workspaceOnly = options.workspaceOnly ?? Boolean(sandbox);
 
   return {
     name: "apply_patch",
@@ -127,6 +128,7 @@ export function createApplyPatchTool(
           sandbox,
           workspaceOnly,
           memoryWriteProvenance: options.memoryWriteProvenance,
+          prepareHostFileMutation: options.prepareHostFileMutation,
           signal: executionSignal,
         });
       } catch (error) {
@@ -171,6 +173,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
       return await commitPatchHunks(hunks, fileOps, patchOptions);
     },
+    options.signal,
   );
 }
 

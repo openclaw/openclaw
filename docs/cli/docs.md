@@ -42,6 +42,9 @@ openclaw docs gateway token secretref
 
 `openclaw docs` calls `https://docs.openclaw.ai/api/search` and renders the JSON results. The search request uses a fixed 30 second timeout.
 
+Ctrl-C or SIGTERM cancels an in-progress search, including its response download,
+without printing a partial result or a search-failure envelope.
+
 ## Output
 
 In a rich (TTY) terminal, results render as a heading followed by a bullet list: page title, linked docs URL, and a short snippet on the next line. Empty results print "No results.".

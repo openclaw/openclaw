@@ -23,7 +23,8 @@ import {
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
@@ -73,7 +74,7 @@ function createSessionPatchHandler(
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     const diagnostics = startSessionPatchDiagnostics(method);
     let archivedSessionsCommitted = false;
-    let preparingOperator: ReturnType<typeof captureGatewayOperatorRunAuthority> | undefined;
+    let preparingOperator: ReturnType<typeof prepareGatewayOperatorRunAuthority> | undefined;
     try {
       let request:
         | { many: true; params: SessionsPatchManyParams }
@@ -90,6 +91,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
+      diagnostics.describeRequest(request.many ? request.params.targets.length : 1, inputPatch);
       const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
@@ -130,7 +132,7 @@ function createSessionPatchHandler(
         patch.agentRuntime !== undefined ||
         patch.cyberAccessProgram !== undefined
       ) {
-        preparingOperator = captureGatewayOperatorRunAuthority({
+        preparingOperator = prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,
@@ -144,6 +146,8 @@ function createSessionPatchHandler(
         signal,
         diagnostics,
         operatorAuthority: preparingOperator,
+        followSharingRegistration: sessionMutationAuthorization?.followRegistration,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
         onCreatedSessionCommitted: request.many
           ? undefined
           : sessionMutationAuthorization?.recordCreatedSession,
@@ -271,13 +275,16 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         allowMissing: true,
       });
       try {
-        const target = facts.readCurrent(context.getRuntimeConfig()).target;
+        const { target, membership } = facts.readCurrent(context.getRuntimeConfig());
         if (
           !target ||
           target.entry.sessionId !== params.expectedSessionId ||
           target.entry.incognito ||
           authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
-          createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
+          createSessionListEntryFilter({ client, cfg, membership })?.(
+            target.storeKey,
+            target.entry,
+          ) === false
         ) {
           respondError(
             respond,
@@ -295,7 +302,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             change: { kind: "visibility", hidden: params.hidden },
             assertCurrent: () => {
               const currentCfg = context.getRuntimeConfig();
-              const current = facts.readCurrent(currentCfg).target;
+              const { target: current, membership: currentMembership } =
+                facts.readCurrent(currentCfg);
               const currentProfile = client.authenticatedUserProfile?.profileId;
               if (
                 client.invalidated ||
@@ -304,10 +312,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
                 !current ||
                 current.entry.sessionId !== params.expectedSessionId ||
                 current.entry.incognito ||
-                createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-                  current.storeKey,
-                  current.entry,
-                ) === false
+                createSessionListEntryFilter({
+                  client,
+                  cfg: currentCfg,
+                  membership: currentMembership,
+                })?.(current.storeKey, current.entry) === false
               ) {
                 throw sessionMutationForbiddenError(
                   "Session access changed. Refresh the session list.",
@@ -390,10 +399,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           currentCfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
         ) =>
           authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-          (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-            candidate.storeKey,
-            candidate.entry,
-          ) === false
+          (createSessionListEntryFilter({
+            client,
+            cfg: currentCfg,
+            membership: facts.readCurrent(currentCfg).membership,
+          })?.(candidate.storeKey, candidate.entry) === false
             ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
             : null);
         const visibilityError = authorizeView(target);
@@ -409,7 +419,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
             ErrorCodes.INVALID_REQUEST,
             `unknown session owner "${params.owner.id}". ${
               params.owner.type === "human"
-                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
+                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the OpenClaw app."
                 : "Agent owners must name a configured agent."
             }`,
           );
@@ -603,7 +613,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const captured = await captureGatewayOperatorRunAuthority({
+    const captured = await prepareGatewayOperatorRunAuthority({
       client,
       context,
       hasCurrentClientAuthority,
@@ -615,6 +625,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     try {
       const result = await performGatewaySessionReset({
         operatorAuthority: captured?.authority,
+        readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
+        getCurrentSessionAccessCap: () => operatorSessionCap(client, context.getRuntimeConfig()),
         key,
         ...(p.agentId ? { agentId: p.agentId } : {}),
         reason,

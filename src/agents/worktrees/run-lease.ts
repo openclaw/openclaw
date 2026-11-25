@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as errorMessage, toErrorObject } from "../../infra/errors.js";
 import { realpathOrResolve } from "../../infra/path-existence.js";
+import { registerProcessExitCleanup } from "../../infra/process-exit-cleanup.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
@@ -17,7 +19,11 @@ import {
 } from "./git-lock.js";
 import { worktreePathExists } from "./git.js";
 import { readRegistryWorktree, readRegistryWorktrees } from "./registry-read.js";
-import { claimWorktreeRemovalRow, releaseWorktreeRunLeaseRow } from "./registry.js";
+import {
+  claimWorktreeRemovalRow,
+  recordRegistryWorktreeActivity,
+  releaseWorktreeRunLeaseRow,
+} from "./registry.js";
 import { setWorktreeRunEndCleanupFailure, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import {
   admitWorktreeRunLeaseRowAsync,
@@ -91,6 +97,7 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       }
       const options = { beforeRun: () => context.admission.assertCurrent() };
       await assertManagedWorktreeRemovalComplete(record, options);
+      await recordRegistryWorktreeActivity(context.environment, record, options.beforeRun);
       await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
@@ -127,6 +134,7 @@ async function releaseGitLock(cleanup: LeaseCleanup): Promise<boolean> {
     try {
       const record = await readRegistryWorktree(cleanup.context, cleanup.id);
       if (record) {
+        await recordRegistryWorktreeActivity(cleanup.context.environment, record);
         await unlockWorktree(record);
       }
     } catch (error) {
@@ -158,23 +166,23 @@ export async function resolveWorktreeForPath(params: {
   if (records.length === 0) {
     return undefined;
   }
-  const bases = new Map<string, string>();
-  for (const record of records) {
-    bases.set(record.id, await realpathOrResolve(record.path));
-  }
-  const seen = new Set<string>();
-  for (const candidate of params.candidatePaths) {
-    if (!candidate || seen.has(candidate)) {
+  // Paths are canonical at creation/migration; keep registry order for overlapping roots.
+  const bases = new Map(records.map((record, index) => [record.path, index] as const).toReversed());
+  for (const candidate of new Set(params.candidatePaths)) {
+    if (!candidate) {
       continue;
     }
-    seen.add(candidate);
-    const real = await realpathOrResolve(candidate);
-    for (const record of records) {
-      const base = bases.get(record.id);
-      if (base && (real === base || real.startsWith(`${base}${path.sep}`))) {
-        context.admission.assertCurrent();
-        return { context, record };
+    let first = records.length;
+    for (let current = await realpathOrResolve(candidate); ; current = path.dirname(current)) {
+      first = Math.min(first, bases.get(current) ?? records.length);
+      if (path.dirname(current) === current) {
+        break;
       }
+    }
+    const record = records[first];
+    if (record) {
+      context.admission.assertCurrent();
+      return { context, record };
     }
   }
   context.admission.assertCurrent();
@@ -237,6 +245,7 @@ async function runLeaseCleanup(cleanup: LeaseCleanup): Promise<boolean> {
 }
 
 function retainCleanupFailure(cleanup: LeaseCleanup, error: unknown): void {
+  materializeErrorStack(error);
   cleanup.failure = error;
   pendingLeaseCleanups.add(cleanup);
   setWorktreeRunEndCleanupFailure(cleanup.context, cleanup, { error });
@@ -256,7 +265,7 @@ function ensureExitCleanupRegistered(): void {
   }
   exitCleanupRegistered = true;
   // Only settled admissions can be deleted synchronously; unknown writers may still insert.
-  process.on("exit", () => {
+  registerProcessExitCleanup(() => {
     for (const cleanup of pendingLeaseCleanups) {
       if (cleanup.admissionSettled && !cleanup.rowDeleted) {
         try {

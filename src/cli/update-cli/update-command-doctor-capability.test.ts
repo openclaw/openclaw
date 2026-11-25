@@ -3,10 +3,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import * as commandExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -34,6 +35,12 @@ it.each([
   { target: "legacy", coreAlreadyCurrent: true },
   { target: "pre-worker", coreAlreadyCurrent: false },
   { target: "modern", coreAlreadyCurrent: false },
+  { target: "modern", coreAlreadyCurrent: false, retirement: true },
+  { target: "modern", coreAlreadyCurrent: true, retirement: true },
+  { target: "modern", coreAlreadyCurrent: false, retirement: true, pendingMigration: true },
+  { target: "modern", coreAlreadyCurrent: false, retirement: true, retirementCapability: false },
+  { target: "legacy", coreAlreadyCurrent: false, retirement: true },
+  { target: "invalid-retirement-capability", coreAlreadyCurrent: false },
   { target: "malformed", coreAlreadyCurrent: false },
   { target: "unknown-protocol", coreAlreadyCurrent: false },
   { target: "probe-failed", coreAlreadyCurrent: false },
@@ -41,8 +48,20 @@ it.each([
   { target: "revoked", coreAlreadyCurrent: false },
   { target: "revoked-before-probe", coreAlreadyCurrent: false },
 ] as const)(
-  "converges changed plugins using the $target target Doctor contract (current=$coreAlreadyCurrent)",
-  async ({ target, coreAlreadyCurrent }) => {
+  "converges with the $target Doctor contract (current=$coreAlreadyCurrent, retirement=$retirement, pending=$pendingMigration, capability=$retirementCapability)",
+  async ({
+    target,
+    coreAlreadyCurrent,
+    retirement = false,
+    pendingMigration = false,
+    retirementCapability = true,
+  }: {
+    target: string;
+    coreAlreadyCurrent: boolean;
+    retirement?: boolean;
+    pendingMigration?: boolean;
+    retirementCapability?: boolean;
+  }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const root = state.path("target");
       const control = state.path("control");
@@ -74,7 +93,15 @@ it.each([
           : {
               state: 16,
               agent: 1,
-              ...(target === "modern" ? { doctorConfigWrites: "pid-start-v1" } : {}),
+              ...(target === "modern"
+                ? {
+                    doctorConfigWrites: "pid-start-v1",
+                    ...(retirementCapability ? { doctorRetirementOnly: true } : {}),
+                  }
+                : {}),
+              ...(target === "invalid-retirement-capability"
+                ? { doctorRetirementOnly: "yes" }
+                : {}),
               ...(target === "unknown-protocol" ? { doctorConfigWrites: "unknown-v2" } : {}),
             };
       if (target !== "pre-worker") {
@@ -93,6 +120,7 @@ it.each([
               ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
               const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
               if (input.fullIntegrityCheck !== true) throw new Error("Doctor lost full integrity request");
+              if (input.retirementOnly !== ${retirement && retirementCapability ? "true" : "undefined"}) throw new Error("Doctor selected the wrong retirement work profile");
               await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
                 fence.assertCurrent();
                 fs.appendFileSync(${JSON.stringify(marker)},"native-doctor\\n");
@@ -108,7 +136,7 @@ it.each([
       // inspection, both Doctor transports and native executor ownership are real.
       vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValue({
         resumed: true,
-        pluginUpdate,
+        pluginUpdate: { ...pluginUpdate, changed: !retirement },
       });
       let current = true;
       if (target === "revoked-before-probe") {
@@ -142,6 +170,21 @@ it.each([
         },
       );
       const record = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      if (retirement) {
+        recordUpdateRunStep(
+          record.runId,
+          { step: "finalize:doctor:model-retirement", status: "skipped" },
+          { env: state.env },
+        );
+      }
+      if (pendingMigration) {
+        await recordDeferredPluginMigrations({
+          env: state.env,
+          pending: [
+            { pluginId: "fixture", reason: "migration pending", command: "openclaw doctor --fix" },
+          ],
+        });
+      }
       const opts: UpdateCommandOptions = {
         yes: true,
         json: true,
@@ -184,6 +227,7 @@ it.each([
       });
       if (
         target === "malformed" ||
+        target === "invalid-retirement-capability" ||
         target === "unknown-protocol" ||
         target === "probe-failed" ||
         target === "missing-runner" ||
@@ -197,7 +241,9 @@ it.each([
           expect(await fs.readFile(marker, "utf8")).toBe("check\n");
         }
       } else {
-        expect((await pending).resultWithPostUpdate.status).toBe("ok");
+        expect((await pending).resultWithPostUpdate.status).toBe(
+          coreAlreadyCurrent && retirement ? "skipped" : "ok",
+        );
         expect(await fs.readFile(marker, "utf8")).toBe(
           `${target === "pre-worker" ? "" : "check\n"}${target === "modern" ? "native" : "legacy"}-doctor\n`,
         );

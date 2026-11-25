@@ -20,7 +20,6 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import * as gitExec from "./git-exec.js";
-import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import {
   exists,
   git,
@@ -157,8 +156,7 @@ describe("Git operation host lifecycle", () => {
   });
 
   it("bounds ignored dependency output during snapshot without losing private staged inputs", async () => {
-    const root = tempDirs.make("openclaw-ignored-inventory-");
-    const repo = await repository(root);
+    const repo = await repository(tempDirs.make("openclaw-ignored-inventory-"));
     await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\nmedia/\nprivate.txt\n");
     await git(repo, "add", ".gitignore");
     await git(repo, "commit", "-m", "ignore generated and private files");
@@ -285,35 +283,34 @@ describe("Git operation host lifecycle", () => {
   it.skipIf(process.platform === "win32")(
     "resolves unknown dirent types through runtime fixtures during cleanup inspection",
     async () => {
-      const root = tempDirs.make("openclaw-unknown-dirent-");
-      const repo = await repository(root);
+      const repo = await repository(tempDirs.make("openclaw-unknown-dirent-"));
       await fs.writeFile(path.join(repo, ".gitignore"), "dependencies/\n");
       const rawDirectory = Buffer.concat([
         Buffer.from(`${repo}/dependencies/`),
         supportsRawPathBytes ? Buffer.from([0xff]) : Buffer.from("界"),
       ]);
-      const name = Buffer.concat([
-        Buffer.from("ordinary-"),
-        supportsRawPathBytes ? Buffer.from([0xfe]) : Buffer.from("文"),
-      ]);
+      const name = supportsRawPathBytes ? Buffer.from([0xfe]) : Buffer.from("文");
       const child = Buffer.concat([rawDirectory, Buffer.from("/"), name]);
       await fs.mkdir(rawDirectory, { recursive: true });
       await fs.writeFile(child, "generated, not snapshot-owned\n");
-      // Observe the directory API at the inventory owner used by workers.
-      const directoryFixture = installUnknownDirentFixture(rawDirectory, name);
-      expect(
-        await executeGitWorktreeOperation({
+      const empty = Buffer.concat([rawDirectory, Buffer.from("/empty")]);
+      await fs.mkdir(empty);
+      const external = path.join(repo, "..", "external");
+      await fs.mkdir(path.join(external, ".git"), { recursive: true });
+      await fs.symlink(external, Buffer.concat([rawDirectory, Buffer.from("/link")]), "dir");
+      const inspect = () =>
+        executeGitWorktreeOperation({
           type: "worktree.cleanup-inspection",
           input: { kind: "nested-repository", checkoutPath: repo },
-        }),
-      ).toEqual({ retainedReason: undefined });
-      directoryFixture.expectConsumed(child);
+        });
+      expect(await inspect()).toEqual({ retainedReason: undefined });
+      await fs.symlink("missing-git-metadata", Buffer.concat([empty, Buffer.from("/.git")]));
+      expect(await inspect()).toEqual({ retainedReason: "nested-repository" });
     },
   );
 
   it("still refuses an ignored inventory exceeding the cap after directory collapsing", async () => {
-    const root = tempDirs.make("openclaw-ignored-inventory-limit-");
-    const repo = await repository(root);
+    const repo = await repository(tempDirs.make("openclaw-ignored-inventory-limit-"));
     await fs.writeFile(path.join(repo, ".gitignore"), "*.ignored\n");
     for (let index = 0; index < 64; index++) {
       await fs.writeFile(path.join(repo, `private-file-${index}.ignored`), "");
@@ -640,8 +637,7 @@ describe("Git operation host lifecycle", () => {
   it.each(["canonical", "metadata"] as const)(
     "preserves late buffered %s cleanup errors after cancellation",
     async (kind) => {
-      const root = tempDirs.make("openclaw-git-worker-buffered-cleanup-");
-      const repo = await repository(root);
+      const repo = await repository(tempDirs.make("openclaw-git-worker-buffered-cleanup-"));
       const held = createEnteredGate();
       const abort = new AbortController();
       const failure =
@@ -689,8 +685,7 @@ describe("Git operation host lifecycle", () => {
   );
 
   it("captures caller Git policy before a queued sizing request can be changed", async () => {
-    const root = tempDirs.make("openclaw-caller-git-admission-");
-    const repo = await repository(root);
+    const repo = await repository(tempDirs.make("openclaw-caller-git-admission-"));
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let held = false;
@@ -815,6 +810,7 @@ describe("Git operation host lifecycle", () => {
     async (ending) => {
       const root = tempDirs.make("openclaw-git-worker-temporary-");
       const repo = await repository(root);
+      await fs.writeFile(path.join(repo, "dirty.txt"), "pending recovery\n");
       const neighbor = path.join(root, "neighbor.txt");
       await fs.writeFile(neighbor, "keep");
       const entered = createDeferredCore();

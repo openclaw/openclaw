@@ -1,6 +1,10 @@
 import * as ts from "typescript/ast";
 import { SymbolFlags, type Symbol } from "typescript/sync";
-import type { NativeTypeScriptProject } from "./native-typescript.mts";
+import {
+  containsTrigger,
+  identifierTokens,
+  type NativeTypeScriptProject,
+} from "./native-typescript.mts";
 
 const accounts = "src/state/user-model-accounts.ts";
 const profileMerge = "src/state/user-profiles-merge.ts";
@@ -33,11 +37,13 @@ const authSqlite = "src/agents/auth-profiles/sqlite.ts";
 const authStore = "src/agents/auth-profiles/store.ts";
 const authRuntime = "src/agents/auth-profiles/store-runtime.ts";
 const authUpdate = "src/agents/auth-profiles/store-update.ts";
+const authUpdater = "src/agents/auth-profiles/store-updater.ts";
 const authEnrollment = "src/agents/auth-profiles/authorization-enrollment.ts";
 const authEnrollmentRuntime = "src/agents/auth-profiles/authorization-enrollment-runtime.ts";
 const authKernel = "src/agents/auth-profiles/store-update.worker.ts";
 const authProfiles = "src/agents/auth-profiles/profiles.ts";
 const authStorage = "src/agents/sessions/auth-storage.ts";
+const authStorageCore = "src/agents/sessions/auth-storage.core.ts";
 const catalogWorker = "src/agents/prepared-model-catalog.worker.ts";
 const factory = (name: string) => key(authStore, `createAuthProfileStoreRuntime/${name}`);
 const guardedTables = new Set([
@@ -51,8 +57,8 @@ const guardedTables = new Set([
   "session_members",
 ]);
 
-// The startup fixture owns a newly created root before any Gateway runs; its one
-// historical shared receipt has no requester authority and cannot publish.
+// Offline benchmark roots are synthetic and owned before any Gateway runs.
+// Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
@@ -71,7 +77,12 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(file, name),
     [
       key(publicationRequestWorker, "githubPublications.insert/write"),
-      ...(file === sharedPublication ? [offlinePublicationFixture] : []),
+      ...(file === sharedPublication
+        ? [
+            offlinePublicationFixture,
+            key("scripts/perf/publication-empty-recovery-measure.ts", "seedPublicationRequests"),
+          ]
+        : []),
     ],
   ]),
   ...[
@@ -81,22 +92,29 @@ const publicationWriters = new Map<string, readonly string[]>([
     "bindAcceptedGitHubPublicationClaimSnapshotInDatabase",
   ].map((name): [string, string[]] => [
     key(sharedPublication, name),
-    [key(publicationWorker, "sharedMutation")],
+    [
+      key(publicationWorker, "sharedMutation"),
+      ...(name === "claimGitHubPublicationExecutionInDatabase" ? [offlinePublicationFixture] : []),
+    ],
   ]),
   [
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),
     [key(publicationWorker, "personalMutation")],
   ]),
   ...[
+    "reopenRepositoryGitHubPublicationInDatabase",
     "bindRepositoryGitHubPublicationCheckpointInDatabase",
     "failRepositoryGitHubPublicationPreparationInDatabase",
     "writeRepositoryGitHubPublicationInDatabase",
@@ -127,11 +145,14 @@ const recommendationCallbacks = new Map(
 // Native SDK compatibility has exact exported roots; workers must enter a host publication route.
 const authCredentialCallers = new Map<string, readonly string[]>([
   [
-    key(authStorage, "AuthStorage"),
+    key(authStorageCore, "AuthStorage"),
     ["forAgent", "forAgentAsync", "fromStorage", "inMemory"].map((name) =>
-      key(authStorage, `AuthStorage/${name}`),
+      key(authStorageCore, `AuthStorage/${name}`),
     ),
   ],
+  [key(authStorage, "AuthStorage"), []],
+  [key(authStorageCore, "AuthStorage/forAgent"), []],
+  [key(authStorage, "forAgent"), [key(authStorage, "AuthStorage/forAgent")]],
   [key(authStorage, "AuthStorage/forAgent"), [key(authStorage, "AuthStorage/create")]],
   [key(authStorage, "AuthStorage/create"), []],
   [
@@ -141,12 +162,12 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   [
     key(authUpdate, "runAuthProfileStoreUpdate"),
     [
-      key(authUpdate, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
+      key(authUpdater, "createAuthProfileStoreUpdater/updateAuthProfileStoreWithLock"),
       key(authProfiles, "removeAuthProfileTargetsWithLocks"),
       key(authProfiles, "removeAuthProfileTargetsWithLocks/publish"),
       key("src/agents/auth-profiles/upsert-with-lock.ts", "persistAuthProfileBatch"),
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
-      key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/updateAsync"),
+      key(authStorageCore, "SqliteAuthStorageBackend/updateAsync"),
       key(
         "src/system-agent/setup-inference-credential-access.ts",
         "activateSavedSetupCredential/replaceCredential",
@@ -251,7 +272,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     key(authRuntime, "saveAuthProfileStoreWithPreparedOwner"),
     [
       key("src/agents/auth-profiles/candidate-stores.ts", "runCandidateAuthProfileUpdate"),
-      key("src/agents/sessions/auth-storage.ts", "SqliteAuthStorageBackend/withLock"),
+      key(authStorageCore, "SqliteAuthStorageBackend/withLock"),
       key("src/commands/doctor-auth-flat-profiles.ts", "maybeMigrateAuthProfileJsonStoresToSqlite"),
     ],
   ],
@@ -272,7 +293,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
     ],
   ],
   [
-    key(authUpdate, "createAuthProfileStoreUpdater"),
+    key(authUpdater, "createAuthProfileStoreUpdater"),
     [key(authStore, "createAuthProfileStoreRuntime")],
   ],
   [
@@ -309,12 +330,25 @@ const genericCredentialCallers = new Map<string, readonly string[]>([
       key("src/state/config-machine-state.worker.ts", "machineState.write"),
       // localOnboardingStateKey always uses the onboarding.local. namespace.
       key("src/state/local-onboarding-state.worker.ts", "localOnboarding.complete"),
+      // installationCountStateKey is fixed to telemetry.installationCount.<endpoint hash>.
+      key("src/infra/telemetry-store.worker.ts", "telemetry.claimInstallationCount"),
+      // Pairing receipts are fixed to devicePairing.openclawIdNode.<peer>, never credential keys.
+      key("src/infra/device-pairing-openclaw-id.worker.ts", "consumeOpenClawIdNodePairingInWorker"),
+      // Fixed update recovery/cohort prefixes cannot address authProfiles.store.
+      ...[
+        "beginPluginCohortRecovery",
+        "writePluginCohortRecovery",
+        "recordPluginCohortIndexPublicationInDatabase",
+        "recordPluginCohortMigrationPublicationInDatabase",
+      ].map((name) => key("src/infra/update-run-recovery-store.ts", name)),
     ],
   ],
   [
     key(machineState, "updateConfigMachineStateInDatabase"),
     [
       key(machineState, "updateConfigMachineState"),
+      // Deletes only the exact run/transaction-bound update recovery pair.
+      key("src/infra/update-run-recovery-store.ts", "deletePluginCohortRecovery"),
       // Both receipt writers construct only automation-default: keys in their kernel.
       ...["recordDefaultProactiveJobInDatabase", "recordConvertedProactiveJobInDatabase"].map(
         (name) => key("src/cron/proactive-job-receipt.kernel.ts", name),
@@ -516,10 +550,27 @@ const nativeSdkExports = new Map<string, readonly string[]>([
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
   ...publicationWriters,
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
-    key(sessionMembers, name),
-    [key("src/config/sessions/session-sharing-store.worker.ts", "bindSqliteWorkerBackend/execute")],
-  ]),
+  ...["addSessionMember", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, string[]] => [
+      key(sessionMembers, name),
+      [
+        key(
+          "src/config/sessions/session-sharing-store.worker.ts",
+          "bindSqliteWorkerBackend/execute",
+        ),
+      ],
+    ],
+  ),
+  [
+    key(sessionMembers, "addSessionMemberInTransaction"),
+    [
+      key(sessionMembers, "addSessionMember"),
+      key(
+        "src/config/sessions/session-accessor.sqlite-involvement.worker.ts",
+        "updateSessionProfileInvolvementInTransaction",
+      ),
+    ],
+  ],
   [
     key(sessionArtifacts, "clearSessionCollaborationForKey"),
     [
@@ -592,7 +643,7 @@ const callers = new Map<string, readonly string[]>([
   ]),
   [
     key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase"),
-    [key(publicationWorker, "sharedMutation")],
+    [key(publicationWorker, "sharedMutation"), offlinePublicationFixture],
   ],
   [
     key(publicationDeletion, "deletePersonalGitHubSessionReceiptsInDatabase"),
@@ -685,10 +736,17 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
-  ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
-    key(sessionMembers, name),
-    1,
-  ]),
+  // Private restore output copies the validated named pair verbatim under parent exclusion.
+  [
+    key(
+      "src/infra/update-database-restore-source.ts",
+      "prepareUpdateDatabaseRestoreSourceInProcess",
+    ),
+    2,
+  ],
+  ...["addSessionMemberInTransaction", "setSessionMemberAccess", "removeSessionMember"].map(
+    (name): [string, number] => [key(sessionMembers, name), 1],
+  ),
   ...[
     "clearSessionCollaborationForKey",
     "copySessionNodeArtifactsForRepair",
@@ -749,6 +807,8 @@ const sinks = new Map<string, number>([
     1,
   ],
   [key("src/secrets/store/secret-store-github-handoff.worker.ts", "githubSetup.consume"), 1],
+  // One writeAdmitted upsert. The registry-derived name cannot select another identity secret.
+  [key("src/secrets/store/secret-store-clawhub-template.worker.ts", "templateClawHub.write"), 1],
   // Purge removes already-deleted rows and expiring GitHub handoffs, never live credentials.
   [
     key(
@@ -871,6 +931,10 @@ function conflictUpdateMayIncludeAuthKey(
 
 const credentialCommandOwners = new Map([
   [
+    "templateClawHub.write",
+    key("src/secrets/store/secret-store-clawhub-template.ts", "savePersonalTemplateClawHubToken"),
+  ],
+  [
     "machineState.write",
     key("src/state/config-machine-state-async.ts", "writeConfigMachineStateAsync"),
   ],
@@ -882,6 +946,10 @@ const credentialCommandOwners = new Map([
 ]);
 
 const repeatedEdges = new Map([
+  [
+    `${key(machineState, "writeConfigMachineStateInDatabase")}<-${key("src/infra/update-run-recovery-store.ts", "beginPluginCohortRecovery")}`,
+    2,
+  ],
   ...[
     key(
       "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
@@ -918,6 +986,29 @@ const repeatedEdges = new Map([
   ]),
 ]);
 
+function isAuthStorageFacadeInitializer(node: ts.Node): node is ts.CallExpression {
+  if (
+    !ts.isCallExpression(node) ||
+    !ts.isPropertyAccessExpression(node.expression) ||
+    !ts.isIdentifier(node.expression.expression) ||
+    node.expression.expression.text !== "Object" ||
+    node.expression.name.text !== "assign" ||
+    !ts.isVariableDeclaration(node.parent) ||
+    !ts.isIdentifier(node.parent.name) ||
+    node.parent.name.text !== "AuthStorage" ||
+    node.parent.initializer !== node ||
+    !ts.isVariableDeclarationList(node.parent.parent) ||
+    !(node.parent.parent.flags & ts.NodeFlags.Const) ||
+    !ts.isVariableStatement(node.parent.parent.parent) ||
+    !ts.isSourceFile(node.parent.parent.parent.parent) ||
+    node.arguments.length !== 2
+  ) {
+    return false;
+  }
+  const methods = node.arguments[1];
+  return methods !== undefined && ts.isObjectLiteralExpression(methods);
+}
+
 function operation(node: ts.Node): string {
   const scope: string[] = [];
   let property: string | undefined;
@@ -934,7 +1025,9 @@ function operation(node: ts.Node): string {
     if (
       ts.isVariableDeclaration(parent) &&
       parent.initializer &&
-      (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer))
+      (ts.isArrowFunction(parent.initializer) ||
+        ts.isFunctionExpression(parent.initializer) ||
+        isAuthStorageFacadeInitializer(parent.initializer))
     ) {
       scope.push(parent.name.getText());
     }
@@ -947,9 +1040,11 @@ function operation(node: ts.Node): string {
 
 /** Extend the existing worker-ratchet semantic snapshot; no second compiler or runtime guard. */
 export function inspectPersonalCredentialWriters(
-  sources: readonly { file: string; source: ts.SourceFile }[],
+  sources: readonly { file: string; source: ts.SourceFile; text: string }[],
   checker: NativeTypeScriptProject["project"]["checker"],
+  symbolsAt: (nodes: readonly ts.Node[]) => (Symbol | undefined)[],
 ): string[] {
+  const symbolAt = (node: ts.Node) => symbolsAt([node])[0];
   const approvedCallers = new Map([...callers, ...exclusiveMaintenanceCallers]);
   const protectedDeclarations = new Map<ts.Node, string>();
   const names = new Set(
@@ -959,13 +1054,26 @@ export function inspectPersonalCredentialWriters(
   );
   const aliases: [string, string][] = [];
   const bindingNames: (ts.Identifier | ts.StringLiteral)[] = [];
-  for (const { file, source } of sources) {
-    const visit = (node: ts.Node) => {
+  // Elsewhere only import/export declarations, found through their keywords, add facts.
+  const approvedFiles = new Set(
+    [...approvedCallers.keys()].map((entry) => entry.slice(0, entry.indexOf(":"))),
+  );
+  const moduleKeywords = /\b(?:import|export)\b/g;
+  for (const { file, source, text } of sources) {
+    const descend = approvedFiles.has(file) ? () => true : containsTrigger(text, moduleKeywords);
+    const visit = (node: ts.Node, declaration = false) => {
+      // Type subtrees hold no value declarations or specifiers; skip them before they materialize.
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (
         (ts.isFunctionDeclaration(node) ||
           ts.isFunctionExpression(node) ||
           ts.isClassDeclaration(node) ||
-          (ts.isMethodDeclaration(node) && ts.isClassDeclaration(node.parent)) ||
+          (ts.isMethodDeclaration(node) &&
+            (ts.isClassDeclaration(node.parent) ||
+              (ts.isObjectLiteralExpression(node.parent) &&
+                isAuthStorageFacadeInitializer(node.parent.parent)))) ||
           ts.isVariableDeclaration(node) ||
           ts.isBindingElement(node)) &&
         node.name &&
@@ -991,9 +1099,12 @@ export function inspectPersonalCredentialWriters(
       } else if (ts.isImportClause(node) && node.name) {
         bindingNames.push(node.name);
       }
-      node.forEachChild(visit);
+      const whole = declaration || ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
+      if (whole || descend(node)) {
+        node.forEachChild((child) => visit(child, whole));
+      }
     };
-    source.forEachChild(visit);
+    source.forEachChild((child) => visit(child));
   }
   const importedBindings = new Map<Symbol, Symbol>();
   // Compiler aliases are immutable; prepared binding overrides are applied separately.
@@ -1023,8 +1134,20 @@ export function inspectPersonalCredentialWriters(
     resolved.set(symbol, found);
     const declaration = symbol.valueDeclaration?.resolve();
     const direct = declaration && protectedDeclarations.get(declaration);
-    if (direct) {
-      found.push(direct);
+    // Object.assign exposes intersection properties without a single value declaration.
+    // The public override owns its method; the core method remains guarded on direct imports.
+    const declarations = direct
+      ? [direct]
+      : symbol.declarations.flatMap((entry) => {
+          const memberDeclaration = entry.resolve();
+          const target = memberDeclaration && protectedDeclarations.get(memberDeclaration);
+          return target ? [target] : [];
+        });
+    const selected =
+      declarations.find((target) => target.startsWith(`${authStorage}:AuthStorage/`)) ??
+      declarations[0];
+    if (selected) {
+      found.push(selected);
     } else if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
       found.push(...targets(checker.getShorthandAssignmentValueSymbol(declaration)));
     } else if (symbol.flags & SymbolFlags.Module) {
@@ -1048,7 +1171,7 @@ export function inspectPersonalCredentialWriters(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword
     ) {
       const specifier = expression.arguments[0];
-      return specifier && resolveSymbol(checker.getSymbolAtLocation(specifier));
+      return specifier && resolveSymbol(symbolAt(specifier));
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -1065,11 +1188,11 @@ export function inspectPersonalCredentialWriters(
         );
       }
     }
-    return resolveSymbol(checker.getSymbolAtLocation(expression));
+    return resolveSymbol(symbolAt(expression));
   };
   const bindModule = (binding: ts.BindingName, module: Symbol): boolean => {
     if (ts.isIdentifier(binding)) {
-      const local = checker.getSymbolAtLocation(binding);
+      const local = symbolAt(binding);
       if (local) {
         importedBindings.set(local, module);
         bindingNames.push(binding);
@@ -1140,8 +1263,14 @@ export function inspectPersonalCredentialWriters(
       }
     }
   };
-  for (const { source } of sources) {
+  // Every bound import spells `import` inside its declaration or `.then` call.
+  const importKeyword = /\bimport\b/g;
+  for (const { source, text } of sources) {
+    const descend = containsTrigger(text, importKeyword);
     const visit = (node: ts.Node) => {
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (ts.isVariableDeclaration(node) && node.initializer) {
         bindImports(node.initializer, node.name);
       }
@@ -1159,12 +1288,14 @@ export function inspectPersonalCredentialWriters(
           bindImports(node.expression.expression, callback.parameters[0].name);
         }
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
   }
   // Resolve namespace candidates after every dynamic binding has its prepared target.
-  const bindingSymbols = bindingNames.length ? checker.getSymbolAtLocation(bindingNames) : [];
+  const bindingSymbols = symbolsAt(bindingNames);
   for (const [index, binding] of bindingNames.entries()) {
     if (targets(bindingSymbols[index]).length) {
       names.add(binding.text);
@@ -1200,16 +1331,37 @@ export function inspectPersonalCredentialWriters(
   const sinkCounts = new Map<string, number>();
   const rawSinkCounts = new Map<string, number>();
   const edgeCounts = new Map<string, number>();
-  for (const { file, source } of sources) {
+  const queryWriters = new Set(["insertInto", "replaceInto", "updateTable", "deleteFrom"]);
+  // Every inspected node spells a candidate name, one of these tokens, or the SQL verb that
+  // starts a raw authority-table write.
+  const isSinkToken = (token: string) =>
+    names.has(token) ||
+    queryWriters.has(token) ||
+    token === "type" ||
+    token === "import" ||
+    token === "export" ||
+    /^(?:insert|replace|update|delete)$/i.test(token);
+  let tokens = identifierTokens(names);
+  let tokenNames = names.size;
+  for (const { file, source, text } of sources) {
+    // Reference resolution below can add names; later files must spell those too.
+    if (names.size !== tokenNames) {
+      tokens = identifierTokens(names);
+      tokenNames = names.size;
+    }
+    const descend = containsTrigger(text, tokens, isSinkToken);
     const fail = (node: ts.Node, reason: string) => {
       violations.push(
         `${file}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}: ${reason}`,
       );
     };
     const references: ts.Node[] = [];
+    const commandNodes: (readonly [ts.Node, ts.Expression])[] = [];
+    const commandExpressions: ts.Expression[] = [];
     const visit = (node: ts.Node) => {
       if (
         ts.isTypeNode(node) ||
+        ts.isTypeAliasDeclaration(node) ||
         ts.isImportDeclaration(node) ||
         ((ts.isExportDeclaration(node) || ts.isExportSpecifier(node)) && node.isTypeOnly)
       ) {
@@ -1221,35 +1373,22 @@ export function inspectPersonalCredentialWriters(
         node.name.text === "type"
       ) {
         const initializer = ts.isPropertyAssignment(node) ? node.initializer : node.name;
-        // Literal command values are already exact; only expressions need semantic resolution.
-        const type = ts.isStringLiteralLikeNode(initializer)
-          ? undefined
-          : checker.getTypeAtLocation(initializer);
-        const commands = ts.isStringLiteralLikeNode(initializer)
-          ? [initializer.text]
-          : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
-              .filter((value) => value.isStringLiteralType())
-              .map((value) => value.value);
-        for (const command of commands) {
-          const owner = credentialCommandOwners.get(command);
-          if (owner && key(file, operation(node)) !== owner) {
-            fail(node, `${command} credential writes require the host publication adapter`);
-          }
+        commandNodes.push([node, initializer]);
+        if (!ts.isStringLiteralLikeNode(initializer)) {
+          commandExpressions.push(initializer);
         }
       }
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
-        ["insertInto", "replaceInto", "updateTable", "deleteFrom"].includes(
-          node.expression.name.text,
-        )
+        queryWriters.has(node.expression.name.text)
       ) {
         let table = node.arguments[0];
         const seen = new Set<ts.Node>();
         while (table && !seen.has(table)) {
           seen.add(table);
           if (ts.isIdentifier(table)) {
-            const declaration = checker.getSymbolAtLocation(table)?.valueDeclaration?.resolve();
+            const declaration = symbolAt(table)?.valueDeclaration?.resolve();
             if (declaration && ts.isVariableDeclaration(declaration)) {
               const loop = declaration.parent.parent;
               table =
@@ -1316,7 +1455,7 @@ export function inspectPersonalCredentialWriters(
             node.parent.expression.name.text === "prepare" &&
             node.parent.arguments.length === 1 &&
             node.parent.arguments[0] === node &&
-            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'$/u.test(
+            /^UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN \('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3'\)$/u.test(
               node.text,
             )
           ) {
@@ -1357,17 +1496,49 @@ export function inspectPersonalCredentialWriters(
       ) {
         references.push(node);
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
-    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
-    for (const [index, node] of references.entries()) {
+    // Literal commands need no compiler query; resolve every expression in the
+    // same immutable file together instead of one native round trip per field.
+    const commandTypes = commandExpressions.length
+      ? checker.getTypeAtLocation(commandExpressions)
+      : [];
+    let commandTypeIndex = 0;
+    for (const [node, initializer] of commandNodes) {
+      const type = ts.isStringLiteralLikeNode(initializer)
+        ? undefined
+        : commandTypes[commandTypeIndex++];
+      const commands = ts.isStringLiteralLikeNode(initializer)
+        ? [initializer.text]
+        : (type?.isUnionType() ? type.getTypes() : type ? [type] : [])
+            .filter((value) => value.isStringLiteralType())
+            .map((value) => value.value);
+      for (const command of commands) {
+        const owner = credentialCommandOwners.get(command);
+        if (owner && key(file, operation(node)) !== owner) {
+          fail(node, `${command} credential writes require the host publication adapter`);
+        }
+      }
+    }
+    // Access and shorthand references have their own resolution paths below.
+    const directReferences = references.filter(
+      (node) =>
+        !ts.isShorthandPropertyAssignment(node.parent) &&
+        !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) &&
+        !(ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node),
+    );
+    const symbols = symbolsAt(directReferences);
+    let symbolIndex = 0;
+    for (const node of references) {
       const symbol = ts.isShorthandPropertyAssignment(node.parent)
         ? checker.getShorthandAssignmentValueSymbol(node.parent)
         : (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) ||
             (ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node)
           ? accessSymbol(node.parent)
-          : symbols[index];
+          : symbols[symbolIndex++];
       if (
         ts.isStringLiteral(node) &&
         ts.isCallExpression(node.parent) &&
@@ -1447,7 +1618,7 @@ export function inspectPersonalCredentialWriters(
             !node.parent.exportClause);
         // Static members retain their own checks; escaping the class bypasses that selection.
         const selectedAuthStorageMember =
-          target === key(authStorage, "AuthStorage") &&
+          [key(authStorage, "AuthStorage"), key(authStorageCore, "AuthStorage")].includes(target) &&
           ((ts.isPropertyAccessExpression(expression.parent) &&
             expression.parent.expression === expression) ||
             (ts.isElementAccessExpression(expression.parent) &&
@@ -1469,7 +1640,63 @@ export function inspectPersonalCredentialWriters(
           ts.isShorthandPropertyAssignment(node.parent) &&
           ts.isObjectLiteralExpression(node.parent.parent) &&
           ts.isReturnStatement(node.parent.parent.parent);
+        const authStorageComposition =
+          file === authStorage &&
+          target === key(authStorageCore, "AuthStorage") &&
+          isAuthStorageFacadeInitializer(expression.parent) &&
+          protectedDeclarations.get(expression.parent.parent) === key(authStorage, "AuthStorage") &&
+          expression.parent.arguments[0] === expression &&
+          expression.parent.arguments[1] !== undefined &&
+          ts.isObjectLiteralExpression(expression.parent.arguments[1]) &&
+          expression.parent.arguments[1].properties.length === 3 &&
+          expression.parent.arguments[1].properties.every(
+            (method) =>
+              ts.isMethodDeclaration(method) &&
+              ts.isIdentifier(method.name) &&
+              ["forAgent", "forAgentAsync", "create"].includes(method.name.text),
+          );
+        const capturedAuthStorageFactory =
+          file === authStorage &&
+          target === key(authStorageCore, "AuthStorage/forAgent") &&
+          ts.isVariableDeclaration(expression.parent) &&
+          expression.parent.initializer === expression &&
+          protectedDeclarations.get(expression.parent) === key(authStorage, "forAgent") &&
+          ts.isVariableDeclarationList(expression.parent.parent) &&
+          Boolean(expression.parent.parent.flags & ts.NodeFlags.Const) &&
+          ts.isVariableStatement(expression.parent.parent.parent) &&
+          ts.isSourceFile(expression.parent.parent.parent.parent) &&
+          !expression.parent.parent.parent.modifiers?.some(
+            (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
+          );
+        const descriptorCall = expression.parent;
+        const descriptor = ts.isCallExpression(descriptorCall)
+          ? descriptorCall.arguments[2]
+          : undefined;
+        const authStorageCreateDescriptor =
+          file === authStorage &&
+          target === key(authStorage, "AuthStorage") &&
+          ts.isCallExpression(descriptorCall) &&
+          ts.isPropertyAccessExpression(descriptorCall.expression) &&
+          ts.isIdentifier(descriptorCall.expression.expression) &&
+          descriptorCall.expression.expression.text === "Object" &&
+          descriptorCall.expression.name.text === "defineProperty" &&
+          descriptorCall.arguments.length === 3 &&
+          descriptorCall.arguments[0] === expression &&
+          descriptorCall.arguments[1] !== undefined &&
+          ts.isStringLiteral(descriptorCall.arguments[1]) &&
+          descriptorCall.arguments[1].text === "create" &&
+          descriptor &&
+          ts.isObjectLiteralExpression(descriptor) &&
+          descriptor.properties.length === 1 &&
+          descriptor.properties[0] !== undefined &&
+          ts.isPropertyAssignment(descriptor.properties[0]) &&
+          ts.isIdentifier(descriptor.properties[0].name) &&
+          descriptor.properties[0].name.text === "enumerable" &&
+          descriptor.properties[0].initializer.kind === ts.SyntaxKind.FalseKeyword;
         const forwarded =
+          authStorageComposition ||
+          capturedAuthStorageFactory ||
+          authStorageCreateDescriptor ||
           returnedMember ||
           (runtimeMember &&
             ((file === authRuntime &&

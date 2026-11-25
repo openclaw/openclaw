@@ -61,7 +61,7 @@ function startupConfigFixture(t, { phase = "ROLLBACK_FAILED", change } = {}) {
   fs.writeFileSync(f.config + ".next", JSON.stringify(next), { mode: 0o600 }); fs.renameSync(f.config + ".next", f.config);
   const entry = fs.statSync(f.config), bytes = fs.readFileSync(f.config), ts = new Date().toISOString();
   const audit = { ts, event: "config.write", source: "config-io", result: "rename", configPath: f.config,
-    existsBefore: true, pid: binding.pid, previousHash: hash(previousBytes), nextHash: hash(bytes),
+    existsBefore: true, pid: binding.pid, cwd: candidate, argv: [process.execPath, join(candidate, "dist/index.js"), "gateway", "--port", "18789"], previousHash: hash(previousBytes), nextHash: hash(bytes),
     previousBytes: previousBytes.length, nextBytes: bytes.length };
   for (const [prefix, descriptor] of [["previous", paths[0]], ["next", { device: entry.dev, inode: entry.ino }]])
     Object.assign(audit, { [prefix + "Dev"]: String(descriptor.device), [prefix + "Ino"]: String(descriptor.inode),

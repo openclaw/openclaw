@@ -1,5 +1,5 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
   ensureAuthProfileStoreAsync,
   externalCliDiscoveryForProviderAuth,
@@ -40,11 +40,16 @@ export async function modelsAuthListCommand(
     const usage = readAuthProfileUsageStats(store, profileId);
     const expiresAt =
       profile.type === "api_key" ? undefined : timestampMsToIsoString(profile.expires);
-    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, Date.now());
+    const now = Date.now();
+    const blockedActive = isActiveUnusableWindow(usage?.blockedUntil, now);
     const blockedUntil = blockedActive ? timestampMsToIsoString(usage?.blockedUntil) : undefined;
     const blockedModel = usage?.blockedScope === "model" ? usage.blockedModel : undefined;
-    const cooldownUntil = timestampMsToIsoString(usage?.cooldownUntil);
-    const disabledUntil = timestampMsToIsoString(usage?.disabledUntil);
+    const cooldownUntil = isActiveUnusableWindow(usage?.cooldownUntil, now)
+      ? timestampMsToIsoString(usage?.cooldownUntil)
+      : undefined;
+    const disabledUntil = isActiveUnusableWindow(usage?.disabledUntil, now)
+      ? timestampMsToIsoString(usage?.disabledUntil)
+      : undefined;
     const disabledActive = Boolean(disabledUntil);
     const reason = disabledActive
       ? usage?.disabledReason
@@ -79,11 +84,11 @@ export async function modelsAuthListCommand(
         : {}),
       ...(cooldownUntil ? { cooldownUntil } : {}),
       ...(disabledUntil ? { disabledUntil } : {}),
-      ...(usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
-      ...(usage?.cooldownClassification
+      ...(cooldownUntil && usage?.cooldownReason ? { cooldownReason: usage.cooldownReason } : {}),
+      ...(cooldownUntil && usage?.cooldownClassification
         ? { cooldownClassification: usage.cooldownClassification }
         : {}),
-      ...(usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
+      ...(disabledUntil && usage?.disabledReason ? { disabledReason: usage.disabledReason } : {}),
       ...(recoveryHint ? { recoveryHint } : {}),
     });
   }
@@ -102,17 +107,18 @@ export async function modelsAuthListCommand(
     return;
   }
 
-  const logLine = (line: string) => runtime.log(sanitizeTerminalText(line));
-  logLine(`Agent: ${agentId}`);
-  logLine(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(terminalText`Agent: ${agentId}`);
+  runtime.log(
+    terminalText`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`,
+  );
   if (provider) {
-    logLine(`Provider: ${provider}`);
+    runtime.log(terminalText`Provider: ${provider}`);
   }
   if (profiles.length === 0) {
-    logLine("Profiles: (none)");
+    runtime.log("Profiles: (none)");
     return;
   }
-  logLine("Profiles:");
+  runtime.log("Profiles:");
   for (const profile of profiles) {
     const details = [`${profile.provider}/${profile.type}`];
     if (profile.expiresAt) {
@@ -136,8 +142,8 @@ export async function modelsAuthListCommand(
         `disabled${profile.disabledReason ? `:${profile.disabledReason}` : ""} until ${profile.disabledUntil}`,
       );
     }
-    logLine(
-      `- ${profile.label} [${details.join("; ")}]${profile.recoveryHint ? ` — ${profile.recoveryHint}` : ""}`,
+    runtime.log(
+      terminalText`- ${profile.label} [${details.join("; ")}]${profile.recoveryHint ? ` — ${profile.recoveryHint}` : ""}`,
     );
   }
 }

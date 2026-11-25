@@ -3,8 +3,10 @@ import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { GatewayStatusProps } from "../../../components/gateway-status.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
+import type { WorkspaceIconSource } from "../../../components/workspace-icon-source.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import type { ChatHeaderSharingSnapshot } from "../chat-header-viewers-snapshot.ts";
 import type { ChatMobilePeopleMentions } from "../chat-mobile-people-mentions.ts";
 import type { ChatMobilePeople } from "../chat-mobile-people.ts";
 import type { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
@@ -37,17 +39,14 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   personActivity?: PersonActivityRouting;
   catalog: boolean;
   catalogColor?: string;
+  sessionColor?: string;
+  hasVersions?: boolean;
   editing: boolean;
   renameValue: string;
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
-  workspaceIcon: {
-    routeUrl: string;
-    authTokens: readonly string[];
-    authReady: boolean;
-    connectionId?: string;
-  } | null;
+  workspaceIcon: WorkspaceIconSource | null;
   parentSession: {
     key: string;
     title: string;
@@ -72,6 +71,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   runAction?: Parameters<typeof PaneSubagentStop>[0];
   presence?: Parameters<typeof PaneHeaderPresence>[0];
   sharingControl?: ChatSessionSharingProps;
+  sharingPlaceholder?: ChatHeaderSharingSnapshot;
   mobileSharing?: PreparedChatSessionSharing;
   mobileVersions?: ChatSessionVersionsMobileProps;
   mobilePeople?: ChatMobilePeople;

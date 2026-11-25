@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { routeIdFromPath } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -89,6 +88,16 @@ describe("model setup first-run redirect", () => {
     const cases = [
       ["/", "", "", "", true],
       ["/chat", "", "", "", true],
+      ["/openclaw/", "", "", "/openclaw", true],
+      ["/index.html", "?draft=hello", "#anchor", "", true],
+      ["/ui/index.html", "", "", "/ui", true],
+      ["/ui/INDEX.HTML", "", "", "/ui", true],
+      ["/ui/unknown/index.html", "", "", "/ui", false],
+      ["/ui/other.html", "", "", "/ui", false],
+      ["/index.html", "?session=agent%3Amain%3Amain", "", "", false],
+      ["/ui/index.html", "", "#session=agent%3Amain%3Amain", "/ui", false],
+      ["/beam/unfinished-share-5", "", "", "", false],
+      ["/settings/unknown/page", "", "", "", false],
       ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
       ["/chat", "", "#session=agent%3Amain%3Amain", "", false],
       ["/chat/main/", "", "", "", true],
@@ -99,11 +108,25 @@ describe("model setup first-run redirect", () => {
       ["/settings/appearance", "", "", "", false],
     ] as const;
     for (const [pathname, search, hash, basePath, expected] of cases) {
-      expect(isDefaultChatLanding({ pathname, search, hash }, basePath, routeIdFromPath)).toBe(
-        expected,
-      );
+      expect(isDefaultChatLanding({ pathname, search, hash }, basePath)).toBe(expected);
     }
   });
+
+  it.each(["", "/ui", "/portable/control"])(
+    "starts first-run setup from the index document at %s",
+    async (basePath) => {
+      const location = { pathname: `${basePath}/index.html`, search: "", hash: "" };
+      const { context, replace } = createConnectedContext();
+      const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+        context,
+        enabled: isDefaultChatLanding(location, basePath),
+        history: { location: () => location, replace: vi.fn() },
+        initialLocationReady: Promise.resolve(location),
+      });
+      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      dispose();
+    },
+  );
 
   it("installs a released session deep link without registering the first-run gate", async () => {
     const releasedLocation = {
@@ -120,7 +143,7 @@ describe("model setup first-run redirect", () => {
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
-      enabled: isDefaultChatLanding(releasedLocation, "", routeIdFromPath),
+      enabled: isDefaultChatLanding(releasedLocation, ""),
       history: { location: () => currentLocation, replace: replaceLocation },
       initialLocationReady: Promise.resolve(canonicalLocation),
     });

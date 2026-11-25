@@ -124,7 +124,11 @@ function recordCliSessionEnded(params: {
     (failed &&
       context.params.abortSignal?.aborted === true &&
       isSignalTimeoutReason(context.params.abortSignal.reason));
-  const aborted = result?.meta.aborted === true || isAbortError(runError);
+  // The run assertion rethrows the caller's own abort reason, e.g. a TimeoutError.
+  const aborted =
+    result?.meta.aborted === true ||
+    isAbortError(runError) ||
+    (failed && runError === context.params.abortSignal?.reason);
   const terminalAttempt = result?.meta.executionTrace?.attempts?.at(-1);
   const status =
     timedOut || aborted

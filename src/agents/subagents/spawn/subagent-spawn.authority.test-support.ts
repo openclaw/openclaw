@@ -1,32 +1,21 @@
-import { promises as fs } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as config from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayLifecycleRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
-import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-  type SessionBindingRecord,
-} from "../../../infra/outbound/session-binding-service.js";
-import * as privateStores from "../../../infra/private-file-store.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import * as plugins from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import * as runContext from "../../admitted-run-context.js";
@@ -82,132 +71,6 @@ export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) 
   } finally {
     observed.stop();
   }
-}
-
-export function installSpawnThreadBindingFixture(
-  onBound?: (binding: SessionBindingRecord) => Promise<void>,
-) {
-  const plugin = {
-    ...createChannelTestPluginBase({ id: "matrix" }),
-    conversationBindings: { defaultTopLevelPlacement: "child" },
-  };
-  plugins.setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]),
-  );
-  const bindings: SessionBindingRecord[] = [];
-  const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
-    const binding: SessionBindingRecord = {
-      bindingId: "synthetic-thread",
-      targetSessionKey: input.targetSessionKey,
-      targetKind: input.targetKind,
-      status: "active",
-      boundAt: Date.now(),
-      conversation: {
-        ...input.conversation,
-        conversationId: "child-thread",
-        parentConversationId: "parent",
-      },
-    };
-    bindings.push(binding);
-    await onBound?.(binding);
-    return binding;
-  });
-  const adapter: SessionBindingAdapter = {
-    channel: "matrix",
-    accountId: "default",
-    bind,
-    capabilities: { placements: ["child"] },
-    listBySession: (key) => bindings.filter((binding) => binding.targetSessionKey === key),
-    resolveByConversation: (ref) =>
-      bindings.find((binding) => binding.conversation.conversationId === ref.conversationId) ??
-      null,
-    unbind: async (input) => {
-      const removed = bindings.filter(
-        (binding) =>
-          input.targetSessionKey === binding.targetSessionKey ||
-          input.bindingId === binding.bindingId,
-      );
-      for (const binding of removed) {
-        bindings.splice(bindings.indexOf(binding), 1);
-      }
-      return removed;
-    },
-  };
-  registerSessionBindingAdapter(adapter);
-  return {
-    bind,
-    bindings,
-    unregister: () =>
-      unregisterSessionBindingAdapter({ channel: "matrix", accountId: "default", adapter }),
-  };
-}
-
-export function installSpawnAttachmentFixture(params: {
-  stateDir: string;
-  admitted: Parameters<typeof runContext.getAdmittedRunDelegatedAuthority>[0];
-  pauseAt?: "directory" | "files";
-  entered: () => void | Promise<void>;
-  release: Promise<void>;
-}) {
-  const root = path.join(params.stateDir, "attachments", "subagents", "main");
-  const lateWrites: string[] = [];
-  const attachmentDirs: string[] = [];
-  const recordWrite = (kind: string) => {
-    if (!runContext.getAdmittedRunDelegatedAuthority(params.admitted)) {
-      lateWrites.push(kind);
-    }
-  };
-  const pause = async () => {
-    await params.entered();
-    await params.release;
-  };
-  const mkdir = fs.mkdir;
-  const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-    const result = await mkdir(...args);
-    if (typeof args[0] === "string" && path.dirname(path.dirname(args[0])) === root) {
-      attachmentDirs.push(args[0]);
-      recordWrite("directory");
-      if (params.pauseAt === "directory") {
-        await pause();
-      }
-    }
-    return result;
-  });
-  const createStore = privateStores.privateFileStore;
-  const storeSpy = vi.spyOn(privateStores, "privateFileStore").mockImplementation((rootDir) => {
-    const store = createStore(rootDir);
-    if (path.dirname(rootDir) !== root) {
-      return store;
-    }
-    return {
-      ...store,
-      writeText: async (...args) => {
-        const attachmentDir = path.join(rootDir, args[0].split("/")[0] ?? "");
-        if (!attachmentDirs.includes(attachmentDir)) {
-          attachmentDirs.push(attachmentDir);
-        }
-        recordWrite("content");
-        const result = await store.writeText(...args);
-        expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
-        if (params.pauseAt === "directory" || params.pauseAt === "files") {
-          await pause();
-        }
-        return result;
-      },
-      writeJson: async (...args) => {
-        recordWrite("manifest");
-        return await store.writeJson(...args);
-      },
-    };
-  });
-  return {
-    lateWrites,
-    attachmentDirs,
-    restore: () => {
-      mkdirSpy.mockRestore();
-      storeSpy.mockRestore();
-    },
-  };
 }
 
 export function installSpawnAuthorityFixture() {
@@ -314,15 +177,12 @@ export function installSpawnAuthorityFixture() {
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
-      recoveryRuntime: {
-        prepareFailedWorkerPlacement: async () => undefined,
-        prepareRestartRecovery: () => undefined,
+      lifecycleRuntime: {
         waitForAgent: async () => await new Promise<never>(() => {}),
         dispatchAgent: unexpectedRecovery,
         dispatchSessionMethod: unexpectedRecovery,
-        sendRecoveryNotice: unexpectedRecovery,
-        resumeChatInput: unexpectedRecovery,
-      } satisfies GatewayRecoveryRuntime,
+        sendNotice: unexpectedRecovery,
+      } satisfies GatewayLifecycleRuntime,
     });
     const admission = runContext.prepareSystemAgentRunAdmission(
       cfg,

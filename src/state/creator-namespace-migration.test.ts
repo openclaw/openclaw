@@ -20,6 +20,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -76,7 +77,7 @@ describe("creator namespace upgrades", () => {
         expect(migrate).toThrow(/maintenance/);
         const execute = db.exec.bind(db);
         const fault = vi.spyOn(db, "exec").mockImplementation((sql) => {
-          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`) {
+          if (sql === `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`) {
             throw new Error("injected commit failure");
           }
           return execute(sql);
@@ -155,6 +156,7 @@ describe("creator namespace upgrades", () => {
         ],
       });
       const initial = openOpenClawStateDatabase({ env: state.env });
+      restorePreTemplateStateIdentifiersForTest(initial.db);
       addPreCutoverClientCredentialTablesForTest(initial.db);
       initial.db
         .exec(`UPDATE cron_jobs SET job_json = json_remove(job_json, '$.createdActor.source');

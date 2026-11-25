@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
@@ -7,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  resolveSessionProfileId,
+  projectSessionRelatedProfileIds,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -17,54 +16,55 @@ import {
   type SelectionChange,
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
+import { sameSelectionFacts } from "./session-row-selection-facts.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
+type SelectionScope = Omit<
+  ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>,
+  "targets"
+>;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+type SessionRowSelectionSource = {
+  onSelectionChange(listener: (change: SelectionChange) => void): void;
+  onMembershipChange(listener: (sessionKey?: string) => void): void;
+};
 
-// Search and live-run queries bypass retained partitions; display facts publish separately.
-const presentationFields = new Set<string>([
-  "activeWriterRunId",
-  "activitySummary",
-  "sessionDiffBaseline",
-  "sessionDiffBaselineCapture",
-  "pendingFinalDelivery",
-  "contextBudgetStatus",
-  "abortedLastRun",
-  "startedAt",
-  "inputTokens",
-  "outputTokens",
-  "cacheRead",
-  "cacheWrite",
-  "estimatedCostUsd",
-  "contextTokens",
-  "contextTokensSource",
-  "totalTokens",
-  "totalTokensFresh",
-  "totalTokensVersion",
-  "usageReport",
-] satisfies (keyof SelectionTarget["entry"])[]);
+// Topology retires scopes; accepted facts advance only their affected partitions.
+const sessionRowSelections = new WeakMap<
+  SessionRowSelectionSource,
+  Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
+>();
 
-function sameSelectionFacts(previous: SelectionTarget, next: SelectionTarget) {
-  if (
-    rowIdentity(previous) !== rowIdentity(next) ||
-    previous.generation !== next.generation ||
-    previous.hasBoard !== next.hasBoard ||
-    previous.entry.updatedAt !== next.entry.updatedAt ||
-    !isDeepStrictEqual(previous.selection, next.selection)
-  ) {
-    return false;
+export function sessionRowSelectionScopes(projection: SessionRowSelectionSource) {
+  const previous = sessionRowSelections.get(projection);
+  if (previous) {
+    return previous;
   }
-  const before = new Map<string, unknown>(
-    Object.entries(previous.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  const after = new Map<string, unknown>(
-    Object.entries(next.entry).filter(([field]) => !presentationFields.has(field)),
-  );
-  return isDeepStrictEqual(before, after);
+  const scopes = new Map<
+    SelectionScope,
+    Map<boolean, ReturnType<typeof createSessionRowSelection>>
+  >();
+  sessionRowSelections.set(projection, scopes);
+  projection.onMembershipChange((key) => {
+    for (const variants of scopes.values()) {
+      variants.get(false)?.membershipChanged(key);
+    }
+  });
+  projection.onSelectionChange((change) => {
+    if (change.kind === "reset") {
+      scopes.clear();
+    } else {
+      for (const variants of scopes.values()) {
+        for (const selection of variants.values()) {
+          selection.change(change);
+        }
+      }
+    }
+  });
+  return scopes;
 }
 
 export function createSessionRowSelection(
@@ -86,14 +86,25 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
-  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
-  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
-  const partitionFor = (key: string) => {
+  // Archive populations own separate revisions; each winner belongs to only one partition.
+  let partitions:
+    | Array<{
+        archived: boolean;
+        revision: object;
+        // Membership publications rotate only invited views of this partition.
+        invitedRevision?: object;
+        entries: Map<string, SessionEntryPair>;
+      }>
+    | undefined;
+  const partitionFor = (key: string, target: IndexedTarget) => {
+    if (!partitions) {
+      return undefined;
+    }
     let hash = 0;
     for (let i = 0; i < key.length; i++) {
       hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
     }
-    return partitions?.[hash & 63];
+    return partitions[(hash & 63) + (target.row.entry.archivedAt !== undefined ? 64 : 0)];
   };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
@@ -174,31 +185,17 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      let related: Set<string> | undefined;
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
         cfg,
         configuredAgentIds,
       )?.actor;
-      if (owner?.identity?.type === "profile") {
-        (related ??= new Set()).add(owner.identity.id);
-      }
-      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
-      for (const { identity } of entry.participants ?? []) {
-        if (identity.type === "profile") {
-          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
-        }
-      }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
         entry,
         identities,
       );
-      for (const [profileId, state] of states) {
-        if (state.lastMention) {
-          (related ??= new Set()).add(profileId);
-        }
-      }
+      const related = projectSessionRelatedProfileIds(entry, identities, owner, states);
       // Most rows have identical facets; copy only when a personal override changes membership.
       let personal = related;
       for (const [profileId, state] of states) {
@@ -277,11 +274,15 @@ export function createSessionRowSelection(
     } else {
       duplicates.delete(key);
     }
+    // Raw selections without an owner snapshot still need structural comparison.
     if (
       winner &&
       oldWinner &&
       winner !== oldWinner &&
-      sameSelectionFacts(oldWinner.row, winner.row)
+      (oldWinner.row.selectionFactsRevision && winner.row.selectionFactsRevision
+        ? rowIdentity(oldWinner.row) === rowIdentity(winner.row) &&
+          oldWinner.row.selectionFactsRevision === winner.row.selectionFactsRevision
+        : sameSelectionFacts(oldWinner.row, winner.row))
     ) {
       oldWinner.row = winner.row;
       oldWinner.pair[1] = winner.row.entry;
@@ -298,15 +299,19 @@ export function createSessionRowSelection(
     }
     updateCreator(oldWinner, true);
     updateCreator(winner);
-    const partition = partitionFor(key);
+    const partition = winner && partitionFor(key, winner);
+    const previousPartition = oldWinner && partitionFor(key, oldWinner);
+    if (previousPartition && previousPartition !== partition) {
+      previousPartition.entries.delete(key);
+      previousPartition.revision = {};
+      previousPartition.invitedRevision = undefined;
+      recordSessionRowPartitionRevision(changeScope);
+    }
     if (partition) {
       partition.revision = {};
+      partition.invitedRevision = undefined;
       recordSessionRowPartitionRevision(changeScope);
-      if (winner) {
-        partition.entries.set(key, winner.pair);
-      } else {
-        partition.entries.delete(key);
-      }
+      partition.entries.set(key, winner!.pair);
     }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
@@ -346,6 +351,19 @@ export function createSessionRowSelection(
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row, change.scope);
     },
+    membershipChanged(key?: string) {
+      if (key === undefined) {
+        partitions?.forEach((part) => {
+          part.invitedRevision = {};
+        });
+      } else {
+        const target = winners.get(key);
+        const part = target && partitionFor(key, target);
+        if (part) {
+          part.invitedRevision = {};
+        }
+      }
+    },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();
       const profileOrders = Array.from(profileIds, (profileId) => {
@@ -382,12 +400,13 @@ export function createSessionRowSelection(
     ) {
       assertCanonical();
       if (!candidates && !partitions) {
-        partitions = Array.from({ length: 64 }, () => ({
+        partitions = Array.from({ length: 128 }, (_, index) => ({
+          archived: index >= 64,
           revision: {},
           entries: new Map<string, SessionEntryPair>(),
         }));
         for (const [key, target] of winners) {
-          partitionFor(key)!.entries.set(key, target.pair);
+          partitionFor(key, target)!.entries.set(key, target.pair);
         }
       }
       return {

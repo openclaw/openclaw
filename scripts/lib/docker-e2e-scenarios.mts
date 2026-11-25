@@ -70,9 +70,14 @@ const updateRestartAuthCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}"',
 );
+// Hosted 4-vCPU legacy-operator-state passed in 1195-1841s (run 41105259079; 10.8 runs a
+// second published update for the native plugin UI opt-out specimen), and the
+// 2026-10-30 matrix died at the old 1200s default in 4/4 cells => 2700s inner + 300s
+// margin. The shipped 9.36 updater finished its recorded steps in 718s but its command
+// outlived the 900s default (canary-copy cleanup runs outside them), so use 1500s.
 const updateMigrationCommand = upgradeSurvivorScriptCommand(
-  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
+  'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2700s}"',
 );
 const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
@@ -414,7 +419,23 @@ export const mainLanes: DockerE2eLane[] = [
     timeoutMs: 10 * 60 * 1000,
   }),
   upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
+  upgradeSurvivorLane(
+    "release-update-survivor",
+    upgradeSurvivorScriptCommand("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=release-update"),
+    55 * 60 * 1000,
+    "release-update",
+  ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
+  // The published 2026.10.9 updater still uses in-place activation and Doctor.
+  npmLane("package-installed-recovery-older-runtime", {
+    command: upgradeSurvivorScriptCommand(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=package-installed-recovery OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT=older-runtime OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=0 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC= OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+    ),
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 25 * 60 * 1000,
+    weight: 3,
+  }),
   // Explicit Docker/release regression; the per-PR cell still runs only one real update.
   lane("published-driver-lifecycle", {
     command: "pnpm test:docker:published-driver-lifecycle",
@@ -427,6 +448,54 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
+  // A published updater behind a linked package path: the layout a downgrade would leave under
+  // the proposed release-directory design. No CI workflow selects this lane yet.
+  npmLane("published-driver-linked-root", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
+  // Release directories behind a linked package path on an install-cli-shaped prefix: adoption
+  // and switch, and rollback after a failed post-switch Doctor. Each adds candidate updates to the cell. No CI workflow
+  // selects these lanes yet.
+  npmLane("published-driver-release-adoption", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rollback", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  // An added launcher takes the swap and the next update adopts again (owned prefix). A linked
+  // root whose service a published updater bound to a release has that release replaced in place;
+  // the restart rebinds the service (rebind), or with --no-restart it stays bound (in-place).
+  npmLane("published-driver-release-launcher", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rebind", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-in-place", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  // A published updater's first update with official npm plugins while openclaw.json is a link to
+  // a read-only file: plugin convergence changes no config, so the update must succeed. Local
+  // cells took 6-7 minutes inside the script's 1125 s envelope. No CI workflow selects it yet.
+  // By hand, OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT=corrupt-plugin serves one corrupt plugin
+  // tarball instead, and =refused-channel-change also requests a channel the config cannot take.
+  npmLane("published-driver-plugin-publication", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",
@@ -445,7 +514,7 @@ export const mainLanes: DockerE2eLane[] = [
   upgradeSurvivorLane(
     "update-migration",
     updateMigrationCommand,
-    30 * 60 * 1000,
+    3000 * 1000,
     "plugin-deps-cleanup",
   ),
   lane("plugins", {
@@ -548,6 +617,13 @@ export const tailLanes: DockerE2eLane[] = [
     resources: ["npm", "service"],
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
+  }),
+  liveLane("gbrain", {
+    command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gbrain",
+    e2eImageKind: false,
+    provider: "openai",
+    resources: ["npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
   }),
   liveLane("live-plugin-tool", {
     command:
@@ -676,6 +752,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
+  "release-update-survivor",
   ...updateFirstHopCompatLanes.map((entry) => entry.name),
 );
 const releasePathPackageUpdateCoreLanes = [

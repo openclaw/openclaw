@@ -2,67 +2,59 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
-import * as packageMetadata from "../../infra/update-check-package-target.js";
-import * as updateGlobal from "../../infra/update-global.js";
-import { defaultRuntime } from "../../runtime.js";
-import * as shared from "./shared.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import { runtimeFixture } from "./update-command-fixtures.test-support.js";
-import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
-import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
-import * as packageUpdate from "./update-command-package.js";
+import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
-import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
 const engine = ">=24.22.1 <25 || >=26.12.1";
 
-it.each([
-  ["npm", "24.20.0"],
-  ["pnpm", "24.21.0"],
-  ["bun", "26.10.0"],
-] as const)(
-  "refuses %s before fresh-profile staging under service Node %s",
-  async (manager, version) => {
-    stubNodeRuntime();
-    const serviceNode = path.join(path.dirname(fixture.root), "nix/store/old-nodejs/bin/node");
-    fixture.managedServiceNodeRunner = serviceNode;
-    vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue(manager);
-    vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
-      manager,
-      command: manager,
-      globalRoot: path.dirname(fixture.root),
-      packageRoot: fixture.root,
-      ...(manager === "npm"
-        ? { npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" } }
-        : {}),
-    });
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
-      runtimeFixture(version, "3.53.0"),
+it.skipIf(process.platform === "win32").each([true, false])(
+  "never executes a relative PATH Node, including diagnostics (restart=%s)",
+  async (restart) => {
+    const current = stubNodeRuntime();
+    vi.spyOn(process, "versions", "get").mockReturnValue({ ...current.versions, node: "26.8.2" });
+    const workspace = path.join(path.dirname(fixture.root), "workspace");
+    const marker = path.join(workspace, "executed");
+    const serviceNode = path.join(path.dirname(fixture.root), "service-node", "node");
+    fs.mkdirSync(path.join(workspace, "bin"), { recursive: true });
+    fs.mkdirSync(path.dirname(serviceNode), { recursive: true });
+    fs.writeFileSync(serviceNode, "fixture", { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(workspace, "bin/node"),
+      `#!/bin/sh\n: > ${quoteCliArg(marker)}\nexit 1\n`,
+      { mode: 0o755 },
     );
-    vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
-      ...targetMetadata,
-      version: "2026.10.6",
-      nodeEngine: engine,
+    const probe = runtimePaths.resolveNodeRuntimeInfo;
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation((executable, ...args) =>
+      executable === serviceNode || executable === current.execPath
+        ? Promise.resolve(runtimeFixture("26.8.2", "3.53.0"))
+        : probe(executable, ...args),
+    );
+    const result = await resolvePackageRuntimePreflight({
+      engineOnly: true,
+      target: { version: "2026.10.9", nodeEngine: engine },
+      nodeRunner: serviceNode,
+      shouldRestart: restart,
+      runtimeRecovery: {
+        env: {
+          HOME: path.dirname(fixture.root),
+          PATH: `${path.relative(process.cwd(), path.join(workspace, "bin"))}${path.delimiter}${path.dirname(current.execPath)}`,
+        },
+      },
+      service: {
+        running: true,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: fixture.root,
+          fingerprint: "fixture",
+          refreshDefinition: true,
+        },
+      },
     });
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: "2026.10.6" });
-    const provision = vi.spyOn(runtimeRecovery, "resolveTargetNodeRuntime");
-    const manifest = fs.readFileSync(path.join(fixture.root, "package.json"));
-
-    await expect(updateCommand({ tag: "2026.10.6", yes: true, json: true })).rejects.toMatchObject({
-      code: 1,
-    });
-
-    const result = vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
-    expect(result).toMatchObject({ reason: "preflight-node-runtime-incompatible" });
-    const output = JSON.stringify(result);
-    expect(output).toContain(`Node ${version}`);
-    expect(output).toContain(engine);
-    expect(output).toContain("24.22.1");
-    expect(output).toContain(serviceNode);
-    expect(output).toContain("service definition");
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-    expect(provision).not.toHaveBeenCalled();
-    expect(fs.existsSync(fixture.databasePath)).toBe(false);
-    expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
+    expect(result.ok).toBe(false);
+    expect(fs.existsSync(marker)).toBe(false);
   },
 );

@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -129,9 +133,10 @@ NODE_VERSION_REQUESTED=0
 if [[ -n "${OPENCLAW_NODE_VERSION:-}" ]]; then
   NODE_VERSION_REQUESTED=1
 fi
-MIN_NODE_24_VERSION="24.22.1"
-MIN_NODE_26_VERSION="26.12.1"
-SUPPORTED_NODE_VERSION_LABEL="Node 24.22.1+ or Node 26.12.1+"
+# Compatibility floors mirror node-version.mjs, not the patched download default.
+MIN_NODE_24_VERSION="24.16.0"
+MIN_NODE_26_VERSION="26.1.0"
+SUPPORTED_NODE_VERSION_LABEL="Node 24.16.0+ or Node 26.1.0+"
 NODE_RELEASE_VERSION_CORE=""
 APK_NODE_BIN_DIR="/usr/bin"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
@@ -139,6 +144,7 @@ INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
+JSON_EVENT_FD=1
 RUN_ONBOARD=0
 NODE_ONLY=0
 RUNTIME_ONLY=0
@@ -160,6 +166,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.22.1)
@@ -256,7 +263,7 @@ emit_json() {
     quote_json_string "$value"
     output+="$JSON_STRING"
   done
-  printf '%s}\n' "$output"
+  printf '%s}\n' "$output" >&"$JSON_EVENT_FD"
 }
 
 fail() {
@@ -907,17 +914,20 @@ install_node() {
     link_node_runtime_paths "$system_node" "$system_npm"
     installed_version="$("$(node_bin)" -v)"
     emit_json step name node status ok method system version "$installed_version"
+    warn_node_security_patch "$installed_version"
     return
   fi
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
     install_alpine_node
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
   if linked_node_is_usable; then
     ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
@@ -964,6 +974,7 @@ install_node() {
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
+  warn_node_security_patch "$("$(node_bin)" -v)"
 }
 
 ensure_pnpm() {
@@ -1027,7 +1038,8 @@ fix_npm_prefix_if_needed() {
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi
@@ -1044,7 +1056,8 @@ publish_executable_wrapper() {
   (umask 077; mkdir -p "$target_dir")
   temp="$(mktemp "${target_dir}/.openclaw-wrapper.XXXXXX")" || return 1
   TMPFILES+=("$temp")
-  cat > "$temp"
+  # Generated Bash must execute literal paths, not expand their shell characters.
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nexec %q %q "$@"\n' "$2" "$3" > "$temp"
   chmod +x "$temp"
   if [[ -z "$WRAPPER_BACKUP_PATH" && ( -e "$target" || -L "$target" ) ]]; then
     backup="$(mktemp "${target}.backup.XXXXXX")" || return 1
@@ -1117,11 +1130,8 @@ install_openclaw() {
     fi
   fi
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"
   emit_json step name openclaw status ok version "$requested"
 }
 
@@ -1213,11 +1223,8 @@ install_openclaw_from_git() {
   run_pnpm -C "$repo_dir" build
   emit_json step name cli-build status ok
 
-  publish_executable_wrapper "${PREFIX}/bin/openclaw" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-exec "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js" "\$@"
-EOF
+  publish_executable_wrapper "${PREFIX}/bin/openclaw" \
+    "${PREFIX}/tools/node/bin/node" "${repo_dir}/dist/entry.js"
   emit_json step name openclaw status ok method git
 }
 
@@ -1297,6 +1304,15 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  if [[ "$JSON" -eq 1 ]]; then
+    # --json promises NDJSON-only stdout: keep it for events and send child-process output to stderr.
+    exec 3>&1 1>&2
+    JSON_EVENT_FD=3
+  fi
+  # Node-only recovery ignores the method; normal installs validate before any writes.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
+    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+  fi
   # Reject unsupported source installs before changing runtime links or checkouts.
   # Node-only recovery owns its separate platform refusal and ignores the method.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
@@ -1324,13 +1340,14 @@ main() {
   fi
 
   select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
+  local original_path="${PATH-}"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
   install_node "$(os_detect)" "$(arch_detect)"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
-  elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+  else
     if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
       ensure_git
     fi
@@ -1338,8 +1355,6 @@ main() {
       fix_npm_prefix_if_needed
     fi
     install_openclaw
-  else
-    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
   local installed_version
@@ -1362,6 +1377,42 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  local bin_dir="${PREFIX%/}/bin"
+  if [[ "$JSON" -eq 0 && ":${original_path}:" != *":${bin_dir}:"* ]]; then
+    local shell_name="${SHELL:-}" quoted_dir="$bin_dir" fish_dir="$bin_dir" quote_escape="'\\''"
+    shell_name="${shell_name##*/}"
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
+    quoted_dir="'$quoted_dir'"
+    fish_dir="${fish_dir//\\/\\\\}"
+    fish_dir="${fish_dir//\"/\\\"}"
+    fish_dir="${fish_dir//\$/\\\$}"
+
+    echo ""
+    echo "Warning: PATH missing prefix bin dir: ${bin_dir}"
+    echo "  This directory was not on PATH when the installer started."
+    case "$shell_name" in
+      bash|zsh)
+        echo "  For this shell, run:"
+        printf "    export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        ;;
+      fish)
+        echo "  For this shell, run:"
+        printf "    set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+      *)
+        echo "  Add this directory to PATH using your shell's syntax. Examples:"
+        printf "    Bash/zsh: export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        printf "    Fish: set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+    esac
+    echo "  For future shells, check your shell startup file."
+
+    if [[ "$RUN_ONBOARD" -eq 0 || "$RUNTIME_ONLY" -eq 1 ]]; then
+      local quoted_claw=""
+      printf -v quoted_claw '%q' "${bin_dir}/openclaw"
+      echo "Run ${quoted_claw} onboard to finish setup."
+    fi
+  fi
   log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then

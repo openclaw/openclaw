@@ -80,7 +80,8 @@ function cronJob(id: string, agentId?: string): CronJob {
     sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
-  } as CronJob;
+    state: {},
+  };
 }
 
 function cronListResponse(
@@ -89,7 +90,7 @@ function cronListResponse(
 ): CronJobsListResult {
   const total = options.total ?? jobs.length;
   const offset = options.offset ?? 0;
-  const limit = options.limit ?? 50;
+  const limit = options.limit ?? 200;
   const nextOffset = offset + jobs.length;
   const hasMore = nextOffset < total;
   return {
@@ -241,44 +242,18 @@ describe("AgentsPage gateway lifecycle", () => {
     await issued?.result;
   });
 
-  it("does not refresh the agent roster after a rejected config save", async () => {
+  it("re-reads config along with the roster on page Refresh", async () => {
     const client = createTestGatewayClient(vi.fn(async () => ({ models: [] })));
     const agents = agentsCapability(async () => files("main", "unused"));
     const refreshList = vi.fn(async () => agentsList);
     agents.refreshList = refreshList;
-    const save = vi.fn(async () => false);
+    const refresh = vi.fn(async () => undefined);
     const context = pageContext(gateway(snapshot(client)), agents);
-    Object.assign(context.runtimeConfig, { save });
+    Object.assign(context.runtimeConfig, { refresh });
     const { page } = mountPage(client, "overview", context);
-    context.runtimeConfig.state.lastError = "Synthetic config save refused";
-    await page.read().onConfigSave();
-    expect(save).toHaveBeenCalledOnce();
-    expect(refreshList).not.toHaveBeenCalled();
-    expect(page.read().config.lastError).toBe("Synthetic config save refused");
-  });
-
-  it("keeps config save completion pending through the agent roster refresh", async () => {
-    const saved = deferred<boolean>();
-    const roster = deferred<typeof agentsList>();
-    const client = createTestGatewayClient(vi.fn(async () => ({ models: [] })));
-    const agents = agentsCapability(async () => files("main", "unused"));
-    agents.refreshList = vi.fn(() => roster.promise);
-    const context = pageContext(gateway(snapshot(client)), agents);
-    Object.assign(context.runtimeConfig, { save: () => saved.promise });
-    const { page } = mountPage(client, "overview", context);
-    let completed = false;
-    const completion = page
-      .read()
-      .onConfigSave()
-      .then(() => {
-        completed = true;
-      });
-    saved.resolve(true);
-    await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
-    expect(completed).toBe(false);
-    roster.resolve(agentsList);
-    await completion;
-    expect(completed).toBe(true);
+    page.read().onRefresh();
+    expect(refreshList).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith({ background: true });
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {
@@ -353,7 +328,7 @@ describe("AgentsPage gateway lifecycle", () => {
       await waitForFast(async () =>
         expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
           hasRows
-            ? "Some models could not be refreshed. Open Models to try again."
+            ? "Couldn’t refresh some models. Open Models to try again."
             : "Models unavailable",
         ),
       );
@@ -608,10 +583,13 @@ describe("AgentsPage gateway lifecycle", () => {
       }
       if (method === "cron.list") {
         const scoped = params?.agentId === "main";
-        return cronListResponse(scoped ? [implicitDefaultJob] : unrelatedJobs, {
-          total: scoped ? 1 : 51,
-          limit: params?.limit,
-        });
+        return cronListResponse(
+          scoped ? [implicitDefaultJob] : [implicitDefaultJob, ...unrelatedJobs],
+          {
+            total: scoped ? 1 : 51,
+            limit: params?.limit,
+          },
+        );
       }
       throw new Error(`Unexpected gateway method: ${method}`);
     });
@@ -632,38 +610,36 @@ describe("AgentsPage gateway lifecycle", () => {
     });
     expect(request).toHaveBeenCalledWith(
       "cron.list",
-      expect.objectContaining({ agentId: "main", limit: 50, offset: 0 }),
+      expect.objectContaining({
+        agentId: "main",
+        limit: 200,
+        offset: 0,
+        enabled: "all",
+        sortBy: "name",
+      }),
+      { signal: expect.any(AbortSignal) },
     );
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ agentId: "main", limit: 1, enabled: "enabled" }),
-    );
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
   });
 
   it("loads the selected agent's remaining cron jobs after preserving the first-page total", async () => {
-    const jobs = Array.from({ length: 50 }, (_, index) => cronJob(`main-${index}`, "main"));
-    const lastJob = cronJob("main-50", "main");
-    const request = vi.fn(
-      async (method: string, params?: { agentId?: string; limit?: number; offset?: number }) => {
-        if (method === "cron.status") {
-          return { enabled: true, jobs: 80, nextWakeAtMs: null };
-        }
-        if (params?.limit === 1) {
-          return cronListResponse([jobs[0]!], { total: 51, limit: 1 });
-        }
-        if (params?.offset === 50) {
-          return cronListResponse([lastJob], { total: 51, offset: 50 });
-        }
-        return cronListResponse(jobs, { total: 51 });
-      },
+    const jobs = Array.from({ length: 50 }, (_, index) =>
+      cronJob(`main-${String(index).padStart(2, "0")}`, "main"),
     );
+    const lastJob = cronJob("main-50", "main");
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 80, nextWakeAtMs: null };
+      }
+      return cronListResponse([...jobs, lastJob]);
+    });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page } = mountPage(client, "cron");
 
     refreshPanel(page);
 
     await waitForFast(() => {
-      expect(page.read().readData().cron.cronJobs).toHaveLength(50);
+      expect(page.read().readData().cron.cronJobs).toEqual(jobs);
       expect(page.read().readData().cron.cronJobsTotal).toBe(51);
       expect(page.read().readData().cron.cronScopedTotal).toBe(51);
     });
@@ -672,15 +648,12 @@ describe("AgentsPage gateway lifecycle", () => {
     page.read().cron.onLoadMore();
     await waitForFast(() => expect(page.read().readData().cron.cronJobs).toHaveLength(51));
 
-    expect(page.read().readData().cron.cronJobs).toHaveLength(51);
+    expect(page.read().readData().cron.cronJobs).toEqual([...jobs, lastJob]);
     expect(page.read().readData().cron.cronJobs.at(-1)).toEqual(lastJob);
     expect(page.read().readData().cron.cronJobsTotal).toBe(51);
     expect(page.read().readData().cron.cronScopedTotal).toBe(51);
     expect(page.read().readData().cron.cronJobsHasMore).toBe(false);
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ agentId: "main", limit: 50, offset: 50 }),
-    );
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
   });
 
   it("reloads cron jobs when the selected agent changes", async () => {
@@ -701,20 +674,21 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.read().readData().cron.cronJobs).toEqual([]);
 
     await waitForFast(() => expect(page.read().readData().cron.cronJobs[0]?.id).toBe("other-job"));
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ agentId: "other" }),
-    );
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "cron.list")
+        .map(([, params]) => params?.agentId),
+    ).toEqual(["main", "other"]);
   });
 
   it("keeps an in-flight scoped cron request attached to a same-client gateway snapshot", async () => {
     const job = cronJob("same-client-job", "main");
     const pendingJobs = deferred<CronJobsListResult>();
-    const request = vi.fn((method: string, params?: { limit?: number }) => {
+    const request = vi.fn((method: string) => {
       if (method === "cron.status") {
         return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
       }
-      if (params?.limit === 50) {
+      if (method === "cron.list") {
         return pendingJobs.promise;
       }
       return Promise.resolve(cronListResponse([job]));
@@ -726,11 +700,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await waitForFast(() => expect(page.read().readData().cron.cronLoading).toBe(true));
     emitGatewaySnapshot(currentGateway, snapshot(client));
     expect(page.read().readData().cron.cronLoading).toBe(true);
-    expect(
-      request.mock.calls.filter(
-        ([method, params]) => method === "cron.list" && params?.limit === 50,
-      ),
-    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
 
     pendingJobs.resolve(cronListResponse([job]));
     await waitForFast(() => {
@@ -742,11 +712,11 @@ describe("AgentsPage gateway lifecycle", () => {
   it("immediately publishes cron loading and ignores a second refresh while the first is pending", async () => {
     const job = cronJob("double-refresh-job", "main");
     const pendingJobs = deferred<CronJobsListResult>();
-    const request = vi.fn((method: string, params?: { limit?: number }) => {
+    const request = vi.fn((method: string) => {
       if (method === "cron.status") {
         return Promise.resolve({ enabled: true, jobs: 1, nextWakeAtMs: null });
       }
-      if (params?.limit === 50) {
+      if (method === "cron.list") {
         return pendingJobs.promise;
       }
       return Promise.resolve(cronListResponse([job]));
@@ -755,11 +725,7 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page } = mountPage(client, "cron");
     expect(page.read().readData().cron.cronLoading).toBe(true);
     page.read().cron.onRefresh();
-    expect(
-      request.mock.calls.filter(
-        ([method, params]) => method === "cron.list" && params?.limit === 50,
-      ),
-    ).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
 
     pendingJobs.resolve(cronListResponse([job]));
     await waitForFast(() => expect(page.read().readData().cron.cronLoading).toBe(false));
@@ -768,23 +734,36 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.read().readData().cron.cronJobs).toEqual([job]);
   });
 
-  it("reads the current owner roster across provider replacement", () => {
+  it("reads the current owner roster and hydrates only its selection across provider replacement", async () => {
     const client = {} as GatewayBrowserClient;
     const currentGateway = gateway(snapshot(client, false));
-    const selection = settingsSelection(agentsList);
     const agents = agentsCapability(async () => files("main", "unused"));
     agents.state.agentsList = {
       ...agentsList,
-      agents: [...agentsList.agents, { id: "ordinary-looking-id", kind: "system" }],
+      agents: [
+        ...agentsList.agents,
+        { id: "research", name: "Research" },
+        { id: "ordinary-looking-id", kind: "system" },
+      ],
     };
+    const selection = settingsSelection(agents.state.agentsList);
     const route = agentsRouteData(currentGateway, agentsList, "main", selection);
     const context = { ...pageContext(currentGateway, agents), settingsAgentSelection: selection };
-    const ensureIdentities = vi.fn(async () => {});
+    const ensureIdentities = vi.fn<ApplicationContext["agentIdentity"]["ensure"]>(async () => {});
     context.agentIdentity.ensure = ensureIdentities;
     const page = createAgentsPage(context, route);
     expect(page.read().readData().agentsList).toBe(agents.state.agentsList);
     expect(page.read().selectedAgentId).toBe("main");
-    expect(ensureIdentities).toHaveBeenLastCalledWith(["main"]);
+    expect(new Set(ensureIdentities.mock.calls.flatMap(([ids]) => ids))).toEqual(new Set(["main"]));
+
+    ensureIdentities.mockClear();
+    selection.set("research");
+    await waitForFast(() => {
+      expect(page.read().selectedAgentId).toBe("research");
+      expect(new Set(ensureIdentities.mock.calls.flatMap(([ids]) => ids))).toEqual(
+        new Set(["research"]),
+      );
+    });
 
     page.dispose();
     const replacementAgents = agentsCapability(async () => files("main", "unused"));

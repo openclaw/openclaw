@@ -9,15 +9,16 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { createRuntimeTestRegistry } from "../../src/plugins/registry-runtime.test-helpers.js";
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 
-export type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 type TranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
   nextCursor?: string;
 };
 
-export function commandFixture(groups: string[] = ["Team"]) {
+export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawConfig["agents"]) {
   const config: OpenClawConfig = {
+    agents,
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
   };
   setRuntimeConfigSnapshot(config);
@@ -41,10 +42,23 @@ export function commandFixture(groups: string[] = ["Team"]) {
   return {
     config,
     runtime,
+    gatewayHandlers: registry.registry.gatewayHandlers,
     commands,
     select: (share: unknown) => {
       config.plugins!.entries!["session-share"]!.config = { share };
     },
+    listForProfile: async (params: Record<string, unknown>) =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.list.v1")!
+          .handle(JSON.stringify(params)),
+      ) as SessionPage,
+    readForProfile: async (threadId: string, params: Record<string, unknown>) =>
+      JSON.parse(
+        await commands
+          .find((command) => command.command === "openclaw.sessions.catalog.read.v1")!
+          .handle(JSON.stringify({ threadId, ...params })),
+      ) as TranscriptPage,
     list: async (params: Record<string, unknown> = {}) =>
       JSON.parse(await list.handle(JSON.stringify(params))) as SessionPage,
     read: async (threadId: string, params: Record<string, unknown> = {}) =>

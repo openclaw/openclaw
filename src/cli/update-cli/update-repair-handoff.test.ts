@@ -1,14 +1,24 @@
 // Register shared mocks before importing the production CLI graph.
 import "./update-repair.test-support.js";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import * as nativeProcess from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { mockInertSealedHelper } from "../../infra/package-update-activation-lifetime.test-support.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
+import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import * as legacyHandoffStore from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
+import * as handoffScope from "../../infra/update-managed-service-handoff-scope.js";
 import {
   createUpdateRun,
   finishUpdateRun,
@@ -23,6 +33,7 @@ import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js"
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
 
 const { createRepairState, mocks } = await import("./update-repair.test-support.js");
 
@@ -30,6 +41,10 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveUpdateInstallKind: async () => "package",
 }));
+vi.mock("@openclaw/proc-safe/identity", async (original) => ({
+  ...(await original<typeof import("@openclaw/proc-safe/identity")>()),
+}));
+
 let state: OpenClawTestState;
 let fixture: ReturnType<typeof createManagedHandoffRecoveryFixture>;
 
@@ -108,6 +123,147 @@ it("registered update repair leaves a live current root owner alone", async () =
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
   expect(fixture.store.read(state.root)).toEqual(retained);
+});
+
+it.skipIf(process.platform === "win32").each(["dead", "live"] as const)(
+  "repair checks the journal-pinned store with a %s uncertain triage owner and an empty default store",
+  async (owner) => {
+    mockInertSealedHelper(state.root);
+    const publication = await createInterruptedPackagePublication(
+      state.path("publication"),
+      "publication-complete",
+    );
+    const { packageRoot, record, anchor } = publication;
+    mocks.root.mockResolvedValue(packageRoot);
+    const previous = fixture.seed();
+    handoffDatabase()(true, (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .updateTable("managed_update_handoffs")
+          .set({ install_root: packageRoot })
+          .where("install_root", "=", state.root),
+      ),
+    );
+    // Use real history discovery and recovery checks, with bounded host observations.
+    fixture.repairFacts.mockRestore();
+    vi.spyOn(os, "tmpdir").mockReturnValue(state.root);
+    const run = createUpdateRun({
+      trigger: "cli",
+      origin: { driver: { ...previous.helper, host: os.hostname() } },
+    });
+    finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
+    if (owner === "live") {
+      fixture.births.set(previous.helper.pid, Number(previous.helper.startIdentity));
+    }
+    const rows = fixture.rows();
+    const currentDirectory = state.path("current-handoff");
+    fs.mkdirSync(currentDirectory, { mode: 0o700 });
+    vi.mocked(temporaryRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(currentDirectory);
+    vi.spyOn(
+      legacyHandoffStore,
+      "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+    ).mockReturnValue(undefined);
+    const currentDatabasePath = path.join(currentDirectory, "managed-update-handoffs.sqlite");
+    createManagedHandoffLeaseDatabase(currentDatabasePath)(true, () => undefined);
+    const currentStore = createManagedHandoffLeaseStore({
+      databasePath: currentDatabasePath,
+      serviceManagerEnv: {},
+    });
+    expect(currentStore.read(packageRoot)).toEqual({ kind: "absent" });
+
+    await repair();
+
+    if (owner === "live") {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Handoff owners are live or unverified: PID ${previous.helper.pid}`,
+        ),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(fixture.rows()).toEqual(rows);
+      expect(publication.journal.read()).toEqual(record);
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    } else {
+      expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "ok" }),
+      );
+      expectAbsent(packageRoot);
+      expectSettlement("legacy handoff lease reclaimed");
+      expect(fs.existsSync(`${anchor}.superseded-${record.descriptor.operationId}`)).toBe(true);
+      expect(() => assertNoPendingPackageActivation(packageRoot)).not.toThrow();
+    }
+    expect(currentStore.read(packageRoot)).toEqual({ kind: "absent" });
+  },
+);
+
+it.each([
+  ["foreground", "dead"],
+  ["native", "dead"],
+  ["foreground", "live helper"],
+  ["native", "live executor"],
+  ["foreground", "unknown helper"],
+  ["native", "unverified scope"],
+] as const)("repair settles or reports a closing %s lease with %s", async (lifetime, owners) => {
+  const previous = fixture.seed();
+  const nativeScope = handoffScope.createManagedHandoffScopeReader({});
+  vi.spyOn(handoffScope, "createManagedHandoffScopeReader").mockReturnValue({
+    ...nativeScope,
+    nativeClosed: () => owners !== "unverified scope",
+  });
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .updateTable("managed_update_handoffs")
+        .set({
+          payload_json: JSON.stringify({
+            version: 2,
+            helper: previous.helper,
+            executor: previous.executor,
+            action: {
+              kind: "triage",
+              phase: "closing",
+              lifetime:
+                lifetime === "foreground"
+                  ? { kind: "foreground", boot: fixture.store.bootIdentity() }
+                  : {
+                      kind: "native",
+                      unit: "openclaw-gateway.service",
+                      scope: "triage.scope",
+                      placement: { kind: "attached", invocation: "a".repeat(32) },
+                    },
+            },
+          }),
+        }),
+    ),
+  );
+  if (owners === "live executor") {
+    fixture.births.set(previous.executor.pid, Number(previous.executor.startIdentity));
+  } else if (owners === "live helper" || owners === "unknown helper") {
+    fixture.births.set(
+      previous.helper.pid,
+      owners === "live helper" ? Number(previous.helper.startIdentity) : null,
+    );
+  }
+  const retained = fixture.rows();
+  await repair();
+  if (owners === "dead") {
+    expectAbsent(state.root);
+    expectSettlement("legacy handoff lease reclaimed");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Warning: Reclaiming"),
+    );
+    await expectAdmitted("after-closing-repair");
+  } else {
+    expect(fixture.rows()).toEqual(retained);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`owner ${previous.owner}, lease version 2, phase closing`),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.doctor).not.toHaveBeenCalled();
+  }
 });
 
 function seedLegacyLineage(nested = false, bound = false) {
@@ -211,6 +367,14 @@ it.each(preservedOwnerCases)(
           throw Object.assign(new Error("permission denied"), { code: "EPERM" });
         }
         return kill(pid, signal);
+      });
+      // Both Windows probes must observe the synthetic owner's denied permissions.
+      const readIdentity = nativeProcess.readProcessIdentity;
+      vi.spyOn(nativeProcess, "readProcessIdentity").mockImplementation((pid) => {
+        if (pid === fixture.helper.pid) {
+          throw new ProcSafeError("access-denied", "permission denied");
+        }
+        return readIdentity(pid);
       });
     }
     const retained = fixture.store.read(key);

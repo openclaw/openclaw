@@ -103,6 +103,9 @@ describe("cross-OS release checks workflow", () => {
 
   it("gives every lane unique proof identities and both packaged runtimes", () => {
     const { include } = resolveRunnerMatrix({ mode: "both", ref: "main" });
+    expect(new Set(include.map((entry) => `${entry.os_id}/${entry.runner}`))).toEqual(
+      new Set(["ubuntu/blacksmith-2vcpu-ubuntu-2404", "windows/windows-2025", "macos/xcode-27"]),
+    );
     expect(new Set(include.map((entry) => `${entry.display_name}/${entry.suite_label}`)).size).toBe(
       include.length,
     );
@@ -122,6 +125,49 @@ describe("cross-OS release checks workflow", () => {
       ]).toEqual(versions);
     }
   });
+
+  it.each([
+    ["boat", "", "", "ubuntu-24.04"],
+    ["boat", " repository-linux ", "", "repository-linux"],
+    ["boat", "repository-linux", " explicit-linux ", "explicit-linux"],
+    ["blacksmith", "", "", "blacksmith-2vcpu-ubuntu-2404"],
+  ])(
+    "routes direct dispatch for backend %j, repository runner %j and input %j to %s",
+    (backend, repositoryRunner, inputRunner, expectedRunner) => {
+      const matrixStep = step(prepare, "Resolve runner matrix");
+      const expression = String(matrixStep.env!.VAR_UBUNTU_RUNNER).replace(
+        /^\$\{\{(.*)\}\}$/u,
+        "$1",
+      );
+      const result = runWrapper(
+        [
+          "--resolve-matrix",
+          "--ref",
+          "main",
+          "--mode",
+          "fresh",
+          "--suite-filter",
+          "ubuntu/packaged-fresh",
+          "--ubuntu-runner",
+          inputRunner,
+        ],
+        process.cwd(),
+        {
+          VAR_UBUNTU_RUNNER: runInNewContext(expression, {
+            vars: {
+              OPENCLAW_CI_RUNNER_BACKEND: backend,
+              OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: repositoryRunner,
+            },
+          }),
+          OPENCLAW_RELEASE_CHECKS_UBUNTU_RUNNER: "",
+        },
+      );
+      expect(result).toMatchObject({ stderr: "", status: 0 });
+      expect(
+        JSON.parse(result.stdout).include.map((entry: { runner: string }) => entry.runner),
+      ).toEqual([expectedRunner, expectedRunner]);
+    },
+  );
 
   it.each(["windows/packaged-upgrade", "packaged-fresh"])(
     "filters the cross-OS runner matrix by %s",
@@ -340,34 +386,45 @@ describe("cross-OS release checks workflow", () => {
       mkdirSync(dirname(target), { recursive: true });
       cpSync(source, target, { recursive: true });
     }
-    const result = runWrapper(
-      [
-        "--resolve-matrix",
-        "--ref",
-        "test/native-node",
-        "--mode",
-        "fresh",
-        "--suite-filter",
-        "windows/packaged-fresh",
-        "--windows-runner",
-        "windows-2025",
-      ],
-      fixture,
-      { NODE_OPTIONS: "", NODE_PATH: "" },
-    );
+    for (const [windowsRunner, varWindowsRunner, expectedRunner] of [
+      ["", "", "windows-2025"],
+      ["", " repository-windows ", "repository-windows"],
+      [" explicit-windows ", "repository-windows", "explicit-windows"],
+    ] as const) {
+      const result = runWrapper(
+        [
+          "--resolve-matrix",
+          "--ref",
+          "test/native-node",
+          "--mode",
+          "fresh",
+          "--suite-filter",
+          "windows/packaged-fresh",
+          "--windows-runner",
+          windowsRunner,
+        ],
+        fixture,
+        {
+          NODE_OPTIONS: "",
+          NODE_PATH: "",
+          VAR_WINDOWS_RUNNER: varWindowsRunner,
+          OPENCLAW_RELEASE_CHECKS_WINDOWS_RUNNER: "",
+        },
+      );
 
-    expect(result).toMatchObject({ stderr: "", status: 0 });
-    expect(JSON.parse(result.stdout).include).toEqual([
-      expect.objectContaining({
-        os_id: "windows",
-        runner: "windows-2025",
-        node_version: "24.22.1",
-      }),
-      expect.objectContaining({
-        os_id: "windows",
-        runner: "windows-2025",
-        node_version: "26.12.1",
-      }),
-    ]);
+      expect(result).toMatchObject({ stderr: "", status: 0 });
+      expect(JSON.parse(result.stdout).include).toEqual([
+        expect.objectContaining({
+          os_id: "windows",
+          runner: expectedRunner,
+          node_version: "24.22.1",
+        }),
+        expect.objectContaining({
+          os_id: "windows",
+          runner: expectedRunner,
+          node_version: "26.12.1",
+        }),
+      ]);
+    }
   });
 });

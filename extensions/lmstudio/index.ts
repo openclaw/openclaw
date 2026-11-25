@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import lmstudioProviderDiscovery from "./provider-discovery.js";
+import { createLmstudioChatStream } from "./src/chat.js";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, LMSTUDIO_PROVIDER_LABEL } from "./src/defaults.js";
 import {
   createLmstudioEmbeddingProvider,
@@ -32,7 +33,6 @@ const lmstudioMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   defaultModel: DEFAULT_LMSTUDIO_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "lmstudio",
-  allowExplicitWhenConfiguredAuto: true,
   create: async (options) => {
     const providerId = options.provider?.trim() || "lmstudio";
     const { provider, client } = await createLmstudioEmbeddingProvider({
@@ -124,6 +124,10 @@ export default definePluginEntry({
       prepareDynamicModel: setupMethod((setup) => setup.prepareLmstudioDynamicModel),
       augmentModelCatalog: ({ config }) =>
         normalizeLmstudioConfiguredCatalogEntries(config?.models?.providers?.lmstudio?.models),
+      createStreamFn: ({ model }) =>
+        model.api === "openai-completions" || model.api === "anthropic-messages"
+          ? createLmstudioChatStream()
+          : undefined,
       wrapStreamFn: wrapLmstudioInferencePreload,
       ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {

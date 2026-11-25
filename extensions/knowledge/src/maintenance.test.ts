@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { getResourceProfile } from "openclaw/plugin-sdk/resource-profile";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { contract } from "./contract.js";
 import { Maintenance } from "./maintenance.js";
 import { RegistryClient } from "./registry-client.js";
 import { createKnowledgeService } from "./service.js";
+import { StorageClient } from "./storage-client.js";
+import { parsePolicy } from "./stores-config.js";
 import { Stores } from "./stores.js";
 import {
   adopt,
@@ -16,6 +20,11 @@ import {
   useTestTempDirs,
   defaultOrder,
 } from "./test-support.js";
+
+vi.mock("openclaw/plugin-sdk/resource-profile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/resource-profile")>()),
+  getResourceProfile: vi.fn(() => "standard"),
+}));
 
 const tempDirs = useTestTempDirs();
 
@@ -107,21 +116,22 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
   ).toStrictEqual([]);
 });
 
-it("stopping during a paused review enqueue settles maintenance before closing the registry", async () => {
+it("stopping while a pass is paused settles maintenance before closing the registry", async () => {
   // Passthrough spies record each call's receiver, result and global call order.
   const callSpy = vi.spyOn(RegistryClient.prototype, "call"),
     closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
     storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
-    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop");
+    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop"),
+    releaseSpy = vi.spyOn(Stores.prototype, "releaseIdle");
   afterTest(() => {
-    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy]) {
+    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy, releaseSpy]) {
       spy.mockRestore();
     }
   });
-  const f = await fixture({ reviewJobId: "review-job" }),
+  const f = await fixture(),
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   let entered!: () => void, release!: () => void;
-  const enqueued = new Promise<void>((resolve) => {
+  const reached = new Promise<void>((resolve) => {
       entered = resolve;
     }),
     paused = new Promise<void>((resolve) => {
@@ -129,33 +139,31 @@ it("stopping during a paused review enqueue settles maintenance before closing t
     });
   // A failed assertion must not leave the pass, and so its service stop, paused.
   afterTest(() => release());
-  const enqueueSettled = vi.fn();
-  const cron = {
-    enqueueRun: async () => {
-      entered();
-      await paused;
-      enqueueSettled();
-      return { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
+  const pauseSettled = vi.fn();
+  const service = await f.boot(scheduler);
   await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  // The pass pauses after relink, before it records its state.
+  releaseSpy.mockImplementationOnce(async () => {
+    entered();
+    await paused;
+    pauseSettled();
+  });
   const pass = scheduler.fire("knowledge-maintenance");
-  await enqueued;
+  await reached;
   const stopped = f.lifecycles[0].stop();
   expect(maintenanceStopSpy, "stop asks maintenance to settle").toHaveBeenCalledOnce();
   expect(
     storesStopSpy.mock.calls.map(([gate]) => gate),
     "the registry closes only after maintenance settles",
   ).toStrictEqual(maintenanceStopSpy.mock.results.map((result) => result.value));
-  expect(closeSpy, "nothing closes while the enqueue is paused").not.toHaveBeenCalled();
+  expect(closeSpy, "nothing closes while the pass is paused").not.toHaveBeenCalled();
   release();
   await stopped;
   await pass;
   expect(closeSpy).toHaveBeenCalledOnce();
   const [closedAt] = closeSpy.mock.invocationCallOrder,
     [closed] = closeSpy.mock.contexts;
-  expect(enqueueSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
+  expect(pauseSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
   callSpy.mock.contexts.forEach((registry, index) => {
     if (registry === closed) {
       expect(callSpy.mock.invocationCallOrder[index], "no registry call after close").toBeLessThan(
@@ -217,7 +225,7 @@ it("a scheduled pass links across every store and partition, skips unprovisioned
   expect(status.lastRun!.linked).toBe(3);
   expect(status.nextRunAt).toBe("2026-10-20T12:00:00.000Z");
   const entities = async (ctx: any, id: any) =>
-    (await service.record({ id, includeMetadata: true }, ctx)).record!.metadata!.entities;
+    (await service.record_detail({ id, includeMetadata: true }, ctx)).record!.metadata!.entities;
   expect(await entities(main, a)).toStrictEqual([atlas.id]);
   expect(await entities(ops, b)).toStrictEqual([nimbus.id]);
   expect(
@@ -264,132 +272,208 @@ it("disabled maintenance, invalid schedules and write-disabled installs schedule
   }
 });
 
-it("a pass that leaves private claims unlinked queues the review automation once, and only then", async () => {
-  const f = await fixture({ reviewJobId: "review-job" }),
-    host = f.host,
-    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  let answer: any = { ok: true, enqueued: true, runId: "run-1" },
-    cron: any = {
-      enqueueRun: async (id: any, mode: any) => {
-        calls.push([id, mode]);
-        return answer;
-      },
-    };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  const main = toolContext(host.api, "main");
-  const review = async () => {
-    await scheduler.fire("knowledge-maintenance");
-    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
-  };
-
-  const linkable = (await remember(service, main, "Atlas Labs moved its launch to March.")).items[0]
-    .id;
-  await remember(service, main, "I prefer short replies.");
-  await page(service, main, "Atlas Labs");
-  expect(await review(), "Relink links Atlas; the preference is left for review").toStrictEqual({
-    jobId: "review-job",
-    pending: 1,
-    outcome: "enqueued",
-    runId: "run-1",
-  });
-  expect(calls).toStrictEqual([["review-job", "if-enabled"]]);
-  expect((await service.record({ id: linkable }, main)).record).toBeTruthy();
-
-  answer = { ok: true, ran: false, reason: "disabled" };
-  expect((await review())!.outcome, "A disabled automation is reported, not forced").toBe(
-    "skipped",
-  );
-  cron = undefined;
-  expect((await review())!.outcome).toBe("unavailable");
-
-  // Once the review has linked everything, the pass does not queue it.
-  const left = (await service.relink({ dryRun: true }, main)).examples[0]!.id;
-  const record = (await service.record({ id: left }, main)).record!;
-  const prefs = await page(service, main, "Reply style", "concept");
-  await service.annotate(
-    {
-      requestId: randomUUID(),
-      id: left,
-      expectedRevision: record.revision,
-      expectedHash: record.hash,
-      reason: "Reviewed.",
-      annotations: {},
-      entities: [prefs.id],
-    },
-    main,
-  );
-  cron = { enqueueRun: async () => expect.unreachable("nothing to review") };
-  expect(await review()).toStrictEqual({ jobId: "review-job", pending: 0, outcome: "not_needed" });
-  const status = await service.maintenance_status({}, operatorContext(host.api));
-  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
-  expect(status.reviewJobId).toBe("review-job");
-});
-
-it("without reviewJobId, the pass queues the review scribe's automation found by declaration key", async () => {
+it("a pass leaves claims it cannot link for the review scribe and never reaches the automation scheduler", async () => {
   const f = await fixture(),
     host = f.host,
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  let jobs: any[] = [{ id: "other", declarationKey: "knowledge:scribe:conversations" }];
-  const cron = {
-    list: async (opts: any) => {
-      expect(opts, "a paused scribe is found so the pass can report it").toStrictEqual({
-        includeDisabled: true,
-      });
-      return jobs;
-    },
-    enqueueRun: async (id: any, mode: any) => {
-      calls.push([id, mode]);
-      return id === "paused"
-        ? { ok: true, ran: false, reason: "disabled" }
-        : { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  const review = async () => {
-    await scheduler.fire("knowledge-maintenance");
-    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
-  };
-  await remember(service, toolContext(host.api, "main"), "I prefer short replies.");
-
-  expect(await review(), "No scribe job: no review, as when nothing is configured").toBe(undefined);
-  expect(calls).toStrictEqual([]);
-
-  jobs = [
-    ...jobs,
-    { id: "paused", declarationKey: "knowledge:scribe:unlinked-review", enabled: false },
-    { id: "scribe", declarationKey: "knowledge:scribe:unlinked-review", enabled: true },
-  ];
-  expect(await review(), "The enabled scribe job is preferred").toStrictEqual({
-    jobId: "scribe",
-    pending: 1,
-    outcome: "enqueued",
-    runId: "run-1",
-  });
-  jobs = jobs.filter((job) => job.id !== "scribe");
-  expect((await review())!.outcome, "A paused scribe job is reported, not forced").toBe("skipped");
-  expect(calls).toStrictEqual([
-    ["scribe", "if-enabled"],
-    ["paused", "if-enabled"],
-  ]);
+  const getCron = vi.fn();
+  const service = await f.boot(scheduler, { getCron });
+  const main = toolContext(host.api, "main");
+  await remember(service, main, "Atlas Labs moved its launch to March.");
+  const left = (await remember(service, main, "I prefer short replies.")).items[0].id;
+  await page(service, main, "Atlas Labs");
+  await scheduler.fire("knowledge-maintenance");
   const status = await service.maintenance_status({}, operatorContext(host.api));
-  expect(status.reviewJobId, "Status reports only the configured job").toBe(null);
+  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
+  expect(status.lastRun!.linked, "relink links Atlas").toBe(1);
+  expect(Object.keys(status.lastRun!), "a pass records no review").not.toContain("review");
+  expect(Object.keys(status), "status names no review automation").not.toContain("reviewJobId");
+  expect(getCron, "maintenance never looks up or queues an automation").not.toHaveBeenCalled();
+  const record = (await service.record_detail({ id: left, includeMetadata: true }, main)).record!;
+  expect(record.metadata!.entities ?? [], "the preference stays unlinked").toStrictEqual([]);
 });
 
-it("a configured reviewJobId wins over the review scribe's automation", async () => {
-  const f = await fixture({ reviewJobId: "review-job" }),
-    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
-  const calls: any[] = [];
-  const cron = {
-    list: async () => expect.unreachable("the configured job needs no lookup"),
-    enqueueRun: async (id: any) => {
-      calls.push(id);
-      return { ok: true, enqueued: true, runId: "run-1" };
-    },
-  };
-  const service = await f.boot(scheduler, { getCron: () => cron });
-  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
-  await scheduler.fire("knowledge-maintenance");
-  expect(calls).toStrictEqual(["review-job"]);
+it("a maintenance reviewJobId is not a configuration key", () => {
+  expect(() => parsePolicy({ maintenance: { reviewJobId: "review-job" } })).toThrow(
+    /configuration is invalid/,
+  );
+});
+
+it.each([
+  { writesEnabled: true, maintenance: { enabled: true } },
+  { writesEnabled: false, maintenance: { enabled: true } },
+  { writesEnabled: true, maintenance: { enabled: false } },
+])("lean service start performs no registry or storage I/O: %j", async (policy) => {
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  const registry = vi.spyOn(RegistryClient.prototype, "call"),
+    storage = vi.spyOn(StorageClient.prototype, "call");
+  afterTest(() => {
+    vi.mocked(getResourceProfile).mockReturnValue("standard");
+    registry.mockRestore();
+    storage.mockRestore();
+  });
+  const services: any[] = [],
+    host = hostApi(tempDirs.make("knowledge-unused-"), {
+      policy,
+      extra: { registerService: (service: any) => services.push(service) },
+    });
+  afterTest(() => services[0]?.stop());
+  createKnowledgeService(host.api);
+  await services[0].start({ scheduler: fakeScheduler(Date.now()) });
+  expect(registry).not.toHaveBeenCalled();
+  expect(storage).not.toHaveBeenCalled();
+  expect(existsSync(host.stateRoot), "unused startup does not create the registry").toBe(false);
+});
+
+it("lean maintenance status as first use loads saved results before responding", async () => {
+  const f = await fixture(),
+    first = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+    seeded = await f.boot(first),
+    context = operatorContext(f.host.api);
+  await first.fire("knowledge-maintenance");
+  const saved = await seeded.maintenance_status({}, context);
+  expect(saved.lastRun).not.toBeNull();
+  await f.lifecycles[0].stop();
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  afterTest(() => vi.mocked(getResourceProfile).mockReturnValue("standard"));
+  const next = fakeScheduler(Date.parse("2026-10-20T13:20:00Z")),
+    restarted = await f.boot(next);
+  expect(next.jobs.size).toBe(0);
+  const status = await restarted.maintenance_status({}, context);
+  expect(status.lastRun).toEqual(saved.lastRun);
+  expect(next.jobs.size).toBe(1);
+  expect(next.jobs.get("knowledge-maintenance").at).toBe(next.clock + 60_000);
+});
+
+it("lean first use activates maintenance once, including same-instance restart with cached facts", async () => {
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  const start = vi.spyOn(Maintenance.prototype, "start"),
+    registry = vi.spyOn(RegistryClient.prototype, "call"),
+    storage = vi.spyOn(StorageClient.prototype, "call");
+  afterTest(() => {
+    vi.mocked(getResourceProfile).mockReturnValue("standard");
+    start.mockRestore();
+    registry.mockRestore();
+    storage.mockRestore();
+  });
+  const f = await fixture(),
+    scheduler = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+    service = await f.boot(scheduler);
+  expect(registry, "existing stores are not opened by service startup").not.toHaveBeenCalled();
+  expect(storage).not.toHaveBeenCalled();
+  const context = operatorContext(f.host.api);
+  await service.status({}, context);
+  await start.mock.results[0]!.value;
+  await service.status({}, context);
+  expect(start).toHaveBeenCalledOnce();
+  expect(scheduler.jobs.size).toBe(1);
+  expect(new Set(storage.mock.contexts).size, "only the demanded store is opened").toBe(1);
+  await f.lifecycles[0].stop();
+  const later = fakeScheduler(scheduler.clock);
+  await f.lifecycles[0].start({ scheduler: later });
+  expect(start).toHaveBeenCalledOnce();
+  await service.status({}, context);
+  expect(start).toHaveBeenCalledTimes(2);
+  await start.mock.results[1]!.value;
+  expect(later.jobs.size, "cached registry facts still count as first use").toBe(1);
+});
+
+it.each(["load", "save"] as const)(
+  "lean stop joins paused maintenance initialization %s before registry close",
+  async (stage) => {
+    vi.mocked(getResourceProfile).mockReturnValue("lean");
+    const entered = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>(),
+      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the original receiver via apply below.
+      call = RegistryClient.prototype.call,
+      calls = vi.spyOn(RegistryClient.prototype, "call"),
+      close = vi.spyOn(RegistryClient.prototype, "close");
+    afterTest(() => {
+      release.resolve();
+      vi.mocked(getResourceProfile).mockReturnValue("standard");
+      calls.mockRestore();
+      close.mockRestore();
+    });
+    let paused = false;
+    calls.mockImplementation(function (this: RegistryClient, ...args) {
+      const reply = call.apply(this, args);
+      if (args[0] !== "maintenance" || paused || args.length > 1 !== (stage === "save")) {
+        return reply;
+      }
+      paused = true;
+      return reply.then(async (value) => {
+        entered.resolve();
+        await release.promise;
+        return value;
+      });
+    });
+    const f = await fixture(),
+      scheduler = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+      service = await f.boot(scheduler);
+    // The real registry has replied, but the owning initialization is unsettled.
+    await service.status({}, operatorContext(f.host.api));
+    await entered.promise;
+    const settled = vi.fn(),
+      stopped = f.lifecycles[0].stop().then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    release.resolve();
+    await stopped;
+    expect(close).toHaveBeenCalledOnce();
+    expect(scheduler.jobs.size, "stopped initialization never arms a stale job").toBe(0);
+    for (const registry of calls.mock.contexts) {
+      if (!(registry instanceof RegistryClient)) {
+        throw new Error("Expected the real registry client");
+      }
+      expect(Reflect.get(registry, "worker")).toBeUndefined();
+    }
+  },
+);
+
+it("lean restart joins old initialization without arming its scheduler", async () => {
+  vi.mocked(getResourceProfile).mockReturnValue("lean");
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>(),
+    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the original receiver via apply below.
+    call = RegistryClient.prototype.call,
+    calls = vi.spyOn(RegistryClient.prototype, "call"),
+    start = vi.spyOn(Maintenance.prototype, "start");
+  afterTest(() => {
+    release.resolve();
+    vi.mocked(getResourceProfile).mockReturnValue("standard");
+    calls.mockRestore();
+    start.mockRestore();
+  });
+  let paused = false;
+  calls.mockImplementation(function (this: RegistryClient, ...args) {
+    const reply = call.apply(this, args);
+    if (args[0] !== "maintenance" || paused) {
+      return reply;
+    }
+    paused = true;
+    return reply.then(async (value) => {
+      entered.resolve();
+      await release.promise;
+      return value;
+    });
+  });
+  const f = await fixture(),
+    first = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+    service = await f.boot(first),
+    context = operatorContext(f.host.api);
+  await service.status({}, context);
+  await entered.promise;
+  const stopped = f.lifecycles[0].stop(),
+    next = fakeScheduler(first.clock);
+  await f.lifecycles[0].start({ scheduler: next });
+  await service.status({}, context);
+  expect(start).toHaveBeenCalledTimes(2);
+  expect(next.jobs.size).toBe(0);
+  release.resolve();
+  await stopped;
+  await start.mock.results[1]!.value;
+  expect(first.jobs.size).toBe(0);
+  expect(next.jobs.size).toBe(1);
+  expect((await service.status({}, context)).store).toBe("ready");
 });

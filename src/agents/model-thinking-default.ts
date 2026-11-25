@@ -2,7 +2,7 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-import { resolveThinkingDefaultCore } from "./model-thinking-default-core.js";
+import { buildThinkingCatalog, resolveThinkingDefaultCore } from "./model-thinking-default-core.js";
 export {
   resolveConfiguredThinkingDefaultCore as resolveConfiguredThinkingDefault,
   resolveThinkingDefaultCore as resolveThinkingDefault,
@@ -27,10 +27,10 @@ export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
   const runtimeSelectedEntry = runtimeCatalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
+  // A runtime row for the selected model is authoritative; otherwise authored rows gain the
+  // bundled row's thinking facts they omit.
   const catalog =
-    runtimeSelectedEntry || configuredCatalog.length === 0
-      ? (runtimeCatalog ?? configuredCatalog)
-      : configuredCatalog;
+    runtimeSelectedEntry && runtimeCatalog ? runtimeCatalog : buildThinkingCatalog(params);
   return resolveThinkingDefaultCore({
     cfg: params.cfg,
     agentId: params.agentId,

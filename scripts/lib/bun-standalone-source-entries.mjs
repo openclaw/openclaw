@@ -121,7 +121,7 @@ function entryOutput(config, name, source, format, packageType) {
  * @typedef {Pick<ReturnType<typeof import("./bundled-plugin-build-entries.mjs").collectSourceCheckoutPluginBuildEntries>[number], "id" | "sourceEntries" | "runtimeExtension"> & (
  *   { isolated: false } | {
  *     isolated: true,
- *     runtimeBuildConfig: StandaloneSourceConfig,
+ *     runtimeBuildConfigs: (StandaloneSourceConfig & { entry: Record<string, string> })[],
  *     runtimeBuildPlan: import("./plugin-npm-runtime-build.mts").PluginNpmRuntimeBuildPlan
  *   }
  * )} StandaloneSourcePluginEntry
@@ -252,20 +252,21 @@ export function createStandaloneSourceEntries({
     }
   }
   for (const plugin of pluginEntries.filter((entry) => entry.isolated)) {
-    for (const source of plugin.sourceEntries) {
-      const name = source.replace(/^\.\//u, "").replace(/\.[^.]+$/u, plugin.runtimeExtension);
-      add(
-        bundledDistPluginFile(plugin.id, name),
-        path.join("extensions", plugin.id, source),
-        plugin.runtimeBuildConfig,
-        plugin.runtimeExtension === ".cjs" ? "cjs" : "esm",
-        {
-          pluginEntry: plugin,
-          pluginPlan: plugin.runtimeBuildPlan,
-          moduleUrlOutputRoot: bundledDistPluginFile(plugin.id, ""),
-          contextId: `plugin:${plugin.id}`,
-        },
-      );
+    for (const [configIndex, config] of plugin.runtimeBuildConfigs.entries()) {
+      for (const [name, source] of Object.entries(config.entry)) {
+        add(
+          bundledDistPluginFile(plugin.id, `${name}${plugin.runtimeExtension}`),
+          source,
+          config,
+          plugin.runtimeExtension === ".cjs" ? "cjs" : "esm",
+          {
+            pluginEntry: plugin,
+            pluginPlan: plugin.runtimeBuildPlan,
+            moduleUrlOutputRoot: bundledDistPluginFile(plugin.id, ""),
+            contextId: `plugin:${plugin.id}:${configIndex}`,
+          },
+        );
+      }
     }
   }
   const resolve = (output) =>
@@ -398,7 +399,7 @@ export async function loadStandaloneSourceEntries(options) {
       }
       return Object.assign(entry, {
         runtimeBuildPlan,
-        runtimeBuildConfig: runtimePlans.createPluginNpmRuntimeBuildOptions(runtimeBuildPlan),
+        runtimeBuildConfigs: runtimePlans.createPluginNpmRuntimeBuildOptions(runtimeBuildPlan),
       });
     });
   // These programs are already original JavaScript. Their existing manifest and

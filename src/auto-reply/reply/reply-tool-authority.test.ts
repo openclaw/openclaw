@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import type { GatewayAccessGrantRef } from "../../plugins/gateway-access-policy.types.js";
@@ -111,11 +111,10 @@ it("keeps same-requester steering independent of session personal-context reassi
     run.run.bootstrapUserProfileId = owner.id;
     run.run.senderId = "first-participant";
     run.run.permissionMode = "full";
-    run.operatorAuthority = createAdmittedRunOperatorAuthority({
+    run.operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.read", "operator.write"],
       source: {},
-      assertCurrent: () => {},
     });
     const { operation, fingerprint, queueMessage, inject } = await admit(
       run,
@@ -150,7 +149,7 @@ it("keeps same-requester steering independent of session personal-context reassi
       { toolOverrides: { webSearch: false } },
       { operatorAuthority: undefined },
       {
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+        operatorAuthority: createTestOperatorAuthority({
           ...run.operatorAuthority,
           scopes: ["operator.admin"],
         }),
@@ -295,10 +294,10 @@ it.each([
         sessions: { others: "none" },
         modelPolicy: {},
       };
-      let config: OpenClawConfig = withModelPolicy
+      const config: OpenClawConfig = withModelPolicy
         ? {
             agents: { defaults: { model: defaultModel } },
-            gateway: { roles: { definitions: { writer } } },
+            gateway: { roles: { default: "writer", definitions: { writer } } },
           }
         : {};
       const context = { getRuntimeConfig: () => config };
@@ -328,7 +327,7 @@ it.each([
           },
         );
         cleanups.push(caller.release);
-        const owner = await captureGatewayOperatorRunAuthority({
+        const owner = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority: caller.isCurrent,
@@ -384,10 +383,6 @@ it.each([
             gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
           }),
         ).resolves.toEqual({ status: "accepted" });
-        config = { ...config };
-        await expect(inject()).resolves.toEqual(
-          grant === undefined ? rejected : { status: "accepted" },
-        );
         const otherAuthority = await capture(
           clientFor(otherProfileId),
           new AbortController().signal,
@@ -399,7 +394,7 @@ it.each([
             gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
           }),
         ).resolves.toEqual(rejected);
-        const acceptedMessages = grant === undefined ? 1 : 2;
+        const acceptedMessages = 1;
         expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         expect(queueMessage).toHaveBeenLastCalledWith(
           "change strategy",
@@ -429,23 +424,9 @@ it.each([
           ).resolves.toMatchObject(rejected);
           expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         }
-        if (grant !== null) {
-          const revokedGrant = new AbortController();
-          const revokedAuthority = await capture(
-            reconnectedClient,
-            reconnectedRevocation.signal,
-            grant,
-            revokedGrant.signal,
-          );
-          revokedGrant.abort();
-          await expect(inject({ operatorAuthority: revokedAuthority })).resolves.toMatchObject(
-            rejected,
-          );
-          expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
-        }
         for (const changed of [
           {
-            operatorAuthority: createAdmittedRunOperatorAuthority({
+            operatorAuthority: createTestOperatorAuthority({
               ...reconnectedAuthority,
               scopes: ["operator.read"],
             }),
@@ -457,7 +438,7 @@ it.each([
           { gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId } },
           { gatewayUiCommandTarget: undefined },
           ...["openai/gpt-test", "openai/another-model"].map((model) => ({
-            operatorAuthority: createAdmittedRunOperatorAuthority({
+            operatorAuthority: createTestOperatorAuthority({
               ...reconnectedAuthority,
               modelPolicy: prepareOperatorModelPolicy({
                 cfg: config,
@@ -470,18 +451,6 @@ it.each([
         ]) {
           await expect(inject(changed)).resolves.toMatchObject(rejected);
         }
-        reconnectedRevocation.abort();
-        await expect(inject()).resolves.toMatchObject(rejected);
-        const liveReplacement = await capture(
-          reconnectedClient,
-          new AbortController().signal,
-          grant,
-        );
-        originalRevocation.abort();
-        await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject(
-          rejected,
-        );
-        expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
       } finally {
         for (const release of cleanups.toReversed()) {
           release();
@@ -527,8 +496,6 @@ it("projects inbound authority without forwarding a changed approval destination
     { gatewayUiCommandTarget: undefined },
     { toolBindings: { browser: { clientId: "different-browser" } } },
     { permissionMode: "guarded" },
-    { forceRestartSafeTools: true },
-    { forceCodeModeTools: true },
   ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
     await expect(inject({ ...overlay, ...restricted })).resolves.toMatchObject(rejected);
     expect(queueMessage).toHaveBeenCalledOnce();

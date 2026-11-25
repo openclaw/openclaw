@@ -1,13 +1,42 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, OpenClawConfigInput } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderAuthConfigPatch as applySdkAuthPatch } from "../plugin-sdk/provider-auth.js";
-import { applyProviderAuthConfigPatchWithNormalization as applyAuthPatch } from "./provider-auth-choice-helpers.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import {
+  applyProviderAuthConfigPatchWithNormalization as applyAuthPatch,
+  pickAuthMethod,
+} from "./provider-auth-choice-helpers.js";
 import type { ProviderAuthResult } from "./provider-authentication.types.js";
+import type { ProviderPlugin } from "./types.js";
 
-const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
-  providerConfig;
-const normalization = { providerConfigNormalizer };
+// mock-isolation: Declare one device-code sign-in without scanning installed plugins.
+vi.mock("./provider-auth-choices.js", () => ({
+  resolveManifestDeclaredProviderAuthChoices: () => [
+    { providerId: "openai", methodId: "oauth", appGuidedAuth: "device-code" },
+    { providerId: "openai", methodId: "api-key", appGuidedSecret: true },
+  ],
+}));
+
+it("matches --method by id or label and routes --device-code to the declared device-code sign-in", async () => {
+  const run = async () => ({ profiles: [] });
+  const provider = {
+    id: "openai",
+    label: "OpenAI",
+    auth: [
+      { id: "oauth", label: "Codex login", kind: "oauth", run },
+      { id: "api-key", label: "OpenAI API Key", kind: "api_key", run },
+    ],
+  } as ProviderPlugin;
+  const pick = async (requestedMethod: string) =>
+    (await pickAuthMethod({ provider, requestedMethod, prompter: {} as WizardPrompter }))?.id;
+
+  expect(await pick("API-KEY")).toBe("api-key");
+  expect(await pick("codex login")).toBe("oauth");
+  expect(await pick("device-code")).toBe("oauth");
+  expect(await pick("browser")).toBeUndefined();
+});
+
 const providerPatch = <T>(providers: T) => ({ models: { providers } });
 const pluginPatch = <T>(config: T) => ({ plugins: { entries: { example: { config } } } });
 const retiredGemini = "google/gemini-3-pro-preview";
@@ -91,7 +120,7 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
         models: [],
       },
     } satisfies Record<string, ModelProviderConfig>);
-    const patch = providerPatch({
+    const patch: ProviderAuthResult["configPatch"] = providerPatch({
       "microsoft-foundry": {
         authHeader: true,
         apiKey: undefined,
@@ -99,7 +128,7 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
       },
     });
 
-    const next = applyAuthPatch(baseLocal, patch, normalization);
+    const next = applyAuthPatch(baseLocal, patch);
     const provider = next.models?.providers?.["microsoft-foundry"];
 
     expect(provider).toMatchObject({ authHeader: true });
@@ -116,14 +145,40 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
     };
     const patch: ProviderAuthResult["configPatch"] = providerPatch({
       fixture: {
-        ...provider,
         headers: { Authorization: undefined },
         request: { headers: { "X-Custom-Auth": undefined } },
       },
     });
     const next = applySdkAuthPatch(providerPatch({ fixture: provider }), patch);
+    expect(next.models?.providers?.fixture).toMatchObject({
+      baseUrl: provider.baseUrl,
+      models: provider.models,
+    });
     expect(next.models?.providers?.fixture?.headers).toEqual({ "X-Deployment": "keep" });
     expect(next.models?.providers?.fixture?.request?.headers).toEqual({ "X-Route": "keep" });
+  });
+
+  it("accepts authored config input without materializing unrelated providers", () => {
+    const materialized: OpenClawConfig = {
+      models: { providers: { fixture: { baseUrl: "https://provider.example/v1", models: [] } } },
+    };
+    const fullResult: ProviderAuthResult = { profiles: [], configPatch: materialized };
+    expect(applySdkAuthPatch({}, fullResult.configPatch).models?.providers?.fixture).toMatchObject(
+      materialized.models!.providers!.fixture!,
+    );
+    const config: OpenClawConfigInput = {
+      models: {
+        providers: {
+          fixture: { baseUrl: "https://provider.example/v1", models: [] },
+          unrelated: { apiKey: "synthetic-unrelated-key" },
+        },
+      },
+    };
+    const result: ProviderAuthResult = { profiles: [], configPatch: config };
+    const next = applySdkAuthPatch({}, result.configPatch);
+    expect(next.models?.providers?.fixture?.baseUrl).toBe("https://provider.example/v1");
+    expect(next.models?.providers?.unrelated?.apiKey).toBe("synthetic-unrelated-key");
+    expect(config.models?.providers?.unrelated).toEqual({ apiKey: "synthetic-unrelated-key" });
   });
 
   it.each(["litellm", "LiteLLM"] as const)(
@@ -168,7 +223,7 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
         },
       });
 
-      const next = applyAuthPatch(baseLocal, patch, normalization);
+      const next = applyAuthPatch(baseLocal, patch);
 
       expect(next.models?.providers).toEqual({
         litellm: {
@@ -211,7 +266,7 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
           models: [model()],
         },
       } satisfies Record<string, ModelProviderConfig>);
-      const next = applyAuthPatch({}, patch, normalization);
+      const next = applyAuthPatch({}, patch);
       expect(next.models?.providers?.[provider]?.models?.[0]?.id).toBe(currentGemini);
       expect(next.models?.providers?.[provider]?.api).toBe("openai-completions");
     },

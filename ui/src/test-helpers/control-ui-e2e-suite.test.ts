@@ -24,6 +24,11 @@ const healthyFixtureModes: [FixtureMode, ...FixtureMode[]] = [
   "scenario-timeout",
   "resources-success",
 ];
+const diagnosticFixtureModes: [FixtureMode, ...FixtureMode[]] = [
+  "diagnostic-page-timeout",
+  "diagnostic-tracked-timeout",
+  "diagnostic-scenario-timeout",
+];
 
 type FixtureJournal = {
   closeCalls: number;
@@ -88,7 +93,14 @@ afterAll(async () => {
 });
 
 async function startNativeFixtures(modes: [FixtureMode, ...FixtureMode[]], signal: AbortSignal) {
-  const invocationRoot = path.join(fixtureRoot, modes.length === 1 ? modes[0] : "healthy-run");
+  const invocationRoot = path.join(
+    fixtureRoot,
+    modes.length === 1
+      ? modes[0]
+      : modes === healthyFixtureModes
+        ? "healthy-run"
+        : "diagnostic-run",
+  );
   const files: string[] = [];
   for (const mode of modes) {
     const root = path.join(fixtureRoot, mode);
@@ -151,6 +163,7 @@ async function startNativeFixtures(modes: [FixtureMode, ...FixtureMode[]], signa
 }
 
 let healthyRun: ReturnType<typeof startNativeFixtures> | undefined;
+let diagnosticRun: ReturnType<typeof startNativeFixtures> | undefined;
 
 async function runFixture(mode: FixtureMode, signal: AbortSignal) {
   if (hasUnjoinedFixture) {
@@ -163,7 +176,9 @@ async function runFixture(mode: FixtureMode, signal: AbortSignal) {
     // Poisoned-fork cases retain their own invocation and teardown boundary.
     const { child, output, nativeReport } = await (healthyFixtureModes.includes(mode)
       ? (healthyRun ??= startNativeFixtures(healthyFixtureModes, signal))
-      : startNativeFixtures([mode], signal));
+      : diagnosticFixtureModes.includes(mode)
+        ? (diagnosticRun ??= startNativeFixtures(diagnosticFixtureModes, signal))
+        : startNativeFixtures([mode], signal));
     const pid = Number(await fs.readFile(path.join(root, "worker.pid"), "utf8"));
     expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
     let workerStopped = false;
@@ -295,43 +310,41 @@ it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
     }),
 );
 
-it.for([
-  "diagnostic-page-timeout",
-  "diagnostic-tracked-timeout",
-  "diagnostic-scenario-timeout",
-] as const)("captures a native timeout before its context closes: %s", (mode, context) =>
-  runJoinedFixture(mode, context, (result) => {
-    expect(result.code, result.output).toBe(1);
-    expectTestCounts(result, 1, 1);
-    expect(result.output).toContain("Test timed out in 50ms");
-    expect(result.successorStarted).toBe(true);
-    expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
-    expect(result.captures).toHaveLength(1);
-    expect(result.captures[0]?.public).toMatchObject({
-      hostBeforeRead: { pageClosed: false },
-      rendererRead: "completed",
-    });
-    expect(result.captures[0]?.public.gatewayRpc).toEqual(
-      [
-        "agents.files.get",
-        "chat.history",
-        "chat.startup",
-        "sessions.list",
-        "sessions.subscribe",
-        "sessions.unsubscribe",
-        "sessions.messages.subscribe",
-        "sessions.messages.unsubscribe",
-      ].flatMap((method) => [
-        { method, outcome: "sent" },
-        { method, outcome: "ok" },
-        { method, outcome: "sent" },
-        { method, outcome: "error" },
-      ]),
-    );
-    expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
-    expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
-    expectClosed(result, 1);
-  }),
+it.for(diagnosticFixtureModes)(
+  "captures a native timeout before its context closes: %s",
+  (mode, context) =>
+    runJoinedFixture(mode, context, (result) => {
+      expect(result.code, result.output).toBe(1);
+      expectTestCounts(result, 1, 1);
+      expect(result.output).toContain("Test timed out in 50ms");
+      expect(result.successorStarted).toBe(true);
+      expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
+      expect(result.captures).toHaveLength(1);
+      expect(result.captures[0]?.public).toMatchObject({
+        hostBeforeRead: { pageClosed: false },
+        rendererRead: "completed",
+      });
+      expect(result.captures[0]?.public.gatewayRpc).toEqual(
+        [
+          "agents.files.get",
+          "chat.history",
+          "chat.startup",
+          "sessions.list",
+          "sessions.subscribe",
+          "sessions.unsubscribe",
+          "sessions.messages.subscribe",
+          "sessions.messages.unsubscribe",
+        ].flatMap((method) => [
+          { method, outcome: "sent" },
+          { method, outcome: "ok" },
+          { method, outcome: "sent" },
+          { method, outcome: "error" },
+        ]),
+      );
+      expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
+      expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
+      expectClosed(result, 1);
+    }),
 );
 
 it("drains held modules and cancels unrequested observations during cleanup", (context) =>

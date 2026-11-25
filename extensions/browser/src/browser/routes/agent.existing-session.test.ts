@@ -786,7 +786,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("does not submit when filling completes after the body deadline before its timer runs", async () => {
     fill.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 60_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_001);
     });
     const request = await startClientAction(typeAndSubmit);
 
@@ -873,7 +873,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("rejects a condition that finishes after its deadline before the timer runs", async () => {
     withDocument.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 251);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 251);
       return true;
     });
     const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });
@@ -1071,17 +1071,6 @@ describe("existing-session interaction navigation guard", () => {
       }
     },
   );
-
-  it("skips the guard when no SSRF policy is configured", async () => {
-    const response = await runAction({ kind: "press", key: "Enter" }, null);
-
-    expect(response.statusCode).toBe(200);
-    expect(press).toHaveBeenCalledOnce();
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(vi.mocked(resolveSafeRouteTabUrl)).toHaveBeenCalledOnce();
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledOnce();
-    expect(checkNavigation).not.toHaveBeenCalled();
-  });
 
   it("still probes navigation when the interaction command throws", async () => {
     click.mockImplementationOnce(() => {

@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
     vi.fn<(key: string, options?: { agentId?: string }) => SessionRead | Promise<SessionRead>>(),
   roleScopes: undefined as string[] | undefined,
   roleReads: 0,
+  sessionCap: undefined as "invited" | undefined,
+  prepareSharing:
+    vi.fn<typeof import("../session-sharing-target-read.js").prepareSessionSharingRead>(),
 }));
 
 // mock-isolation: Reject legacy synchronous reads to enforce the async storage boundary.
@@ -62,9 +65,9 @@ vi.mock("../github-publication-requester.js", () => ({
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
-// mock-isolation: Supply profile authority without opening the host profile store.
+// mock-isolation: Supply the canonical identity binding without opening the profile store.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
-  prepareUserProfileRolePolicyAuthority: async (profileId: string) => ({
+  prepareUserProfileSelectionAuthority: async (profileId: string) => ({
     profileId,
     isCurrent: () => true,
   }),
@@ -82,6 +85,7 @@ vi.mock("../operator-role-policy.js", () => {
     return mocks.roleScopes ? { scopes: mocks.roleScopes } : null;
   };
   return {
+    operatorSessionCap: () => mocks.sessionCap,
     resolveOperatorRolePolicy: resolve,
     resolveOperatorRolePolicyForProfile: resolve,
     resolveOperatorRolePolicyForAssignment: resolve,
@@ -90,6 +94,11 @@ vi.mock("../operator-role-policy.js", () => {
 // mock-isolation: Supply selected-session access without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
+}));
+
+// mock-isolation: Supply the separately selected sharing target without opening session stores.
+vi.mock("../session-sharing-target-read.js", () => ({
+  prepareSessionSharingRead: mocks.prepareSharing,
 }));
 
 // mock-isolation: Admit sharing independently of the live personal grant under test.
@@ -124,8 +133,18 @@ function sessionRead(agentId = "main", patch: Partial<SessionEntry> = {}) {
   };
 }
 
-function prepare(request = createRequest(), agentId?: string, signal?: AbortSignal) {
-  return prepareGitHubPublicationOptionsRead(request, { sessionKey: "main", agentId }, signal);
+function prepare(
+  request = createRequest(),
+  agentId?: string,
+  signal?: AbortSignal,
+  purpose: "options" | "shared-observation" = "options",
+) {
+  return prepareGitHubPublicationOptionsRead(
+    request,
+    { sessionKey: "main", agentId },
+    signal,
+    purpose,
+  );
 }
 
 function publish(loaded: SessionRead, patch: Partial<SessionEntry>) {
@@ -152,6 +171,8 @@ beforeEach(() => {
   setRuntimeConfigSnapshot({});
   mocks.roleScopes = undefined;
   mocks.roleReads = 0;
+  mocks.sessionCap = undefined;
+  mocks.prepareSharing.mockReset();
   mocks.loadSession.mockReset();
   mocks.loadSession.mockReturnValue(sessionRead());
 });
@@ -199,7 +220,41 @@ it("prepares the new session store after an in-place config publication", async 
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
 });
 
-it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
+it.each(["options", "shared-observation"] as const)(
+  "rejects invited %s metadata when sharing selects a replacement store",
+  async (purpose) => {
+    const config = getRuntimeConfigSnapshot()!;
+    const request = createRequest();
+    request.context.getRuntimeConfig = () => getRuntimeConfigSnapshot()!;
+    mocks.sessionCap = "invited";
+    const { snapshot, pending, entered } = holdSessionRead();
+    const replacement = {
+      ...sessionRead("main", { sessionId: "replacement-session" }),
+      storePath: "/test/reloaded/sessions.json",
+    };
+    const release = vi.fn();
+    mocks.prepareSharing.mockResolvedValue({
+      storageTarget: replacement,
+      readCurrent: () => ({
+        target: { ...replacement, storeKey: replacement.canonicalKey },
+        membership: new Set(["profile-cache-test"]),
+        sourcePath: replacement.storePath,
+        sourceAgentId: replacement.agentId,
+      }),
+      release,
+    });
+    const first = prepare(request, undefined, undefined, purpose);
+    const rejected = expect(first).rejects.toThrow("session lifecycle changed");
+    await entered.promise;
+    config.session = { store: replacement.storePath };
+    setRuntimeConfigSnapshot(config);
+    pending.resolve(snapshot);
+    await rejected;
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
+
+it("keeps admitted personal reads and publication after ingress closes; refuses the next request", async () => {
   const request = createRequest();
   const grant = new AbortController();
   const principal = createRemoteControlUiIngressTestContext({
@@ -219,8 +274,12 @@ it("keeps origin-free personal reads and publication bound to the live ingress g
   using _ = { [Symbol.dispose]: publication.release };
   expect(() => publication.action.assertCurrent()).not.toThrow();
   grant.abort();
-  expect(() => read.currentSession()).toThrow("connection is no longer current");
-  expect(() => publication.action.assertCurrent()).toThrow("current authenticated human");
+  expect(read.currentSession()).toEqual(read.session);
+  expect(() => publication.action.assertCurrent()).not.toThrow();
+  await expect(prepare(request)).rejects.toThrow("connection lost access");
+  await expect(
+    preparePersonalGitHubSessionActionV2(request, { sessionKey: "main" }),
+  ).rejects.toThrow("current authenticated human");
 });
 
 it.each([
@@ -236,8 +295,9 @@ it.each([
   expect(read.personal.kind).toBe("ineligible");
 
   mocks.roleScopes = ["operator.approvals"];
-  expect(() => read.currentSession()).toThrow(
-    "GitHub requires current operator.sessions.read permission.",
+  expect(read.currentSession()).toEqual(read.session);
+  await expect(prepare(request)).rejects.toThrow(
+    "Personal profile requires current operator.sessions.read permission.",
   );
 });
 
@@ -254,7 +314,7 @@ it("reuses the worker result until publication metadata changes", async () => {
   expect(() => read.currentSession()).toThrow("session lifecycle changed");
 });
 
-it("checks live client policy once per publication options read", async () => {
+it("captures client policy once for a publication options request", async () => {
   mocks.roleScopes = ["operator.read", "operator.write"];
   using read = await prepare();
   // Owner benchmark: OPENCLAW_VITEST_RUNTIME=node OPENCLAW_BENCH_GITHUB_OPTIONS=both
@@ -340,14 +400,13 @@ it("checks live client policy once per publication options read", async () => {
   ]) {
     mocks.roleReads = 0;
     consume();
-    expect(mocks.roleReads).toBe(1);
+    expect(mocks.roleReads).toBe(0);
   }
   mocks.roleScopes = ["operator.approvals"];
-  expect(() => read.currentSession()).toThrow("operator.sessions.read permission");
-  expect(() => read.currentSessionRead()).toThrow("operator.sessions.read permission");
-  expect(() => read.assertSessionUnchanged(read.session)).toThrow(
-    "operator.sessions.read permission",
-  );
+  expect(read.currentSession()).toEqual(read.session);
+  expect(read.currentSessionRead().entry?.sessionId).toBe(read.session.sessionId);
+  expect(() => read.assertSessionUnchanged(read.session)).not.toThrow();
+  await expect(prepare()).rejects.toThrow("operator.sessions.read permission");
 });
 
 it.each([null, 123])(

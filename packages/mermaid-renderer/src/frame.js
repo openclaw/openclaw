@@ -1,7 +1,7 @@
 // A classic script is required here: opaque sandbox frames cannot import
 // same-origin ES modules without relaxing the host's asset CORS policy.
 (() => {
-  const mermaid = globalThis.mermaid;
+  const pele = globalThis.pele;
   const truncateUtf16Safe = (value, maxLength) => {
     if (value.length <= maxLength) {
       return value;
@@ -19,7 +19,6 @@
   policy.content =
     "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
   document.head.append(policy);
-  mermaid.initialize({ startOnLoad: false });
 
   const initialize = (event) => {
     if (
@@ -33,7 +32,9 @@
     const port = event.ports[0];
     const properties = event.data.presentationAttributes;
     let busy = false;
-    const render = async ({ data: { id, source, config, maxSvgLength, maxSvgElements } }) => {
+    const render = ({
+      data: { id, source, theme, maxSourceLength, maxEdges, maxSvgLength, maxSvgElements },
+    }) => {
       if (busy) {
         return;
       }
@@ -41,17 +42,19 @@
       const container = document.createElement("div");
       document.body.replaceChildren(container);
       try {
-        // Lock every supported configuration root, including future defaults.
-        // The source may describe diagrams, but cannot change host policy.
-        config.secure = [
-          ...new Set([
-            ...Object.keys(mermaid.mermaidAPI.defaultConfig),
-            ...Object.keys(config),
-            ...config.secure,
-          ]),
-        ];
-        mermaid.initialize(config);
-        const { svg } = await mermaid.render(`mermaid-${id}`, source, container);
+        // Host options are never merged with source configuration. Links, images and
+        // trusted markup callbacks remain disabled even when front matter requests them.
+        const { svg } = pele.render(source, {
+          idPrefix: `diagram-${id}`,
+          fontFamily: theme.fontFamily,
+          // Measure labels at chat scale; shrinking only the exported text would clip nodes.
+          fontSize: 14,
+          limit: maxSourceLength,
+          maxEdges,
+          outputLimit: maxSvgLength,
+          links: false,
+          images: false,
+        });
         if (svg.length > maxSvgLength) {
           throw new Error("Mermaid diagram output is too large.");
         }
@@ -59,6 +62,21 @@
         const root = container.querySelector("svg");
         if (!root) {
           throw new Error("Mermaid returned an invalid diagram.");
+        }
+        // Resolve inherited CSS variables before the result becomes a standalone
+        // image. The passive host deliberately discards all source CSS afterwards.
+        for (const [property, value] of Object.entries({
+          bg: theme.background,
+          fg: theme.foreground,
+          muted: theme.muted,
+          line: theme.muted,
+          surface: theme.background,
+          "surface-alt": theme.background,
+          border: theme.border,
+          accent: theme.accent,
+          font: theme.fontFamily,
+        })) {
+          root.style.setProperty(`--pele-${property}`, value);
         }
         const elements = [root, ...root.querySelectorAll("*")];
         if (elements.length > maxSvgElements) {
@@ -94,7 +112,7 @@
         busy = false;
       }
     };
-    port.addEventListener("message", (message) => void render(message));
+    port.addEventListener("message", render);
     port.start();
     port.postMessage({ type: "ready" });
   };

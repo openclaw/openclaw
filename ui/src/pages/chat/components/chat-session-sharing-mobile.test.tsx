@@ -181,10 +181,14 @@ it.each(["event", "canonical-list"] as const)(
       reason: "update",
       session: replacement,
     });
-    await waitForSolid(() =>
-      expect(source.operationSignal?.aborted, "successor retires the previous sharing scope").toBe(
-        true,
-      ),
+    // Retirement crosses the roster refresh path; loaded 4-vCPU PR runners exceed 1s here.
+    await waitForSolid(
+      () =>
+        expect(
+          source.operationSignal?.aborted,
+          "successor retires the previous sharing scope",
+        ).toBe(true),
+      { timeout: 5_000 },
     );
     pane.syncSelectedSessionSharing(replacement);
     await waitForSolid(() =>

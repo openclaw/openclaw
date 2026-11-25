@@ -85,9 +85,15 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
         willRetry: true,
       }),
     );
-    expect(onReconnectScheduled).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(0);
+    await vi.advanceTimersByTimeAsync(0);
     expect(wsInstances).toHaveLength(2);
+    // The immediate replacement spends no backoff attempt; a failing one backs off as usual.
+    wsInstances[1]!.emitClose(1006, "lost connection");
+    await vi.advanceTimersByTimeAsync(799);
+    expect(wsInstances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(201);
+    expect(wsInstances).toHaveLength(3);
   });
 
   it.each([
@@ -106,27 +112,19 @@ describe("GatewayBrowserClient heartbeat recovery", () => {
     expect(probes(ws)).toHaveLength(2);
   });
 
-  it("probes fifteen seconds after a sent request even if it timed out after ten seconds", async () => {
+  it("probes five seconds after an unanswered send and reconnects within sixteen seconds", async () => {
     const client = createClient();
     const ws = await connect(client);
-    await vi.advanceTimersByTimeAsync(5_000);
-    const onSent = vi.fn();
+    await vi.advanceTimersByTimeAsync(5_001);
     const request = client
-      .request("sessions.list", {}, { timeoutMs: 10_000, onSent })
+      .request("sessions.list", {}, { timeoutMs: 10_000 })
       .catch((error: unknown) => error);
-    expect(onSent).toHaveBeenCalledOnce();
-    expect(JSON.parse(ws.sent.at(-1)!).method).toBe("sessions.list");
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(await request).toMatchObject({
-      code: "CLIENT_TIMEOUT",
-      timeoutMs: 10_000,
-      requestSent: true,
-    });
     await vi.advanceTimersByTimeAsync(4_999);
     expect(probes(ws)).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(probes(ws)).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(10_000);
+    expect(await request).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
     expect(ws.lastClose).toEqual({ code: 4000, reason: "inbound silence probe timeout" });
   });
 

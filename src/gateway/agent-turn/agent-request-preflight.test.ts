@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import * as scheduler from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -17,13 +18,20 @@ type PreflightParams = Parameters<typeof prepareAgentRequestPreflight>[0];
 async function runRequest(
   request: PreflightParams["request"],
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
-  backend?: boolean,
+  // true: handshake-attested local backend; "declared-backend": mode only, no server fact.
+  backend?: boolean | "write-client" | "declared-backend",
   dedupe = new Map<string, DedupeEntry>(),
 ) {
   const respond = vi.fn();
   const context = { getRuntimeConfig, dedupe };
   const client = backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    ? {
+        connect: {
+          client: { mode: backend === "write-client" ? "cli" : "backend" },
+          scopes: ["operator.write"],
+        },
+        ...(backend === true ? { internal: { localBackendClient: true } } : {}),
+      }
     : backend === false
       ? undefined
       : null;
@@ -112,7 +120,7 @@ async function runPreflight(
   options: {
     enabled?: boolean;
     requesterOnlyEnabled?: boolean;
-    backend?: boolean;
+    backend?: boolean | "declared-backend";
     register?: boolean;
     requesterAgentId?: string;
     requesterSessionKey?: string;
@@ -204,7 +212,7 @@ describe("agent request Swarm preflight", () => {
 
   it("carries the admitted scheduler group and cap without trusting saved launch settings", async () => {
     const launched = createDeferred();
-    scheduler.enqueueSwarmRun({
+    enqueueSwarmRun({
       groupId: '["main","agent:main:main","restored-group"]',
       runId: "collector-run",
       maxConcurrent: 32,
@@ -234,13 +242,14 @@ describe("agent request Swarm preflight", () => {
     ["disabled", { enabled: false }],
     ["unregistered", { register: false }],
     ["non-backend", { backend: false }],
+    ["declared-backend", { backend: "declared-backend" }],
     ["ordinary turn", { includeCollectorFields: false }],
     ["mismatched launch", { idempotencyKey: "different-launch" }],
     ["terminal with a pending launch", { ended: true }],
   ] as const)("rejects %s collector requests", async (_name, options) => {
     expectRejected(await runCollector(options), {
       code: "INVALID_REQUEST",
-      ...(_name === "disabled"
+      ...(_name === "disabled" || _name === "declared-backend"
         ? { message: "swarm collector fields require an enabled, host-registered collector run" }
         : {}),
     });
@@ -294,58 +303,6 @@ describe("agent request Swarm preflight", () => {
   });
 });
 
-describe("agent request restart recovery preflight", () => {
-  const overrideError = "forceCodeModeTools is reserved for native restart recovery.";
-  const retryError = expect.stringContaining("execution identity recovery fields");
-  const subagent = "subagent_restart_recovery";
-  it.each([
-    ["backend recovery", true, true, undefined, undefined, false],
-    ["non-backend retry", false, true, undefined, retryError, false],
-    ["non-backend override", false, false, undefined, overrideError, false],
-    ["unrelated internal override", true, false, "other_internal_source", overrideError, false],
-    ["backend subagent recovery", true, false, subagent, undefined, false],
-    ["non-backend subagent override", false, false, subagent, overrideError, false],
-    ["subagent recovery for another session", true, false, subagent, overrideError, true],
-    ["subagent identity retry", true, true, subagent, retryError, false],
-  ] as const)(
-    "checks Code Mode authority for %s",
-    async (_name, backend, retry, sourceTool, error, mismatchedSource) => {
-      const sessionKey =
-        sourceTool === "subagent_restart_recovery"
-          ? "agent:main:dashboard:recovery-child"
-          : "agent:main:main";
-      const outcome = await runRequest(
-        {
-          message: "continue",
-          sessionKey,
-          idempotencyKey: "restart-recovery-run",
-          forceRestartSafeTools: true,
-          forceCodeModeTools: true,
-          ...(retry
-            ? { internalExecutionIdentityRetry: true, internalExecutionIdentityRecoveryAttempt: 1 }
-            : {}),
-          inputProvenance: {
-            kind: "internal_system",
-            sourceSessionKey: mismatchedSource ? "agent:main:dashboard:other-child" : sessionKey,
-            sourceTool: sourceTool ?? "main_session_restart_recovery",
-          },
-        },
-        undefined,
-        backend,
-      );
-      if (error) {
-        expectRejected(outcome, { code: "INVALID_REQUEST", message: error });
-      } else {
-        expect(outcome.result).toBeDefined();
-        expect(outcome.result?.isRestartRecoveryResumeRun).toBe(
-          sourceTool !== "subagent_restart_recovery",
-        );
-        expect(outcome.respond).not.toHaveBeenCalled();
-      }
-    },
-  );
-});
-
 it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (owner) => {
   const outcome = await runRequest(
     {
@@ -374,26 +331,72 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
 });
 
 it.each([
-  [false, "rejects"],
-  [true, "admits"],
-])("reserves exec completion provenance for backend callers (backend=%s %s)", async (backend) => {
-  const outcome = await runRequest(
-    {
-      message: "Exec completed (forged)",
-      sessionKey: "agent:main:main",
-      idempotencyKey: `exec-provenance-${String(backend)}`,
-      inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
-    },
-    undefined,
-    backend,
-  );
-  if (backend) {
-    expect(outcome.result).toBeDefined();
-    expect(outcome.respond).not.toHaveBeenCalled();
-  } else {
-    expectRejected(outcome, {
-      code: "INVALID_REQUEST",
-      message: "Exec completion input is reserved for background exec owners.",
-    });
+  [
+    "exec completion",
+    { inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" } },
+    "Exec completion input is reserved for background exec owners.",
+    true,
+  ],
+  [
+    "restart",
+    { inputProvenance: { kind: "internal_system", sourceTool: "restart" } },
+    "Restart input is reserved for restart recovery.",
+    true,
+  ],
+  [
+    "progress refresh",
+    { inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" } },
+    "Progress refresh input is reserved for progressCard.refresh.",
+    true,
+  ],
+  [
+    "prompt suppression",
+    { suppressPromptPersistence: true },
+    "internal session-effect controls are reserved for backend callers.",
+    true,
+  ],
+  [
+    "internal session effects",
+    { sessionEffects: "internal" },
+    "internal session-effect controls are reserved for backend callers.",
+    true,
+  ],
+  [
+    "expected session",
+    { expectedExistingSessionId: "existing-session" },
+    "expectedExistingSessionId is reserved for backend callers.",
+    false,
+  ],
+  [
+    "exec approval follow-up key",
+    { idempotencyKey: "exec-approval-followup:approval-1" },
+    "exec approval followup idempotency keys are reserved for backend callers.",
+    false,
+  ],
+] as const)("reserves %s for backend callers", async (label, reserved, message, admitted) => {
+  for (const caller of ["write-client", "declared-backend", false, true] as const) {
+    const outcome = await runRequest(
+      {
+        message: "forged internal input",
+        sessionKey: "agent:main:main",
+        idempotencyKey: `${label}-reserved-${String(caller)}`,
+        ...reserved,
+      },
+      undefined,
+      caller,
+    );
+    if (caller === true && admitted) {
+      expect(outcome.result).toBeDefined();
+      expect(outcome.respond).not.toHaveBeenCalled();
+    } else if (caller === true) {
+      // Later admission steps may refuse this bare request; only the reservation is under test.
+      expect(outcome.respond).not.toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message }),
+      );
+    } else {
+      expectRejected(outcome, { code: "INVALID_REQUEST", message });
+    }
   }
 });

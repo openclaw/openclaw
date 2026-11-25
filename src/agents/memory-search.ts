@@ -94,7 +94,12 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 
 export function resolveMemorySearchProviderId(provider?: string): string {
   const configured = provider?.trim();
-  return configured && configured !== "auto" ? configured : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  if (configured?.toLowerCase() === "none") {
+    return "none";
+  }
+  return configured && configured.toLowerCase() !== "auto"
+    ? configured
+    : DEFAULT_MEMORY_EMBEDDING_PROVIDER;
 }
 
 /** Compare provider identities without collapsing distinct configured tenants into their adapter. */
@@ -186,7 +191,8 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     (overrideRemote?.baseUrl === undefined && defaultRemote?.baseUrl?.trim())
       ? defaultRemote
       : undefined;
-  const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const configuredFallback = overrides?.fallback ?? defaults?.fallback ?? "none";
+  const fallback = configuredFallback.toLowerCase() === "none" ? "none" : configuredFallback;
   const fallbackAdapter =
     normalizeProviderId(provider) !== "none" && fallback && fallback !== "none"
       ? getConfiguredMemoryEmbeddingProvider(fallback, cfg)

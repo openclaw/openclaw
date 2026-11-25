@@ -65,6 +65,8 @@ beforeEach(async () => {
         return {};
       case "telemetry.countRecentSessions":
         return 3;
+      case "telemetry.claimInstallationCount":
+        return "1;20688;31";
       case "telemetry.persistSuccess":
         return command.input.state;
       default:
@@ -72,6 +74,7 @@ beforeEach(async () => {
     }
   });
   vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", `https://telemetry.example.invalid/${sequence++}`);
+  vi.stubEnv("CI", undefined);
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "");
   vi.stubEnv("OPENCLAW_NIX_MODE", "");
   vi.stubEnv("DO_NOT_TRACK", "");
@@ -97,33 +100,6 @@ it("keeps reads and accepted updates when storage admission is closed", async ()
   expect(execute).not.toHaveBeenCalled();
 });
 
-it("coalesces checks through storage preparation and persistence", async () => {
-  const read = pauseOperation<TelemetryState>("telemetry.readState");
-  const persisted = pauseOperation<TelemetryState>("telemetry.persistSuccess");
-  let settled = false;
-  const first = check(() => ({}), 100).then((value) => {
-    settled = true;
-    return value;
-  });
-  const second = check(() => ({}), 100);
-  try {
-    expect(fetchImpl).not.toHaveBeenCalled();
-    read.resolve({});
-    await persisted.requested;
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(settled).toBe(false);
-  } finally {
-    read.resolve({});
-    persisted.resolve({ lastPingAt: 101, latestVersion: "2026.8.25" });
-    await Promise.all([first, second]);
-  }
-  const expected = { version: "2026.8.25" };
-  expect(await Promise.all([first, second])).toEqual([expected, expected]);
-  expect(
-    execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
-  ).toHaveLength(1);
-});
-
 it("keeps the captured endpoint and storage destination across awaits", async () => {
   const read = pauseOperation<TelemetryState>("telemetry.readState");
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
@@ -137,6 +113,54 @@ it("keeps the captured endpoint and storage destination across awaits", async ()
   expect(contexts.every((candidate) => candidate === context)).toBe(true);
   expect(fetchImpl).toHaveBeenCalledWith(endpoint, expect.objectContaining({ method: "POST" }));
 });
+
+it.each(["do-not-track", "opt-out", "update-disabled", "CI"] as const)(
+  "revokes %s while the installation-count claim is awaiting storage",
+  async (change) => {
+    const claim = pauseOperation<string | null>("telemetry.claimInstallationCount");
+    config = {};
+    fetchImpl.mockImplementation(async () =>
+      Response.json(
+        { version: "2026.8.24" },
+        {
+          headers: { "OpenClaw-Installation-Count": "1;20688" },
+        },
+      ),
+    );
+    if (change === "CI") {
+      vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.openclaw.ai/api/latest-version");
+    }
+    const checking = check();
+    try {
+      await claim.requested;
+      if (change === "do-not-track") {
+        vi.stubEnv("DO_NOT_TRACK", "true");
+      }
+      if (change === "opt-out") {
+        config = { telemetry: { enabled: false } };
+      }
+      if (change === "update-disabled") {
+        config = { update: { checkOnStart: false } };
+      }
+      if (change === "CI") {
+        vi.stubEnv("CI", "1");
+        vi.stubEnv(
+          "OPENCLAW_TELEMETRY_ENDPOINT",
+          "https://telemetry.example.invalid/changed-after-capture",
+        );
+      }
+    } finally {
+      claim.resolve("1;20688;31");
+      await checking;
+    }
+    // The valid update answer is retained; revocation suppresses only the later count POST.
+    expect(await checking).toEqual({ version: "2026.8.24" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(
+      new Headers(fetchImpl.mock.calls[0]?.[1]?.headers).has("OpenClaw-Installation-Count"),
+    ).toBe(false);
+  },
+);
 
 it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
   "honors %s when the canonical snapshot changes during the feature count",

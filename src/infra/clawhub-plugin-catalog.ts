@@ -252,6 +252,7 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
       icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
       order,
       ...(pinnedPackages ? { pinnedPackages } : {}),
+      ...readClawHubNonEmptyStringFields(entry, ["previewCursor"], `plugin category ${slug}`),
     };
   });
   return categories.toSorted((left, right) => left.order - right.order);
@@ -416,15 +417,20 @@ export async function fetchClawHubPluginCatalog(
       }),
     };
   }
+  const curatedCategory = (params.intent ?? "all") === "all" && Boolean(params.category);
   const value = await fetchClawHubJson<unknown>({
     ...shared,
+    // Curated discovery shares the public CDN snapshot, just like the overview.
+    skipAuth:
+      params.skipAuth ??
+      (curatedCategory && !params.token && isDefaultClawHubBaseUrl(params.baseUrl)),
     path: "/api/v1/plugins",
     search: {
       category: params.category,
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.officialOnly || params.intent === "official" ? "true" : undefined,
-      curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
+      curated: curatedCategory ? "true" : undefined,
       sort:
         params.intent === "featured"
           ? undefined
@@ -456,6 +462,7 @@ export async function fetchClawHubPluginOverview(
     // This viewer-independent snapshot uses the public CDN; ambient auth bypasses its cache.
     skipAuth: options.skipAuth ?? (!options.token && isDefaultClawHubBaseUrl(options.baseUrl)),
     path: "/api/v1/plugins/overview",
+    search: { previewCursors: "true" },
   });
   if (!isRecord(value) || !Array.isArray(value.items)) {
     throw new Error("Malformed ClawHub plugin overview response: expected items to be an array.");

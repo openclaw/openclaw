@@ -207,10 +207,12 @@ it.each(["pending", "denied"])(
     const input = { value: "@Al", selectionStart: 3, selectionEnd: 3 };
     menu.syncDirectory(directory);
     menu.update(input, "trigger");
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     menu.syncDirectory(other);
     menu.syncDirectory(directory);
     menu.update(input, "trigger");
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(150);
     if (replacement === "denied") {
       current.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }));

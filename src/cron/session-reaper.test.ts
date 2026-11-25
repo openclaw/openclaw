@@ -13,10 +13,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as maintenanceReads from "../config/sessions/session-entry-read-maintenance.js";
 import * as sessionEntryReader from "../config/sessions/session-entry-read-runtime.js";
-import {
-  maintenanceLane,
-  targetDiscoveryLane,
-} from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { initializeSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
@@ -282,34 +279,34 @@ describe("sweepCronRunSessions", () => {
     expect(await sweepShared("ops")).toEqual({ swept: true, pruned: 0 });
     await replaceSessionEntry(opsScope, expiredRun("ops-run"));
     expect(await sweepShared("main", now + 5 * 60_000)).toEqual({ swept: false, pruned: 0 });
-    const workersCreated = maintenanceLane.pool.getSnapshot().workersCreated;
+    const workersCreated = sessionStoreLane.pool.getSnapshot().workersCreated;
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
-    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
-    const closeObservation = keepsMaintenanceWorker
-      ? vi.spyOn(targetDiscoveryLane.pool, "closeResources").mockImplementationOnce((key) => {
-          const closing = closeResources(key);
-          foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
-            agentId: "main",
-            storePath: exactStorePath,
-            sessionKeys: [mainKey],
-          });
-          void foregroundRead.catch(() => {});
-          return closing;
-        })
-      : undefined;
+    const read = maintenanceReads.readExpiredCronRunEntriesInWorker;
+    const readObservation = vi
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
+      .mockImplementationOnce(async (input) => {
+        const candidates = await read(input);
+        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+          agentId: "main",
+          storePath: exactStorePath,
+          sessionKeys: [mainKey],
+        });
+        void foregroundRead.catch(() => {});
+        return candidates;
+      });
     try {
       expect(await sweepShared("ops", now + 5 * 60_000)).toEqual({ swept: true, pruned: 1 });
+      expect(foregroundRead).toBeDefined();
+      expect(await foregroundRead).toMatchObject({
+        entries: [{ sessionKey: mainKey, entry: foregroundEntry }],
+      });
       if (keepsMaintenanceWorker) {
-        expect(foregroundRead).toBeDefined();
-        expect(await foregroundRead).toMatchObject({
-          entries: [{ sessionKey: mainKey, entry: foregroundEntry }],
-        });
-        expect(maintenanceLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
+        expect(sessionStoreLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
       }
     } finally {
-      closeObservation?.mockRestore();
+      readObservation.mockRestore();
       await Promise.allSettled([foregroundRead]);
     }
     expect(sessionAccessor.loadSessionEntry(mainScope)).toMatchObject({ sessionId: "main-run" });

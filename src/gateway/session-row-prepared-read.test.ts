@@ -121,12 +121,7 @@ async function withPendingStartupInspection(
       migrateAgent: async () => {},
       publishAgent: async () => {},
     });
-    fixture.context.agentDatabaseStartup = {
-      get hasPendingAgents() {
-        return admission.hasPendingAgents;
-      },
-      waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
-    };
+    fixture.context.agentDatabaseStartup = admission.observation;
     try {
       await runInDetachedAsyncContext(() => {
         expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
@@ -282,7 +277,7 @@ it("dispatches broad lists while an agent remains in startup preparation", async
 });
 
 it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
-  "settles startup discovery after %s before dispatch",
+  "settles an admitted startup discovery across %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
       async ({ authorize, context, client, databasePath, complete }) => {
@@ -334,9 +329,16 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             expect(prepare).toHaveBeenCalledTimes(2);
             complete();
           }
-          await expect(reading).resolves.toMatchObject(
-            outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
-          );
+          await expect(reading).resolves.toMatchObject({ error: null });
+          if (outcome === "revoked") {
+            const discoveries = prepare.mock.calls.length;
+            await expect(authorize("sessions.list", { agentId: "healthy" })).resolves.toMatchObject(
+              {
+                error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+              },
+            );
+            expect(prepare).toHaveBeenCalledTimes(discoveries);
+          }
         }
         expect(discoverySignal?.aborted).toBe(true);
       },
@@ -345,7 +347,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
 );
 
 it.each(["current", "revoked"] as const)(
-  "bounds startup reads with %s authority without cancelling preparation or granting writes",
+  "bounds admitted startup reads across %s authority changes without granting writes",
   async (authority) => {
     await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
       const read = authorize();
@@ -354,17 +356,18 @@ it.each(["current", "revoked"] as const)(
         client.connect.scopes = [];
       }
       await vi.advanceTimersByTimeAsync(20_000);
-      await expect(read).resolves.toMatchObject(
-        authority === "revoked"
-          ? { error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } } }
-          : {
-              error: {
-                code: "UNAVAILABLE",
-                retryable: true,
-                details: { code: "agent-database-inspection-pending" },
-              },
-            },
-      );
+      await expect(read).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "agent-database-inspection-pending" },
+        },
+      });
+      if (authority === "revoked") {
+        await expect(authorize()).resolves.toMatchObject({
+          error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+        });
+      }
       expect(admission.signal.aborted).toBe(false);
       expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
       complete();
@@ -412,54 +415,36 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
   expect(prepare).not.toHaveBeenCalled();
 });
 
-it.each(["dispatch scopes", "private access"] as const)(
-  "rechecks %s after row preparation",
-  async (boundary) => {
-    const { projection, context, client, describe: dispatchDescription } = describeFixture();
-    const prepare = projection.withPreparedExactRows.bind(projection);
-    const describe = vi.spyOn(projection, "describe");
-    if (boundary === "dispatch scopes") {
-      client.connect.scopes = ["operator.read"];
-    }
-    vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
-      await Promise.resolve();
-      client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
-      if (boundary === "private access") {
-        client.authenticatedUserProfile = {
-          profileId: "identified-viewer",
-          displayName: "Viewer",
-          hasAvatar: false,
-          updatedAt: 1,
-        };
-      }
-      return prepare(...args);
-    });
-    if (boundary === "dispatch scopes") {
-      const respond = vi.fn();
-      await dispatchDescription(respond);
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-    } else {
-      const respond = vi.fn();
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "private-description", method: "sessions.describe" },
-        params: { key: query.key },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-        code: "INVALID_REQUEST",
-        message: `Incognito session "${query.key}" was not found.`,
-      });
-      expect(describe).not.toHaveBeenCalled();
-    }
-  },
-);
+it("rechecks private access after row preparation", async () => {
+  const { projection, context, client } = describeFixture();
+  const prepare = projection.withPreparedExactRows.bind(projection);
+  const describe = vi.spyOn(projection, "describe");
+  vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
+    await Promise.resolve();
+    client.connect.scopes = ["operator.read"];
+    client.authenticatedUserProfile = {
+      profileId: "identified-viewer",
+      displayName: "Viewer",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    return prepare(...args);
+  });
+  const respond = vi.fn();
+  await sessionByKeyReadHandlers["sessions.describe"]!({
+    req: { type: "req", id: "private-description", method: "sessions.describe" },
+    params: { key: query.key },
+    context,
+    client,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+    code: "INVALID_REQUEST",
+    message: `Incognito session "${query.key}" was not found.`,
+  });
+  expect(describe).not.toHaveBeenCalled();
+});
 
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",
@@ -492,10 +477,12 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+it("shares captured metadata during consumption while reading current policy", () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
   const initial = owner.state;
   let current = initial;
+  let policy: OpenClawConfig = cfg;
+  vi.spyOn(owner, "getPolicyConfig").mockImplementation(() => policy);
   const state = vi.fn(() => current);
   Object.defineProperty(owner, "state", { get: state });
   vi.spyOn(owner, "describe").mockImplementation(() => {
@@ -510,6 +497,12 @@ it("captures metadata refreshed during preparation without rereading it during c
   });
   const consume = vi.fn((read: SessionRowReadView) => {
     state.mockClear();
+    const captured = read.state;
+    expect(read.state).toBe(captured);
+    expect(captured.policyConfig).toBe(cfg);
+    policy = { ...cfg, session: { scope: "global" } };
+    expect(read.state.policyConfig).toBe(policy);
+    expect(captured.policyConfig).toBe(cfg);
     expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
       provider: "fixture",
       model: "fresh",
@@ -574,7 +567,11 @@ it.each(["child", "parent"] as const)(
       dirtyKey = undefined;
     });
     const exact = createSessionRowAncestorReads({
-      state: () => ({ cfg, context: projection.state.rowContext }),
+      state: () => ({
+        cfg,
+        context: projection.state.rowContext,
+        catalog: { prepareCurrent: async () => {} },
+      }),
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,

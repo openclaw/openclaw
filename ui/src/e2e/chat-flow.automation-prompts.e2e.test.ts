@@ -2,8 +2,21 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { chatFixture, timedText, transcript } from "./chat-flow-fixtures.test-support.ts";
-import { captureUiProofEnabled, createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
+import { createCronJob } from "../test-helpers/cron.ts";
+import {
+  agentEvent,
+  chatFixture,
+  sendChat,
+  sessionMessage,
+  sessionState,
+  timedText,
+  transcript,
+} from "./chat-flow-fixtures.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  requireString,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const prompt =
@@ -14,6 +27,123 @@ const prompt =
   "If nothing needs doing, reply with exactly NO_REPLY as the entire final answer.";
 
 suite.define(() => {
+  it("shows only saved automations in an active chat without waiting for a final reply", async () => {
+    const { page, gateway } = await chatFixture(suite, undefined, {
+      viewport: { width: 980, height: 720 },
+      colorScheme: "light",
+    });
+    await page.goto(suite.server.baseUrl + "chat");
+    const name = "Weekly onboarding readiness digest";
+    const send = await sendChat(page, gateway, "Set up a weekly digest for onboarding readiness.");
+    const runId = requireString(send.idempotencyKey, "chat send idempotency key");
+    const tool = { name: "automations", toolCallId: "declare", parentToolCallId: "code-mode" };
+    const plan = {
+      type: "automation_creation_plan",
+      planId: "digest",
+      slots: [{ slotId: "1", name }],
+    };
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(
+        runId,
+        "main",
+        "tool",
+        {
+          ...tool,
+          phase: "start",
+          args: { action: "plan", names: [name] },
+        },
+        1,
+        Date.now(),
+      ),
+    );
+    await gateway.emitGatewayEvent(
+      "agent",
+      agentEvent(
+        runId,
+        "main",
+        "tool",
+        {
+          ...tool,
+          phase: "result",
+          isError: false,
+          result: { details: plan },
+        },
+        2,
+        Date.now(),
+      ),
+    );
+    const thread = transcript(page);
+    const card = thread.getByRole("group", { name: "Automations", exact: true });
+    const capture = async (file: string) => {
+      if (captureUiProofEnabled) {
+        const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [thread], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, file), frame.png);
+      }
+    };
+    const stop = page.getByRole("button", { name: "Stop" });
+    await stop.waitFor();
+    await capture("automation-before-save.png");
+    expect(await card.count()).toBe(0);
+    const publishAdd = async (seq: number, isError: boolean, details?: object) => {
+      const id = "add-" + seq;
+      const common = { runId, name: "automations", parentToolCallId: "code-mode" };
+      const message = {
+        role: "custom",
+        customType: "openclaw.nested-tool.v1",
+        display: true,
+        timestamp: Date.now(),
+        __openclaw: { id, seq, runId },
+        content: [
+          {
+            ...common,
+            type: "toolCall",
+            id,
+            arguments: { action: "add", planId: plan.planId, slotId: "1" },
+          },
+          {
+            ...common,
+            type: "toolResult",
+            toolName: "automations",
+            toolCallId: id,
+            isError,
+            details,
+          },
+        ],
+      };
+      await gateway.emitGatewayEvent(
+        "session.message",
+        sessionMessage(message, id, seq, sessionState([runId], true, "running"), { runId }),
+      );
+    };
+    await publishAdd(3, true);
+    expect(await card.count()).toBe(0);
+    const job = createCronJob("saved-digest", name, {
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 9 * * 1", tz: "America/Chicago" },
+    });
+    await gateway.deferNext("cron.get");
+    await publishAdd(4, false, {
+      automationCreation: {
+        type: "automation_creation_result",
+        planId: plan.planId,
+        slotId: "1",
+        status: "created",
+        jobId: job.id,
+      },
+    });
+    await card.getByText("Created", { exact: true }).waitFor();
+    const { params } = await gateway.waitForRequest("cron.get");
+    expect(params).toEqual({ id: job.id });
+    expect(await card.getByRole("switch").count()).toBe(0);
+    await gateway.resolveDeferred("cron.get", job);
+    await card.getByRole("switch", { name: "Pause: " + name }).waitFor();
+    expect(await stop.isVisible()).toBe(true);
+    await capture("automation-after-save.png");
+  });
+
   it("collapses recorded automation prompts without hiding results or lookalike user text", async () => {
     const { page } = await chatFixture(
       suite,

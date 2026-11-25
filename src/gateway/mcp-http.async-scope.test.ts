@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
+  bindCronManagementToolConstruction,
+  captureCronRequesterGrantIssuer,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../agents/cron-creator-authority-context.js";
+import {
   getGatewayToolCallerIdentity as getToolCaller,
   withGatewayToolCallerIdentity as withToolCaller,
 } from "../agents/tools/gateway-caller-context.js";
@@ -34,6 +40,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
+import { consumeCronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -187,7 +194,7 @@ it("keeps Gateway readers while shedding the starting turn's async stores", asyn
   }
 });
 
-it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after a write-only starter", async () => {
+it("keeps each CLI grant's own ceiling for an admin dispatch after a write-only starter", async () => {
   const adminDispatch = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
     respond(true, { allowed: true }),
   );
@@ -203,15 +210,13 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
     getRuntimeConfig: () => ({}),
     getGatewayMethodRegistry: () => registry,
   });
-  const scopeFor = (client: RuntimeClient, isCurrent: () => boolean) => ({
+  const scopeFor = (client: RuntimeClient) => ({
     client,
     isWebchatConnect: () => false,
     resolveGatewayContext: () => context,
-    hasCurrentClientAuthority: isCurrent,
   });
   const writeOnly = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
   const admin = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
-  let ownerCurrent = true;
   execute.mockImplementation(async () => {
     const result = await dispatchMethod(
       "scope.probe",
@@ -223,16 +228,15 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
     };
   });
   // A write-only restart-recovery run starts the listener with its operator authority.
-  await withGatewayScope(
-    scopeFor(writeOnly, () => true),
-    () => withOperatorAuthority({ scopes: ["operator.write"] }, ensureMcpLoopbackServer),
+  await withGatewayScope(scopeFor(writeOnly), () =>
+    withOperatorAuthority({ scopes: ["operator.write"] }, ensureMcpLoopbackServer),
   );
   const runtime = mcp.runtime();
-  const admit = async (runId: string, client: RuntimeClient, isCurrent: () => boolean) => {
+  const admit = async (runId: string, client: RuntimeClient) => {
     const admission = mcp.prepareAdmission(runId, "mcp-scope-proof");
     admissions.push(admission);
     const admittedRunContext = await admission.admit("gateway", `gateway-${runId}`);
-    return withGatewayScope(scopeFor(client, isCurrent), () =>
+    return withGatewayScope(scopeFor(client), () =>
       mcp.captureGrant(
         {
           context: { sessionKey: "agent:main:scope-proof", senderIsOwner: true },
@@ -244,8 +248,8 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
       ),
     );
   };
-  const ownerGrant = await admit("mcp-owner", admin, () => ownerCurrent);
-  const recoveryGrant = await admit("mcp-recovery", writeOnly, () => true);
+  const ownerGrant = await admit("mcp-owner", admin);
+  const recoveryGrant = await admit("mcp-recovery", writeOnly);
 
   expect(await callTool(ownerGrant)).toMatchObject({
     result: { content: [{ text: "admin-dispatched" }], isError: false },
@@ -255,11 +259,6 @@ it("keeps each CLI grant's own ceiling and liveness for an admin dispatch after 
   });
   expect(adminDispatch).toHaveBeenCalledTimes(1);
 
-  ownerCurrent = false;
-  expect(await callTool(ownerGrant)).toMatchObject({
-    result: { content: [{ text: "Gateway requester authority changed" }] },
-  });
-  expect(adminDispatch).toHaveBeenCalledTimes(1);
   expect(revokeMcpLoopbackClientGrant(ownerGrant.token)).toBe(true);
   const revoked = await mcp.request(runtime, mcp.toolCall("scope_probe"), ownerGrant);
   expect(revoked.status).toBe(401);
@@ -443,5 +442,53 @@ describe("MCP HTTP keepalive", () => {
       await reader.cancel();
       reader.releaseLock();
     }
+  });
+});
+
+it("keeps requester grant minting at execution when management needs a construction identity", async () => {
+  await ensureMcpLoopbackServer();
+  const runId = "mcp-management-and-requester";
+  const admission = mcp.prepareAdmission(runId, "mcp-management-requester-proof");
+  admissions.push(admission);
+  const admittedRunContext = await admission.admit("gateway", runId);
+  const scope = expectDefined(
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source: "control-ui-admin" }),
+    "Cron run scope",
+  );
+  const constructionIssuers: boolean[] = [];
+  resolveTools.mockImplementation(() => {
+    expect(getToolCaller()?.approvalAuthority).toBeDefined();
+    constructionIssuers.push(getToolCaller()?.mintCronRequesterGrant !== undefined);
+    return mcp.probeTools("scope_probe", execute);
+  });
+  execute.mockImplementation(() => {
+    const mint = expectDefined(getToolCaller()?.mintCronRequesterGrant, "execution issuer");
+    const grant = mint();
+    const redeemed = consumeCronCreatorAuthorityGrant(grant);
+    expect(redeemed.authority).toBeUndefined();
+    redeemed.assertCurrent();
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(/access has ended/);
+    return completed;
+  });
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    const grant = mcp.captureGrant(
+      {
+        context: { sessionKey: "agent:main:scope-proof", runId, senderIsOwner: true },
+        runtimeOwnerToken: mcp.runtime().ownerToken,
+        admittedRunContext,
+        toolPolicyConfig: {},
+        cronRequesterGrantIssuer: captureCronRequesterGrantIssuer(runId),
+        withCronManagementToolConstruction: bindCronManagementToolConstruction(runId),
+      },
+      "management-and-requester-capture",
+    );
+    await mcp.json(
+      await mcp.request(mcp.runtime(), { jsonrpc: "2.0", id: 1, method: "tools/list" }, grant),
+    );
+    expect(scope.grantTokens.size).toBe(0);
+    expect(await callTool(grant)).toMatchObject({ result: { ...completed, isError: false } });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(constructionIssuers).toEqual([false]);
+    expect(scope.grantTokens.size).toBe(0);
   });
 });

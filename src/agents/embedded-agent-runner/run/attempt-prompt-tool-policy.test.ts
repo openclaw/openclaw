@@ -1,7 +1,10 @@
-import { expect, it } from "vitest";
+import { vi, expect, it } from "vitest";
+import * as hostHookState from "../../../plugins/host-hook-state.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { markAgentToolExecutionUnavailable } from "../../agent-tool-availability.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
+import { resolvePromptBuildHookResult } from "./attempt-prompt-helpers.js";
 import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
@@ -39,7 +42,8 @@ function createPolicyFixture(
   let names = [...activeToolNames];
   const session = {
     getActiveToolNames: () => [...names],
-    getToolDefinition: (name: string) => createStubTool(name),
+    getToolDefinition: (name: string): ReturnType<typeof createStubTool> | undefined =>
+      createStubTool(name),
     setActiveToolsByName: (next: string[]) => void (names = [...next]),
   };
   const params = {
@@ -57,13 +61,14 @@ function createPolicyFixture(
 function expectSurface(
   result: ReturnType<typeof createPromptBuildToolPolicy>["current"],
   names: string[],
+  callableNames: string[],
 ) {
-  const tools = named(...names);
   expect(result).toMatchObject({
     activeToolNames: names,
-    effectiveTools: tools,
-    uncompactedEffectiveTools: tools,
-    tools,
+    effectiveTools: named(...names),
+    callableToolNames: callableNames,
+    uncompactedEffectiveTools: named(...callableNames),
+    tools: named(...callableNames),
   });
 }
 
@@ -118,14 +123,37 @@ it.each([
     const catalogRef = catalog(tools);
     const { session, policy } = createPolicyFixture(active, tools, catalogRef, force);
     const result = policy.apply(allow);
-    expectSurface(result, expected);
+    expectSurface(result, active, expected);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(expected);
-    expect(session.getActiveToolNames()).toEqual(expected);
-    expect(finalize(result.activeToolNames)).toBe(
+    expect(session.getActiveToolNames()).toEqual(active);
+    expect(finalize(result.callableToolNames)).toBe(
       `cron:${expected.some((name) => name === "message")}`,
     );
   },
 );
+
+it("leaves a listed tool the turn refuses out of the callable guidance", () => {
+  // A cron whose delivery may not send still lists message, but is not told to use it.
+  const { session, policy } = createPolicyFixture(["message", "read"]);
+  const refused = markAgentToolExecutionUnavailable(createStubTool("message"));
+  session.getToolDefinition = (name: string) =>
+    name === "message" ? refused : createStubTool(name);
+  const result = policy.apply(undefined);
+  expect(result.activeToolNames).toEqual(["message", "read"]);
+  expect(result.callableToolNames).toEqual(["read"]);
+  expect(finalize(result.callableToolNames)).toBe("cron:false");
+});
+
+it("leaves a cataloged tool the turn refuses out of the callable guidance", () => {
+  const tools = [markAgentToolExecutionUnavailable(createStubTool("exec")), createStubTool("read")];
+  const { session, policy } = createPolicyFixture(["tool_search"], tools, catalog(tools));
+  // Cataloged tools have no direct session definition.
+  session.getToolDefinition = (name: string) =>
+    name === "tool_search" ? createStubTool(name) : undefined;
+  const result = policy.apply(undefined);
+  expect(result.callableToolNames).toContain("read");
+  expect(result.callableToolNames).not.toContain("exec");
+});
 
 it("keeps cataloged plugin tools allowed through the plugin group", () => {
   const pluginTool = createStubTool("plugin_lookup");
@@ -138,4 +166,21 @@ it("keeps cataloged plugin tools allowed through the plugin group", () => {
   expect(result.activeToolNames).toEqual(["tool_search"]);
   expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
   expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["plugin_lookup"]);
+});
+
+it("preserves an explicit empty per-turn tool allowlist", async () => {
+  using _ = vi
+    .spyOn(hostHookState, "drainPluginNextTurnInjectionContext")
+    .mockResolvedValue({ queuedInjections: [] });
+  const result = await resolvePromptBuildHookResult({
+    config: {},
+    prompt: "answer without tools",
+    messages: [],
+    hookCtx: { sessionKey: "agent:main:main" },
+    hookRunner: {
+      hasHooks: (name) => name === "before_prompt_build",
+      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: [] })),
+    },
+  });
+  expect(result.toolsAllow).toEqual([]);
 });

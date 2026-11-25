@@ -170,6 +170,39 @@ struct TailscaleIntegrationSectionTests {
         #expect(saveCount == 0)
     }
 
+    @Test(arguments: [
+        ["mode": "token", "token": "existing-token"], // pragma: allowlist secret
+        ["mode": "password", "password": "existing-password"], // pragma: allowlist secret
+    ])
+    func `turning tailscale off keeps gateway authentication`(credentials: [String: String]) async {
+        let saved = SavedConfigRoot()
+        let outcome = await TestIsolation.withIsolatedState(defaults: [connectionModeKey: "local"]) {
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .local
+            // A loaded document with no local-only save goes through the connected config.set path.
+            await ConfigStore._testSetOverrides(.init(
+                isRemoteMode: { false },
+                loadLocal: {
+                    var auth: [String: Any] = credentials
+                    auth["allowTailscale"] = true
+                    return ["gateway": ["mode": "local", "tailscale": ["mode": "serve"], "auth": auth]]
+                },
+                saveGateway: { saved.root = $0 }))
+            let outcome = await TailscaleIntegrationSection.saveTailscaleSettings(
+                settings: GatewayTailscaleSettingsSnapshot(mode: .off, requireCredentialsForServe: false, password: ""),
+                connectionMode: .local)
+            await ConfigStore._testClearOverrides()
+            state.connectionMode = previousMode
+            return outcome
+        }
+        let gateway = saved.root?["gateway"] as? [String: Any]
+
+        #expect(outcome == .saved)
+        #expect((gateway?["tailscale"] as? [String: Any])?["mode"] as? String == "off")
+        #expect(gateway?["auth"] as? [String: String] == credentials)
+    }
+
     @Test func `tailscale apply validates changed passwords before saving`() async {
         let settings = GatewayTailscaleSettingsSnapshot(
             mode: .funnel, requireCredentialsForServe: true, password: "  ")
@@ -240,4 +273,9 @@ private actor TailscaleStatusCompletion {
     func markFinished() {
         self.finishedCount += 1
     }
+}
+
+@MainActor
+private final class SavedConfigRoot {
+    var root: [String: Any]?
 }

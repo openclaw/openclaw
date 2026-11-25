@@ -1,19 +1,24 @@
 import path from "node:path";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { transformMessages } from "../../packages/ai/src/transcript-transform.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sanitizeSessionHistory } from "../agents/embedded-agent-runner/replay-history.js";
+import { normalizeMessagesForLlmBoundary } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import type { Agent } from "../agents/runtime/index.js";
 import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
@@ -25,6 +30,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { reportGitHubPublicationTranscript } from "../gateway/github-publication-transcript.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -77,7 +83,6 @@ async function createTarget() {
     commitBackgroundResultToSession({
       agentId: "main",
       sessionKey,
-      expectedGeneration: generation,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -90,6 +95,15 @@ async function createTarget() {
 const lookupCall = { role: "assistant", content: [{ type: "toolCall", id: "lookup-call" }] };
 const lookupResult = { role: "toolResult", toolCallId: "lookup-call", isError: false };
 const automationResult = { role: "assistant", model: "automation-result" };
+const BACKGROUND_RESULT_LABEL = "[OpenClaw background result]";
+
+// Embedded attempts project model context at dispatch (attempt-session-prepare.ts).
+// This harness session runs without an attempt, so install the same boundary.
+function dispatchThroughLlmBoundary(agent: Agent) {
+  const convert = agent.convertToLlm.bind(agent);
+  agent.convertToLlm = (messages) =>
+    convert(normalizeMessagesForLlmBoundary(messages, { includeTimestamp: false }));
+}
 
 it("deduplicates background output without breaking live or replayed tool results", async ({
   signal,
@@ -127,6 +141,7 @@ it("deduplicates background output without breaking live or replayed tool result
       },
     ],
   });
+  dispatchThroughLlmBoundary(session.agent);
   const updates: unknown[] = [];
   const turn = withSessionTurn(target, () => session.prompt("Run lookup"));
   try {
@@ -150,17 +165,22 @@ it("deduplicates background output without breaking live or replayed tool result
     finishTool.resolve();
     await withinTest(turn, signal);
     expect(requests).toHaveLength(2);
-    expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult]);
+    expect(requests[1]).toMatchObject([
+      { role: "user" },
+      lookupCall,
+      lookupResult,
+      { role: "user", content: expect.stringContaining(BACKGROUND_RESULT_LABEL) },
+    ]);
     const reopened = await SessionManager.openAsync(target.scope);
     const stored = reopened.buildSessionContext().messages;
     expect(stored).toMatchObject([
       { role: "user" },
       lookupCall,
-      automationResult,
       lookupResult,
+      automationResult,
       { role: "assistant" },
     ]);
-    expect(stored[2]).toEqual(
+    expect(stored[3]).toEqual(
       expect.objectContaining({
         api: "openclaw-transcript",
         idempotencyKey: "cron-current-completion:cron:job-1:1000",
@@ -201,7 +221,10 @@ it("deduplicates background output without breaking live or replayed tool result
         content: [{ type: "text", text: "Actual lookup result" }],
         isError: false,
       },
-      automationResult,
+      {
+        role: "user",
+        content: [{ type: "text", text: expect.stringContaining(BACKGROUND_RESULT_LABEL) }],
+      },
       { role: "assistant" },
     ]);
     const call = transformed[1];
@@ -216,6 +239,285 @@ it("deduplicates background output without breaking live or replayed tool result
     await turn;
   }
 });
+
+it("places a GitHub publication receipt that lands during a tool call after the tool result", async () => {
+  const target = await createTarget();
+  // The receipt writer resolves its session store through the runtime config.
+  setRuntimeConfigSnapshot(target.config);
+  const manager = await SessionManager.openAsync(target.scope);
+  const requests: Message[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(
+      requests.length === 1
+        ? createAssistant(
+            model,
+            [{ type: "toolCall", id: "lookup-call", name: "lookup", arguments: {} }],
+            "toolUse",
+          )
+        : createAssistant(model, "Lookup completed"),
+    );
+  });
+  const { session } = await createTestSession({
+    sessionManager: manager,
+    customTools: [
+      {
+        name: "lookup",
+        label: "Lookup",
+        description: "Synthetic lookup",
+        parameters: Type.Object({}),
+        execute: async () => {
+          await reportGitHubPublicationTranscript(
+            () => import("../gateway/session-utils.js"),
+            {
+              markReportedAsync: async () => {},
+              readReportLifecycleAsync: async () => target.generation.lifecycleRevision,
+            },
+            {
+              agentId: "main",
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              result: {
+                requestId: "publication-during-tool",
+                status: "published",
+                repository: "example/repository",
+                branch: "publication",
+                url: "https://github.com/example/repository/pull/1",
+                headCommit: "a".repeat(40),
+              },
+            },
+          );
+          return {
+            content: [{ type: "text" as const, text: "Actual lookup result" }],
+            details: {},
+          };
+        },
+      },
+    ],
+  });
+  await withSessionTurn(target, () => session.prompt("Run lookup"));
+  const receipt = { role: "assistant", responseId: "github-publication:publication-during-tool" };
+  expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult, receipt]);
+  const replay = (await SessionManager.openAsync(target.scope)).buildSessionContext().messages;
+  expect(JSON.stringify(replay.slice(0, requests[1]!.length))).toBe(JSON.stringify(requests[1]));
+});
+
+it.each(["tool", "stream"])(
+  "keeps a live background result append-only during %s",
+  async (arrival) => {
+    const target = await createTarget();
+    const manager = await SessionManager.openAsync(target.scope);
+    const requests: Message[][] = [];
+    let acceptedEvents: unknown[] = [];
+    const streaming = createDeferred();
+    const held = holdAssistantResponse(() =>
+      createAssistant(
+        testModel,
+        [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({
+              type: "reasoning",
+              id: "rs_synthetic",
+              summary: [],
+              encrypted_content: "synthetic-signed-output",
+            }),
+          },
+          { type: "toolCall", id: "call_lookup_1", name: "lookup", arguments: {} },
+        ],
+        "toolUse",
+      ),
+    );
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      if (arrival === "stream" && requests.length === 1) {
+        streaming.resolve();
+        return held.response;
+      }
+      return createAssistantResultStream(
+        requests.length <= 2
+          ? createAssistant(
+              model,
+              [
+                {
+                  type: "toolCall",
+                  id: `call_lookup_${requests.length}`,
+                  name: "lookup",
+                  arguments: {},
+                },
+              ],
+              "toolUse",
+            )
+          : createAssistant(model, "Lookup completed"),
+      );
+    });
+    let lookups = 0;
+    const customTools = [
+      {
+        name: "lookup",
+        label: "Lookup",
+        description: "Synthetic lookup",
+        parameters: Type.Object({}),
+        execute: async () => {
+          if (++lookups === 1 && arrival === "tool") {
+            expect(await target.commit()).toEqual({ ok: true });
+            acceptedEvents = await loadTranscriptEvents(target.scope);
+          }
+          return {
+            content: [{ type: "text" as const, text: "Actual lookup result" }],
+            details: {},
+          };
+        },
+      },
+    ];
+    const { session } = await createTestSession({ sessionManager: manager, customTools });
+    dispatchThroughLlmBoundary(session.agent);
+    const turn = withSessionTurn(target, () => session.prompt("Run two lookups"));
+    if (arrival === "stream") {
+      try {
+        await streaming.promise;
+        expect(await target.commit()).toEqual({ ok: true });
+        acceptedEvents = await loadTranscriptEvents(target.scope);
+      } finally {
+        held.release();
+      }
+    }
+    await turn;
+    expect(requests).toHaveLength(3);
+    const completedEvents = await loadTranscriptEvents(target.scope);
+    expect(JSON.stringify(completedEvents.slice(0, acceptedEvents.length))).toBe(
+      JSON.stringify(acceptedEvents),
+    );
+
+    const reopened = await SessionManager.openAsync(target.scope);
+    const { session: next } = await createTestSession({ sessionManager: reopened, customTools });
+    dispatchThroughLlmBoundary(next.agent);
+    next.agent.state.messages = await sanitizeSessionHistory({
+      messages: next.messages,
+      sessionManager: reopened,
+      sessionId: target.sessionId,
+      provider: testModel.provider,
+      modelId: testModel.id,
+      modelApi: testModel.api,
+      config: { plugins: { enabled: false } },
+    });
+    await withSessionTurn(target, () => next.prompt("Continue after the background result"));
+    expect(requests).toHaveLength(4);
+
+    const captureInput = async (messages: Message[]) => {
+      let input: unknown[] | undefined;
+      const stream = streamOpenAIResponses(
+        { ...testModel, api: "openai-responses" },
+        { systemPrompt: "Stable synthetic prompt", messages },
+        {
+          apiKey: "synthetic-unused-key",
+          onPayload(payload) {
+            input = (payload as { input: unknown[] }).input;
+            throw new Error("stop after request capture");
+          },
+        },
+      );
+      expect((await stream.result()).stopReason).toBe("error");
+      expect(input).toBeDefined();
+      return input!;
+    };
+    const previous = await captureInput(requests[2]!);
+    const current = await captureInput(requests[3]!);
+    const callOffset = arrival === "stream" ? 3 : 2;
+    expect(previous.slice(callOffset, callOffset + 2)).toMatchObject([
+      { type: "function_call", call_id: "call_lookup_1", name: "lookup" },
+      { type: "function_call_output", call_id: "call_lookup_1" },
+    ]);
+    expect(current.slice(0, 4)).toEqual(previous.slice(0, 4));
+    expect(JSON.stringify(current.slice(0, previous.length))).toBe(JSON.stringify(previous));
+    expect(
+      JSON.stringify(
+        await captureInput(
+          normalizeMessagesForLlmBoundary(reopened.buildSessionContext().messages, {
+            includeTimestamp: false,
+          })
+            .filter(
+              (message): message is Message =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            )
+            .slice(0, requests[3]!.length),
+        ),
+      ),
+    ).toBe(JSON.stringify(current));
+  },
+);
+
+it.each(["live", "full", "bounded", "model", "bounded-model"] as const)(
+  "places an interrupted result before the next request (reopen: %s)",
+  async (reopen) => {
+    const target = await createTarget();
+    let manager = await SessionManager.openAsync(target.scope);
+    const requests: Message[][] = [];
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream(createAssistant(model, "Interrupted output", "aborted"));
+    });
+    let { session } = await createTestSession({ sessionManager: manager });
+    const stop = session.agent.subscribe(async (event) => {
+      if (event.type === "turn_end") {
+        expect(await target.commit()).toEqual({ ok: true });
+      }
+    });
+    await withSessionTurn(target, () => session.prompt("Start"));
+    stop();
+    const accepted = await loadTranscriptEvents(target.scope);
+    expect(accepted).not.toContainEqual(
+      expect.objectContaining({ customType: "openclaw.background-result-placement" }),
+    );
+    if (reopen !== "live") {
+      session.dispose();
+      if (reopen === "bounded") {
+        await manager.appendMessageAsync({ role: "user", content: "Older input", timestamp: 1 });
+        await manager.appendMessageAsync({ role: "user", content: "Newest input", timestamp: 2 });
+      }
+      manager =
+        reopen === "full"
+          ? await SessionManager.openAsync(target.scope)
+          : reopen === "bounded"
+            ? await SessionManager.openBoundedAsync(target.scope, {
+                maxBytes: 16384,
+                maxEvents: 1,
+              })
+            : await SessionManager.openModelContextAsync(
+                target.scope,
+                reopen === "bounded-model"
+                  ? { limits: { maxBytes: 16384, maxEvents: 100 } }
+                  : undefined,
+              );
+      if (reopen === "bounded") {
+        expect(manager.getEntries().filter((entry) => entry.type === "message")).toHaveLength(2);
+        expect(manager.buildSessionContext().messages).toEqual([
+          { role: "user", content: "Newest input", timestamp: 2 },
+        ]);
+      }
+      ({ session } = await createTestSession({ sessionManager: manager }));
+    }
+    streamMocks.streamSimple.mockImplementation((model, context) => {
+      requests.push(structuredClone(context.messages));
+      return createAssistantResultStream(createAssistant(model, "Recovered"));
+    });
+    await withSessionTurn(target, () => session.agent.continue());
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.at(-1)).toMatchObject(automationResult);
+    expect(
+      requests[1]?.filter(
+        (message) => message.role === "assistant" && message.model === "automation-result",
+      ),
+    ).toHaveLength(1);
+    const completed = await loadTranscriptEvents(target.scope);
+    expect(JSON.stringify(completed.slice(0, accepted.length))).toBe(JSON.stringify(accepted));
+    expect(manager.buildSessionContext().messages).toEqual(session.messages);
+    session.dispose();
+  },
+);
 
 it("cancels a background result queued behind a mutation without retaining custody", async () => {
   const target = await createTarget();
@@ -291,7 +593,7 @@ it("releases background-result write custody during suspension while the turn ru
     finishCommit.resolve();
     await withinTest(completion, signal);
     expect(getGatewaySuspendStatus(suspensionId)).toMatchObject({
-      status: "draining",
+      status: "ready",
       writeCustody: [],
     });
     expect(getSessionMutationCount()).toBe(0);
@@ -384,50 +686,78 @@ it("does not commit when cancelled during display preparation", async () => {
   expect(await loadTranscriptEvents(target.scope)).toEqual([]);
 });
 
-it.each<[string, Partial<SessionEntry>, string]>([
-  ["archived conversation", { archivedAt: 2 }, "archived"],
-  ["session-id replacement", { sessionId: "replacement-session" }, "session rebound"],
-  [
-    "same-id lifecycle replacement",
-    { lifecycleRevision: "replacement-revision" },
-    "session rebound",
-  ],
-])("refuses %s", async (_, replacement, reason) => {
+it("refuses an archived conversation", async () => {
   const target = await createTarget();
-  await target.replace(replacement);
+  await target.replace({ archivedAt: 2 });
 
   await expect(target.commit()).resolves.toMatchObject({
     ok: false,
-    reason: expect.stringContaining(reason),
+    reason: expect.stringContaining("archived"),
   });
 
-  await expect(
-    loadTranscriptEvents({
-      ...target.scope,
-      sessionId: replacement.sessionId ?? target.sessionId,
-    }),
-  ).resolves.toEqual([]);
+  await expect(loadTranscriptEvents(target.scope)).resolves.toEqual([]);
 });
 
-it("treats a missing lifecycle revision as exact generation state", async () => {
+it("follows a message edit to the conversation's current transcript", async () => {
   const target = await createTarget();
-  const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };
-  await target.replace({ lifecycleRevision: undefined });
+  // Rewind and branch switch rotate the transcript id inside the same incarnation.
+  await target.replace({ sessionId: "edited-session" });
+
+  await expect(target.commit()).resolves.toMatchObject({ ok: true });
+
+  expect(await loadTranscriptEvents(target.scope)).toEqual([]);
+  expect(
+    (await loadTranscriptEvents({ ...target.scope, sessionId: "edited-session" })).map(
+      (event) => (event as { message?: { model?: string } }).message?.model,
+    ),
+  ).toContain(automationResult.model);
+});
+
+it("follows the conversation key through a reset", async () => {
+  const target = await createTarget();
+  await target.replace({ lifecycleRevision: "reset-revision" });
 
   await expect(
     target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:4000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:4000" },
+      idempotencyKey: "cron-current-completion:cron:job-key:5000",
+      provenance: { kind: "cron", jobId: "job-key", runId: "cron:job-key:5000" },
     }),
   ).resolves.toMatchObject({ ok: true });
+});
 
-  await target.replace({ lifecycleRevision: "materialized-revision", updatedAt: 3 });
-  await expect(
-    target.commit({
-      expectedGeneration: generation,
-      idempotencyKey: "cron-current-completion:cron:job-legacy:5000",
-      provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:5000" },
-    }),
-  ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
+it("writes a display-only row while the producing turn holds the session", async () => {
+  const target = await createTarget();
+  await withSessionTurn(target, async () => {
+    await expect(target.commit({ displayOnly: true })).resolves.toEqual({ ok: true });
+    await expect(
+      target.commit({
+        text: "A foreign result while the turn runs.",
+        idempotencyKey: "cron-current-completion:cron:job-2:2000",
+        provenance: { kind: "cron", jobId: "job-2", runId: "cron:job-2:2000" },
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+  const rows = (await loadTranscriptEvents(target.scope)).flatMap((event) => {
+    const message = readTranscriptEventMessage(event) as Record<string, unknown> | undefined;
+    if (!message) {
+      return [];
+    }
+    return {
+      key: message?.idempotencyKey,
+      excludeFromContext: message?.excludeFromContext,
+      placement: message?.openclawModelPlacement,
+    };
+  });
+  expect(rows).toEqual([
+    {
+      key: "cron-current-completion:cron:job-1:1000",
+      excludeFromContext: true,
+      placement: undefined,
+    },
+    {
+      key: "cron-current-completion:cron:job-2:2000",
+      excludeFromContext: true,
+      placement: "pending",
+    },
+  ]);
 });

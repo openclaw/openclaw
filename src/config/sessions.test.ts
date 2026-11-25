@@ -8,7 +8,6 @@ import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionKey,
-  resolveSessionTranscriptPath,
 } from "./sessions.js";
 import { buildGroupDisplayName } from "./sessions/group-display.js";
 
@@ -53,14 +52,6 @@ describe("sessions", () => {
     ],
   ] as const)("resolves %s context %j", (scope, ctx, mainKey, expected) => {
     expect(resolveSessionKey(scope, ctx, mainKey, "main")).toBe(expected);
-  });
-
-  it("includes topic ids in session transcript filenames", () => {
-    inState(() => {
-      expect(resolveSessionTranscriptPath("sess-1", "main", 123)).toBe(
-        sessionPath("/custom/state", "main", "sess-1-topic-123.jsonl"),
-      );
-    });
   });
 
   it("uses agent id when resolving session file fallback paths", () => {

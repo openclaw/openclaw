@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isProxy } from "node:util/types";
 import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
@@ -27,7 +28,11 @@ const STORAGE_ERRORS = [
     -2,
   ],
 ] as const;
-export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0] | "57014" | "unavailable";
+export type GatewayStorageFailure =
+  | (typeof STORAGE_ERRORS)[number][0]
+  | "57014"
+  | "storage-worker-memory"
+  | "unavailable";
 
 function readOwnErrorDataProperty(value: object, key: string): unknown {
   try {
@@ -37,6 +42,23 @@ function readOwnErrorDataProperty(value: object, key: string): unknown {
   }
 }
 
+/** Retired admission cannot recover by replaying a channel, model, or state operation. */
+export function isStateDatabaseAdmissionClosedError(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some((candidate) => {
+    const fields =
+      typeof candidate === "string" ? { message: candidate } : isRecord(candidate) ? candidate : {};
+    const code =
+      readOwnErrorDataProperty(fields, "errorCode") ?? readOwnErrorDataProperty(fields, "code");
+    const message =
+      readOwnErrorDataProperty(fields, "errorMessage") ??
+      readOwnErrorDataProperty(fields, "message");
+    return (
+      code === "STATE_DATABASE_READ_ADMISSION_INVALIDATED" ||
+      (typeof message === "string" && message.includes("Shared-state worker is retiring"))
+    );
+  });
+}
+
 /** These outcomes must leave tool execution without becoming model-visible tool errors. */
 export function isLocalStorageOutcomeError(error: unknown): boolean {
   // Presentation can select a primary failure, but every uncertain write still fences continuation.
@@ -44,6 +66,9 @@ export function isLocalStorageOutcomeError(error: unknown): boolean {
     return true;
   }
   try {
+    if (isStateDatabaseAdmissionClosedError(error)) {
+      return true;
+    }
     const failure = classifyGatewayStorageFailure(error);
     return failure === "session_actor_reconciliation" || failure === "57014";
   } catch {
@@ -83,6 +108,9 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
   if (outcomeUnknown || hasSqliteWorkerOutcomeUnknown(primaryError)) {
     return "session_actor_reconciliation";
   }
+  if (hasStorageWorkerMemoryFailure(primaryError)) {
+    return "storage-worker-memory";
+  }
   let cancellation: GatewayStorageFailure | undefined;
   let reconciliation: GatewayStorageFailure | undefined;
   for (const candidate of collectNestedErrorCandidates(primaryError)) {
@@ -104,6 +132,47 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
     cancellation ??
     (hasSqliteWorkerOutcomeUnknown(error) ? "session_actor_reconciliation" : undefined)
   );
+}
+
+function errorCode(value: object): unknown {
+  return readOwnErrorDataProperty(value, "errorCode") ?? readOwnErrorDataProperty(value, "code");
+}
+
+function hasStorageWorkerMemoryFailure(error: unknown): boolean {
+  const seen = new Set<object>();
+  for (
+    let current = error;
+    isRecord(current) && !isProxy(current) && !seen.has(current);
+    current = readOwnErrorDataProperty(current, "cause")
+  ) {
+    seen.add(current);
+    const code = errorCode(current);
+    if (code === "storage-worker-memory") {
+      return true;
+    }
+    const storageWorker =
+      isSqliteWorkerError(current, "closed") ||
+      isSqliteWorkerError(current, "overloaded") ||
+      isSqliteWorkerError(current, "unavailable") ||
+      isSqliteWorkerError(current, "outcome-unknown") ||
+      (readOwnErrorDataProperty(current, "errorType") === "SqliteWorkerError" &&
+        typeof code === "string");
+    if (!storageWorker) {
+      continue;
+    }
+    const nestedSeen = new Set<object>();
+    for (
+      let nested = readOwnErrorDataProperty(current, "cause");
+      isRecord(nested) && !isProxy(nested) && !nestedSeen.has(nested);
+      nested = readOwnErrorDataProperty(nested, "cause")
+    ) {
+      nestedSeen.add(nested);
+      if (errorCode(nested) === "ERR_WORKER_OUT_OF_MEMORY") {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function classifyStorageFailure(error: unknown): GatewayStorageFailure | undefined {
@@ -256,6 +325,12 @@ export function formatSqliteReadOnlyInspectionFailure(error: unknown): string {
 
 export function formatSqliteErrorCodeSuffix(error: unknown): string {
   return readSqliteErrorDetails(error).suffix;
+}
+
+export function readSqliteInspectionOperation(
+  error: unknown,
+): SqliteInspectionOperation | undefined {
+  return readSqliteErrorDetails(error).operation;
 }
 
 function readSqliteErrorDetails(error: unknown) {

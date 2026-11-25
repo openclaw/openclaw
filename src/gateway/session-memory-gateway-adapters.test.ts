@@ -255,9 +255,12 @@ it("projects unbound memory watches from current facts with the existing recipie
     sharingTargetState: () => {
       throw new Error("Memory watch used a durable target");
     },
+    hasMembership: () => {
+      throw new Error("Memory watch used durable membership");
+    },
   } satisfies Pick<
     SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
   >;
   const project = createPresenceRecipientProjection({
     cfg,
@@ -304,18 +307,16 @@ it("uses current actor media policy for unbound incognito reads and refuses clos
   expect(policy?.session).toEqual({ sessionKey, agentId: "main", sessionId: sessionKey });
   expect(policy?.localRoots).toContain("/synthetic/workspace");
   await patch(actor, { sessionRoot: "/synthetic/changed" });
-  expect(() => assertAssistantMediaPolicyCurrent(selection, policy!, false, requestAuth)).toThrow(
+  expect(() => assertAssistantMediaPolicyCurrent(selection, policy!, false)).toThrow(
     "Media access changed",
   );
   using currentRead = await retainedMediaPolicy(selection);
   const current = currentRead.value;
   expect(current?.localRoots).toContain("/synthetic/changed");
-  expect(() =>
-    assertAssistantMediaPolicyCurrent(selection, current!, false, requestAuth),
-  ).not.toThrow();
+  expect(() => assertAssistantMediaPolicyCurrent(selection, current!, false)).not.toThrow();
   owner.closeSession(sessionKey);
   expect(await resolveAssistantMediaPolicy(selection)).toBeUndefined();
-  expect(() => assertAssistantMediaPolicyCurrent(selection, current!, false, requestAuth)).toThrow(
+  expect(() => assertAssistantMediaPolicyCurrent(selection, current!, false)).toThrow(
     "Media access changed",
   );
 });

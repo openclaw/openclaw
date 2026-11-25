@@ -95,6 +95,7 @@ import {
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureReadyBeforeSettlement as observeFixtureReadiness } from "./run-process.test-support.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
 vi.mock("node:net", async (importOriginal) => {
@@ -132,27 +133,15 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function fixtureReadyBeforeSettlement(
-  pidPath: string,
-  operation: PromiseLike<unknown>,
-): Promise<void> {
-  // The child records its PID before reporting readiness; socket delivery can trail settlement.
-  const recorded = () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1;
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error(`timeout waiting for ${pidPath}`);
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
+function fixtureReadyBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  // A marker alone can be partial; require the recorded child PID before proceeding.
+  return observeFixtureReadiness(
+    receipts,
+    pidPath,
+    operation,
+    () => existsSync(pidPath) && Number(readFileSync(pidPath, "utf8")) > 1,
   );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
 }
-
 // runCommand signals foreign descendants, but only joins the leader and its output streams.
 async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
   try {
@@ -415,7 +404,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("requires dashboard root markers and same-origin asset URLs", () => {
     const html = [
       "<title>OpenClaw Control</title>",
-      "<openclaw-app></openclaw-app>",
+      '<openclaw-app><main id="openclaw-boot-shell"></main></openclaw-app>',
       '<link rel="stylesheet" href="/assets/index.css">',
       '<script type="module" src="assets/index.js"></script>',
       '<script type="module" src="https://example.com/assets/ignored.js"></script>',
@@ -595,8 +584,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it.each([
-    [800_000, 1200, 2_520_000],
-    [Number.NaN, 600, 1_320_000],
+    [357_000, 1200, 2_520_000],
+    [1_000_000, 1500, 3_120_000],
+    [1_500_000, 1800, 3_720_000],
+    [Number.NaN, 1200, 2_520_000],
   ])(
     "sizes Windows upgrade budgets from a %d ms baseline install",
     (durationMs, stepTimeoutSeconds, wrapperTimeoutMs) => {
@@ -1353,9 +1344,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           fixtureReceiptClientSource(receipts.endpoint),
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
           "child.once('message', () => {",
+          "process.stdout.write('discarded stdout ' + 'x'.repeat(600) + 'stdout sentinel 😀\\n', () => {",
+          "process.stderr.write('discarded stderr ' + 'y'.repeat(600) + 'stderr sentinel 😀\\n', () => {",
           "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
           "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
           "child.disconnect();",
+          "});",
+          "});",
           "});",
           "setInterval(() => {}, 1000);",
         ].join("");
@@ -1373,7 +1368,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         await withinTest(fixtureReadyBeforeSettlement(childPidPath, command), signal);
         const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
-        await expect(withinTest(releaseAndWait(), signal)).rejects.toThrow(/Command timed out:/u);
+        const settlement = withinTest(releaseAndWait(), signal);
+        await expect(settlement).rejects.toThrow(/Command timed out:/u);
+        await expect(settlement).rejects.toMatchObject({
+          message: expect.stringMatching(
+            /\nstderr tail:\n.{0,300}stderr sentinel 😀\nstdout tail:\n.{0,300}stdout sentinel 😀$/su,
+          ),
+        });
         await waitForDead(childPid, signal);
         expect(readFileSync(logPath, "utf8")).toContain("timeout command=");
       } finally {
@@ -1692,6 +1693,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error(`${error.message}\nstderr tail:\nupdater progress`),
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error(
           "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --yes --json --no-restart --timeout 1200",
         ),
@@ -1707,6 +1714,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       ),
     ).toBe(true);
     expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "linux")).toBe(false);
+    for (const headline of [
+      "Command timed out: powershell.exe installer.ps1",
+      "Command timeout cleanup failed: node updater",
+      "Command timed out and could not be terminated cleanly: node updater",
+    ]) {
+      expect(
+        isRecoverableWindowsPackagedUpgradeTimeoutError(
+          new Error(`${headline}\nstderr tail:\n${error.message}`),
+          "win32",
+        ),
+      ).toBe(false);
+    }
     expect(
       isRecoverableWindowsPackagedUpgradeTimeoutError(
         new Error("Command timed out: node openclaw.mjs update --tag openclaw@beta"),

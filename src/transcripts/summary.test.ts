@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { renderTranscriptsMarkdown, summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const ESC = "\u001b";
 const C1_CSI = "\u009b";

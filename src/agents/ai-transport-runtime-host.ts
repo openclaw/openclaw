@@ -4,7 +4,7 @@ import {
   type AiProviderRequestCapabilities,
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import "../llm/ai-transport-host.js";
+import { configureAiTransportBaseHost } from "../llm/ai-transport-host.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -39,11 +39,10 @@ import {
 } from "./provider-request-config.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-let configured = false;
-
 /** Installs the agent and plugin ports only on paths that execute provider runtime. */
 export function configureAiTransportRuntimeHost(): void {
-  if (configured) {
+  const installation = configureAiTransportBaseHost();
+  if (installation.runtime) {
     return;
   }
   const host = getDefaultAiTransportHost();
@@ -135,7 +134,7 @@ export function configureAiTransportRuntimeHost(): void {
     transformTransportMessages,
     registerCustomApi: ensureCustomApiRegistered,
   });
-  configured = true;
+  installation.runtime = true;
 }
 
 configureAiTransportRuntimeHost();

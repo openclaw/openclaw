@@ -20,7 +20,8 @@ vi.mock("../sqlite-snapshot-source.js", async (importOriginal) => {
   const copy = await import("../sqlite-readonly-location.js");
   return {
     ...actual,
-    prepareSqliteReadOnlyLocationSync: copy.prepareSqliteReadOnlyLocationSyncInProcess,
+    prepareSqliteReadOnlyLocationSync: (pathname: string) =>
+      copy.prepareSqliteReadOnlyLocationSyncInProcess(pathname),
     prepareSqliteReadOnlyLocation: (pathname: string) =>
       copy.prepareSqliteReadOnlyCopyInProcess(pathname),
   };
@@ -45,11 +46,12 @@ vi.mock("../worker-task-pool.js", async (importOriginal) => {
           return new Target(...args);
         }
         return {
-          async run(input: unknown) {
-            if (!backup.handle) {
+          async run(input: unknown, options: { signal?: AbortSignal } = {}) {
+            if (typeof backup.handle !== "function") {
               throw new Error("Backup worker handler was not registered");
             }
             return backup.handle(structuredClone(input), undefined, {
+              signal: options.signal ?? new AbortController().signal,
               runNativeSection: async (operation) => operation(),
               throwIfCancelled() {},
             });

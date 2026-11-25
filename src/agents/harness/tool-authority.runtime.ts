@@ -56,8 +56,6 @@ type ToolAuthorityAttempt = Pick<
   | "messageChannel"
   | "toolsAllow"
   | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
   | "runId"
   | "abortSignal"
   | "sessionTarget"
@@ -120,6 +118,9 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const admitted = internal.admittedRunContext;
   const instance = admitted.operationalRunInstance;
   const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, abortSignal);
+  if (!assertAdmitted) {
+    throw new Error("The agent run ended. Start a new turn to retry.");
+  }
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
@@ -154,6 +155,27 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   let live = true;
+  const assertActive = () => {
+    if (!live || admitted.operationalRunInstance !== instance || instance.runId !== runId) {
+      throw new Error("The agent run ended. Start a new turn to retry.");
+    }
+    assertAdmitted();
+    if (turn) {
+      assertSessionControllerOperation(turn);
+    }
+    assertHostActive?.();
+    if (
+      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
+      (source?.workerTurnClaim &&
+        (source.workerTurnClaim.sessionId !== sessionId ||
+          source.workerTurnClaim.runId !== runId ||
+          !source.receiptAuthority)) ||
+      (source?.gatewayContextResolver && !source.gatewayContextResolver())
+    ) {
+      throw new Error("embedded tool authority lost its source execution claim");
+    }
+    source?.receiptAuthority?.();
+  };
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
   const direct = operation
@@ -163,8 +185,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
-          forceRestartSafeTools: attempt.forceRestartSafeTools,
-          forceCodeModeTools: attempt.forceCodeModeTools,
           operatorAuthority,
           run: {
             ...attempt,
@@ -211,52 +231,22 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const personalToolParticipants = operation
     ? operation.personalToolParticipants
     : createReplyTurnParticipants(direct?.personalToolOwner);
-  function assertActive() {
-    if (
-      !live ||
-      !assertAdmitted ||
-      admitted.operationalRunInstance !== instance ||
-      instance.runId !== runId
-    ) {
-      throw new Error("embedded tool authority is no longer active");
-    }
-    assertAdmitted();
-    if (turn) {
-      assertSessionControllerOperation(turn);
-    }
-    assertHostActive?.();
-    if (
-      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
-      (source?.workerTurnClaim &&
-        (source.workerTurnClaim.sessionId !== sessionId ||
-          source.workerTurnClaim.runId !== runId ||
-          !source.receiptAuthority)) ||
-      source?.receiptAuthority?.() === false ||
-      (source?.gatewayContextResolver && !source.gatewayContextResolver())
-    ) {
-      throw new Error("embedded tool authority lost its source execution claim");
-    }
-  }
   const assertReplyActive = () => {
     assertActive();
-    operatorAuthority?.assertCurrent();
     if (
       operation &&
       (operation.toolAuthorityRoute?.provider !== route.provider ||
         operation.toolAuthorityRoute.model !== route.model ||
         operation.toolAuthorityFingerprint !== fingerprint)
     ) {
-      throw new Error("reply authority is no longer active");
+      throw new Error("The reply target changed. Start a new turn to retry.");
     }
   };
   let registered = false;
   const watchdogAttempt = turn
     ? turn.watchdog.attachAttempt({
         assertCurrent: () => {
-          if (!assertAdmitted) {
-            throw new Error("Attempt admission retired");
-          }
-          assertAdmitted();
+          assertAdmitted.assertScopeCurrent();
           assertSessionControllerOperation(turn);
         },
       })
@@ -416,32 +406,39 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                 assertCaller();
                 assertRegistered();
                 if (!ownsOperation() || fingerprint !== expected) {
-                  throw new MessageInjectionTargetUnavailableError(
-                    "Embedded attempt authority changed during steering",
-                  );
+                  throw new MessageInjectionTargetUnavailableError("Steering target changed");
                 }
               };
               assertPreparedOwner();
-              if (!operation && caller && "kind" in caller) {
-                const selected = direct?.requestedRoute;
-                if (
-                  selected &&
-                  (selected.provider !== caller.selectedRoute.provider ||
-                    selected.model !== caller.selectedRoute.model)
-                ) {
-                  throw new MessageInjectionPolicyMismatchError(
-                    "model-fallback-changed",
-                    "The selected model changed before steering",
-                  );
-                }
-              }
-              return captureReplyToolAuthorityCallerBinding(
+              const selectedBinding = captureReplyToolAuthorityCallerBinding(
                 operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
                 caller,
                 expected,
                 route,
                 assertPreparedOwner,
               );
+              if (!selectedBinding) {
+                return undefined;
+              }
+              return {
+                ...selectedBinding,
+                prepare: async () => {
+                  if (!operation && caller && "kind" in caller) {
+                    const selected = direct?.requestedRoute;
+                    if (
+                      selected &&
+                      (selected.provider !== caller.selectedRoute.provider ||
+                        selected.model !== caller.selectedRoute.model)
+                    ) {
+                      throw new MessageInjectionPolicyMismatchError(
+                        "model-fallback-changed",
+                        "The selected model changed before steering",
+                      );
+                    }
+                  }
+                  return selectedBinding.prepare();
+                },
+              };
             },
           );
           const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
@@ -458,7 +455,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             assertActive: () => {
               assertRegistered();
               if (!ownsOperation()) {
-                throw new Error("embedded reply authority is no longer active");
+                throw new Error("The reply target changed. Start a new turn to retry.");
               }
             },
             acceptsRequesterOrigin: (incoming) => {

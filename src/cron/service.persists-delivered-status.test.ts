@@ -87,6 +87,8 @@ async function createCommandWebhook(
     timeoutSeconds?: number;
     oneShot?: boolean;
     runCommandJob?: CronServiceDeps["runCommandJob"];
+    runScriptJob?: CronServiceDeps["runScriptJob"];
+    payload?: CronAddInput["payload"];
     beforeClose?: () => void;
   } = {},
 ) {
@@ -116,6 +118,7 @@ async function createCommandWebhook(
     runCronFailureRepair,
     enqueueSystemEvent,
     runCommandJob: options.runCommandJob ?? runCronCommandJob,
+    runScriptJob: options.runScriptJob,
     sendCronWebhook: (params) =>
       sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
   });
@@ -128,7 +131,7 @@ async function createCommandWebhook(
           failureAlert,
         }
       : {}),
-    payload: {
+    payload: options.payload ?? {
       kind: "command",
       argv: [process.execPath, "-e", "process.stdout.write('HOOKSCHED_PAYLOAD')"],
       ...(options.timeoutSeconds === undefined ? {} : { timeoutSeconds: options.timeoutSeconds }),
@@ -203,6 +206,76 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}) {
 }
 
 describe("CronService persists delivered status", () => {
+  it.each(["restart", "restart-timeout", "operator"] as const)(
+    "sends one script interruption webhook only for %s, without replaying the script",
+    async (cause) => {
+      const restarting = cause !== "operator";
+      const deliveryTimesOut = cause === "restart-timeout";
+      const entered = createDeferred();
+      const runScriptJob = vi.fn<NonNullable<CronServiceDeps["runScriptJob"]>>(
+        async ({ abortSignal }) => {
+          entered.resolve();
+          await new Promise<void>((resolve) => {
+            abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { status: "error", error: "script stopped" };
+        },
+      );
+      await using h = await createCommandWebhook({
+        oneShot: true,
+        responseStatus: deliveryTimesOut ? undefined : 204,
+        payload: { kind: "script", script: "return {};", timeoutSeconds: 180 },
+        runScriptJob,
+      });
+      h.clock.setTime(h.job.state.nextRunAtMs!);
+      const run = h.run("due");
+      await entered.promise;
+      if (cause === "restart") {
+        const fetchGuard = mocks.fetchWithSsrFGuard.getMockImplementation()!;
+        mocks.fetchWithSsrFGuard.mockImplementationOnce(async (request) => {
+          // Stop scheduling after the notice is admitted but before its HTTP request.
+          h.cron.stop();
+          return await fetchGuard(request);
+        });
+      } else {
+        h.cron.stop();
+      }
+      expect(abortActiveCronTaskRuns(restarting ? undefined : "Cancelled by operator.")).toBe(1);
+      if (deliveryTimesOut) {
+        await h.expectRequest({ action: "finished", status: "error" });
+        await vi.advanceTimersByTimeAsync(5_000);
+      }
+      await run;
+      await h.cron.waitForIdle();
+      await h.cron.start();
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(h.storePath),
+        jobId: h.job.id,
+        limit: 10,
+      });
+      expect(history.total).toBe(1);
+      expect(history.entries[0]).toMatchObject({
+        status: "error",
+        completionStatus: "failed",
+        deliveryStatus: deliveryTimesOut ? "unknown" : restarting ? "delivered" : "not-delivered",
+      });
+      expect(h.requests).toHaveLength(restarting ? 1 : 0);
+      if (restarting) {
+        expect(JSON.parse(h.requests[0]!)).toMatchObject({
+          jobId: h.job.id,
+          action: "finished",
+          status: "error",
+          error:
+            "Gateway restarted during the run. The script was not rerun. | OPENCLAW_RESTART_ABORT",
+        });
+      }
+      expect((await h.cron.readJob(h.job.id))?.enabled).toBe(false);
+      expect((await h.cron.readJob(h.job.id))?.state.nextRunAtMs).toBeUndefined();
+      expect(runScriptJob).toHaveBeenCalledOnce();
+      expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
+    },
+  );
+
   it("delivers a command webhook after a forward wall-clock jump", async () => {
     const execution = gate(commandOk);
     await using h = await createCommandWebhook({
@@ -223,14 +296,20 @@ describe("CronService persists delivered status", () => {
     expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
-  it.each(["deadline", "cancellation"] as const)(
+  it.each(["deadline", "cancellation", "restart"] as const)(
     "finalizes a hanging webhook on %s",
     async (cause) => {
-      if (cause === "cancellation") {
+      if (cause !== "deadline") {
         vi.useRealTimers();
       }
       await using h = await createCommandWebhook({
         timeoutSeconds: cause === "deadline" ? 1 : 0,
+        ...(cause === "restart"
+          ? {
+              payload: { kind: "script" as const, script: "return {};" },
+              runScriptJob: async () => ({ status: "ok" as const, notify: "HOOKSCHED_PAYLOAD" }),
+            }
+          : {}),
       });
       const run = h.run();
       await h.expectRequest();
@@ -244,7 +323,9 @@ describe("CronService persists delivered status", () => {
         await vi.advanceTimersByTimeAsync(1);
       } else {
         const cancelledAt = performance.now();
-        expect(abortActiveCronTaskRuns("Cancelled by operator.")).toBe(1);
+        expect(
+          abortActiveCronTaskRuns(cause === "restart" ? undefined : "Cancelled by operator."),
+        ).toBe(1);
         await h.finished;
         expect(performance.now() - cancelledAt).toBeLessThan(1_000);
       }
@@ -260,6 +341,7 @@ describe("CronService persists delivered status", () => {
       }
       expect(h.state()?.runningAtMs).toBeUndefined();
       expect(h.state()?.lastDeliveryError).toContain(diagnostic);
+      expect(h.requests).toHaveLength(1);
     },
   );
 
@@ -288,15 +370,10 @@ describe("CronService persists delivered status", () => {
       const updated = await h.cron.readJob(h.job.id);
       expect(updated?.state.consecutiveErrors).toBe(consecutiveErrors + 1);
       expect(updated?.state.lastDeliveryError).toContain("Cancelled during webhook delivery.");
-      expect(updated?.enabled).toBe(consecutiveErrors === 0);
-      if (consecutiveErrors === 9) {
-        expect(updated?.state.autoDisabled).toMatchObject({
-          reason: "consecutive-failures",
-          consecutiveErrors: 10,
-        });
-      } else {
-        expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
-      }
+      // A failed run never turns the job off, however long its failure streak.
+      expect(updated?.enabled).toBe(true);
+      expect(updated?.state.autoDisabled).toBeUndefined();
+      expect(h.sendCronFailureAlert).toHaveBeenCalledOnce();
     },
   );
 
@@ -383,7 +460,10 @@ describe("CronService persists delivered status", () => {
         completionStatus: "failed",
         delivered: verified,
         deliveryStatus,
-        ...(!verified ? { failureNotificationDelivery: undefined } : { deliveryError: undefined }),
+        // The first failure requests its alert; the run event carries that open notice.
+        ...(!verified
+          ? { failureNotificationDelivery: expect.objectContaining({ status: "unknown" }) }
+          : { deliveryError: undefined }),
       });
     },
   );

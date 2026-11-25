@@ -28,6 +28,49 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+it("maintains missing and growth-stale agent statistics only on periodic worker passes", async () => {
+  const root = tempDirs.make("openclaw-agent-planner-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    openOpenClawStateDatabase();
+    const scheduled = observeSqliteWalPeriodicWork();
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    scheduled.restore();
+    const db = database.db;
+    const stats = () =>
+      db.prepare("SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1'").get()
+        ? db
+            .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='sqlite_autoindex_cache_entries_1'")
+            .get()?.stat
+        : undefined;
+    const grow = (start: number, end: number) =>
+      db.exec(`
+      WITH RECURSIVE rows(n) AS (VALUES(${start}) UNION ALL SELECT n+1 FROM rows WHERE n<${end})
+      INSERT INTO cache_entries(scope,key,value_json,updated_at)
+      SELECT 'planner',printf('%08d',n),'{}',1 FROM rows;
+    `);
+    grow(1, 32);
+    expect(stats()).toBeUndefined();
+    const exec = vi.spyOn(db, "exec");
+    try {
+      await scheduled.periodic();
+      const small = stats();
+      expect(small).toBe("32 32 1");
+      grow(33, 8192);
+      // Writes do not refresh planner statistics in their hot path.
+      expect(stats()).toBe(small);
+      await scheduled.periodic();
+      expect(Number(String(stats()).split(" ")[0])).toBeGreaterThan(1000);
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM cache_entries WHERE scope='planner'").get(),
+      ).toEqual({ n: 8192 });
+      // The published main-thread handle must never execute planner maintenance.
+      expect(exec.mock.calls.filter(([sql]) => /ANALYZE|optimize/i.test(sql))).toEqual([]);
+    } finally {
+      exec.mockRestore();
+    }
+  });
+});
+
 it.each(["keep", "close", "replace"] as const)(
   "admits one bounded periodic pass on the published agent handle (%s)",
   async (retirement) => {
@@ -58,6 +101,8 @@ it.each(["keep", "close", "replace"] as const)(
         scheduled.restore();
       }
       const periodic = scheduled.periodic;
+      // Allocate SQLite's statistics pages before measuring vacuum's page budget.
+      database.db.exec("ANALYZE");
       database.db
         .prepare(
           "INSERT INTO cache_entries(scope, key, value_json, blob, updated_at) VALUES ('wal-proof', 'pages', '{}', randomblob(4194304), 1)",
@@ -274,8 +319,8 @@ const workerSource = String.raw`
       });
     }
     phase = "close";
-    await withAdmission(() => {
-      const cleanup = agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
+    await withAdmission(async () => {
+      const cleanup = await agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
       if (!cleanup.settled) throw new Error("Worker database cleanup did not settle");
       state.closeOpenClawStateDatabaseForTest();
     });

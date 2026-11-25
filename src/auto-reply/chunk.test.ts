@@ -99,6 +99,34 @@ describe("resolveTextChunkLimit", () => {
 });
 
 describe("chunkMarkdownText", () => {
+  it.each([
+    ["prefix ", "[the named link](https://example.test)"],
+    ["prefix", "[the named link](https://example.test)"],
+    ["", "[the named link](https://example.test)"],
+    ["prefix ", "[a [nested] label](https://example.test/a_(b))"],
+    ["prefix ", String.raw`[a \] label](https://example.test "a title")`],
+  ])("keeps fitting links intact after %j: %s", (prefix, link) => {
+    const limit = link.length;
+    const text = `${prefix}${link} trailing words beyond the limit`;
+    for (const mode of ["length", "newline"] as const) {
+      const chunks = chunkMarkdownTextWithMode(text, limit, mode);
+      expect(chunks).toEqual([
+        ...(prefix ? [prefix.trimEnd()] : []),
+        link,
+        "trailing words beyond the limit",
+      ]);
+      expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+    }
+  });
+
+  it("keeps the hard limit for oversized links and treats code links literally", () => {
+    const link = `[label](${"x".repeat(60)})`;
+    const chunks = chunkMarkdownText(link, 20);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(chunks.join("")).toBe(link);
+    expect(chunkMarkdownText("`[a b](url)` trailing", 10)).toEqual(["`[a", "b](url)`", "trailing"]);
+  });
+
   it("keeps prose after inline triple-backtick code outside fences", () => {
     expect(
       chunkMarkdownText("```literal```\nParagraph outside code with ordinary words.", 32),
@@ -269,12 +297,11 @@ describe("chunkMarkdownTextWithMode", () => {
     expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
   });
 
-  it.each(["length", "newline"] as const)(
-    "keeps astral text with a fractional limit in %s mode",
-    (mode) => {
-      expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
-    },
-  );
+  it.each([1.5, Number.NaN])("keeps astral text whole at limit %s", (limit) => {
+    for (const mode of ["length", "newline"] as const) {
+      expect(chunkMarkdownTextWithMode("😀", limit, mode)).toEqual(["😀"]);
+    }
+  });
 });
 
 describe("resolveChunkMode", () => {

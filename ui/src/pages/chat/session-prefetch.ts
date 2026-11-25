@@ -22,6 +22,7 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
@@ -67,6 +68,12 @@ type SessionPrefetchCandidate = {
   sessionId: GatewaySessionRow["sessionId"];
 };
 
+type SessionPrefetchCycle = {
+  controller: AbortController;
+  snapshot: SessionPrefetchSnapshot;
+  candidate?: SessionPrefetchCandidate;
+};
+
 function mayPrefetchHistory(
   snapshot: SessionPrefetchSnapshot | null,
   sessionKey?: string,
@@ -84,9 +91,10 @@ class SessionPrefetcher {
   private readonly lastAttemptAt = new Map<string, number>();
   private delayTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private delayDeadline: number | null = null;
-  private running = false;
+  private running: SessionPrefetchCycle | null = null;
   private rescheduleDelayMs: number | null = null;
   private stopVisibility: (() => void) | undefined;
+  private stopInvalidation: (() => void) | undefined;
 
   constructor(
     private readonly cache: ChatMessageCache,
@@ -99,14 +107,31 @@ class SessionPrefetcher {
     }
     this.connected = true;
     this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
+    this.stopInvalidation = subscribeSnapshotInvalidation(({ sessionKey, scopePrefix }) => {
+      const cycle = this.running;
+      const key = cycle?.candidate?.snapshotKey;
+      if (
+        cycle &&
+        key &&
+        (sessionKey ? key === sessionKey : !scopePrefix || key.startsWith(scopePrefix))
+      ) {
+        // Publication fencing alone leaves the obsolete socket read alive.
+        // Retire only this target; unrelated cache churn keeps its reader.
+        this.retireCycle();
+      }
+    });
     this.schedule();
   }
 
   disconnect(): void {
     this.connected = false;
+    this.retireCycle();
+    this.snapshot = null;
     this.rescheduleDelayMs = null;
     this.stopVisibility?.();
     this.stopVisibility = undefined;
+    this.stopInvalidation?.();
+    this.stopInvalidation = undefined;
     this.cancelScheduledWork();
     this.lastAttemptAt.clear();
   }
@@ -114,6 +139,15 @@ class SessionPrefetcher {
   update(snapshot: SessionPrefetchSnapshot): void {
     const previous = this.snapshot;
     this.snapshot = snapshot;
+    const running = this.running;
+    if (
+      running &&
+      (!this.isCurrent(running.snapshot, running.candidate) ||
+        !mayPrefetchHistory(snapshot, running.snapshot.intentSessionKey ?? undefined) ||
+        (running.candidate && this.isOpen(running.candidate.snapshotKey)))
+    ) {
+      this.retireCycle();
+    }
     if (previous?.client !== snapshot.client) {
       this.lastAttemptAt.clear();
     }
@@ -133,8 +167,21 @@ class SessionPrefetcher {
   private readonly handleVisibilityChange = () => {
     if (document.visibilityState === "visible") {
       this.schedule();
+    } else {
+      this.retireCycle();
+      this.cancelScheduledWork();
+      this.rescheduleDelayMs = null;
     }
   };
+
+  private retireCycle(): void {
+    const cycle = this.running;
+    cycle?.controller.abort();
+    // Cancellation did not warm history. A later intent may retry immediately.
+    if (cycle?.candidate) {
+      this.lastAttemptAt.delete(cycle.candidate.snapshotKey);
+    }
+  }
 
   private schedule(delayMs = SESSION_PREFETCH_INTENT_DELAY_MS): void {
     if (!this.connected || !mayPrefetchHistory(this.snapshot)) {
@@ -161,16 +208,24 @@ class SessionPrefetcher {
   }
 
   private async runCycle(): Promise<void> {
-    if (!this.connected || this.running || document.visibilityState === "hidden") {
+    if (
+      !this.connected ||
+      !this.snapshot ||
+      this.running ||
+      document.visibilityState === "hidden"
+    ) {
       return;
     }
-    this.running = true;
+    const cycle = { controller: new AbortController(), snapshot: this.snapshot };
+    this.running = cycle;
     try {
-      await this.prefetchIntendedSession();
+      await this.prefetchIntendedSession(cycle);
     } catch (error) {
-      console.debug("[chat-session-prefetch] cycle failed", error);
+      if (!cycle.controller.signal.aborted) {
+        console.debug("[chat-session-prefetch] cycle failed", error);
+      }
     } finally {
-      this.running = false;
+      this.running = null;
       if (this.rescheduleDelayMs !== null) {
         const delayMs = this.rescheduleDelayMs;
         this.rescheduleDelayMs = null;
@@ -179,8 +234,8 @@ class SessionPrefetcher {
     }
   }
 
-  private async prefetchIntendedSession(): Promise<void> {
-    const snapshot = this.snapshot;
+  private async prefetchIntendedSession(cycle: SessionPrefetchCycle): Promise<void> {
+    const snapshot = cycle.snapshot;
     // A presented transcript still in flight owns the socket; the pane's
     // loading-changed event reschedules this cycle, so waiting costs no polling.
     if (
@@ -194,7 +249,7 @@ class SessionPrefetcher {
     }
     const { client } = snapshot;
     await this.snapshotStore.loadSavedAtIndex();
-    if (!this.isCurrent(snapshot)) {
+    if (cycle.controller.signal.aborted || !this.isCurrent(snapshot)) {
       return;
     }
     // Refresh presented snapshots through their LRU owner before background writes
@@ -208,7 +263,8 @@ class SessionPrefetcher {
     }
     const candidate = this.selectCandidate(snapshot);
     if (candidate) {
-      await this.prefetchCandidate(snapshot, client, candidate);
+      cycle.candidate = candidate;
+      await this.prefetchCandidate(snapshot, client, candidate, cycle.controller.signal);
     }
   }
 
@@ -216,11 +272,13 @@ class SessionPrefetcher {
     snapshot: SessionPrefetchSnapshot,
     client: GatewayBrowserClient,
     candidate: SessionPrefetchCandidate,
+    signal: AbortSignal,
   ): Promise<void> {
     // Hydration and cursor removal are synchronous owned writes. Renew
     // only after checking the previous claim, before another await.
     let ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache.isCurrent();
+    const isCurrent = () =>
+      !signal.aborted && this.isCurrent(snapshot, candidate) && ownsCache.isCurrent();
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
     const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
@@ -253,6 +311,7 @@ class SessionPrefetcher {
         this,
         mayRequest,
         existing?.deltaCursor,
+        signal,
       );
       if (!isCurrent()) {
         return;
@@ -273,6 +332,8 @@ class SessionPrefetcher {
           candidate.canonicalSessionKey,
           this,
           mayRequest,
+          undefined,
+          signal,
         );
         if (!isCurrent()) {
           return;
@@ -312,10 +373,12 @@ class SessionPrefetcher {
       }
       cacheSnapshot(cached);
     } catch (error) {
-      console.debug(
-        `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
-        error,
-      );
+      if (!signal.aborted) {
+        console.debug(
+          `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
+          error,
+        );
+      }
     } finally {
       ownsCache.dispose();
     }
@@ -450,6 +513,7 @@ export function createSessionPrefetch(
       }
     }
     if (!context) {
+      prefetcher.disconnect();
       return;
     }
     const source = context;
@@ -482,6 +546,7 @@ export function createSessionPrefetch(
         hello: source.gateway.snapshot.hello,
       },
     });
+    prefetcher.connect();
   }
 
   function handleNavigationIntent(event: Event): void {

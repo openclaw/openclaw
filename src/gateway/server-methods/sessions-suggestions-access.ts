@@ -65,8 +65,7 @@ export function requireVisibleSuggestionRole(params: {
   sharing: ReturnType<typeof prepareProjectedSessionSharing>;
 }) {
   const { target, client, cfg, sharing } = params;
-  const entryFilter = hasOperatorBoundary(client, cfg) ? sharing.entryFilter : undefined;
-  if (!target || entryFilter?.(target.storeKey, target.entry) === false) {
+  if (!target || (hasOperatorBoundary(client, cfg) && !sharing.canReadTarget(target))) {
     params.respond(
       false,
       undefined,
@@ -238,7 +237,9 @@ export async function createSessionSuggestionMutation(params: {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(
               ErrorCodes.UNAVAILABLE,
-              error instanceof Error ? error.message : "suggestion requester authority changed",
+              error instanceof Error
+                ? error.message
+                : "suggestion request ended; retry the request",
             ),
           );
         }

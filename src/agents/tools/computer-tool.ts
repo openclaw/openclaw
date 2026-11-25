@@ -1,12 +1,11 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readImageMetadataFromHeader } from "../../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../../media/image-header-metadata.js";
 import type {
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
@@ -20,11 +19,11 @@ import {
   resolveImageSanitizationLimits,
 } from "../image-sanitization.js";
 import { readNodePermissionError } from "../node-permission-error.js";
-import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
+import type { AgentToolResult } from "../runtime/index.js";
+import { markToolExecutionRefused } from "../tool-effect-receipt.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
-import { recordComputerToolOutcome } from "./computer-tool-outcome.js";
 import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
 import {
   availableComputerActions,
@@ -41,6 +40,7 @@ import type {
 import {
   AFTER_ACTION_SCREENSHOT_DELAY_MS,
   COMPUTER_REF_WIDTH,
+  computerFrameImageIdentity,
   computerTargetDetails,
   isComputerObservationAction,
   MAX_WAIT_SECONDS,
@@ -51,7 +51,7 @@ import {
   getInProcessGatewayToolContext,
   runWithGatewayToolCleanupContext,
 } from "./in-process-gateway.js";
-import { textResult } from "./tool-results.js";
+import { jsonResult, textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 
@@ -222,57 +222,6 @@ function computerActResultText(action: ComputerToolAction, result: ComputerActRe
   return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
 }
 
-function computerFrameImageIdentity(
-  content: AgentToolResult<unknown>["content"],
-): string | undefined {
-  const [image, duplicate] = content.filter((block) => block.type === "image");
-  if (!image || duplicate) {
-    return undefined;
-  }
-  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
-}
-
-function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
-  if (contextEpoch.frameToolCallId === undefined && contextEpoch.frameImageIdentity === undefined) {
-    return false;
-  }
-  contextEpoch.value += 1;
-  delete contextEpoch.frameToolCallId;
-  delete contextEpoch.frameImageIdentity;
-  return true;
-}
-
-/**
- * Invalidate screenshot coordinates when the final model context no longer
- * contains the image produced by the tracked computer tool result.
- */
-export function invalidateComputerFrameIfMissing(params: {
-  contextEpoch: ComputerContextEpoch;
-  messages: AgentMessage[];
-  imagesBlocked?: boolean;
-}): boolean {
-  const frameToolCallId = params.contextEpoch.frameToolCallId;
-  if (frameToolCallId === undefined || params.imagesBlocked) {
-    return invalidateComputerFrame(params.contextEpoch);
-  }
-  const frameMessage = params.messages.findLast(
-    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
-      message?.role === "toolResult" &&
-      message.toolName === "computer" &&
-      message.toolCallId === frameToolCallId,
-  );
-  const frameImageIdentity = frameMessage
-    ? computerFrameImageIdentity(frameMessage.content)
-    : undefined;
-  if (
-    frameImageIdentity !== undefined &&
-    frameImageIdentity === params.contextEpoch.frameImageIdentity
-  ) {
-    return false;
-  }
-  return invalidateComputerFrame(params.contextEpoch);
-}
-
 async function projectComputerImage(params: {
   image?: { base64: string; mimeType: string };
   action: ComputerToolAction;
@@ -353,14 +302,25 @@ export function createComputerTool(options?: {
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
+  let capabilityNotice: string | undefined;
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
   // shared target/frame/button state must apply in model order, not completion
   // order: a click racing a type could type into the wrong app, and split
   // mouse down/move/up could interleave. Chaining preserves invocation order.
   let opQueue: Promise<unknown> = Promise.resolve();
-  const serialize = <T>(fn: () => Promise<T>): Promise<T> => {
-    const result = opQueue.then(fn, fn);
+  const serialize = (
+    fn: () => Promise<AgentToolResult<unknown>>,
+  ): Promise<AgentToolResult<unknown>> => {
+    const run = async () => {
+      const result = await fn();
+      if (capabilityNotice) {
+        result.content.push({ type: "text", text: capabilityNotice });
+        capabilityNotice = undefined;
+      }
+      return result;
+    };
+    const result = opQueue.then(run, run);
     opQueue = result.then(
       () => undefined,
       () => undefined,
@@ -375,11 +335,13 @@ export function createComputerTool(options?: {
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
     onCapabilitiesChanged: (capabilities) => {
-      tool.parameters = createComputerToolSchema(
-        availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
-        targetScope,
-      );
-      tool.description = buildComputerToolDescription(capabilities, targetScope);
+      // Live target facts append to history, never rewrite the provider prefix.
+      capabilityNotice = `Current computer capabilities: ${JSON.stringify({
+        actions: availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+        targets: capabilities?.targets,
+        observations: capabilities?.observations,
+        deliveryModes: capabilities?.deliveryModes,
+      })}`;
     },
     registerRunCleanup: options?.registerRunCleanup,
     getOperationQueue: () => opQueue,
@@ -469,6 +431,8 @@ export function createComputerTool(options?: {
     // model-visible screenshot block that coordinate actions depend on.
     catalogMode: "direct-only",
     executionMode: "sequential",
+    // Observing a desktop repeats by design; input actions still count.
+    repeatable: { actions: ["screenshot", "wait"] },
     description: buildComputerToolDescription(initialCapabilities, targetScope),
     parameters: parameterSchema,
     prepareArguments: prepareComputerArguments,
@@ -486,6 +450,17 @@ export function createComputerTool(options?: {
           gatewayOpts,
           signal,
         });
+        if ("unavailableAction" in resolved) {
+          return markToolExecutionRefused(
+            jsonResult({
+              status: "refused",
+              reason: "action_unavailable",
+              action: resolved.unavailableAction,
+              availableActions: resolved.availableActions,
+            }),
+            { kind: "gated", reason: "action_unavailable" },
+          );
+        }
         const deliverObservation = async (
           result: ComputerActResult,
           observationAction = action,
@@ -550,9 +525,7 @@ export function createComputerTool(options?: {
             },
           };
           session.recordObservation(resolved, result, imageCoordinates);
-          return action === "get_window_state"
-            ? recordComputerToolOutcome(projected, result)
-            : projected;
+          return projected;
         };
 
         if (action === "screenshot" || action === "wait" || action === "take_control") {

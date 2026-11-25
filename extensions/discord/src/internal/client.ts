@@ -17,7 +17,7 @@ import { BaseMessageInteractiveComponent, parseCustomId } from "./components.bas
 import type { Modal } from "./components.modal.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
 import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contract.js";
-import { RequestClient, type RequestClientOptions } from "./rest.js";
+import { DiscordError, RequestClient, type RequestClientOptions } from "./rest.js";
 import { Guild, GuildMember, User, channelFactory } from "./structures.js";
 
 type CacheEntry<T> = {
@@ -46,6 +46,7 @@ const CACHE_KIND_BY_EVENT = new Map<string, "channel" | "guild" | "guild-emojis"
 type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
 const DISCORD_APPLICATION_COMMAND_LIMIT_REACHED = 30032;
+const DISCORD_UNKNOWN_APPLICATION_COMMAND = 10063;
 
 function stableCommandKey(command: { name: string; type?: ApplicationCommandType }) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
@@ -331,7 +332,7 @@ export class Client {
   }
 
   private async fetchCachedEntity<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const now = Date.now();
+    const now = performance.now();
     // SAFETY: Each private cache key has one entity type, fixed by its fetch caller.
     const cached = this.entityEntries.get(key) as CacheEntry<T> | undefined;
     if (cached && cached.expiresAt > now) {
@@ -438,10 +439,23 @@ export class Client {
     }
     for (const command of existing) {
       if (!desiredKeys.has(stableCommandKey(command))) {
-        await this.requestCommandDeploy(
-          "delete",
-          Routes.applicationCommand(this.options.clientId, command.id),
-        );
+        try {
+          await this.requestCommandDeploy(
+            "delete",
+            Routes.applicationCommand(this.options.clientId, command.id),
+          );
+        } catch (error) {
+          // Another deploy may have already removed this obsolete command.
+          if (
+            !(
+              error instanceof DiscordError &&
+              error.status === 404 &&
+              error.discordCode === DISCORD_UNKNOWN_APPLICATION_COMMAND
+            )
+          ) {
+            throw error;
+          }
+        }
       }
     }
   }
@@ -467,7 +481,7 @@ export class Client {
   ): Promise<unknown> {
     const rest = this.rest;
     const timeoutMs = rest.options.timeout;
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     try {
       return method === "get" || body === undefined
         ? await rest[method](path)
@@ -484,7 +498,7 @@ export class Client {
         Object.assign(error, {
           deployRestMethod: method,
           deployRestPath: path,
-          deployRequestMs: Date.now() - startedAt,
+          deployRequestMs: performance.now() - startedAt,
           ...(Number.isFinite(timeoutMs) ? { deployTimeoutMs: timeoutMs } : {}),
         });
       }
@@ -515,10 +529,10 @@ export class Client {
         }
         const listenerName = listener.constructor.name || "AnonymousListener";
         const release = await queue.permits.acquire();
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         try {
           await listener.handle(data, this);
-          const durationMs = Date.now() - startedAt;
+          const durationMs = performance.now() - startedAt;
           if (durationMs < 30_000) {
             return;
           }

@@ -131,8 +131,8 @@ socket.socket.connect = connect`,
 
   const env = { PATH: process.env.PATH, PYTHONPATH: fixtureDir };
   const sandbox = createSandboxContext({
-    runShellCommand: async ({ script, stdin }) => {
-      const child = spawn("/bin/sh", ["-c", script], { env });
+    runShellCommand: async ({ script, stdin, args = [] }) => {
+      const child = spawn("/bin/sh", ["-c", script, "sandbox-http-test", ...args], { env });
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));

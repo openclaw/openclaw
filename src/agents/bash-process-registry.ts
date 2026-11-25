@@ -19,6 +19,7 @@ import { notifyListeners } from "../shared/listeners.js";
 import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -150,20 +151,30 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Runtime selected by the sandbox owner, including detached command cleanup. */
+  sandboxContainerName?: string;
   /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
-  /** Run whose exec call started this process; completion provenance only, never authority. */
-  originRunId?: string;
+  /** Systemd hosts the tree; the registry still owns observation and retention. */
+  durable?: {
+    observe: () => Promise<void>;
+    cancel: (assertCurrent?: () => void) => void;
+    remove: () => void;
+    finalize: () => Promise<void>;
+    drain: () => Promise<void>;
+  };
+  /** Run whose exec call started this process. A provenance fact for plugins; it routes nothing. */
+  startedByRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
-  assertExitNotificationAcceptanceCurrent?: () => void;
-  persistExitNotification?: () => Promise<void>;
-  exitNotificationPersistence?: Promise<void>;
-  clearExitNotification?: () => Promise<void>;
+  /** One-shot run (hidden subagent, cron run): the exit continues it only after sessions_yield. */
+  exitWakeAfterYield?: true;
+  /** sessions_yield awaits this command, so its exit resumes the yielded origin run. */
+  resumesYieldedRun?: true;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -195,6 +206,8 @@ export interface ProcessSession {
   /** Output prepared for a poll but not yet attached to the agent transcript. */
   pendingPollDelivery?: PendingPollDelivery;
   output: ProcessOutput;
+  /** Every output chunk in order, beyond the in-memory caps; kept only when the agent needs it. */
+  outputFile?: PrivateTempFileStream;
   readonly aggregated: string;
   readonly tail: string;
   exitCode?: number | null;
@@ -214,6 +227,12 @@ export interface ProcessSession {
   finalizing?: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** Explicit `background: true` service. */
+  independentService?: true;
+  /** A process a completed command left running, tracked by identity instead of a run. */
+  adopted?: {
+    stop: () => Promise<{ status: "stopped" } | { status: "uncertain"; reason: string }>;
+  };
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
 }
@@ -236,6 +255,7 @@ export function createProcessSession(
   };
 }
 
+const pollWaiters = new WeakMap<ProcessSession, Set<() => void>>();
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, ProcessSession & { endedAt: number; expiresAt: number }>();
 // Display uses start chronology; retained records are evicted in completion order.
@@ -250,9 +270,27 @@ const activeExecSessions = new Map<
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+let observeDurableProcesses: (() => Promise<void>) | undefined;
+
+/** Reuse the retention timer for bounded durable-unit observation. */
+export function setDurableProcessObserver(observer: (() => Promise<void>) | undefined) {
+  observeDurableProcesses = observer;
+  scheduleSweeper();
+}
+
+type ExitWakeRecorder = {
+  backgrounded: (session: ProcessSession) => void;
+  exited: (session: ProcessSession) => void;
+};
+let exitWakeRecorder: ExitWakeRecorder | undefined;
+
+/** The Gateway's durable store records wake-armed ordinary processes so a restart can report them. */
+export function setExitWakeRecorder(recorder: ExitWakeRecorder | undefined) {
+  exitWakeRecorder = recorder;
+}
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
-const pendingChanges = new Map<string, ProcessChange>();
+const pendingChanges = new Map<string, Set<string | undefined>>();
 let changeTimer: NodeJS.Timeout | undefined;
 
 /** Process observation is independent of the creating turn's lifetime. */
@@ -273,21 +311,26 @@ function queueProcessChange(session: ProcessSession) {
   if (!sessionKey || changeListeners.size === 0) {
     return;
   }
-  const target = { sessionKey, agentId: session.agentId };
-  pendingChanges.set(JSON.stringify([sessionKey, session.agentId]), target);
+  const agents = pendingChanges.get(sessionKey);
+  if (agents) {
+    agents.add(session.agentId);
+  } else {
+    pendingChanges.set(sessionKey, new Set([session.agentId]));
+  }
   // Bound chatty output to the former five-second polling cadence. Later writes
   // never postpone the signal, and no command text or output crosses this bus.
   changeTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       changeTimer = undefined;
-      const changes = [...pendingChanges.values()];
+      const changes = [...pendingChanges];
       pendingChanges.clear();
-      for (const change of changes) {
-        notifyListeners(changeListeners, change);
+      for (const [changedSessionKey, agentIds] of changes) {
+        for (const agentId of agentIds) {
+          notifyListeners(changeListeners, { sessionKey: changedSessionKey, agentId });
+        }
       }
-    }, 5_000),
+    }, 5_000).unref(),
   );
-  changeTimer.unref();
 }
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
@@ -303,6 +346,9 @@ export function addSession(session: ProcessSession) {
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
   if (session.backgrounded) {
     queueProcessChange(session);
+  }
+  if (session.durable) {
+    scheduleSweeper();
   }
 }
 
@@ -343,6 +389,7 @@ function deleteFinishedSession(id: string): boolean {
   }
   finishedSessions.delete(id);
   finishedSessionOutputChars -= session.output.length;
+  session.durable?.remove();
   queueProcessChange(session);
   return true;
 }
@@ -409,9 +456,11 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
+  session.outputFile?.write(chunk);
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
   }
@@ -470,9 +519,47 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   };
 }
 
-/** Returns whether a prior poll has output ready for immediate replay. */
-export function hasPendingPollDelivery(session: ProcessSession): boolean {
-  return session.pendingPollDelivery !== undefined;
+function wakeSessionPolls(session: ProcessSession) {
+  const waiters = pollWaiters.get(session);
+  if (waiters) {
+    for (const wake of waiters) {
+      wake();
+    }
+  }
+}
+
+/** Waits for this exact process's output, exit, timeout, or caller cancellation. */
+export function waitForSessionPoll(
+  session: ProcessSession,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (
+    session.exited ||
+    session.pendingPollDelivery ||
+    session.pendingStdoutChars + session.pendingStderrChars > 0 ||
+    session.pendingOutputDropped ||
+    signal?.aborted
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const waiters = pollWaiters.get(session) ?? new Set<() => void>();
+    const wake = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", wake);
+      waiters.delete(wake);
+      if (waiters.size === 0) {
+        pollWaiters.delete(session);
+      }
+      resolve();
+    };
+    // Retain one timer so a one-shot caller stays alive until the result arrives.
+    const timer = setTimeout(wake, timeoutMs);
+    waiters.add(wake);
+    pollWaiters.set(session, waiters);
+    signal?.addEventListener("abort", wake, { once: true });
+  });
 }
 
 /** Moves a session to finished state and records exit metadata. */
@@ -500,8 +587,10 @@ export function markExited(
   session.pendingOutputDropped = pending.outputDropped;
   session.output.freeze();
   moveToFinished(session);
+  wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.exited(session);
   }
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
@@ -533,13 +622,13 @@ export function markCancellationRequested(session: ProcessSession) {
 export function markBackgrounded(session: ProcessSession) {
   if (!session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.backgrounded(session);
   }
   session.backgrounded = true;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     active.promoted = true;
   }
-  session.exitNotificationPersistence ??= session.persistExitNotification?.();
 }
 
 /** Retains the precise completion-event removal handle on its process owner. */
@@ -564,11 +653,7 @@ export function acknowledgeNotifyOnExit(record: {
 }
 
 /** Retire notification custody without claiming that retained output was observed. */
-export function removeNotifyOnExit(record: {
-  notifyOnExitRemoval?: NotifyOnExitRemoval;
-  clearExitNotification?: () => Promise<void>;
-}): void {
-  void record.clearExitNotification?.();
+export function removeNotifyOnExit(record: { notifyOnExitRemoval?: NotifyOnExitRemoval }): void {
   const remove = record.notifyOnExitRemoval;
   if (!remove) {
     return;
@@ -580,19 +665,29 @@ export function removeNotifyOnExit(record: {
 /** Returns the number of live background exec sessions without exposing process details. */
 export function getActiveBackgroundExecSessionCount(): number {
   let count = 0;
-  for (const { promoted } of activeExecSessions.values()) {
-    if (promoted) {
+  for (const { promoted, session } of activeExecSessions.values()) {
+    if (promoted && !session.durable) {
       count += 1;
     }
   }
   return count;
 }
 
+// Handed off to keep running without OpenClaw; no cleanup remains to join.
+const releasedSessions = new WeakSet<ProcessSession>();
+
+export function markExecSessionReleased(session: ProcessSession): void {
+  releasedSessions.add(session);
+}
+
 /** Joins registered exec cleanup, including foreground and hidden processes. */
 export async function waitForExecScope(scopeKey: string): Promise<void> {
   while (true) {
     const pending = Array.from(activeExecSessions.values())
-      .filter(({ session }) => session.scopeKey === scopeKey)
+      .filter(
+        ({ session }) =>
+          session.scopeKey === scopeKey && !session.adopted && !releasedSessions.has(session),
+      )
       .map((active) => (active.settled ??= createDeferredCore()).promise);
     if (pending.length === 0) {
       return;
@@ -640,7 +735,7 @@ function moveToFinished(session: ProcessSession) {
   // Keep full completed logs; evict older records rather than silently
   // truncating the process poll/log contract or dropping the newest result.
   deleteFinishedSession(session.id);
-  const endedAt = Date.now();
+  const endedAt = session.endedAt ?? Date.now();
   finishedSessions.set(
     session.id,
     Object.assign(session, { endedAt, expiresAt: endedAt + session.cleanupMs }),
@@ -691,6 +786,7 @@ function resetProcessRegistryForTests() {
     active.settled?.resolve();
   }
   activeExecSessions.clear();
+  observeDurableProcesses = undefined;
   stopSweeper();
 }
 
@@ -710,10 +806,25 @@ function scheduleSweeper() {
       nextExpiration = Math.min(nextExpiration, session.expiresAt);
     }
   }
+  if (
+    observeDurableProcesses &&
+    [...activeExecSessions.values()].some(({ session }) => session.durable)
+  ) {
+    nextExpiration = Math.min(nextExpiration, now + 5_000);
+  }
   if (!Number.isFinite(nextExpiration)) {
     return;
   }
-  sweeper = setTimeout(scheduleSweeper, nextExpiration - now);
+  sweeper = runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      const observation = observeDurableProcesses?.();
+      if (observation) {
+        void observation.then(scheduleSweeper, scheduleSweeper);
+      } else {
+        scheduleSweeper();
+      }
+    }, nextExpiration - now),
+  );
   sweeper.unref();
 }
 

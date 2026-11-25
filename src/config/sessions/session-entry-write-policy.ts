@@ -17,9 +17,40 @@ export function applySessionEntryWritePolicy(
     profileInvolvement?: SessionEntry["profileInvolvement"];
     previousEntry?: SessionEntry | null;
     consumePendingReset?: boolean;
+    preserveVisibility?: boolean;
   },
 ): { entry: SessionEntry; previousEntry: SessionEntry | undefined } {
   let normalizedEntry = initialEntry;
+  if (
+    canonicalPreviousEntry?.sessionId !== normalizedEntry.sessionId ||
+    canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+    normalizedEntry.archivedAt !== undefined ||
+    normalizedEntry.incognito
+  ) {
+    delete normalizedEntry.resumeAfterRestart;
+    delete normalizedEntry.lifecycleRestartScope;
+    delete normalizedEntry.mainRestartRecovery;
+  } else {
+    // Public projections omit the shutdown marker and the run's restart resume scope;
+    // same-incarnation bookkeeping retains them.
+    if (!Object.hasOwn(normalizedEntry, "resumeAfterRestart")) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        ...(canonicalPreviousEntry.resumeAfterRestart
+          ? { resumeAfterRestart: canonicalPreviousEntry.resumeAfterRestart }
+          : {}),
+      };
+    }
+    if (
+      !Object.hasOwn(normalizedEntry, "lifecycleRestartScope") &&
+      canonicalPreviousEntry.lifecycleRestartScope
+    ) {
+      normalizedEntry = {
+        ...normalizedEntry,
+        lifecycleRestartScope: canonicalPreviousEntry.lifecycleRestartScope,
+      };
+    }
+  }
   if (
     canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
     canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
@@ -85,6 +116,17 @@ export function applySessionEntryWritePolicy(
     const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
     normalizedEntry = forkEntry;
   }
+  // Authenticated sources belong to this logical node's people, not its transcript generation.
+  // Writers that omit the private field keep the committed sources; a fork starts without them.
+  const operatorSources = Object.hasOwn(normalizedEntry, "operatorSources")
+    ? normalizedEntry.operatorSources
+    : canonicalPreviousEntry?.operatorSources;
+  if (operatorSources && (canonicalPreviousEntry || options.allowStoredAliases)) {
+    normalizedEntry = { ...normalizedEntry, operatorSources };
+  } else if (Object.hasOwn(normalizedEntry, "operatorSources")) {
+    const { operatorSources: _forkSources, ...entryWithoutSources } = normalizedEntry;
+    normalizedEntry = entryWithoutSources;
+  }
   const previousEntry =
     options.previousEntry === undefined
       ? canonicalPreviousEntry
@@ -98,12 +140,13 @@ export function applySessionEntryWritePolicy(
     // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
     normalizedEntry.updatedAt = 0;
   }
-  // The lifecycle-selected entry owns visibility copy-forward semantics.
+  // Fresh child installation can retain its current audience; other replacements clear it.
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
-    delete normalizedEntry.visibility;
-  }
-  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
-    delete normalizedEntry.pendingExecNotifications;
+    if (options.preserveVisibility && canonicalPreviousEntry?.visibility !== undefined) {
+      normalizedEntry.visibility = canonicalPreviousEntry.visibility;
+    } else {
+      delete normalizedEntry.visibility;
+    }
   }
   return { entry: normalizedEntry, previousEntry };
 }

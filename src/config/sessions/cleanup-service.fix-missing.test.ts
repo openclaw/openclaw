@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { setCleanupDeleteFault } from "./cleanup-service.delete-fault.test-support.js";
 import { runSessionsCleanup, type SessionsCleanupOptions } from "./cleanup-service.js";
@@ -171,7 +171,7 @@ it("recreates every derived file from pending canonical archives after commit", 
       path.basename(candidate).startsWith(`${sessionId}.jsonl.deleted.`),
     );
     expect(archivePath).toBeTruthy();
-    expect(readSessionArchiveContentSync(archivePath ?? "")).toBe(`${rawEventJson(sessionId)}\n`);
+    expect(readSessionArchiveText(archivePath ?? "")).toBe(`${rawEventJson(sessionId)}\n`);
   }
   const statuses = sql(
     `SELECT session_id, published_at, publish_attempts, last_publish_error
@@ -270,7 +270,7 @@ it("reclassifies a rewritten generation after a warmed message-bearing inspectio
   expect(loadSessionEntry(scope)).toBeUndefined();
   const published = archives();
   expect(published).toHaveLength(1);
-  expect(readSessionArchiveContentSync(published[0]!)).toContain("replacement-generation");
+  expect(readSessionArchiveText(published[0]!)).toContain("replacement-generation");
 });
 
 it.each([false, true])(

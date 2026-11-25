@@ -14,15 +14,19 @@ import {
   type BackupResourceInventory,
   type BackupResourcePlan,
 } from "../commands/backup-resource-inventory.js";
+import type { BackupManifestPostgresAnchor } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawRegisteredAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertOpenClawStateDatabaseOwner } from "../state/openclaw-state-db-maintenance.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -35,11 +39,13 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
+import type { ReportBackupProgress, BackupProgressStage } from "./backup-progress.js";
 import {
   assertBackupSqliteSourceGroup,
   captureBackupSqliteSourceGroup,
-  planBackupSqliteSourceGroups,
+  planBackupSqliteSources,
   type BackupSqliteSourceGroup,
+  type CanonicalSqliteSource,
 } from "./backup-sqlite-source-groups.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
@@ -58,6 +64,10 @@ import {
   SQLITE_SIDECAR_SUFFIXES,
 } from "./sqlite-files.js";
 import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
+import {
+  assertDeferredSqliteContent,
+  type DeferredSqliteContentCheck,
+} from "./sqlite-snapshot-file.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
@@ -85,27 +95,12 @@ function findLegacyAuditBackupStateChange(
   );
 }
 
-type CanonicalSqliteSource = {
-  archiveSourcePath: string;
-  identity: BigIntStats;
-  sourcePath: string;
-} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
-
 // The sealed inventory also bounds header answers to one backup capture.
 const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
 
 function stripSqliteSidecarSuffix(sourcePath: string): string {
   const sidecarSuffix = SQLITE_SIDECAR_SUFFIXES.find((suffix) => sourcePath.endsWith(suffix));
   return sidecarSuffix ? sourcePath.slice(0, -sidecarSuffix.length) : sourcePath;
-}
-
-function headerAnswers(inventory: BackupResourceInventory): Map<string, boolean> {
-  let answers = sqliteHeaderAnswers.get(inventory);
-  if (!answers) {
-    answers = new Map();
-    sqliteHeaderAnswers.set(inventory, answers);
-  }
-  return answers;
 }
 
 export function classifyBackupSqliteSource(
@@ -128,7 +123,7 @@ export function classifyBackupSqliteSource(
     return nameTrusted ? "excluded" : undefined;
   }
   if (!transient && !nameTrusted) {
-    const answers = headerAnswers(inventory);
+    const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, inventory);
     if (!answers.has(databasePath)) {
       for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
         answers.set(pathname, sqlite);
@@ -213,7 +208,7 @@ async function discoverBackupSqliteSources(params: {
 
   // One isolated read batch serves discovery and archive traversal. Include
   // visited directories so traversal never launches a probe for each directory.
-  const answers = headerAnswers(params.inventory);
+  const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, params.inventory);
   const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
     .map(stripSqliteSidecarSuffix)
     .filter((pathname) => !pathname.endsWith(".sqlite"));
@@ -306,60 +301,29 @@ export async function discoverBackupDatabasePaths(params: {
   return [...new Set(existing)].toSorted();
 }
 
-async function planBackupSqliteSources(
-  inventory: BackupResourceInventory,
-  snapshotPaths: readonly string[],
-) {
-  const sources: Array<{
-    archiveSourcePath: string;
-    path: string;
-    identity: BigIntStats;
-    canonicalSource: CanonicalSqliteSource | undefined;
-  }> = [];
-  for (const archiveSourcePath of snapshotPaths) {
-    const identity = await fs.stat(archiveSourcePath, { bigint: true });
-    const owner = inventory.resolveSqliteSource(archiveSourcePath, identity);
-    if (!owner || owner.role === "unresolvable-link") {
-      throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
-    }
-    let canonicalSource: CanonicalSqliteSource | undefined;
-    if (owner.role !== "plugin") {
-      if (!owner.identity || !sameFileIdentity(owner.identity, identity)) {
-        throw new Error(`Canonical SQLite path changed after discovery: ${archiveSourcePath}`);
-      }
-      canonicalSource = {
-        ...owner,
-        archiveSourcePath: owner.sourcePath,
-        sourcePath: await fs.realpath(owner.sourcePath),
-        identity: owner.identity,
-      };
-      assertNotUpdateCapturePath(canonicalSource.sourcePath, inventory.stateDir);
-    }
-    sources.push({
-      archiveSourcePath,
-      path: canonicalSource ? await fs.realpath(archiveSourcePath) : archiveSourcePath,
-      identity,
-      canonicalSource,
-    });
-  }
-  return { sources, groups: await planBackupSqliteSourceGroups(sources) };
-}
-
 export async function createBackupSqliteSnapshotPlan(params: {
   resources: BackupResourcePlan;
   tempDir: string;
   legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
   legacyAuditDatabaseWitness?: string;
+  /** Only in an isolated backup process; preserves source artifacts and snapshot row IDs. */
+  preserveSourceArtifacts?: boolean;
+  localCompanion?: boolean;
+  onProgress?: ReportBackupProgress;
 }): Promise<{
   inventory: BackupResourceInventory;
   snapshots: SqliteBackupAsset[];
   postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
+  postgresAnchors: BackupManifestPostgresAnchor[];
   discoveredSourcePaths: Set<string>;
   sharedDatabaseSourcePath?: string;
+  deferredContentChecks: Map<string, DeferredSqliteContentCheck>;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
+  const deferredContentChecks = new Map<string, DeferredSqliteContentCheck>();
   const snapshots: SqliteBackupAsset[] = [];
   const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
+  const postgresAnchors: BackupManifestPostgresAnchor[] = [];
   let sharedDatabaseSourcePath: string | undefined;
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
@@ -392,12 +356,59 @@ export async function createBackupSqliteSnapshotPlan(params: {
     assertNotUpdateCapturePath(archiveSourcePath, params.resources.stateDir);
     assertNotUpdateCapturePath(sourceDatabasePath, params.resources.stateDir);
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    const stages = {
+      "source-acquisition": "sqlite-source-acquisition",
+      "source-integrity": "sqlite-source-integrity",
+      "online-copy": "sqlite-online-copy",
+      vacuum: "sqlite-vacuum",
+      hash: "sqlite-hash",
+      "published-integrity": "sqlite-published-integrity",
+    } as const satisfies Record<string, BackupProgressStage>;
+    let currentStage: keyof typeof stages = "online-copy";
     let hasPostgresAnchor: boolean | undefined;
     try {
-      const capture = () =>
-        createVerifiedSqliteSnapshot({
+      const capture = async () => {
+        const snapshot = await createVerifiedSqliteSnapshot({
           sourcePath: sourceDatabasePath,
           targetPath: sourcePath,
+          deferPublishedContentCheck: true,
+          ...(params.onProgress
+            ? {
+                onStage: (stage: keyof typeof stages, phase: "start" | "done", bytes: number) => {
+                  if (phase === "start") {
+                    currentStage = stage;
+                  }
+                  params.onProgress?.({
+                    stage: stages[stage],
+                    phase,
+                    ...(phase === "start" ? { sourceBytes: bytes } : { bytes }),
+                  });
+                },
+                onProgress: ({
+                  totalPages,
+                  remainingPages,
+                }: import("node:sqlite").BackupProgressInfo) => {
+                  if (totalPages > 0) {
+                    params.onProgress?.({
+                      stage: stages[currentStage],
+                      phase: "progress",
+                      pages: totalPages - remainingPages,
+                      totalPages,
+                    });
+                  }
+                },
+              }
+            : {}),
+          ...(params.preserveSourceArtifacts
+            ? {
+                sourceAcquisition: {
+                  mode: "isolated-process" as const,
+                  stagingRoot: params.tempDir,
+                  preserveSourceArtifacts: true,
+                },
+                preserveRowIds: true,
+              }
+            : {}),
           requireNonEmptySource: Boolean(canonicalSource),
           validate: canonicalSource
             ? (database, pathname) => {
@@ -419,6 +430,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
             hasPostgresAnchor ??= readEngineAnchor(database) !== undefined;
             // Anchors are verified and captured with their PostgreSQL data below.
             if (hasPostgresAnchor) {
+              return;
+            }
+            if (params.localCompanion && canonicalSource?.role === "client") {
               return;
             }
             if (canonicalSource?.role === "global") {
@@ -453,13 +467,33 @@ export async function createBackupSqliteSnapshotPlan(params: {
             });
           },
         });
+        if (snapshot.deferredContentCheck) {
+          deferredContentChecks.set(path.resolve(sourcePath), {
+            identity: snapshot.deferredContentCheck.identity,
+            content: { sha256: snapshot.sha256, sizeBytes: snapshot.sizeBytes },
+          });
+        }
+      };
       const capturedPath = capturedSnapshots.get(sourceGroup);
       // Alias staging reuses the private image but still validates its journal binding.
-      await captureBackupSqliteSourceGroup(sourceGroup, () =>
-        capturedPath
-          ? fs.copyFile(capturedPath, sourcePath, fs.constants.COPYFILE_EXCL)
-          : capture(),
-      );
+      await captureBackupSqliteSourceGroup(sourceGroup, async () => {
+        if (capturedPath) {
+          const check = deferredContentChecks.get(path.resolve(capturedPath));
+          if (check) {
+            await assertDeferredSqliteContent(capturedPath, check);
+          }
+          await fs.copyFile(capturedPath, sourcePath, fs.constants.COPYFILE_EXCL);
+          // Keep both comparisons: a pre-copy check does not cover a mutation during copying.
+          if (check) {
+            deferredContentChecks.set(path.resolve(sourcePath), {
+              identity: await fs.lstat(sourcePath, { bigint: true }),
+              content: check.content,
+            });
+          }
+        } else {
+          await capture();
+        }
+      });
       capturedSnapshots.set(sourceGroup, sourcePath);
     } catch (error) {
       const stateChange = findLegacyAuditBackupStateChange(error);
@@ -471,7 +505,26 @@ export async function createBackupSqliteSnapshotPlan(params: {
         { cause: error },
       );
     }
-    if (readBackupEngineImage(sourcePath, sourceDatabasePath).engine === "postgres") {
+    const engine = readBackupEngineImage(sourcePath, sourceDatabasePath);
+    if (engine.engine === "postgres" && params.localCompanion) {
+      postgresAnchors.push({
+        sourcePath: archiveSourcePath,
+        storeId: engine.storeId,
+        namespace: engine.namespace,
+      });
+      if (canonicalSource?.role === "global") {
+        capturedAgents = (
+          await inspectOpenClawRegisteredAgentDatabases({
+            env: { ...process.env, OPENCLAW_STATE_DIR: params.resources.stateDir },
+            includeIncompatibleSchemaVersions: true,
+          })
+        ).map(({ agentId, path: registeredPath }) => ({
+          role: "agent" as const,
+          agentId,
+          sourcePath: registeredPath,
+        }));
+      }
+    } else if (engine.engine === "postgres") {
       const directory = path.join(
         `${sourcePath}.postgres`,
         path.basename(`${archiveSourcePath}.postgres`),
@@ -577,6 +630,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
       }),
     },
     {
+      role: "services",
+      sourcePath: resolveDaemonRuntimePinStorePath({
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
+    {
       role: "quarantine" as const,
       sourcePath: resolveQuarantineStorePath({
         ...process.env,
@@ -649,7 +708,9 @@ export async function createBackupSqliteSnapshotPlan(params: {
     inventory,
     snapshots,
     postgresSnapshots,
+    postgresAnchors,
     discoveredSourcePaths: discovery.discoveredSourcePaths,
     sharedDatabaseSourcePath,
+    deferredContentChecks,
   };
 }

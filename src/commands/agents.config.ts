@@ -42,7 +42,7 @@ export type AgentSummary = {
   bindingDetails?: string[];
   routes?: string[];
   providers?: string[];
-  createdVia?: "operator" | "agent" | "claw";
+  createdVia?: "operator" | "agent" | "template";
   creatorAgentId?: string | null;
   createdAt?: number;
   isDefault: boolean;

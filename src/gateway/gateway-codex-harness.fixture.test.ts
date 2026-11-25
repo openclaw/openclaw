@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexHarnessReply,
   createCodexHarnessLiveInstance,
   createCodexHarnessEventCapture,
+  logCodexHarnessTurnMeasurement,
   readCodexNativeUsageSnapshots,
   CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
 } from "../../test/helpers/gateway-codex-harness.js";
@@ -122,6 +124,32 @@ describe("native Codex fixture boundaries", () => {
       "usage",
     ]);
     expect(capture.firstAssistantMs).toBe(25);
+    let measurement: Record<string, unknown> | undefined;
+    logCodexHarnessTurnMeasurement(
+      "fixture",
+      {
+        runId: "run-a",
+        text: "first",
+        events: capture.events,
+        capture,
+        elapsedMs: 25,
+        firstAssistantMs: 25,
+        compactionCount: 0,
+      },
+      (step, details) => {
+        expect(step).toBe("turn-measurement");
+        measurement = details;
+      },
+    );
+    expect(measurement).toMatchObject({
+      label: "fixture",
+      elapsedMs: 25,
+      timeToFirstAssistantMs: 25,
+      activeContextTokens: 300_010,
+      promptTokens: 300_000,
+      modelContextWindow: 875_900,
+      compactionCount: 1,
+    });
     const guardian = createCodexHarnessEventCapture({
       sessionKey: "session-a",
       includeAllSessions: true,
@@ -135,5 +163,106 @@ describe("native Codex fixture boundaries", () => {
       data: { phase: "completed" },
     });
     expect(guardian.events).toHaveLength(1);
+  });
+  it("retains bounded content-free failure evidence before rejecting a reply", () => {
+    const capture = createCodexHarnessEventCapture({
+      sessionKey: "session-a",
+      eventPrefix: "codex_app_server.",
+    });
+    capture.start(100, "run-a");
+    const emit = (stream: string, data: Record<string, unknown>, runId = "run-a") =>
+      capture.onAgentEvent({ runId, seq: 1, ts: 125, stream, data, sessionKey: "session-a" });
+    emit("codex_app_server.lifecycle", {
+      phase: "turn_starting",
+      threadId: "thread-a",
+      turnId: "turn-a",
+      model: "private-model",
+    });
+    emit("assistant", { text: "PRIVATE-ASSISTANT", delta: "PRIVATE-DELTA" });
+    emit("tool", {
+      phase: "result",
+      isError: true,
+      args: { password: "PRIVATE-ARGS" },
+      result: "PRIVATE-RESULT",
+    });
+    emit("lifecycle", { phase: "error", error: "PRIVATE-ERROR" });
+    const reports: string[] = [];
+    expect(() =>
+      assertCodexHarnessReply(
+        { runId: "run-a", capture, report: (line) => reports.push(line) },
+        () => expect("wrong").toContain("expected"),
+      ),
+    ).toThrow();
+    expect(reports).toHaveLength(1);
+    const report = reports[0];
+    if (report === undefined) {
+      throw new Error("Expected failure evidence before the assertion");
+    }
+    const evidence = JSON.parse(report);
+    expect(evidence.runId).toBe("run-a");
+    expect(evidence.events.map((event: { stream: string }) => event.stream)).toEqual([
+      "codex_app_server.lifecycle",
+      "assistant",
+      "tool",
+      "lifecycle",
+    ]);
+    expect(evidence.events[0]).toMatchObject({ threadId: "thread-a", turnId: "turn-a" });
+    expect(evidence.events[1]).toMatchObject({ textLength: 17, deltaLength: 13 });
+    expect(evidence.events[2]).toMatchObject({ isError: true });
+    expect(report).not.toMatch(/PRIVATE|private-model/);
+    reports.length = 0;
+    assertCodexHarnessReply({ runId: "run-a", capture, report: (line) => reports.push(line) }, () =>
+      expect("expected").toContain("expected"),
+    );
+    expect(reports).toEqual([]);
+    for (let index = 0; index < 300; index++) {
+      emit("codex_app_server.diagnostic", { phase: "notification", index });
+    }
+    expect(capture.failureEvidence("run-a").identity).toMatchObject({
+      threadId: "thread-a",
+      turnId: "turn-a",
+    });
+    expect(capture.failureEvidence("run-a").events).toHaveLength(128);
+    expect(capture.failureEvidence("run-a").droppedEvents).toBe(176);
+    expect(capture.failureEvidence("other-run").events).toEqual([]);
+    expect(capture.events).toHaveLength(1);
+  });
+  it.each([
+    {
+      name: "substring",
+      match: "prefix expected suffix",
+      assert: (text: string) => expect(text).toContain("expected"),
+    },
+    {
+      name: "trimmed exact",
+      match: " expected ",
+      assert: (text: string) => expect(text.trim()).toBe("expected"),
+    },
+    {
+      name: "pattern",
+      match: "permission denied",
+      assert: (text: string) => expect(text).toMatch(/permission|denied/),
+    },
+  ])("retains the caller's $name reply contract with failure evidence", ({ match, assert }) => {
+    const capture = createCodexHarnessEventCapture({ sessionKey: "session-a" });
+    capture.start(100, "run-a");
+    const reports: string[] = [];
+    const params = { runId: "run-a", capture, report: (line: string) => reports.push(line) };
+    expect(() => assertCodexHarnessReply(params, () => assert(""))).toThrow();
+    expect(reports).toHaveLength(1);
+    const report = reports[0];
+    if (report === undefined) {
+      throw new Error("Expected the caller assertion to report failure evidence");
+    }
+    expect(JSON.parse(report)).toMatchObject({ runId: "run-a", events: [] });
+    reports.length = 0;
+    assertCodexHarnessReply(params, () => assert(match));
+    expect(reports).toEqual([]);
+    const error = new Error("caller assertion");
+    expect(() =>
+      assertCodexHarnessReply(params, () => {
+        throw error;
+      }),
+    ).toThrow(error);
   });
 });

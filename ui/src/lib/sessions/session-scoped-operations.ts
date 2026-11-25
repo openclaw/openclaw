@@ -1,8 +1,4 @@
 import type { GatewaySessionMessageSubscriptionOptions } from "@openclaw/gateway-client/browser";
-import type {
-  SessionsRecoverParams,
-  SessionsRecoverResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import { takeEarlyGatewaySubscription } from "../../api/gateway-boot.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -13,6 +9,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
+  SessionWorkspaceStatResult,
 } from "../../api/types.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import { buildSessionRequestParams } from "./session-requests.ts";
@@ -28,8 +25,6 @@ type SessionScopedOperationsHost = {
   connection: SessionConnectionOwner;
   gateway: SessionGateway;
   reconcileMutation: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
-  notifyCreated: (key: string) => void;
-  reportError: (error: unknown) => void;
 };
 
 function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
@@ -84,6 +79,17 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       sessionKey: key,
       path,
       ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
+
+  const statFiles = (
+    key: string,
+    files: { path: string; messageEntryId?: string }[],
+    options: { agentId?: string | null } = {},
+  ) =>
+    requestCurrent<SessionWorkspaceStatResult>("sessions.files.stat", {
+      sessionKey: key,
+      files,
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
 
@@ -189,36 +195,9 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     getFile,
     listBranches,
     listFiles,
-    async recover(params: SessionsRecoverParams): Promise<SessionsRecoverResult | null> {
-      const scope = host.connection.capture();
-      if (!scope) {
-        return null;
-      }
-      try {
-        const result = await scope.client.request<SessionsRecoverResult>(
-          "sessions.recover",
-          params,
-        );
-        if (!result?.key?.trim() || !result?.sessionId?.trim()) {
-          throw new Error("sessions.recover returned no session identity");
-        }
-        if (!host.connection.isCurrent(scope)) {
-          return null;
-        }
-        if (!areUiSessionKeysEquivalent(result.key, params.key)) {
-          host.notifyCreated(result.key);
-        }
-        await host.reconcileMutation(params.agentId);
-        return host.connection.isCurrent(scope) ? result : null;
-      } catch (error) {
-        if (host.connection.isCurrent(scope)) {
-          host.reportError(error);
-        }
-        return null;
-      }
-    },
     rewind,
     setFile,
+    statFiles,
     async subscribeMessages(
       key: string,
       options: GatewaySessionMessageSubscriptionOptions = {},
@@ -242,7 +221,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       }
       const normalizedKey = key.trim();
       const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
-      const { mode, includeApprovals, initialHistory } = options;
+      const { mode, includeApprovals, includeLiveToolOutput, initialHistory } = options;
       const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
       if (!isCurrent()) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -256,9 +235,10 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
           })
           .acquire(normalizedKey, {
             agentId,
-            ...(includeApprovals ? { includeApprovals: true } : {}),
-            ...(mode ? { mode } : {}),
-            ...(initialHistory ? { initialHistory } : {}),
+            includeApprovals,
+            includeLiveToolOutput,
+            mode,
+            initialHistory,
           }));
       ownedSubscriptions.add(subscription);
       if (!isCurrent() || (beforeHello && host.gateway.snapshot.phase !== "connected")) {

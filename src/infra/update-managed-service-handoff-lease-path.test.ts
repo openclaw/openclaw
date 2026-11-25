@@ -34,7 +34,7 @@ it.skipIf(process.platform === "win32")(
         lstatSync: (directory) => ({
           isDirectory: () => true,
           isSymbolicLink: () => false,
-          mode: 0o40700,
+          mode: directory === "/tmp" ? 0o40775 : 0o40700,
           uid: directory === "/tmp/openclaw" ? sharedOwner : 501,
         }),
       }),

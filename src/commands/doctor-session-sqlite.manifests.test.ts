@@ -9,8 +9,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { assertSessionStoreMigrationComplete as assertMigrated } from "../config/sessions/startup-migration.js";
+import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   assertSafeSessionSqliteMigrationMove,
+  readSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { restoreSessionSqliteMigrationRun as restoreRun } from "./doctor-session-sqlite-restore.js";
@@ -53,6 +55,119 @@ async function createImportedManifest() {
 function archiveFile(sessionsDir: string, name: string) {
   return path.join(path.dirname(sessionsDir), "session-sqlite-import-archive", name);
 }
+
+it("archives long Matrix thread keys with bounded names and restores their original bytes", async () => {
+  const store = createLegacyStore({ transcriptLines: RECOVERY_TRANSCRIPT_LINES });
+  const sessionKey = `agent:main:matrix:channel:${"room".repeat(32)}:thread:${"event".repeat(32)}`;
+  const transcriptPath = path.join(store.sessionDir, `${"session".repeat(24)}-é.jsonl`);
+  const trajectoryPath = transcriptPath.replace(/\.jsonl$/, ".trajectory.jsonl");
+  fs.renameSync(store.transcriptPath, transcriptPath);
+  fs.renameSync(store.trajectoryPath, trajectoryPath);
+  writeJson(store.storePath, {
+    [sessionKey]: { sessionId: "session-1", updatedAt: 2000, sessionFile: transcriptPath },
+  });
+  const originals = new Map(
+    [transcriptPath, trajectoryPath, store.storePath].map((file) => [
+      canonicalTestPath(file),
+      fs.readFileSync(file, "utf8"),
+    ]),
+  );
+
+  const { imported, manifestPath, target } = await importManifest(store);
+
+  expect(imported.targets[0]?.issues).toEqual([]);
+  for (const [sourcePath, bytes] of originals) {
+    const move = expectDefined(
+      target.completedMoves.find((candidate) => candidate.sourcePath === sourcePath),
+      "archived original",
+    );
+    expect(Buffer.byteLength(path.basename(move.archivePath), "utf8")).toBeLessThanOrEqual(255);
+    expectFiles(bytes, move.archivePath);
+  }
+  expect(new Set(target.completedMoves.map((move) => move.archivePath)).size).toBe(
+    target.completedMoves.length,
+  );
+  expect(target.completedMoves.filter((move) => move.sessionKey === sessionKey)).toHaveLength(2);
+  const artifactNames = target.completedMoves
+    .filter((move) => move.sessionKey === sessionKey)
+    .map((move) => path.basename(move.archivePath));
+  expect(artifactNames.every((name) => /\.[a-f0-9]{16}\.imported-/.test(name))).toBe(true);
+  expect((await importLegacyStore(store)).totals.importedTranscriptEvents).toBe(0);
+  const restored = await restoreRun({
+    manifestPath,
+    trustedTargets: [trustedMigrationTarget(store)],
+  });
+  expect(restored.conflicts).toEqual([]);
+  for (const [file, bytes] of originals) {
+    expectFiles(bytes, file);
+  }
+});
+
+it("repairs a retained receipt with an impossible 262-byte destination without losing originals", async () => {
+  const store = createLegacyStore({ transcriptLines: RECOVERY_TRANSCRIPT_LINES });
+  const sourcePath = fs.realpathSync.native(store.transcriptPath);
+  const original = fs.readFileSync(sourcePath, "utf8");
+  const move = {
+    kind: "transcript",
+    sessionKey: "agent:main:main",
+    sourcePath,
+    archivePath: archiveFile(
+      path.dirname(sourcePath),
+      `${"a".repeat(233)}.jsonl.imported-1788844747943`,
+    ),
+    artifact: {
+      identity: readMigrationArtifactIdentity(sourcePath),
+      classification: "imported",
+      reason: "verified-import",
+      dependencies: [],
+      disposal: { state: "retained" },
+    },
+  };
+  expect(Buffer.byteLength(path.basename(move.archivePath))).toBe(262);
+  const receipt = {
+    manifestVersion: 3,
+    openClawVersion: "2026.10.8",
+    runId: "session-sqlite-long-path",
+    startedAt: "2026-10-08T00:00:00.000Z",
+    targets: [
+      {
+        ...trustedMigrationTarget(store),
+        storePath: fs.realpathSync.native(store.storePath),
+        sqlitePath: canonicalTestPath(trustedMigrationTarget(store).sqlitePath),
+        validationBeforeArchive: "passed",
+        plannedMoves: [move],
+        completedMoves: [],
+        issues: [],
+      },
+    ],
+  };
+  const receiptPath = path.join(
+    resolveSessionSqliteMigrationRunsDir(store.env),
+    `${receipt.runId}.json`,
+  );
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  writeJson(receiptPath, receipt);
+  const receiptBytes = fs.readFileSync(receiptPath, "utf8");
+  expect(readSessionSqliteMigrationManifest(receiptPath)?.targets[0]?.plannedMoves).toHaveLength(1);
+
+  expect((await runStoreDoctor(store, "dry-run")).totals.issues).toBe(0);
+  expectFiles(original, sourcePath);
+  const { imported, manifestPath, target } = await importManifest(store);
+  expect(imported.targets[0]?.issues).toEqual([]);
+  const archived = expectDefined(
+    target.completedMoves.find((candidate) => candidate.sourcePath === sourcePath),
+    "archived transcript",
+  );
+  expectFiles(original, archived.archivePath);
+  expectFiles(receiptBytes, receiptPath);
+  expect((await runStoreDoctor(store, "dry-run")).totals.issues).toBe(0);
+  const restored = await restoreRun({
+    manifestPath,
+    trustedTargets: [trustedMigrationTarget(store)],
+  });
+  expect(restored.conflicts).toEqual([]);
+  expectFiles(original, sourcePath);
+});
 
 it.each([
   ["missing row", undefined, 0, false, "sqlite_entry_missing", 0, 0],

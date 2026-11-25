@@ -61,7 +61,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       );
       return null;
     }
-    if (payload.isReasoning || payload.isCommentary) {
+    if (payload.isReasoning || payload.isCommentary || payload.isCompactionNotice) {
       return payload;
     }
     if (
@@ -200,7 +200,6 @@ export function createDiscordMessageReplyRuntime(params: {
     discordConfig,
     accountId,
     abortSignal: ctx.abortSignal,
-    isPolicyCurrent: ctx.isPolicyCurrent,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,

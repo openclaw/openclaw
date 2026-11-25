@@ -1,5 +1,6 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
 import fs from "node:fs";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
@@ -70,7 +71,7 @@ export function formatQuickstartGatewaySummary(
     ...(defaults.bind === "custom" && defaults.customBindHost
       ? [
           t("wizard.setup.quickstartGatewayCustomIp", {
-            host: defaults.customBindHost,
+            host: terminalText`${defaults.customBindHost}`,
           }),
         ]
       : []),

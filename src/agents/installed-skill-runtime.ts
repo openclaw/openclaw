@@ -1,7 +1,9 @@
+import path from "node:path";
 import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
 } from "../skills/loading/config.js";
+import { prepareSkillResourceRoot } from "../skills/runtime/refresh.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
@@ -17,6 +19,7 @@ export function prepareInstalledSkillCatalog(params: {
   workspaceDir: string;
   sandbox?: SandboxContext | null;
   assertCurrent?: () => void;
+  instructionDelivery?: InstalledSkill["instructionDelivery"];
 }): InstalledSkill[] {
   const { snapshot, sandbox } = params;
   if (!snapshot) {
@@ -48,6 +51,7 @@ export function prepareInstalledSkillCatalog(params: {
         !isSkillSecretOwnerUnavailable(keys.get(skill.name) ?? skill.name),
     )
     .map((skill) => {
+      const fileHost = resolveSkillFileHost(skill);
       const resource = deliveredByName.get(skill.name);
       const deliveredContent =
         resource?.filePath === skill.filePath ? resource.readContent : undefined;
@@ -80,8 +84,8 @@ export function prepareInstalledSkillCatalog(params: {
         readSearchContent = readInstructions;
       } else if (
         workspace?.loadSkills &&
-        (resolveSkillFileHost(skill) === "workspace" ||
-          (resolveSkillFileHost(skill) !== "gateway" &&
+        (fileHost === "workspace" ||
+          (fileHost !== "gateway" &&
             !snapshot.librarySelections?.some((selection) => selection.name === skill.name)))
       ) {
         reader = async ({ signal }) => {
@@ -100,7 +104,23 @@ export function prepareInstalledSkillCatalog(params: {
         // This resource owner supports whole reads only. Its document bridge
         // is not a substitute for bounded skill-resource authority.
       }
+      const resourceRoot =
+        !sandbox?.enabled &&
+        !reader &&
+        fileHost !== "workspace" &&
+        (fileHost === "gateway" || !workspace?.loadSkills) &&
+        path.isAbsolute(skill.filePath)
+          ? prepareSkillResourceRoot(path.dirname(skill.filePath), skill.resourceRootIdentity)
+          : undefined;
+      // Missing admission must not create an unhandled rejection before a companion read.
+      void resourceRoot?.catch(() => undefined);
+      const contentHash =
+        sandbox?.enabled && typeof deliveredContent === "string"
+          ? resource?.contentHash
+          : skill.contentHash;
       return {
+        instructionDelivery: params.instructionDelivery,
+        catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),
         description: [skill.description, skill.locationNote].filter(Boolean).join("\n"),
@@ -111,6 +131,7 @@ export function prepareInstalledSkillCatalog(params: {
           readContent: sandbox?.enabled ? deliveredContent : skill.readContent,
         },
         reader,
+        resourceRoot,
         assertCurrent,
         readSearchContent,
       };

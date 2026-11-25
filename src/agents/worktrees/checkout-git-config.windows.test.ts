@@ -29,20 +29,58 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./git.js", () => ({
   requireGit: async (_cwd: string, args: string[]) =>
     args.includes("--git-common-dir") ? fixture.common : "sha1",
+  requireGitPath: async () => fixture.common,
   runGit: fixture.run,
   runGitBytes: fixture.run,
   runGitBuffered: fixture.run,
   commandError: () => new Error("Git failed"),
 }));
-// mock-isolation: path conversion/spawning are separate from the real junction/copy proof.
-vi.mock("../../infra/git-exec.js", () => ({
-  normalizeGitPathForFilesystem: (value: string) => value,
-  gitNullConfigPath: () => "NUL",
-  requireGitCommandOutput: () => "",
-}));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+it("checks the shared caller once per Git attempt and retains distinct caller and scope fences", async () => {
+  const root = dirs.make("git-authority-");
+  fixture.common = path.join(root, "common");
+  await fs.mkdir(fixture.common);
+  fixture.beforeProcess = async () => {};
+  const caller = new AbortController();
+  const scope = new AbortController();
+  const assertCaller = vi.fn(() => caller.signal.throwIfAborted());
+  let otherCurrent = true;
+  const assertOther = vi.fn(() => {
+    if (!otherCurrent) {
+      throw new Error("distinct caller stale");
+    }
+  });
+  let retained: (() => void) | undefined;
+  await withWorktreeGitConfig(
+    root,
+    true,
+    { beforeRun: assertCaller, signal: scope.signal },
+    async (git) => {
+      for (const beforeRun of [assertCaller, assertOther]) {
+        await git.run(root, ["status"], { beforeRun });
+        retained = fixture.run.mock.calls.at(-1)![2]!.beforeRun;
+        assertCaller.mockClear();
+        assertOther.mockClear();
+        retained!();
+        expect(assertCaller).toHaveBeenCalledOnce();
+        expect(assertOther).toHaveBeenCalledTimes(beforeRun === assertOther ? 1 : 0);
+      }
+      await Promise.resolve();
+      otherCurrent = false;
+      expect(retained).toThrow("distinct caller stale");
+      otherCurrent = true;
+      caller.abort(new Error("caller replaced"));
+      expect(retained).toThrow("caller replaced");
+      scope.abort(new Error("scope aborted"));
+      expect(retained).toThrow("scope aborted");
+    },
+  );
+  expect(retained).toThrow();
+});
+
 it("isolates copied metadata per Windows process and keeps views until in-flight work settles", async () => {
+  fixture.views = [];
   const root = dirs.make("windows-git-view-");
   fixture.common = path.join(root, "common");
   for (const name of ["objects", "refs", "worktrees"]) {

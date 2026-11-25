@@ -104,7 +104,7 @@ function source(
   return createApplicationGateway({
     client,
     phase: "connected",
-    hello: gatewayHelloForMethods(["system.info"]),
+    hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
     sessionKey: "main",
   } as ApplicationGatewaySnapshot);
 }
@@ -166,7 +166,7 @@ function pageState(page: HTMLElement) {
     busy: host?.getAttribute("aria-busy"),
     placeholders: host?.querySelectorAll('.skeleton[aria-hidden="true"]').length,
     activity: text(page, ".connection-activity"),
-    activityFailed: text(page, ".connection-activity")?.includes("Activity refresh failed."),
+    activityFailed: text(page, ".connection-activity")?.includes("Couldn’t refresh activity."),
     cpuDegraded: page.querySelector(".gateway-vital--cpu")?.hasAttribute("data-degraded"),
     hostSkeleton: page.querySelector(".config-host__name .skeleton"),
     hostElement: page.querySelector(".config-host__name"),
@@ -197,7 +197,7 @@ async function display(snapshot: Partial<ApplicationGatewaySnapshot> = {}) {
 }
 
 function authHello(authMode: "token" | "password" | "trusted-proxy"): GatewayHelloOk {
-  return { ...gatewayHelloForMethods(["system.info"]), snapshot: { authMode } };
+  return { ...gatewayHelloForMethods(["system.info", "last-heartbeat"]), snapshot: { authMode } };
 }
 
 function control(page: HTMLElement, selector: string) {
@@ -240,7 +240,7 @@ it.each([
     const { page } = await mount(gateway);
     const forget = () => findButton(page, "Forget this browser");
     const confirm = () =>
-      document.querySelector<HTMLButtonElement>(".exec-approval-actions button.danger");
+      document.querySelector<HTMLButtonElement>("openclaw-modal-actions button.danger");
     const openConfirmation = async () => {
       forget()?.click();
       await waitForPage(() => expect(confirm()).not.toBeNull());
@@ -248,12 +248,12 @@ it.each([
     expect(forget()).toBeDefined();
     await openConfirmation();
     document
-      .querySelector<HTMLButtonElement>(".exec-approval-actions button:not(.danger)")
+      .querySelector<HTMLButtonElement>("openclaw-modal-actions button:not(.danger)")
       ?.click();
-    await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
+    await waitForPage(() => expect(document.querySelector("openclaw-modal-actions")).toBeNull());
     expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
     await openConfirmation();
-    expect(document.querySelector(".exec-approval-sub")?.textContent).toContain(
+    expect(document.querySelector(".oc-dialog__description")?.textContent).toContain(
       "gateway.example.test",
     );
     if (stale) {
@@ -261,7 +261,7 @@ it.each([
     }
     confirm()?.click();
     if (stale) {
-      await waitForPage(() => expect(document.querySelector(".exec-approval-actions")).toBeNull());
+      await waitForPage(() => expect(document.querySelector("openclaw-modal-actions")).toBeNull());
       expect(gateway.forgetDeviceToken).not.toHaveBeenCalled();
       return;
     }
@@ -330,7 +330,6 @@ it("shows average and nearest-rank percentiles for the last 100 successful round
     p50: "50.0 ms",
     p95: "95.0 ms",
     p99: "99.0 ms",
-    ping: contains("Samples: 100/100"),
   });
 });
 
@@ -342,7 +341,7 @@ it("keeps one ping in flight, excludes failures and hidden responses, and cancel
   let nextResponse = 0;
   const pingRequest = vi.fn().mockImplementation(() => responses[nextResponse++]!.promise);
   const { page, check, unmount } = await setup(undefined, pingRequest);
-  expect(text(page, ".connection-ping")).toContain("Measuring ping…");
+  expect(text(page, ".connection-ping__stats dd")).toBe("—");
   elapse(20);
   responses[0]!.resolve(null);
   await check({ average: "20.0 ms" });
@@ -362,7 +361,7 @@ it("keeps one ping in flight, excludes failures and hidden responses, and cancel
   responses[2]!.resolve(null);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(pingRequest).toHaveBeenCalledTimes(3);
-  await check({ ping: contains("Samples: 1/100") });
+  await check({ average: "20.0 ms", ping: contains("Last ping failed.") });
   setVisibility("visible");
   elapse(40);
   responses[3]!.resolve(null);
@@ -410,11 +409,11 @@ it.each(["reconnect", "source", "client", "source error", "source queued"] as co
     await vi.advanceTimersByTimeAsync(10_000);
     if (change === "reconnect") {
       publish(first, { phase: "reconnecting" });
-      await check({ ping: undefined, secretType: "password", hostName: "—" });
+      await check({ ping: undefined, secretType: "password", hostName: null });
       publish(first, {
         phase: "connected",
         sessionKey: "remote-session",
-        hello: gatewayHelloForMethods(["system.info"]),
+        hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
       });
       await check({ secret: "draft-secret", session: "draft-session" });
     } else if (change.startsWith("source")) {
@@ -449,7 +448,6 @@ it.each(["reconnect", "source", "client", "source error", "source queued"] as co
     await check({
       average: "—",
       activity: excludes("432 MB"),
-      ping: contains("Measuring ping…"),
     });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(systemInfoRequest).toHaveBeenCalledTimes(3);
@@ -465,7 +463,6 @@ it.each(["reconnect", "source", "client", "source error", "source queued"] as co
     });
     await check({
       average: "510.0 ms",
-      ping: contains("Samples: 1/100"),
       activity: contains("70%"),
       hostName: "Current",
     });
@@ -494,8 +491,6 @@ it("shares one host and activity poll independently of ping and reports failed r
   const sessionInput = input(page, "Default session");
   const url = input(page, "Gateway URL");
   const secret = input(page, "Gateway secret");
-  const details = page.querySelector<HTMLDetailsElement>("details")!;
-  details.open = true;
   editInput(page, "Default session", "kept-session");
   sessionInput.focus();
   expect(state().activity).toContain("432 MB");
@@ -541,8 +536,6 @@ it("shares one host and activity poll independently of ping and reports failed r
   expect(input(page, "Gateway secret")).toBe(secret);
   expect(document.activeElement).toBe(url);
   expect([url.selectionStart, url.selectionEnd]).toEqual([4, 7]);
-  expect(page.querySelector("details")).toBe(details);
-  expect(details.open).toBe(true);
   const hidden = deferred<SystemInfoResult>();
   systemInfoRequest.mockReturnValueOnce(hidden.promise);
   await vi.advanceTimersByTimeAsync(10_000);
@@ -588,9 +581,9 @@ it.each([
       type: "password",
       placeholder: "Paste the token or type the password",
     });
-    expect(page.textContent).toContain(`This Gateway expects its ${authMode}.`);
+    expect(page.textContent).toContain(`Enter the Gateway ${authMode}.`);
     expect(page.querySelector('[role="radiogroup"]')).toBeNull();
-    control(page, ".connection-details button").click();
+    control(page, ".connection-actions button").click();
     expect(connect).toHaveBeenLastCalledWith();
     const changedUrl = change === "url";
     const gatewayUrl = "wss://gateway.example/openclaw";
@@ -612,23 +605,25 @@ it.each([
   },
 );
 
-it("offers connection actions only while the draft differs", async () => {
+it("swaps the connection action slot in place while the draft differs", async () => {
   const { page } = await setup();
   const labels = () =>
     [...page.querySelectorAll(".connection-actions button")].map((button) =>
       button.textContent?.trim(),
     );
-  expect(labels()).toEqual([]);
+  expect(labels()).toEqual(["Reconnect"]);
+  expect(page.textContent).not.toContain("Reconnect to the current Gateway to try again.");
+  expect(page.querySelector(".connection-actions .btn.primary")).toBeNull();
   editInput(page, "Gateway secret", "draft-token");
   await waitForPage(() => expect(labels()).toEqual(["Discard changes", "Apply and reconnect"]));
   editInput(page, "Gateway secret", "");
-  await waitForPage(() => expect(labels()).toEqual([]));
+  await waitForPage(() => expect(labels()).toEqual(["Reconnect"]));
   editInput(page, "Gateway secret", "draft-token");
   flush();
   control(page, ".connection-actions button").click();
   await waitForPage(() => {
     expect(input(page, "Gateway secret").value).toBe("");
-    expect(labels()).toEqual([]);
+    expect(labels()).toEqual(["Reconnect"]);
   });
 });
 
@@ -645,7 +640,10 @@ it("saves and discards session edits independently of the pending connection", a
   editInput(page, "Default session", "main-other");
   flush();
   editInput(page, "Default session", "main");
-  await waitForPage(() => expect(sessionSection.querySelector("button")).toBeNull());
+  await waitForPage(() => {
+    expect(findButton(sessionSection, "Save")).toBeUndefined();
+    expect(findButton(sessionSection, "Discard changes")).toBeUndefined();
+  });
   editInput(page, "Default session", "  saved-session  ");
   flush();
   button("Save").click();
@@ -666,32 +664,37 @@ it("stops polling after a missing-read-scope error", async () => {
     .mockResolvedValueOnce(deviceSystemInfo)
     .mockRejectedValueOnce(missingReadScopeErrorFixture())
     .mockResolvedValue(deviceSystemInfo);
-  const { check } = await setup(request);
+  const { check, ...current } = await setup(request);
   await vi.advanceTimersByTimeAsync(10_000);
-  await check({ hostName: null });
-  await vi.advanceTimersByTimeAsync(10_000);
+  await check({ hostName: null, activityFailed: false });
+  publish(current, { sessionKey: "another-session" });
+  await vi.advanceTimersByTimeAsync(20_000);
   expect(request).toHaveBeenCalledTimes(2);
 });
 
 it.each(["advertisement", "scope"] as const)(
-  "retires a pending host read when its %s disappears",
+  "retires pending diagnostics when their %s disappears",
   async (change) => {
     const response = deferred<SystemInfoResult>();
     const request = vi
       .fn()
       .mockReturnValueOnce(response.promise)
       .mockResolvedValue(deviceSystemInfo);
-    const { check, ...current } = await setup(request);
+    const pendingPing = deferred<null>();
+    const ping = vi.fn().mockReturnValueOnce(pendingPing.promise).mockResolvedValue(null);
+    const { check, ...current } = await setup(request, ping);
     publish(current, {
       hello: gatewayHelloForMethods(
-        change === "advertisement" ? [] : ["system.info"],
+        change === "advertisement" ? [] : ["system.info", "last-heartbeat"],
         change === "scope" ? ["operator.sessions.read"] : ["operator.admin"],
       ),
     });
     response.resolve(deviceSystemInfo);
-    await check({ hostElement: null });
+    pendingPing.resolve(null);
+    await check({ hostElement: null, average: "—", activityFailed: false });
+    expect(ping.mock.calls[0]?.[2].signal.aborted).toBe(true);
     publish(current, {
-      hello: gatewayHelloForMethods(["system.info"]),
+      hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
     });
     await check({ hostName: "Gateway", calls: 2 });
   },
@@ -709,16 +712,24 @@ it("hides ingress credentials while preserving connection errors and recovery", 
 it("disables connection actions while starting and hides errors after connection", async () => {
   const current = await display({ phase: "starting", lastError: "connect failed: unauthorized" });
   const { page } = current;
-  expect(control(page, ".connection-actions .btn.primary").disabled).toBe(true);
-  expect(text(page, ".connection-actions .btn.primary")?.trim()).toBe("Connecting…");
-  expect(control(page, "details button").disabled).toBe(true);
-  const error = page.querySelector(".settings-status--danger")!;
-  expect(error.textContent).toContain("Last error");
-  expect(page.textContent).toContain("connect failed: unauthorized");
-  expect(error.closest(".settings-section")?.querySelector("h2")?.textContent).toBe("Connection");
+  expect(page.querySelector(".connection-actions .btn.primary")).toBeNull();
+  expect(control(page, ".connection-actions .btn").disabled).toBe(true);
+  expect(text(page, ".connection-actions .btn")?.trim()).toBe("Connecting…");
+  const status = () => page.querySelector<HTMLElement>('.settings-row[role="status"]')!;
+  expect(status().textContent).toContain("Starting…");
+  expect(status().textContent).toContain("connect failed: unauthorized");
+  expect(status().querySelector(".settings-status--warn")).not.toBeNull();
+  expect(status().closest(".settings-section")?.querySelector("h2")?.textContent).toBe(
+    "Connection",
+  );
+  publish(current, { phase: "stopped" });
+  await waitForPage(() =>
+    expect(status().querySelector(".settings-status--danger")).not.toBeNull(),
+  );
   publish(current, { phase: "connected" });
-  await waitForPage(() => expect(page.querySelector(".settings-status--danger")).toBeNull());
+  await waitForPage(() => expect(status().querySelector(".settings-status--ok")).not.toBeNull());
   expect(page.textContent).not.toContain("connect failed: unauthorized");
+  expect(findButton(page, "Reconnect")?.disabled).toBe(false);
 });
 
 it("shows setup-code guidance only for a mobile setup code", async () => {
@@ -732,7 +743,7 @@ it("shows setup-code guidance only for a mobile setup code", async () => {
     "Gateway secret",
     btoa(
       JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
-    ).replace(/=+$/g, ""),
+    ).replace(/[=]+$/g, ""),
   );
   await waitForPage(() =>
     expect(hint()?.textContent).toContain("device setup code for the OpenClaw mobile app"),
@@ -745,7 +756,7 @@ it("shows setup-code guidance only for a mobile setup code", async () => {
 it("scopes trusted-proxy credentials to the live target", async () => {
   const { page } = await display({ hello: authHello("trusted-proxy") });
   expect(page.querySelector('[aria-label="Gateway secret"]')).toBeNull();
-  expect(text(page, ".settings-row .settings-status")?.trim()).toBe("Trusted proxy");
+  expect(text(page, ".settings-row__control .settings-status")?.trim()).toBe("Trusted proxy");
   expect(page.textContent).toContain("Authenticated via trusted proxy.");
   editInput(page, "Gateway URL", "wss://other.example");
   await waitForPage(() => expect(input(page, "Gateway secret")).toBeDefined());
@@ -817,4 +828,61 @@ it("renders host identity and resource meters, including disk removal", async ()
       "config-host__meter-fill--warn",
     ]),
   );
+});
+
+it.each(["session-only", "unadvertised", "unknown"] as const)(
+  "settles %s diagnostics without requests or retry notices and resumes after reconnect",
+  async (kind) => {
+    vi.useFakeTimers();
+    mockVisibility();
+    const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
+    const ping = vi.fn().mockResolvedValue(null);
+    const current = source(makeClient(request), ping);
+    publish(current, {
+      hello:
+        kind === "unknown"
+          ? null
+          : gatewayHelloForMethods(
+              kind === "unadvertised" ? [] : ["system.info", "last-heartbeat"],
+              kind === "session-only" ? ["operator.sessions.read"] : ["operator.read"],
+            ),
+    });
+    const { page, check } = await mount(current.gateway);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(request).not.toHaveBeenCalled();
+    expect(ping).not.toHaveBeenCalled();
+    expect(page.textContent).not.toContain("Retrying");
+    expect(page.querySelector(".skeleton")).toBeNull();
+    expect(page.textContent).toContain("Connected");
+    publish(current, { phase: "reconnecting" });
+    publish(current, {
+      phase: "connected",
+      hello: gatewayHelloForMethods(["system.info", "last-heartbeat"], ["operator.read"]),
+    });
+    await check({ hostName: "Gateway", activity: contains("432 MB") });
+    expect(ping).toHaveBeenCalledOnce();
+  },
+);
+
+it("settles denied pings until a fresh connection and preserves independent host polling", async () => {
+  vi.useFakeTimers();
+  mockVisibility();
+  const ping = vi
+    .fn()
+    .mockRejectedValueOnce(missingReadScopeErrorFixture())
+    .mockResolvedValue(null);
+  const { page, request, check, ...current } = await setup(undefined, ping);
+  await check({ hostName: "Gateway" });
+  publish(current, { sessionKey: "another-session" });
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(ping).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(page.textContent).not.toContain("Last ping failed");
+  publish(current, { phase: "reconnecting" });
+  publish(current, {
+    phase: "connected",
+    hello: gatewayHelloForMethods(["system.info", "last-heartbeat"]),
+  });
+  await check({ hostName: "Gateway", average: contains("ms") });
+  expect(ping).toHaveBeenCalledTimes(2);
 });

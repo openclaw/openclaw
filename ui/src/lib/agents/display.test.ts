@@ -8,22 +8,26 @@ import {
 } from "../avatar.ts";
 import {
   buildAgentContext,
-  buildModelOptions,
-  createPrimaryModelExclusion,
   formatBytes,
   listSelectableAgents,
   normalizeAgentTargetLabel,
   resolveAgentSkillsFilter,
-  resolveEffectiveModelFallbacks,
 } from "./display.ts";
+import { createAgentModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
+
+it("ignores a draft model map that is not a record", () => {
+  expect(
+    createAgentModelOptions({ agents: { defaults: { models: "unfinished" } } }).options,
+  ).toEqual([]);
+});
 
 it("keeps known unavailable choices visible but disabled", () => {
   const config = { agents: { defaults: { models: { "fixture/blocked": {} } } } };
-  const options = buildModelOptions(config, "fixture/blocked", [
+  const options = createAgentModelOptions(config, [
     { provider: "fixture", id: "blocked", name: "Blocked model", available: false },
     { provider: "fixture", id: "ready", name: "Ready model", available: true },
     { provider: "fixture", id: "unknown", name: "Unknown model" },
-  ]);
+  ]).withCurrent("fixture/blocked");
 
   expect(options).toContainEqual(
     expect.objectContaining({ value: "fixture/blocked", disabled: true }),
@@ -37,7 +41,8 @@ it("lets an explicit empty agent alias disable the inherited alias", () => {
   const config = aliases({ [lower]: "global" }, { [lower]: "" });
 
   expect(
-    buildModelOptions(config, null, catalog, "worker").find(({ value }) => value === lower)?.label,
+    createAgentModelOptions(config, catalog, "worker").options.find(({ value }) => value === lower)
+      ?.label,
   ).toBe("Model A");
 });
 
@@ -51,14 +56,19 @@ it("keeps case-distinct catalog identities, configured aliases, and current valu
   });
 
   expect(
-    buildModelOptions(config, null, caseCatalog).map(({ value, label }) => ({ value, label })),
+    createAgentModelOptions(config, caseCatalog).options.map(({ value, label }) => ({
+      value,
+      label,
+    })),
   ).toEqual([
     { value: lower, label: "Lowercase model · lower" },
     { value: upper, label: "Uppercase model · upper" },
   ]);
-  expect(buildModelOptions(null, upper, caseCatalog.slice(0, 1)).map(({ value }) => value)).toEqual(
-    [upper, lower],
-  );
+  expect(
+    createAgentModelOptions(null, caseCatalog.slice(0, 1))
+      .withCurrent(upper)
+      .map(({ value }) => value),
+  ).toEqual([upper, lower]);
 });
 const [lower, upper, other] = ["custom/model-a", "custom/Model-A", "other/model-a"];
 it.each([
@@ -122,12 +132,11 @@ it.each([
   { name: "a string primary", model: "openai/gpt-5.4" },
   { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
 ])("does not inherit global fallbacks for $name", ({ model }) => {
-  expect(
-    resolveEffectiveModelFallbacks(model, {
-      primary: "openai/gpt-5.4",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
-    }),
-  ).toStrictEqual([]);
+  const config = agentConfig(
+    { model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] } },
+    { model },
+  );
+  expect(buildAgentContext({ id: "main" }, config, null, "main").model).toBe("openai/gpt-5.4");
 });
 it("rejects unsafe invisible controls in assistant text avatars", () => {
   expect(resolveAssistantTextAvatar("VC")).toBe("VC");
@@ -219,3 +228,11 @@ function aliases(defaults: Record<string, string | null>, worker = {}) {
     },
   };
 }
+
+it("names a configured model the catalog does not know by its own ref", () => {
+  expect(createAgentModelOptions(null, []).withCurrent("fixture/unlisted")[0]).toMatchObject({
+    value: "fixture/unlisted",
+    label: "fixture/unlisted",
+    provider: "fixture",
+  });
+});

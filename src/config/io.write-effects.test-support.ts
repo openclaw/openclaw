@@ -10,7 +10,7 @@ import {
 } from "./io.write-safety.js";
 
 export const original = '{"channel":"stable"}\n';
-export const content = '{"channel":"beta"}\n';
+export const content = '{"channel":"beta-é"}\n';
 type Fixture = ReturnType<typeof createWriteEffectsFixture>;
 type WriteOptions = Pick<
   Parameters<typeof prepareConfigFileWrite>[0],

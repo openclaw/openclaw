@@ -39,8 +39,8 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     updatedAt: entry.updatedAt,
     createdAt: entry.createdAt,
     initializationPending: entry.initializationPending,
+    templateInitialization: entry.templateInitialization,
     providerReview: entry.providerReview,
-    mainRestartRecovery: entry.mainRestartRecovery,
     modelSelectionLocked: entry.modelSelectionLocked,
     pluginOwnerId: entry.pluginOwnerId,
     skillLibrarySelections: entry.skillLibrarySelections,
@@ -64,14 +64,6 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolAllow: entry.inheritedToolAllow,
     inheritedToolDeny: entry.inheritedToolDeny,
-    ...(entry.subagentRecovery
-      ? {
-          subagentRecovery: {
-            lastRunId: entry.subagentRecovery.lastRunId,
-            sessionLifecycleRunId: entry.subagentRecovery.sessionLifecycleRunId,
-          },
-        }
-      : {}),
     archivedAt: entry.archivedAt,
     category: entry.category,
     sidebarRoot: entry.sidebarRoot,
@@ -81,7 +73,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     visibility: entry.visibility,
     incognito: entry.incognito,
     createdActor: entry.createdActor,
-    owner: entry.owner ? { ...entry.owner, assignedBy: entry.owner.assignedBy } : undefined,
+    owner: entry.owner,
     sandbox: entry.sandbox,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
@@ -123,12 +115,23 @@ export function createSessionEntryCreationOperation(): SessionEntryCreationOpera
 export function sessionSharingEntriesEqual(
   previous: InternalSessionEntry | undefined,
   current: InternalSessionEntry | undefined,
+  scope: "sharing" | "session-access" = "sharing",
 ): boolean {
   if (!previous || !current) {
     return false;
   }
   const { updatedAt: _previousUpdatedAt, ...before } = selectSessionSharingEntry(previous);
   const { updatedAt: _currentUpdatedAt, ...after } = selectSessionSharingEntry(current);
+  if (scope === "session-access") {
+    // A person's access does not depend on which run currently owns transcript writes.
+    const {
+      lifecycleRunId: _beforeRun,
+      activeWriterRunId: _beforeWriter,
+      ...beforeAccess
+    } = before;
+    const { lifecycleRunId: _afterRun, activeWriterRunId: _afterWriter, ...afterAccess } = after;
+    return isDeepStrictEqual(beforeAccess, afterAccess);
+  }
   return isDeepStrictEqual(before, after);
 }
 
@@ -164,6 +167,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Required patch response facts survive optional full-snapshot receipt bounding. */
+  patchDiffBaselines?: ReadonlyMap<string, NonNullable<SessionEntry["sessionDiffBaseline"]>>;
   conversationPublication?: readonly import("./session-accessor.sqlite-conversation-publication.js").ConversationPublication[];
   /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
   transcriptInventoryUnchanged?: true;

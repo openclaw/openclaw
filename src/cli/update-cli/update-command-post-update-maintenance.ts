@@ -13,12 +13,19 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import {
+  recordOwedUpdateStep,
+  retryOwedPluginSteps,
+  retryOwedUpdateSteps,
+  shellProfileStillOwes,
+  warnOwedUpdateStep,
+} from "./update-command-owed.js";
+import { listOwedPluginSteps } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
-  markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
+  recordServiceReconciliationWarning,
   UpdateCommandPendingRecoveryFailure,
-  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -151,60 +158,135 @@ export async function parkPostUpdateService(
   return stopped;
 }
 
+/** An already-current core explains a service it left alone instead of reporting repair. */
+export function reportCurrentCoreServiceSkip(
+  params: Pick<FinishUpdateParams, "preManagedServiceStop">,
+  result: UpdateRunResult,
+): void {
+  const service = params.preManagedServiceStop;
+  if (service?.serviceUpdateVerdict?.kind === "absent" && service.serviceMutationSkipMessage) {
+    // An absent service needs no repair. Keep the explanation without
+    // reporting a service-install command as completed maintenance.
+    defaultRuntime.error(service.serviceMutationSkipMessage);
+  } else if (service?.serviceMutationSkipMessage) {
+    recordServiceReconciliationWarning(
+      result,
+      service.serviceEnv ?? process.env,
+      service.serviceMutationSkipMessage,
+    );
+  }
+}
+
 /** Shell integration changes follow settled restart and health recovery. */
 export async function completePostUpdateMaintenance(
   params: FinishUpdateParams,
   result: UpdateRunResult,
   assertCurrent: () => void,
-  context: {
-    root: string;
-    activationVerified: boolean;
-    sentinel: Omit<
-      Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
-      "reason"
-    >;
-  },
-): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
-  await tryInstallShellCompletion({
-    root: context.root,
-    jsonMode: Boolean(params.opts.json),
-    skipPrompt: Boolean(params.opts.yes),
-  });
+  context: { root: string },
+): Promise<void> {
+  const run = params.opts.run;
+  const plugins = result.postUpdate?.plugins;
+  // Plugin work runs before activation. What it left undone is owed only now, on a kept result.
+  for (const step of listOwedPluginSteps(plugins)) {
+    warnOwedUpdateStep(result, step, recordOwedUpdateStep(run, step));
+  }
+  const refreshShellCompletion = (skipPrompt: boolean) =>
+    tryInstallShellCompletion({
+      root: context.root,
+      jsonMode: Boolean(params.opts.json),
+      skipPrompt,
+    });
+  const retryOwedSteps = async (completion: () => Promise<string | undefined>) => {
+    if (!run) {
+      return;
+    }
+    assertCurrent();
+    const stillOwed = await retryOwedUpdateSteps(run, {
+      // A retirement-only Doctor follows unchanged plugins and settles nothing.
+      ...retryOwedPluginSteps(
+        plugins,
+        plugins?.changed === true &&
+          result.steps.some(
+            (done) => done.name === "post-plugin doctor" && done.exitCode === 0 && !done.advisory,
+          ),
+      ),
+      "shell-completion": async (step) =>
+        (await completion()) ?? (await shellProfileStillOwes(step.reason)),
+      // Only this update's own successful refresh settles it; repair inspects the service instead.
+      "service-definition": async (step) =>
+        result.steps.some((done) => done.name === "managed-service-install" && done.exitCode === 0)
+          ? undefined
+          : step.reason,
+    });
+    for (const step of stillOwed) {
+      warnOwedUpdateStep(result, step, true);
+    }
+  };
+  if (params.coreAlreadyCurrent) {
+    // A current core refreshes completion only when an earlier update still owes it, unprompted.
+    await retryOwedSteps(() => refreshShellCompletion(true));
+    return;
+  }
+  const startedAt = performance.now();
+  using _ = {
+    [Symbol.dispose]() {
+      result.steps.push({
+        name: "post-update-maintenance-timing",
+        command: "openclaw update",
+        cwd: context.root,
+        durationMs: Math.round(performance.now() - startedAt),
+        exitCode: 0,
+      });
+    },
+  };
+  const completionFailure = await refreshShellCompletion(Boolean(params.opts.yes));
+  if (completionFailure) {
+    const step = { id: "shell-completion" as const, reason: completionFailure };
+    warnOwedUpdateStep(result, step, recordOwedUpdateStep(run, step));
+  }
+  await retryOwedSteps(async () => completionFailure);
   if (!params.installKindChanged || result.mode === "git") {
-    return undefined;
+    return;
   }
   const retirement = await retireStandaloneGitWrapper({
     previousRoot: params.previousInstallRoot ?? params.root,
     assertCurrent,
   });
   if (!retirement.error) {
-    return undefined;
+    return;
   }
-  defaultRuntime.error(retirement.error);
-  if (context.activationVerified) {
-    throw new UpdateCommandFailure(
-      { ...result, status: "error", reason: "wrapper-retirement-failed" },
-      1,
-      retirement.error,
-    );
-  }
-  await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-    ...context.sentinel,
-    reason: "wrapper-retirement-failed",
+  // The package install is kept. No later command knows which file to retry, so this is a
+  // warning and not an owed step. Ownership and authority refusals throw instead.
+  result.steps.push({
+    name: "git-wrapper-retirement",
+    command: "openclaw update",
+    cwd: context.root,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: `Could not finish removing the previous Git checkout's openclaw wrapper: ${retirement.error.replace(/\.$/u, "")}. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`,
+    },
   });
-  return {
-    result: { ...result, status: "error", reason: "wrapper-retirement-failed" },
-    detail: retirement.error,
-  };
 }
 
-export function recordPostUpdateWindowsAutoStartFailure(
+export async function settlePostUpdateWindowsAutoStartFailure(
   params: Pick<FinishUpdateParams, "root">,
   finalResult: UpdateRunResult,
   result: Pick<UpdateRunResult, "status" | "reason">,
   cause: unknown,
-): void {
-  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(cause)}`);
+  readStopped: () => PreManagedServiceStop | undefined,
+): Promise<{ cause: unknown }> {
+  let failure = cause;
+  try {
+    await readStopped()?.windowsTaskAutoStartRecovery?.complete(false);
+  } catch (cleanupError) {
+    failure = new AggregateError(
+      [cause, cleanupError],
+      `Windows task restoration and compensation failed: ${formatErrorMessage(cause)}; ${formatErrorMessage(cleanupError)}`,
+    );
+  }
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(failure)}`);
   finalResult.status = "error";
   finalResult.reason =
     result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
@@ -215,8 +297,9 @@ export function recordPostUpdateWindowsAutoStartFailure(
     cwd: finalResult.root ?? params.root,
     durationMs: 0,
     exitCode: 1,
-    stderrTail: formatErrorMessage(cause),
+    stderrTail: formatErrorMessage(failure),
   });
+  return { cause: failure };
 }
 
 export async function resumePostUpdateWindowsAutoStart(
@@ -224,14 +307,10 @@ export async function resumePostUpdateWindowsAutoStart(
   result: UpdateRunResult,
   readStopped: () => PreManagedServiceStop | undefined,
   callbacks?: {
-    beforeAttempt: () => void;
     onFailure: (cause: unknown) => Promise<unknown>;
   },
 ): Promise<void> {
   try {
-    if (callbacks && readStopped()?.windowsTaskAutoStartRecovery) {
-      callbacks.beforeAttempt();
-    }
     const stopped = readStopped();
     await stopped?.windowsTaskAutoStartRecovery?.restore(
       true,

@@ -11,10 +11,54 @@ who contributed, with links to the source changes.
 
 <!-- Keep releases newest first, with a short summary on every card. -->
 
+### November 2026
+
+<CardGroup cols={2}>
+  <Card title="v2026.11.10" href="/releases/2026.11.10">
+    Deep Research with cited sources, the bundled Knowledge memory plugin, browser tab handoff, and improvements across every part of OpenClaw.
+  </Card>
+  <Card title="v2026.11.9" href="/releases/2026.11.9">
+    Fixes for provider caching, Tool Search, Claude CLI, ACP replies, headed Chrome screenshots, and security.
+  </Card>
+  <Card title="v2026.11.8" href="/releases/2026.11.8">
+    Reliability fixes across chats, updates, models, automations, apps, plugins, and the Web UI.
+  </Card>
+  <Card title="v2026.11.7" href="/releases/2026.11.7">
+    Changes to updates, messaging, models and session reliability.
+  </Card>
+  <Card title="v2026.11.6" href="/releases/2026.11.6">
+    Bug fixes and quality-of-life improvements throughout OpenClaw.
+  </Card>
+  <Card title="v2026.11.5" href="/releases/2026.11.5">
+    OpenClaw v2026.11.5 lets you run your agent’s chats through Requesty.
+  </Card>
+  <Card title="v2026.11.4" href="/releases/2026.11.4">
+    Fixes for updates, conversations, data recovery and privacy.
+  </Card>
+  <Card title="v2026.11.3" href="/releases/2026.11.3">
+    Fixes for update recovery, backup discovery, privacy and reliability.
+  </Card>
+  <Card title="v2026.11.2" href="/releases/2026.11.2">
+    Fixes for updates, scheduled reminders, chat and model connections.
+  </Card>
+  <Card title="v2026.11.1" href="/releases/2026.11.1">
+    Patch fixes for updates, conversations, apps and model connections
+  </Card>
+</CardGroup>
+
 ### October 2026
 
 <CardGroup cols={2}>
-  <Card title="v2026.10.7 (latest)" href="/releases/2026.10.7">
+  <Card title="v2026.10.10" href="/releases/2026.10.10">
+    Chat Details, experimental Advisor, split speech mode for browser Talk, and other improvements and fixes.
+  </Card>
+  <Card title="v2026.10.9" href="/releases/2026.10.9">
+    Security remediations and fixes for updates, database recovery, workspace restrictions, and sessions.
+  </Card>
+  <Card title="v2026.10.8" href="/releases/2026.10.8">
+    Security remediations and patch fixes for updates, conversations, apps, channels, and model providers.
+  </Card>
+  <Card title="v2026.10.7" href="/releases/2026.10.7">
     Patch fixes for updates, recovery, replies, and model providers.
   </Card>
   <Card title="v2026.10.6" href="/releases/2026.10.6">

@@ -76,6 +76,7 @@ async function createControlsFixture(
     requestHandlers: {
       "sessions.patch": { ok: true, key: selectedSession.key, entry: selectedSession },
       "sessions.list": sessionsResult,
+      "users.listModelAccounts": { accounts: [], links: [], profileId: "viewer" },
     },
   });
   const context = createInitializationContext();
@@ -162,7 +163,7 @@ describe("chat pane model-setting permissions", () => {
     const standard = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
     expect(standard.getAttribute("aria-checked")).toBe("true");
     expect(standard.disabled).toBe(false);
-    expect(state.request).not.toHaveBeenCalled();
+    expect(state.request).toHaveBeenCalledExactlyOnceWith("users.listModelAccounts", {});
     state.request.mockImplementation(async (method, params) => {
       if (method === "sessions.patch") {
         if (
@@ -297,12 +298,15 @@ describe("chat pane model-setting permissions", () => {
       const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
       const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
       const context = container.querySelector<HTMLButtonElement>(
-        "[data-chat-context-window-toggle]",
+        ".chat-controls__context-trigger",
       )!;
       expect(thinking.disabled).toBe(readOnly);
       expect(fast.disabled).toBe(readOnly);
       expect(context.disabled).toBe(scope !== "operator.admin");
+      expect(context).not.toBeNull();
       context.click();
+      await controls.composerControls.model.onContextWindowSelect!("extended", state.sessionKey);
+      await getPendingChatPickerPatch(state, state.sessionKey);
       if (!readOnly) {
         thinking.value = "1";
         thinking.dispatchEvent(new Event("change", { bubbles: true }));
@@ -414,7 +418,9 @@ describe("chat pane model-setting permissions", () => {
       container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!.click();
       await controls.permissionPicker.onSelect("guarded");
       await getPendingChatPickerPatch(state, state.sessionKey);
-      expect(state.request).not.toHaveBeenCalled();
+      expect(state.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual(
+        [],
+      );
     },
   );
 });

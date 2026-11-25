@@ -110,18 +110,25 @@ it("rejects caller replacement during initial authorization without an expected 
   const { successor: replacement } = bindProfile(fixture);
   const entered = createDeferred();
   const release = createDeferred();
-  const read = sessionSharingFacts.readSessionSharingFactsInWorker;
+  const acquire = sessionSharingFacts.createSessionSharingFactAcquisition;
   let held = false;
   const sharingRead = vi
-    .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
-    .mockImplementation(async (input, prepareSource) => {
-      const result = await read(input, prepareSource);
-      if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return result;
+    .spyOn(sessionSharingFacts, "createSessionSharingFactAcquisition")
+    .mockImplementation((params) => {
+      const acquisition = acquire(params);
+      const read = acquisition.read;
+      return {
+        ...acquisition,
+        async read(input, publishSource) {
+          const result = await read(input, publishSource);
+          if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        },
+      };
     });
   const request = fixture.send(undefined, {});
   try {
@@ -137,7 +144,7 @@ it("rejects caller replacement during initial authorization without an expected 
     const respond = await request;
     expectRejected(respond, {
       code: "FORBIDDEN",
-      message: "Gateway requester authority changed",
+      message: "Gateway requester identity changed. Retry the request.",
     });
     expect(fixture.context.dedupe.size).toBe(0);
     expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();
@@ -209,55 +216,6 @@ it.each(["reservation", "writer", "approval"] as const)(
   },
 );
 
-it("terminalizes a native command account merge during fresh transcript approval without rewriting the ACK", async () => {
-  await using fixture = await createFixture({ persistDuringDispatch: true });
-  const runId = fixture.params.idempotencyKey;
-  fixture.params.message = "/context list";
-  const { profile: source, merge } = bindProfile(fixture, true);
-  const ack = await fixture.send(undefined, { expectedProfileId: source.id });
-  expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-  const recorder = await fixture.dispatchedRecorder;
-  const acceptedAck = structuredClone(ack.mock.calls);
-  fixture.beforeApprove.mockImplementation(merge);
-  await fixture.finishDispatch();
-  expect.soft(recorder.getAdmissionReceipt()).toBeUndefined();
-  expect.soft(ack.mock.calls).toEqual(acceptedAck);
-  expect.soft(ack).toHaveBeenCalledOnce();
-  const transcript = loadTranscriptEventsSync(fixture.scope);
-  expect
-    .soft(transcript.filter((entry) => isRecord(entry) && entry.type === "message"))
-    .toEqual(
-      fixture.activeTranscript.filter((entry) => isRecord(entry) && entry.type === "message"),
-    );
-  expect.soft(transcript).toContainEqual(
-    expect.objectContaining({
-      type: "custom_message",
-      customType: "run-failed-before-reply",
-      display: true,
-      details: expect.objectContaining({ runId }),
-    }),
-  );
-  expect
-    .soft(loadSessionEntry(fixture.scope))
-    .toMatchObject({ status: "failed", lastRunId: runId });
-  expect.soft(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
-    ok: false,
-    payload: { runId, status: "error" },
-    error: { message: expect.stringContaining("Selected account changed") },
-  });
-  expect.soft(fixture.context.broadcast).toHaveBeenCalledWith(
-    "chat",
-    expect.objectContaining({
-      runId,
-      state: "error",
-      errorMessage: expect.stringContaining("Selected account changed"),
-    }),
-    expect.anything(),
-  );
-  expect.soft(rpcSourceTesting.size).toBe(0);
-  expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-});
-
 it("preserves accepted native input across profile merge without adopting the retry socket", async () => {
   await using fixture = await createFixture();
   const runId = fixture.params.idempotencyKey;
@@ -302,7 +260,7 @@ it("preserves accepted native input across profile merge without adopting the re
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 });
 
-it.each(["host", "session ACL", "lifecycle"] as const)(
+it.each(["host", "lifecycle"] as const)(
   "retains original %s authority after committed browser custody and profile merge",
   async (boundary) => {
     await using fixture = await createFixture({
@@ -312,9 +270,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     const runId = fixture.params.idempotencyKey;
     let hostCurrent = true;
     const { profile, merge } = bindProfile(fixture);
-    if (boundary === "session ACL") {
-      fixture.client.connect.scopes = ["operator.read", "operator.write"];
-    }
     const ack = await fixture.send(undefined, {
       expectedProfileId: profile.id,
       sessionMutationCommitGuard: () => {
@@ -335,8 +290,6 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
     merge();
     if (boundary === "host") {
       hostCurrent = false;
-    } else if (boundary === "session ACL") {
-      await patchSessionEntryCore(fixture.scope, () => ({ visibility: "draft" }));
     } else {
       rotateAgentEventLifecycleGeneration();
     }
@@ -357,7 +310,7 @@ it.each(["host", "session ACL", "lifecycle"] as const)(
       items: [
         {
           id: pending.items[0]?.id,
-          state: "interrupted",
+          state: "cancelled",
           message: pending.items[0]?.message,
         },
       ],

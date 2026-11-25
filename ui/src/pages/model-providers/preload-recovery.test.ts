@@ -1,9 +1,9 @@
 /* @vitest-environment jsdom */
 
+import { createRouter } from "@openclaw/uirouter";
 import { expect, it } from "vitest";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { loadModelProvidersData } from "./load.ts";
 import {
   createAuthStatus,
   createHarness,
@@ -11,8 +11,8 @@ import {
   expandProvider,
   mountPage,
   publishCatalog,
-  publishRouteData,
 } from "./model-providers-page.test-support.tsx";
+import { page as modelsRoute, type ModelProvidersRouteData } from "./route.ts";
 
 it("catches a catalog publication between route preload and page mount", async () => {
   const { context, request, deferNextAuthStatus, publishEvent } = createHarness("main");
@@ -30,17 +30,23 @@ it("catches a catalog publication between route preload and page mount", async (
     const result = await originalRequest(method);
     return method === "models.authStatus" ? createAuthStatus() : result;
   });
-  const preload = loadModelProvidersData(context.gateway.snapshot.client!, { agentId: "main" });
+  const router = createRouter<"model-providers", typeof context, null, ModelProvidersRouteData>({
+    routes: [{ ...modelsRoute, component: () => null }],
+  });
+  const preload = router.navigate("model-providers", context);
+  await waitForSolid(() =>
+    expect(request).toHaveBeenCalledWith("models.authStatus", expect.anything()),
+  );
   publishEvent({
     type: "event",
     event: "chat.metadata.changed",
     payload: { agentId: "main", modelCatalogChanged: true, authChanged: false },
   });
   releaseAuth();
-  const data = await preload;
+  await preload;
   const releaseRefreshAuth = deferNextAuthStatus();
   const page = createPage(context);
-  publishRouteData(page, data);
+  page.routeData = router.getState().matches[0]!.data;
   try {
     mountPage(page);
     await expandProvider(page, "openai");
@@ -55,5 +61,6 @@ it("catches a catalog publication between route preload and page mount", async (
     });
   } finally {
     releaseRefreshAuth();
+    router.stop();
   }
 });

@@ -1,5 +1,28 @@
 import { expect, it, type Mock } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runCapability } from "./capability-cli.test-harness.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+
+export async function interruptCapability(
+  run: (waitForAbort: (signal?: AbortSignal) => Promise<never>) => Promise<void>,
+): Promise<void> {
+  const scope = new AsyncWorkScope();
+  let cancelled = false;
+  const waitForAbort = (signal?: AbortSignal) => {
+    const { promise, reject } = Promise.withResolvers<never>();
+    expect(signal).toBeDefined();
+    const onAbort = () => {
+      cancelled = true;
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    scope.beginClose(new Error("interrupted"));
+    return promise;
+  };
+  await scope.track(() => run(waitForAbort));
+  expect(cancelled).toBe(true);
+  await scope.drain();
+}
 
 export function registerEmbeddingCapabilityCliTests({
   embedBatch,
@@ -9,7 +32,12 @@ export function registerEmbeddingCapabilityCliTests({
   log,
   expectError,
 }: {
-  embedBatch: Mock<(inputs: unknown[], options?: { inputType?: string }) => Promise<number[][]>>;
+  embedBatch: Mock<
+    (
+      inputs: unknown[],
+      options?: { inputType?: string; signal?: AbortSignal },
+    ) => Promise<number[][]>
+  >;
   closeProvider: Mock<() => Promise<void>>;
   providerCall: () => unknown;
   jsonOutput: () => unknown;
@@ -42,11 +70,13 @@ export function registerEmbeddingCapabilityCliTests({
   );
 
   it("rejects conflicting provider and model prefixes before creating a provider", async () => {
-    await expect(
-      create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json"),
-    ).rejects.toThrow("exit 1");
+    const run = create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json");
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow(
+      'Embedding --provider "deepinfra" must match the provider "Qwen" in --model.',
+    );
     expect(providerCall()).toBeUndefined();
-    expectError('Embedding --provider "deepinfra" must match the provider "Qwen" in --model.');
+    expect(jsonOutput()).toBeUndefined();
   });
 
   it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
@@ -81,4 +111,14 @@ export function registerEmbeddingCapabilityCliTests({
       expectError("embedding failed");
     },
   );
+
+  it("cancels pending embedding work and suppresses output while closing the provider", async () => {
+    await interruptCapability((waitForAbort) => {
+      embedBatch.mockImplementationOnce((_inputs, options) => waitForAbort(options?.signal));
+      return create("--json");
+    });
+    expect(jsonOutput()).toBeUndefined();
+    expect(log).not.toHaveBeenCalled();
+    expect(closeProvider).toHaveBeenCalledTimes(1);
+  });
 }
