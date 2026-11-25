@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
 import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
@@ -127,6 +128,7 @@ type ChatThreadInput = {
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
   historySupplement?: TranscriptHeader;
+  children?: JSX.Element;
 };
 
 export function ChatThread(input: ChatThreadInput) {
@@ -592,6 +594,7 @@ function ChatThreadContent(
         />
         <div class="chat-thread-content">
           {contents()}
+          {input.children}
           <Show when={input.props.applicationContext}>
             {(context) => (
               <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />

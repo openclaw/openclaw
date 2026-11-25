@@ -3356,17 +3356,3 @@ openclaw-chat-ci-details {
   color: var(--text);
   background: var(--bg-hover);
 }
-
-.chat-catalog-image {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  align-self: flex-start;
-  max-width: 100%;
-  overflow-wrap: anywhere;
-}
-.chat-catalog-image img {
-  max-width: min(40vw, 12rem);
-  max-height: 6rem;
-  object-fit: contain;
-}
