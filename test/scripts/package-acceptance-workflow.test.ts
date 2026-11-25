@@ -3871,7 +3871,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow.on?.schedule).toEqual([{ cron: "41 4 * * *" }]);
     expect(dispatchInputs.run_live_runtime_proof).toEqual({
-      description: "Run the blocking live runtime release proof",
+      description: "Run only the three live runtime release proof lanes",
       required: false,
       default: false,
       type: "boolean",
@@ -3918,14 +3918,14 @@ describe("package artifact reuse", () => {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_mock_parity",
+      "inputs.run_live_runtime_proof != true && (inputs.expected_sha == '' || inputs.run_mock_parity)",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_matrix",
+      "inputs.run_live_runtime_proof != true && (inputs.expected_sha == '' || inputs.run_matrix)",
     );
     for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
-        `inputs.expected_sha == '' || inputs.run_${channel}`,
+        `inputs.run_live_runtime_proof != true && (inputs.expected_sha == '' || inputs.run_${channel})`,
       );
     }
     expect(releaseWorkflow).not.toContain("qa_live_matrix_release_checks");
@@ -3988,7 +3988,7 @@ describe("package artifact reuse", () => {
       run_buzz: true,
     });
     const buzzJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_buzz");
-    expect(buzzJob.if).toBe("inputs.run_buzz");
+    expect(buzzJob.if).toBe("inputs.run_live_runtime_proof != true && inputs.run_buzz");
     const resolveBuzz = workflowStep(buzzJob, "Resolve Buzz QA runner");
     expect(resolveBuzz.run).toContain('runner?.commandName === "buzz"');
     expect(resolveBuzz.run).toContain("selected ref does not declare the Buzz QA runner");
