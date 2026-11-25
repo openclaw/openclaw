@@ -167,6 +167,8 @@ export type RunEmbeddedAgentParams = Pick<
    * it selects credentials live, like an interactive run, instead of being refused as unrecorded.
    */
   scheduledLiveProviderAuth?: boolean;
+  /** A retired automatic binding permits only a configured host key on this candidate. */
+  scheduledConfiguredKey?: { unavailable: Error; onSelected: () => void };
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */

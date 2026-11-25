@@ -106,11 +106,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const prompt =
     sessionPromptState.activePrompt.override ??
     resolveEmbeddedAttemptBasePrompt({ provider, prompt: params.prompt });
-  const resolvedAttemptApiKey = resolveAttemptDispatchApiKey({
-    apiKeyInfo: runtime.apiKeyInfo,
-    runtimeAuthState: runtime.runtimeAuthState,
-    pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
-  });
   const attemptFastMode = resolveAttemptFastModeParam();
   // Each candidate, including fallbacks and live switches, applies Access to its own provider.
   const attemptAccessProgram = resolveTurnCyberAccessProgram({
@@ -543,7 +538,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
       runtime.transportConfig,
     ),
-    resolvedApiKey: resolvedAttemptApiKey,
+    resolvedApiKey: resolveAttemptDispatchApiKey(runtime),
     authProfileId: runtime.lastProfileId,
     authProfileIdSource: params.authProfileBinding
       ? params.authProfileIdSource
@@ -551,6 +546,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
         ? "user"
         : "auto",
     authProfileBinding: params.authProfileBinding,
+    scheduledConfiguredKey: params.scheduledConfiguredKey,
     initialReplayState: input.replayState,
     authStorage,
     authProfileStore,

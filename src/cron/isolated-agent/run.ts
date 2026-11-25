@@ -59,7 +59,11 @@ import {
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
 import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
-import type { CronAgentExecutionPhaseUpdate, CronFailureNotificationDetail } from "../types.js";
+import type {
+  CronAgentExecutionPhaseUpdate,
+  CronFailureNotificationDetail,
+  CronRunDiagnostics,
+} from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun, resolveCronRecoveryClassification } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare-context.js";
@@ -392,6 +396,7 @@ async function runCronIsolatedAgentTurnInTrace(
             // The execution owner spans model fallback retries. Individual
             // attempts must not retire the shared run before that execution settles.
             let terminalOutcome: AgentRunTerminalOutcome | undefined;
+            let configuredKeyDiagnostic: CronRunDiagnostics | undefined;
             const lifecycle = createAgentLifecycleTerminalBackstop({
               runId,
               sessionKey: prepared.context.runSessionKey,
@@ -460,6 +465,13 @@ async function runCronIsolatedAgentTurnInTrace(
                   },
                   onExecutionStarted: notifyExecutionStarted,
                   onExecutionPhase: notifyExecutionPhase,
+                  onConfiguredKey: (message) => {
+                    configuredKeyDiagnostic ??= createCronRunDiagnosticsFromError(
+                      "agent-run",
+                      message,
+                      { severity: "warn" },
+                    );
+                  },
                   onLaneWait: params.onLaneWait,
                   onPromptCompleted: (runs) => {
                     completedPromptRuns = runs;
@@ -515,6 +527,12 @@ async function runCronIsolatedAgentTurnInTrace(
                 // Other runs retain admission through delivery and release in finally.
                 beforeSessionDelete: prepared.context.sessionPreparationEffect.release,
               });
+              if (configuredKeyDiagnostic) {
+                finalized.diagnostics = mergeCronRunDiagnostics(
+                  finalized.diagnostics,
+                  configuredKeyDiagnostic,
+                );
+              }
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
@@ -631,6 +649,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 model: prepared.context.liveSelection.model,
                 diagnostics: mergeCronRunDiagnostics(
                   prepared.context.preflightDiagnostics,
+                  configuredKeyDiagnostic,
                   createCronRunDiagnosticsFromError(
                     isCronLaneTimeout ? "cron-setup" : "agent-run",
                     isCronLaneTimeout ? error : err,

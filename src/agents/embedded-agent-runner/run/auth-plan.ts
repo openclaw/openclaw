@@ -61,6 +61,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   ) => AgentHarness;
 }) {
   const runParams = params.runParams;
+  const scheduledConfiguredKey = runParams.scheduledConfiguredKey;
   runParams.authProfileBinding?.assertCurrent();
   const usesOpenAIAuthRouting = params.provider === OPENAI_PROVIDER_ID;
   const initialHarness = params.getAgentHarness();
@@ -131,6 +132,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const createAuthPreparation = (): PreparedAgentRuntimeAuth => {
     const harness = params.getAgentHarness();
     if (params.nativeSessionRuntime?.auth === "native") {
+      if (scheduledConfiguredKey) {
+        throw scheduledConfiguredKey.unavailable;
+      }
       if (runParams.authProfileBinding) {
         throw new Error(
           "A native connection cannot replace the automation’s recorded inference account.",
@@ -149,7 +153,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       });
       return { plan, attempts: [{ kind: "implicit", plan }] };
     }
-    const prepared = prepareAgentRuntimeAuth({
+    const authPlanInput: Parameters<typeof prepareAgentRuntimeAuth>[0] = {
       provider: params.provider,
       modelId: params.modelId,
       ...(params.observedRoutes
@@ -177,6 +181,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       allowAuthProfileFallback: runParams.authProfileBinding
         ? false
         : runParams.allowAuthProfileFallback,
+      skipAutomaticAuthProfiles: Boolean(scheduledConfiguredKey),
       harnessId: harness.id,
       harnessRuntime: harness.id,
       harnessAuthBootstrap: harness.authBootstrap,
@@ -190,7 +195,25 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           env: process.env,
           context,
         }),
-    });
+    };
+    let prepared: PreparedAgentRuntimeAuth;
+    try {
+      prepared = prepareAgentRuntimeAuth(authPlanInput);
+    } catch (error) {
+      throw scheduledConfiguredKey?.unavailable ?? error;
+    }
+    if (scheduledConfiguredKey) {
+      const source = prepared.plan.credentialSource;
+      if (
+        source?.kind !== "direct" ||
+        (source.evidence !== "environment" && source.evidence !== "provider-config") ||
+        prepared.plan.selectedAuthMode !== "api-key" ||
+        (harness.id !== "openclaw" &&
+          (harness.id !== "codex" || prepared.plan.modelRoute?.authRequirement !== "api-key"))
+      ) {
+        throw scheduledConfiguredKey.unavailable;
+      }
+    }
     if (
       params.requireConfiguredTransportAuth &&
       prepared.attempts.some((attempt) => {

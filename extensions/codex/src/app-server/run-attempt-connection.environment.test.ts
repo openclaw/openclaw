@@ -209,6 +209,42 @@ describe("Codex local tool environment placement", () => {
   );
 });
 
+it("preserves a scheduled configured-key requirement on a native Codex home", async () => {
+  const params = createParams(
+    path.join(tempDir, "scheduled-key.jsonl"),
+    path.join(tempDir, "scheduled-key-workspace"),
+  );
+  const unavailable = new Error("The automation's recorded account was removed.");
+  const onSelected = vi.fn();
+  params.scheduledConfiguredKey = { unavailable, onSelected };
+  params.resolvedApiKey = "synthetic-configured-api-key";
+  const plan = createCodexRuntimePlanFixture();
+  params.runtimePlan = {
+    ...plan,
+    auth: {
+      ...plan.auth,
+      modelRoute: {
+        provider: "openai",
+        modelId: params.modelId,
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    },
+  };
+  await expect(
+    prepareCodexAttemptConnection({
+      params,
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { homeScope: "user" } },
+      },
+    }),
+  ).rejects.toBe(unavailable);
+  expect(onSelected).not.toHaveBeenCalled();
+});
+
 it.each(["api-key", "subscription", "native-command"] as const)(
   "keeps worker %s route constraints through actual client startup without local login",
   async (authRequirement) => {
