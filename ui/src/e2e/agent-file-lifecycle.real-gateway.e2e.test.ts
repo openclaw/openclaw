@@ -11,6 +11,10 @@ import {
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { ModelCatalogResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  startBuiltControlUiE2eServer,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
@@ -20,6 +24,10 @@ import { openAgentFallbackChain } from "./model-providers.test-support.ts";
 const suite = createControlUiE2eSuite({
   name: "Control UI agent file lifecycle with a real Gateway",
   startServerBeforeBrowser: true,
+  startServer() {
+    const root = inject("controlUiE2eDeploymentAssets")?.root;
+    return root ? startBuiltControlUiE2eServer(root) : startControlUiE2eServer();
+  },
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
