@@ -13,10 +13,12 @@ enum ClientCredentialStartup {
 
     /// A Gateway-held refusal establishes maintenance contention, not version incompatibility.
     nonisolated static func excludedGatewayRecovery(
-        _ exclusion: CLIInstallPrompter.ManagedRepairExclusion,
+        _ exclusion: CLIInstallPrompter.ManagedRepairExclusion?,
         detail: String) -> (title: String, message: String)
     {
         let owner = switch exclusion {
+        case nil:
+            "The app could not identify the tool managing your local Gateway, so it left the Gateway running."
         case .extendedStable:
             "Your local Gateway follows the extended-stable channel, so OpenClaw kept its version."
         case let .installPolicy(policy):

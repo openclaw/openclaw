@@ -240,12 +240,14 @@ export async function prepareStartupClientCredentials(
       const [
         { collectNestedErrorCandidates },
         { GatewayStateOwnerContentionError },
+        { LegacyGatewayHeldError },
         { DoctorMaintenanceRefusalError },
         { hasCommandProcessCleanupError },
         { resolveCommandProcessSignal },
       ] = await Promise.all([
         import("../infra/error-graph-internal.js"),
         import("../infra/gateway-state-owner.js"),
+        import("../infra/gateway-lock-legacy.js"),
         import("../infra/update-doctor-result.js"),
         import("../process/exec-result.js"),
         import("../process/exec-spawn.js"),
@@ -271,7 +273,8 @@ export async function prepareStartupClientCredentials(
       }
       const gatewayHeld = causes.some(
         (cause) =>
-          cause instanceof GatewayStateOwnerContentionError && cause.holder?.role === "gateway",
+          (cause instanceof GatewayStateOwnerContentionError && cause.holder?.role === "gateway") ||
+          cause instanceof LegacyGatewayHeldError,
       );
       if (
         gatewayHeld &&

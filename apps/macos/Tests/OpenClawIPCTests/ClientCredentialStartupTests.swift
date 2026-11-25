@@ -80,6 +80,13 @@ struct ClientCredentialStartupTests {
         }
     }
 
+    @Test func `confirmed contention without a recognized manager offers neutral recovery`() {
+        let recovery = ClientCredentialStartup.excludedGatewayRecovery(nil, detail: "synthetic busy state")
+        #expect(recovery.message.contains("could not identify"))
+        #expect(recovery.message.contains("choose Retry"))
+        #expect(!recovery.message.contains("extended-stable"))
+    }
+
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +30,7 @@ import {
 } from "../infra/device-identity.js";
 import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import {
   acquireGatewayStateOwner,
   GatewayStateOwnerContentionError,
@@ -37,6 +39,7 @@ import { readStartupMigrationWarning } from "../infra/state-migrations.messages.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { stateV24Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -454,6 +457,27 @@ describe("automatic client credential preparation", () => {
     changeRecordedFile(fixture.env, "ino");
     await fixture.prepare();
     await expectCredentials(fixture);
+  });
+
+  it("reports confirmed legacy Gateway contention to native credential recovery", async () => {
+    const fixture = await bootstrap();
+    changeRecordedFile(fixture.env, "ino");
+    vi.spyOn(os, "tmpdir").mockReturnValue(fixture.root);
+    const uid = process.getuid?.();
+    const lockDir = path.join(fixture.root, uid === undefined ? "openclaw" : `openclaw-${uid}`);
+    fs.mkdirSync(lockDir, { recursive: true });
+    const { configLockPath } = resolveGatewayLockPaths(fixture.env, lockDir);
+    fs.writeFileSync(
+      configLockPath,
+      JSON.stringify({
+        pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
+        startTime: getFileLockProcessStartTime(process.pid),
+        createdAt: new Date().toISOString(),
+        configPath: fixture.env.OPENCLAW_CONFIG_PATH,
+      }),
+    );
+    await expect(fixture.prepare()).rejects.toBeInstanceOf(ClientCredentialGatewayHeldError);
   });
 
   it.each([

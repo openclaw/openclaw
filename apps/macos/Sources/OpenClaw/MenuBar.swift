@@ -412,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.credentialLogger
                 .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
             // Only the matching CLI's Gateway-held refusal is that Gateway's owner to resolve.
-            guard let excludedGateway, let held = error as? ClientCredentialStartup.GatewayHeldError else {
+            guard let held = error as? ClientCredentialStartup.GatewayHeldError else {
                 self.pendingOpenURLs.removeAll()
                 self.pendingDashboardOpen = false
                 self.showCredentialStartupFailure()
@@ -431,11 +431,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Another owner keeps this Gateway, so the operator resolves maintenance there and retries in place.
     /// Background launches report the same recovery and quit, as before.
     private func retryAfterExcludedGatewayFailure(
-        _ exclusion: CLIInstallPrompter.ManagedRepairExclusion, detail: String) async -> Bool
+        _ exclusion: CLIInstallPrompter.ManagedRepairExclusion?, detail: String) async -> Bool
     {
         let recovery = ClientCredentialStartup.excludedGatewayRecovery(
             exclusion, detail: detail)
-        guard AppLaunchRuntimePlan.current.allowsActivation else {
+        guard AppLaunchRuntimePlan.current.allowsAutomaticPresentation,
+              AppLaunchRuntimePlan.current.allowsActivation
+        else {
             fputs("\(recovery.title). \(recovery.message)\n", stderr)
             return false
         }

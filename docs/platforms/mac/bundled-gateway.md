@@ -499,7 +499,9 @@ This conflict does not establish version incompatibility: maintenance can also
 reconcile a receipt after a filesystem remount without changing the credential
 layout.
 
-The app explains which owner keeps the Gateway and offers **Retry**. Resolve the
+The app names the Gateway owner when it can identify the manager, or gives neutral
+guidance otherwise, and offers **Retry**. Unverified legacy lock owners keep the
+generic recovery guidance rather than attributing the lock to a Gateway. Resolve the
 reported conflict through the tool that manages the Gateway, then choose
 **Retry**. Change the Gateway or app version only if recovery identifies a
 version incompatibility. Background launches print the same guidance and quit.

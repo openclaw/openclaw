@@ -156,10 +156,16 @@ struct ClientCredentialStartupCompositionTests {
             }
             let owned = try #require(running)
             // External Quit exercises AppKit termination, not the SIGTERM failsafe.
+            let quitStarted = ContinuousClock.now
             try #require(owned.terminate())
             print("[credential-recovery-proof] external Quit sent to real alert owner")
             await child?.value
+            let quitElapsed = quitStarted.duration(to: .now)
             let result = try #require(completion)
+            // A deadline-only exit can be clean while credential startup is still suspended.
+            try #require(
+                quitElapsed < .seconds(AppTerminationTiming.cleanupDeadlineSeconds),
+                "Quit must settle credential startup before the earliest cleanup deadline")
             try #require(!result.timedOut, "Quit must settle the alert without the subprocess timeout killing it")
             try #require(result.exitCode == 0)
             try #require(owned.isTerminated)
