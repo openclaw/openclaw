@@ -2,14 +2,26 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidScreenshotFixture
 import ai.openclaw.app.AndroidScreenshotScene
+import ai.openclaw.app.ChatDraft
+import ai.openclaw.app.ChatDraftPlacement
+import ai.openclaw.app.GatewayConnectionDisplay
+import ai.openclaw.app.GatewayCredentials
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.drainWithMainLooper
+import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayProxyCredentials
+import ai.openclaw.app.gateway.GatewayProxySaveResult
+import ai.openclaw.app.gateway.GatewayRegistryEntry
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.app.Activity
 import android.content.Context
@@ -37,16 +49,21 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextReplacement
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import com.google.android.gms.tasks.Task
@@ -60,6 +77,8 @@ import com.google.mlkit.vision.barcode.common.internal.BarcodeSource
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -279,6 +298,9 @@ class SetupQrSelectionTest {
     )
     capture("onboarding-mixed-candidates")
     composeRule.onNodeWithText("QR code not accepted").assertDoesNotExist()
+    composeRule.onNodeWithText("Connect to this Gateway?").assertIsDisplayed()
+    assertFalse(tlsAttempt.isCompleted)
+    composeRule.onNodeWithText("Connect").performClick()
     composeRule.onNodeWithText("Pair Gateway").assertIsDisplayed()
     drainWithMainLooper {
       withTimeout(5_000) { assertEquals("onboarding.invalid" to 443, tlsAttempt.await()) }
@@ -293,6 +315,117 @@ class SetupQrSelectionTest {
       assertEquals("/openclaw", saved.contextPath)
       assertFalse("A pending fixture TLS probe must not connect to a gateway", model.gatewayConnectionDisplay.value.isConnected)
     }
+  }
+
+  @Test
+  fun proxySaveFailureAndRestoredIdentityRecoveryPreservePairingAndDraft() {
+    runtime.prepareForGatewaySetup()
+    prefs.setOnboardingCompleted(false)
+    val endpoint = GatewayEndpoint.manual("gateway.invalid", 443, true)
+    val original = GatewayCredentials(token = "saved-token", password = "saved-password")
+    prefs.saveGatewayCredentials(endpoint.stableId, original)
+    prefs.saveGatewayCustomHeaders(endpoint.stableId, mapOf("Authorization" to "Bearer existing-proxy"))
+    prefs.gatewayRegistry.upsert(GatewayRegistryEntry(endpoint.stableId, GatewayRegistryEntryKind.MANUAL, name = "Home", host = endpoint.host, port = endpoint.port, tls = true))
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+    val tokens = DeviceAuthStore(prefs)
+    for (role in listOf("node", "operator")) assertTrue(tokens.saveToken(endpoint.stableId, deviceId, role, "saved-$role"))
+    val restoration = StateRestorationTester(composeRule)
+    restoration.setContent {
+      activity = requireNotNull(LocalActivity.current) as ComponentActivity
+      ClawDesignTheme {
+        if (mounted.value) Box(Modifier.fillMaxSize().testTag("onboarding-qr-proof")) { RootScreen(model) }
+      }
+    }
+    composeRule.onNodeWithText("Continue").performClick()
+    composeRule.onNodeWithText("Scan QR or setup code").performClick()
+    val setup = Base64.getUrlEncoder().withoutPadding().encodeToString("""{"url":"wss://gateway.invalid","bootstrapToken":"replacement-setup"}""".toByteArray())
+    chooseImage(setup, scroll = false)
+    composeRule.onNodeWithText("HTTP Basic").performClick()
+    composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
+    composeRule.onNodeWithTag("proxy-password").performTextReplacement("discarded")
+    composeRule.onAllNodesWithText("Cancel").onLast().performClick()
+    assertFalse(prefs.hasGatewayProxyCredentials(endpoint.stableId))
+    composeRule.onNodeWithText("HTTP Basic").performClick()
+    composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
+    composeRule.onNodeWithTag("proxy-save").assertIsNotEnabled()
+    composeRule.onNodeWithTag("proxy-password").performTextReplacement("replacement")
+    composeRule.onNodeWithTag("proxy-save").performScrollTo().performClick()
+    val draft = ChatDraft("Keep this draft", ChatDraftPlacement.Replace, ChatComposerOwner(endpoint.stableId, "main", "main"))
+    composeRule.runOnIdle { model.setChatDraft(draft) }
+    composeRule.onNodeWithText("Connect").performClick()
+    drainWithMainLooper { withTimeout(5_000) { model.gatewayConnectionDisplay.first { it.problem?.code == "PROXY_AUTH_SAVE_FAILED" } } }
+    composeRule.onNodeWithText("Could not save proxy login.", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Go back").assertIsDisplayed()
+    assertEquals(original, prefs.loadGatewayCredentials(endpoint.stableId))
+    assertEquals(draft, model.chatDraft.value)
+    for (role in listOf("node", "operator")) assertEquals("saved-$role", tokens.loadToken(endpoint.stableId, deviceId, role))
+    assertFalse(tlsAttempt.isCompleted)
+    capture("onboarding-proxy-save-failure")
+
+    val failure = requireNotNull(model.gatewayConnectionDisplay.value.problem)
+
+    fun reportProblem(
+      code: String,
+      reason: String? = null,
+    ) {
+      val problem = failure.copy(code = code, reason = reason, message = "Sign-in required")
+      composeRule.runOnIdle {
+        ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_nodeConnected").value = true
+        ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay").value =
+          GatewayConnectionDisplay(false, "Gateway error: sign-in required", problem)
+      }
+      drainWithMainLooper { withTimeout(5_000) { model.gatewayConnectionDisplay.first { it.problem == problem } } }
+    }
+    reportProblem("PROXY_AUTH_REQUIRED")
+    restoration.emulateSavedInstanceStateRestore()
+    composeRule.onNodeWithText("Configure proxy login").performClick()
+    composeRule.onNodeWithText("HTTP Basic").performClick()
+    composeRule.onNodeWithTag("proxy-destination").assertTextEquals("https://gateway.invalid:443")
+    composeRule.onNodeWithTag("proxy-password").performTextReplacement("unsaved-secret")
+    restoration.emulateSavedInstanceStateRestore()
+    composeRule.onNodeWithText("Configure proxy login").performClick()
+    composeRule.onNodeWithText("HTTP Basic").performClick()
+    composeRule.onNodeWithTag("proxy-username").performTextReplacement("alice")
+    composeRule.onNodeWithTag("proxy-save").assertIsNotEnabled()
+    composeRule.onAllNodesWithText("Cancel").onLast().performClick()
+    composeRule.onNodeWithText("Cancel").performClick()
+
+    reportProblem("AUTH_UNAUTHORIZED", "trusted_proxy_user_missing")
+    restoration.emulateSavedInstanceStateRestore()
+    composeRule.onNodeWithText("Verified sign-in required").assertIsDisplayed()
+    composeRule.onNodeWithText("View details").performScrollTo().performClick()
+    composeRule.onNodeWithText("Chat/operator connected: false", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Node connected: true", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Close").performClick()
+    capture("onboarding-proxy-identity-recovery")
+    composeRule.onNodeWithText("Use authenticated setup code").performClick()
+    composeRule.onNodeWithText("Enter setup code").assertIsDisplayed()
+    assertEquals(original, prefs.loadGatewayCredentials(endpoint.stableId))
+    assertFalse(model.onboardingCompleted.value)
+  }
+
+  @Test
+  fun failedSavedGatewayProxyEditKeepsItsAdditionRequestForRetry() {
+    runtime.prepareForGatewaySetup()
+    val endpoint = GatewayEndpoint.manual("gateway.invalid", 443, true)
+    prefs.gatewayRegistry.upsert(GatewayRegistryEntry(endpoint.stableId, GatewayRegistryEntryKind.MANUAL, name = "Home", host = endpoint.host, port = endpoint.port, tls = true))
+    prefs.saveGatewayCredentials(endpoint.stableId, token = "original")
+    prefs.saveGatewayCustomHeaders(endpoint.stableId, mapOf("Authorization" to "Bearer existing-proxy"))
+    model.openGatewayAddition()
+    val addition = requireNotNull(model.gatewayAdditionRequest.value)
+    val config = GatewayConnectConfig(endpoint.host, endpoint.port, true, "", "", "")
+    val action = GatewayProxyAuthAction.Save(GatewayProxyCredentials("alice", "replacement"))
+    model.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.PRESERVE, action), addition)
+    drainWithMainLooper {
+      withTimeout(5_000) {
+        assertEquals(GatewayProxySaveResult.FAILED, addition.proxySaveFailure.first { it != null })
+      }
+    }
+    assertEquals(addition, model.gatewayAdditionRequest.value)
+    assertEquals("original", prefs.loadGatewayCredentials(endpoint.stableId).token)
+    assertFalse(prefs.hasGatewayProxyCredentials(endpoint.stableId))
+    assertFalse(tlsAttempt.isCompleted)
   }
 
   private fun chooseImage(

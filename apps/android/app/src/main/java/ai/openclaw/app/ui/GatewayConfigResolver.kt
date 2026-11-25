@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.gateway.GatewayProxyCredentials
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayContextPath
 import ai.openclaw.app.i18n.NativeText
@@ -59,10 +60,21 @@ internal enum class GatewaySavedAuthAction {
   REPLACE_SETUP,
 }
 
+internal sealed interface GatewayProxyAuthAction {
+  data object Keep : GatewayProxyAuthAction
+
+  data object Remove : GatewayProxyAuthAction
+
+  class Save(
+    val credentials: GatewayProxyCredentials,
+  ) : GatewayProxyAuthAction
+}
+
 /** Endpoint plus the credential ownership decision applied by MainViewModel. */
 internal data class GatewayConnectPlan(
   val config: GatewayConnectConfig,
   val savedAuthAction: GatewaySavedAuthAction,
+  val proxyAuthAction: GatewayProxyAuthAction = GatewayProxyAuthAction.Keep,
 )
 
 /** Validation reason used by setup, QR, and manual endpoint copy. */

@@ -6,6 +6,8 @@ import java.io.IOException
 
 /** One immutable grant owned by a physical upgrade transaction and its media capabilities. */
 interface GatewayIngressAuthorization {
+  val isProxyBasic: Boolean get() = false
+
   /** Internal same-request upgrade retries retain this grant; its owner cancels and drains the socket on retirement. */
   suspend fun authorizeUpgrade(request: Request): Request
 
@@ -18,4 +20,5 @@ interface GatewayIngressAuthorization {
 
 class GatewayExternalAuthorizationException(
   message: String = "Sign in to the gateway's access provider to reconnect.",
+  val code: String = "EXTERNAL_AUTH_REQUIRED",
 ) : IOException(message)

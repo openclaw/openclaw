@@ -16,6 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -27,6 +28,7 @@ import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.QueueDispatcher
 import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
@@ -37,7 +39,12 @@ import org.bouncycastle.asn1.DERNull
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier
+import org.bouncycastle.asn1.x509.BasicConstraints
 import org.bouncycastle.asn1.x509.Certificate
+import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.asn1.x509.ExtensionsGenerator
+import org.bouncycastle.asn1.x509.GeneralName
+import org.bouncycastle.asn1.x509.GeneralNames
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
 import org.bouncycastle.asn1.x509.Time
 import org.bouncycastle.asn1.x509.V3TBSCertificateGenerator
@@ -51,6 +58,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import java.io.IOException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -68,10 +77,24 @@ import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_FRAME =
   """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}"""
+
+/** Substitute only CA discovery; the real builder enforces pins, chain trust, and hostnames. */
+@Implements(className = "ai.openclaw.app.gateway.GatewayTlsKt", isInAndroidSdk = false)
+class FixtureGatewayTls {
+  companion object {
+    var defaultTrust: X509TrustManager? = null
+
+    @JvmStatic
+    @Implementation
+    fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? = params?.let { buildGatewayTlsConfig(it, requireNotNull(defaultTrust)) }
+  }
+}
 
 private class NoopDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
@@ -100,6 +123,105 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
+  @Test
+  @Config(instrumentedPackages = ["ai.openclaw.app.gateway.GatewayTlsKt"], shadows = [FixtureGatewayTls::class])
+  fun basicProxyKeepsGatewayAuthSeparateAndEnforcesTlsAndRedirectBoundaries() =
+    runBlocking {
+      val trusted = sourceFaviconTls()
+      val wrongHost = sourceFaviconTls("127.0.0.2")
+      val untrusted = sourceFaviconTls()
+      val foreign = MockWebServer().apply { start() }
+      try {
+        for ((scenario, expected) in listOf(
+          "ok" to null,
+          "missing" to "PROXY_AUTH_REQUIRED",
+          "password" to "PROXY_AUTH_REQUIRED",
+          "forbidden" to "HTTP_UPGRADE_REJECTED",
+          "redirect" to "PROXY_REDIRECT",
+          "foreign" to "PROXY_REDIRECT",
+          "host" to "PROXY_TLS_FAILURE",
+          "ca" to "PROXY_TLS_FAILURE",
+          "pin" to "PROXY_TLS_FAILURE",
+        )) {
+          val served =
+            when (scenario) {
+              "host" -> wrongHost
+              "ca" -> untrusted
+              else -> trusted
+            }
+          FixtureGatewayTls.defaultTrust = if (scenario == "host") wrongHost.third else trusted.third
+          val connect = AtomicReference<JsonObject>()
+          val server = startCapturingGatewayServer(tls = served.first, onConnect = connect::set) {}
+          val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+          val outcome = CompletableDeferred<Pair<GatewaySession.ErrorShape?, Boolean>>()
+          val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, true)
+          val grant = if (scenario == "missing") null else GatewayBasicProxyAuthorization(endpoint, GatewayProxyCredentials("alice", "secret"), isCurrent = { true })
+          val session =
+            ingressSession(
+              scope,
+              grant,
+              onFailure = { error, paused -> outcome.complete(error to paused) },
+              onConnected = { outcome.complete(null to false) },
+              socketFactory = { client, request, listener -> client.newWebSocket(request, listener) },
+            )
+          try {
+            val response =
+              when (scenario) {
+                "missing", "password" -> MockResponse().setResponseCode(401).setHeader("WWW-Authenticate", "Basic realm=\"proxy\"")
+                "forbidden" -> MockResponse().setResponseCode(403)
+                "redirect" -> MockResponse().setResponseCode(302).setHeader("Location", server.url("/other"))
+                "foreign" -> MockResponse().setResponseCode(302).setHeader("Location", foreign.url("/must-not-load"))
+                else -> null
+              }
+            if (response != null) server.dispatcher = QueueDispatcher().apply { enqueueResponse(response) }
+            val pin =
+              when (scenario) {
+                "host", "ca" -> served.second
+                "pin" -> "00".repeat(32)
+                else -> null
+              }
+            connectIngressSession(session, endpoint = endpoint, tls = GatewayTlsParams(pin, requireSystemTrust = true))
+            val (error, paused) = withTimeout(TEST_TIMEOUT_MS) { outcome.await() }
+            assertEquals(scenario, expected, error?.code)
+            assertEquals(scenario, expected != null, paused)
+            if (expected == "PROXY_TLS_FAILURE") {
+              assertEquals(0, server.requestCount)
+            } else {
+              assertEquals("Basic YWxpY2U6c2VjcmV0".takeUnless { scenario == "missing" }, server.takeRequest().getHeader("Authorization"))
+              assertEquals(1, server.requestCount)
+            }
+            if (scenario == "ok") {
+              val params = connect.get().getValue("params").jsonObject
+              val auth = params.getValue("auth").jsonObject
+              assertEquals("gateway-token", auth.getValue("token").jsonPrimitive.content)
+              assertEquals("node", params.getValue("role").jsonPrimitive.content)
+              val config = requireNotNull(resolveGatewaySourcePreviewConfig(JsonObject(emptyMap()), server.url("/").toString(), 1))
+              val image = byteArrayOf(1, 2, 3, 4)
+              server.dispatcher =
+                QueueDispatcher().apply {
+                  enqueueResponse(MockResponse().setResponseCode(401))
+                  enqueueResponse(MockResponse().setHeader("Content-Type", "image/png").setBody(Buffer().write(image)))
+                }
+              assertNull(session.loadSourceFavicon(endpoint.stableId, config, "example.com") { it() })
+              assertEquals("Basic YWxpY2U6c2VjcmV0", server.takeRequest().getHeader("Authorization"))
+              assertEquals("A rejected image must not retry with Gateway Bearer", 2, server.requestCount)
+              assertArrayEquals(image, session.loadSourceFavicon(endpoint.stableId, config, "allowed.example") { it() }?.bytes)
+              assertEquals("Basic YWxpY2U6c2VjcmV0", server.takeRequest().getHeader("Authorization"))
+              assertEquals(3, server.requestCount)
+            }
+            assertEquals(0, foreign.requestCount)
+          } finally {
+            session.disconnectAndJoin()
+            scope.cancel()
+            server.shutdown()
+          }
+        }
+      } finally {
+        FixtureGatewayTls.defaultTrust = null
+        foreign.shutdown()
+      }
+    }
+
   @Test
   fun sourceFaviconsUseReadAuthContextPathBoundsAndCurrentConnection() =
     runBlocking {
@@ -933,7 +1055,7 @@ class GatewaySessionCustomHeadersTest {
       }
     }
 
-  private fun sourceFaviconTls(): Pair<SSLSocketFactory, String> {
+  private fun sourceFaviconTls(sanIp: String = "127.0.0.1"): Triple<SSLSocketFactory, String, X509TrustManager> {
     val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
     val algorithm = AlgorithmIdentifier(PKCSObjectIdentifiers.sha256WithRSAEncryption, DERNull.INSTANCE)
     val subject = X500Name("CN=source-favicon-test")
@@ -947,6 +1069,13 @@ class GatewaySessionCustomHeadersTest {
           setSubject(subject)
           setValidity(Validity(Time(Date(now - 60_000)), Time(Date(now + 86_400_000))))
           setSubjectPublicKeyInfo(SubjectPublicKeyInfo.getInstance(keyPair.public.encoded))
+          setExtensions(
+            ExtensionsGenerator()
+              .apply {
+                addExtension(Extension.basicConstraints, true, BasicConstraints(true))
+                addExtension(Extension.subjectAlternativeName, false, GeneralNames(GeneralName(GeneralName.iPAddress, sanIp)))
+              }.generate(),
+          )
         }.generateTBSCertificate()
     val signature =
       Signature.getInstance("SHA256withRSA").apply {
@@ -964,7 +1093,8 @@ class GatewaySessionCustomHeadersTest {
     val managers = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(keyStore, password) }
     val factory = SSLContext.getInstance("TLS").apply { init(managers.keyManagers, null, null) }.socketFactory
     val fingerprint = MessageDigest.getInstance("SHA-256").digest(encoded).joinToString("") { "%02x".format(it) }
-    return factory to fingerprint
+    val trust = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(keyStore) }
+    return Triple(factory, fingerprint, trust.trustManagers.filterIsInstance<X509TrustManager>().single())
   }
 
   @Test
@@ -1541,7 +1671,7 @@ class GatewaySessionCustomHeadersTest {
 
   private fun ingressSession(
     scope: CoroutineScope,
-    authorization: GatewayIngressAuthorization,
+    authorization: GatewayIngressAuthorization?,
     onFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
     onConnected: (GatewayHelloSummary) -> Unit = {},
     socketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket,
@@ -1560,8 +1690,9 @@ class GatewaySessionCustomHeadersTest {
   private fun connectIngressSession(
     session: GatewaySession,
     host: String = "gateway.example.test",
+    endpoint: GatewayEndpoint = GatewayEndpoint.manual(host, 443),
+    tls: GatewayTlsParams = GatewayTlsParams(expectedFingerprint = "aa".repeat(32)),
   ) {
-    val endpoint = GatewayEndpoint.manual(host, 443)
     session.connect(
       endpoint = endpoint,
       token = "gateway-token",
@@ -1576,13 +1707,18 @@ class GatewaySessionCustomHeadersTest {
           permissions = emptyMap(),
           client = GatewayClientInfo("openclaw-android-test", "Android Test", "test", "android", "node", "test", "android", "test"),
         ),
-      tls = GatewayTlsParams(expectedFingerprint = "aa".repeat(32)),
+      tls = tls,
     )
   }
 
-  private fun startCapturingGatewayServer(onHandshake: (RecordedRequest) -> Unit): MockWebServer {
+  private fun startCapturingGatewayServer(
+    tls: SSLSocketFactory? = null,
+    onConnect: (JsonObject) -> Unit = {},
+    onHandshake: (RecordedRequest) -> Unit,
+  ): MockWebServer {
     val json = Json { ignoreUnknownKeys = true }
     return MockWebServer().apply {
+      tls?.let { useHttps(it, false) }
       dispatcher =
         object : Dispatcher() {
           override fun dispatch(request: RecordedRequest): MockResponse {
@@ -1604,6 +1740,7 @@ class GatewaySessionCustomHeadersTest {
                   if (frame["type"]?.jsonPrimitive?.content != "req") return
                   val id = frame["id"]?.jsonPrimitive?.content ?: return
                   if (frame["method"]?.jsonPrimitive?.content != "connect") return
+                  onConnect(frame)
                   webSocket.send(
                     """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
                   )
