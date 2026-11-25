@@ -282,8 +282,9 @@ export function catalogToolLabel(
       }
     }
   } else if (phase === "done" && (name === "knowledge_relink" || name === "knowledge_verify")) {
+    const details = asNullableRecord(card.details);
     const result = {
-      ...asNullableRecord(card.details),
+      ...(asNullableRecord(asNullableRecord(details?.result)?.details) ?? details),
       ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
     };
     if (name === "knowledge_relink") {

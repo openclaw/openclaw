@@ -123,6 +123,31 @@ it.each([
   },
 );
 
+it.each([
+  ["knowledge_relink", {}, { dryRun: false, linked: 2 }, "Relinked remembered claims"],
+  [
+    "knowledge_verify",
+    { records: [{ id: "decision" }] },
+    { checked: 1, passed: 1, failed: 0 },
+    "Verified knowledge publication",
+  ],
+] as const)(
+  "reads the retained dispatcher result for %s when the text is omitted",
+  async (name, args, result, label) => {
+    const container = await mountCard(
+      {
+        id: "knowledge",
+        name: "tool_call",
+        args: { id: `openclaw:knowledge:${name}`, args },
+        completed: true,
+        details: { tool: { name }, result: { details: result } },
+      },
+      { expanded: false },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+  },
+);
+
 const recordFence = { id: "claim-earlier", expectedRevision: 1, expectedHash: "1".repeat(64) };
 const request = {
   requestId: "00000000-0000-4000-8000-000000000123",
