@@ -84,7 +84,9 @@ function parseArgs(argv: string[]) {
     } as const;
   }
   for (const name of ["definition", "harness-sha", "timeout-ms"]) {
-    if (values.has(name)) throw new Error(`--${name} requires node-cache-disabled-control mode`);
+    if (values.has(name)) {
+      throw new Error(`--${name} requires node-cache-disabled-control mode`);
+    }
   }
   if (mode === "node-cache-diagnostics") {
     for (const name of values.keys()) {

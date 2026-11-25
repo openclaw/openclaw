@@ -87,8 +87,9 @@ function git(root: string, args: string[], deadline: VitestPairDeadline) {
       GIT_TERMINAL_PROMPT: "0",
     },
   });
-  if (result.error || result.status !== 0)
+  if (result.error || result.status !== 0) {
     throw new Error(`Qualification Git read failed: ${args[0]}`);
+  }
   deadline.throwIfExpired();
   return result.stdout.trim();
 }
@@ -98,8 +99,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
     !Number.isSafeInteger(input.timeoutMs) ||
     input.timeoutMs <= 0 ||
     input.timeoutMs > 30 * 60_000
-  )
+  ) {
     throw new Error("Disabled control requires an explicit deadline of at most 30 minutes");
+  }
   const workload = realpathSync(input.workloadDir);
   const harness = realpathSync(fileURLToPath(new URL("../../", import.meta.url)));
   const output = path.resolve(input.outputDir);
@@ -110,11 +112,13 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
       roots.some((other, j) => i !== j && (root === other || root.startsWith(other + path.sep))),
     ) ||
     [output, scratch].some((root) => root === harness || root.startsWith(harness + path.sep))
-  )
+  ) {
     throw new Error("Control output and scratch must be outside both checkouts and disjoint");
+  }
   for (const root of [output, scratch]) {
-    if (realpathSync(path.dirname(root)) !== path.dirname(root) || existsSync(root))
+    if (realpathSync(path.dirname(root)) !== path.dirname(root) || existsSync(root)) {
       throw new Error("Control paths require absent directories with physical parents");
+    }
   }
   const checkOutput = ownedDirectory(output);
   const checkScratch = ownedDirectory(scratch);
@@ -150,14 +154,16 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
               process.arch !== runtime.architecture ||
               process.versions.bun ||
               sha256(readFileSync(process.execPath)) !== runtime.executableSha256
-            )
+            ) {
               throw new Error("Pinned workload runtime differs");
+            }
             if (
               git(workload, ["rev-parse", "HEAD"], deadline) !== definition.workloadSha ||
               git(workload, ["rev-parse", "HEAD^{tree}"], deadline) !== definition.workloadTree ||
               git(workload, ["status", "--porcelain=v1", "--untracked-files=all"], deadline)
-            )
+            ) {
               throw new Error("Pinned workload SHA/tree or clean state differs");
+            }
             assertDefinitionSources(workload, definition);
           };
           assertSources();
@@ -166,14 +172,16 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
               !/^[0-9a-f]{40}$/u.test(input.harnessSha) ||
               git(harness, ["rev-parse", "HEAD"], deadline) !== input.harnessSha ||
               git(harness, ["status", "--porcelain=v1", "--untracked-files=all"], deadline)
-            )
+            ) {
               throw new Error("Control requires a clean committed harness at the explicit SHA");
+            }
           };
           assertHarness();
           const harnessInputs = NODE_CACHE_DISABLED_INPUTS.map((relative) => {
             const file = path.join(harness, relative);
-            if (realpathSync(file) !== file || !lstatSync(file).isFile())
+            if (realpathSync(file) !== file || !lstatSync(file).isFile()) {
               throw new Error("Harness input is not a physical file");
+            }
             const bytes = readFileSync(file);
             const committed = git(
               harness,
@@ -183,8 +191,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
             if (
               createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") !==
               committed
-            )
+            ) {
               throw new Error(`Harness input differs: ${relative}`);
+            }
             return { path: relative, bytes: bytes.length, sha256: sha256(bytes) };
           });
           const pnpm = input.pnpmBin;
@@ -228,8 +237,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
           if (
             version.exitCode !== 0 ||
             readFileSync(versionLog, "utf8").trim() !== definition.pnpmVersion
-          )
+          ) {
             throw new Error("Prepared pnpm version differs");
+          }
           const prepared = await inventoryPreparedWorkload(workload, deadline);
           writeJsonAtomic(path.join(output, "prepared-inventory.json"), prepared);
           const log = path.join(output, "disabled.log");
@@ -262,8 +272,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
             });
             settled = true;
             record.exitCode = result.exitCode;
-            if (result.exitCode !== 0)
+            if (result.exitCode !== 0) {
               throw new Error(`Disabled control exited with status ${result.exitCode}`);
+            }
             checks.oracle = { status: "failed" };
             record.execution = parseVitestExecutionReport(
               report,
@@ -287,30 +298,34 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
               events.some(
                 (line) => line !== "[compile cache] Disabled by NODE_DISABLE_COMPILE_CACHE.",
               )
-            )
+            ) {
               throw new Error("Disabled control generated cache activity");
+            }
             checks.diagnostic = { status: "passed" };
           } catch (error) {
             failure = error instanceof Error ? error : new Error(String(error));
           }
           if (settled && !deadline.signal.aborted && Date.now() < deadline.deadlineAt) {
             try {
-              if (hashPreparedPnpmExecutable(pnpm) !== pnpmSha256)
+              if (hashPreparedPnpmExecutable(pnpm) !== pnpmSha256) {
                 throw new Error("Prepared pnpm bytes changed");
+              }
               const delta = preparedInventoryDelta(
                 prepared,
                 await inventoryPreparedWorkload(workload, deadline),
               );
               record.inventory = delta;
               checks.inventory = { status: "failed" };
-              if (delta.beforeSha256 !== delta.afterSha256)
+              if (delta.beforeSha256 !== delta.afterSha256) {
                 throw new Error("Prepared workload changed during control");
+              }
               assertSources();
               assertHarness();
               for (const entry of harnessInputs) {
                 const file = path.join(harness, entry.path);
-                if (realpathSync(file) !== file || sha256(readFileSync(file)) !== entry.sha256)
+                if (realpathSync(file) !== file || sha256(readFileSync(file)) !== entry.sha256) {
                   throw new Error(`Harness input changed: ${entry.path}`);
+                }
               }
               checks.inventory = { status: "passed" };
             } catch (error) {
@@ -325,7 +340,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
           }
           record.logSha256 = existsSync(log) ? sha256(readFileSync(log)) : null;
           record.reportSha256 = existsSync(report) ? sha256(readFileSync(report)) : null;
-          if (failure) throw failure;
+          if (failure) {
+            throw failure;
+          }
         }, input.timeoutMs);
       } catch (error) {
         failure = error instanceof Error ? error : new Error(String(error));
@@ -338,9 +355,13 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
           } catch (error) {
             failure ??= error instanceof Error ? error : new Error(String(error));
           }
-        } else record.cleanup = "retained-uncertain-child";
+        } else {
+          record.cleanup = "retained-uncertain-child";
+        }
         for (const check of Object.values(checks)) {
-          if (check.status !== "passed") check.reason = failure?.message ?? "Not reached";
+          if (check.status !== "passed") {
+            check.reason = failure?.message ?? "Not reached";
+          }
         }
         Object.assign(record, {
           status: failure ? "failure" : "success",
@@ -350,7 +371,9 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
         checkOutput();
         writeJsonAtomic(path.join(output, "disabled.json"), record);
       }
-      if (failure) throw failure;
+      if (failure) {
+        throw failure;
+      }
       return record;
     },
     checkOutput,
