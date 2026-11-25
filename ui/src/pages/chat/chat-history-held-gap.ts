@@ -10,11 +10,11 @@ import {
   nativeHistoryMessageSourceId,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   CHAT_HISTORY_OLDER_PAGE_LIMIT,
   requestOlderChatHistoryPage,
-} from "./chat-history-request.ts";
+} from "./chat-history-older-request.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   type ChatHistoryResult,
   historySessionId,

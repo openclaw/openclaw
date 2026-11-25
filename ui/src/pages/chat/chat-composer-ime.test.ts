@@ -84,11 +84,7 @@ it.each([
 
 it("leaves active IME keys to the browser and recovers Enter-send after blur", () => {
   // A dropped compositionend must not leave Enter and history keys stuck after blur.
-  const onHistoryKeydown = vi.fn(() => ({
-    handled: true,
-    preventDefault: true,
-    restoreCaret: null,
-  }));
+  const onHistoryKeydown = vi.fn(() => "up" as const);
   const { container, props } = renderComposerFixture({ onHistoryKeydown, draft: "hello" });
   const textarea = getComposerTextarea(container);
 

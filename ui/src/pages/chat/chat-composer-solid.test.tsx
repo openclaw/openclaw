@@ -113,17 +113,9 @@ it("updates edits and history from the draft owner without remounting the input"
   flush();
   expect(textarea.value).toBe("@Alex restored");
   state.chatLocalInputHistoryBySession[state.sessionKey] = [{ text: "Earlier input", ts: 1 }];
-  state.handleChatInputHistoryKey({
-    key: "ArrowUp",
-    keyCode: 38,
-    selectionStart: 0,
-    selectionEnd: 0,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    shiftKey: false,
-    isComposing: false,
-  });
+  expect(
+    state.handleChatInputHistoryKey({ key: "ArrowUp", selectionStart: 0, selectionEnd: 0 }),
+  ).toBe("up");
   flush();
   expect(textarea.value).toBe("Earlier input");
   expect(view.textarea()).toBe(textarea);

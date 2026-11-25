@@ -8,7 +8,8 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsRewindResult } from "../../api/types.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
-import { loadOlderChatHistoryPage, requestChatSessionSnapshot } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage } from "./chat-history-older-request.ts";
+import { requestChatSessionSnapshot } from "./chat-history-request.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   activeHistory as emptyActiveHistory,
