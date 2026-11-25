@@ -529,4 +529,113 @@ describe("CronService failure repair", () => {
       "failure-repair",
     ]);
   });
+
+  it(
+    "dedupes volatile error tokens, replaces NO_REPLY no-ops on stagnant streaks, and distinguishes new unknown-reason errors",
+    repairCase(async (f) => {
+      f.runIsolatedAgentJob.mockResolvedValueOnce({
+        status: "error",
+        error:
+          "2026-11-25T10:00:00Z sync helper (pid=4120, req=550e8400-e29b-41d4-a716-446655440000) failed after 12.4s",
+        errorClassification: { kind: "reason", reason: "unknown" },
+      });
+      const job = await f.addJob("report sync", owned);
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 1, 0);
+      expect(f.runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain(
+        "Transient (provider outage",
+      );
+
+      // Volatile timestamps, UUIDs, PIDs, and durations do not break 24h incident dedup even without a classified reason.
+      vi.setSystemTime(Date.now() + 60_000);
+      f.runIsolatedAgentJob.mockResolvedValueOnce({
+        status: "error",
+        error:
+          "2026-11-25T10:01:00Z sync helper (pid=9811, req=6ba7b810-9dad-11d1-80b4-00c04fd430c8) failed after 3.1s",
+      });
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 1, 0);
+
+      // Once the same normalized signature reaches 3+ consecutive errors, the reminder stops offering a NO_REPLY no-op.
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      f.runIsolatedAgentJob.mockResolvedValueOnce({
+        status: "error",
+        error:
+          "2026-11-26T10:01:00Z sync helper (pid=7744, req=123e4567-e89b-12d3-a456-426614174000) failed after 4.8s",
+        errorClassification: { kind: "reason", reason: "unknown" },
+      });
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 2, 0);
+      const stagnantBrief = f.runCronFailureRepair.mock.calls[1]?.[0]?.message ?? "";
+      expect(stagnantBrief).toContain("failed 3 runs in a row");
+      expect(stagnantBrief).toContain("Do not leave the automation unchanged");
+      expect(stagnantBrief).toContain("materially different fix");
+      expect(stagnantBrief).not.toContain("Transient (provider outage");
+
+      // A genuinely different error under generic reason "unknown" alerts immediately as a fresh failure.
+      vi.setSystemTime(Date.now() + 60_000);
+      f.runIsolatedAgentJob.mockResolvedValueOnce({
+        status: "error",
+        error: "SyntaxError: unexpected token in helper.mjs",
+        errorClassification: { kind: "reason", reason: "unknown" },
+      });
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 3, 0);
+      expect(f.runCronFailureRepair.mock.calls[2]?.[0]?.message).toContain(
+        "Transient (provider outage",
+      );
+    }),
+  );
+
+  it(
+    "forbids model or provider bypasses when a permission or auth refusal stagnates",
+    repairCase(async (f) => {
+      f.runIsolatedAgentJob.mockResolvedValue({
+        status: "error",
+        error: "Permission denied: tool exec is not allowed by toolsAllow policy",
+      });
+      const job = await f.addJob("restricted audit", owned);
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 1, 0);
+
+      vi.setSystemTime(Date.now() + 60_000);
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 1, 0);
+
+      vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
+      await f.cron.run(job.id, "force");
+      expectNotifications(f, 2, 0);
+      const gateBrief = f.runCronFailureRepair.mock.calls[1]?.[0]?.message ?? "";
+      expect(gateBrief).toContain(
+        "Do not switch models, providers, or accounts to bypass a denied permission",
+      );
+      expect(gateBrief).toContain("silently downgrade");
+      expect(gateBrief).not.toContain("Transient (provider outage");
+    }),
+  );
+
+  it(
+    "keeps high-volume no_change monitor runs and intentional pauses out of failure repair",
+    repairCase(async (f) => {
+      f.runIsolatedAgentJob.mockResolvedValue({
+        status: "ok",
+        delivered: false,
+        result: { outcome: "no_change", summary: "no new items" },
+      });
+      const job = await f.addJob("high-volume monitor", {
+        ...owned,
+        delivery: { mode: "none" },
+      });
+      for (let i = 0; i < 25; i += 1) {
+        await f.cron.run(job.id, "force");
+      }
+      expect(f.cron.getJob(job.id)?.state).toMatchObject({
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+      });
+      expect(f.cron.getJob(job.id)?.state.failureAlertIncident).toBeUndefined();
+      await f.cron.update(job.id, { enabled: false });
+      expectNotifications(f, 0, 0);
+    }),
+  );
 });

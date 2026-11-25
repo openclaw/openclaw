@@ -2,10 +2,37 @@
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import type { CronStagnationDisposition } from "../stagnation.js";
 import type { CronJob } from "../types.js";
 
 const REPAIR_PAYLOAD_MAX_CHARS = 4_000;
 const REPAIR_ERROR_MAX_CHARS = 1_000;
+
+function buildRecurringRepairSteps(params: {
+  consecutiveErrors: number;
+  stagnation?: CronStagnationDisposition;
+}): string[] {
+  if (params.stagnation === "authority_or_auth_gate") {
+    return [
+      `1. Do not leave the automation unchanged with ${SILENT_REPLY_TOKEN}. Do not switch models, providers, or accounts to bypass a denied permission, policy, or sign-in requirement, and do not silently downgrade the task.`,
+      "2. If a workspace file or prompt mistake caused the automation to request the wrong tool or target within its existing permissions, fix it and reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
+      "3. Otherwise: tell the user in one or two plain sentences what permission, sign-in, or billing action is needed to unblock this automation. Do not paste the raw error.",
+    ];
+  }
+  if (params.stagnation === "explore_new_approach") {
+    return [
+      `1. Do not leave the automation unchanged with ${SILENT_REPLY_TOKEN}: this same failure has repeated across ${params.consecutiveErrors} runs after an earlier repair request.`,
+      "2. If fixable in the workspace, apply a materially different fix than prior attempts without weakening permissions or silently downgrading the task, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
+      "3. Otherwise: tell the user in one or two plain sentences what keeps failing and what decision or input you need from them. Do not paste the raw error.",
+    ];
+  }
+  return [
+    `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+    "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
+    "3. Otherwise: tell the user in one or two plain sentences what is broken and exactly what you need from them. Do not paste the raw error.",
+    "If the same failure happens again, you will get this request again.",
+  ];
+}
 
 export function buildCronFailureRepairBrief(params: {
   job: CronJob;
@@ -13,6 +40,7 @@ export function buildCronFailureRepairBrief(params: {
   error?: string;
   errorReason?: FailoverReason;
   terminal?: boolean;
+  stagnation?: CronStagnationDisposition;
 }): string {
   const { job } = params;
   const payload = job.payload;
@@ -55,12 +83,10 @@ export function buildCronFailureRepairBrief(params: {
           `2. If the work is no longer needed, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
           "3. Otherwise, ask the user for what you need to continue.",
         ]
-      : [
-          `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
-          "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
-          "3. Otherwise: tell the user in one or two plain sentences what is broken and exactly what you need from them. Do not paste the raw error.",
-          "If the same failure happens again, you will get this request again.",
-        ]),
+      : buildRecurringRepairSteps({
+          consecutiveErrors: params.consecutiveErrors,
+          stagnation: params.stagnation,
+        })),
     `${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
   ].join("\n");
 }

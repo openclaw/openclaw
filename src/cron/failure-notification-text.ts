@@ -1,4 +1,5 @@
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { isSpecificCronErrorReason } from "./stagnation.js";
 import type { CronFailureNotificationDetail, CronTriggerFailureCode } from "./types.js";
 
 const GENERIC_FAILURE_DETAIL = "Check automation history for details.";
@@ -57,7 +58,7 @@ export function cronFailureDetailLines(
         : "The AI service is having trouble. Wait a moment and run the automation again, or choose another provider.",
     ];
   }
-  if (errorReason) {
+  if (isSpecificCronErrorReason(errorReason)) {
     if (errorReason === "route_unavailable") {
       return [
         `Cause: ${errorReason}`,
@@ -73,7 +74,7 @@ export function cronFailureDetailLines(
       : [`Cause: ${errorReason}`];
   }
   if (!failureNotificationDetail) {
-    return [GENERIC_FAILURE_DETAIL];
+    return errorReason ? [`Cause: ${errorReason}`] : [GENERIC_FAILURE_DETAIL];
   }
   if (failureNotificationDetail.kind === "invalid-target") {
     return [
