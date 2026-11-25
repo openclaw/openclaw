@@ -271,6 +271,39 @@ describe("retained receipt recovery operator", () => {
       }
     },
   );
+  it("rejects an unmatchable new grant before preparing its admission request", async () => {
+    const f = fixture();
+    const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+    const policySha = "e".repeat(40);
+    const ledger = "scripts/lib/release-validation-waivers.json";
+    const grant = {
+      targetVersion: original.admission.receipt.baselinePolicy.candidateVersion,
+      targetSha: Q,
+      childRole: "normalCi",
+      jobName: "new job",
+      aggregates: [{ jobName: "gate", stepName: "Verify", causes: ["new job"] }],
+      reason: "Synthetic approval",
+    };
+    const client = {
+      ...f.client,
+      verifyQualificationAdmission: async () => original.admission.receipt,
+      getCommit: async () => ({
+        sha: policySha,
+        parents: [{ sha: Q }],
+        commit: { verification: { verified: true } },
+        files: [{ filename: ledger, status: "modified" }],
+      }),
+      getWorkflowSource: (sha: string) =>
+        JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: sha === Q ? [] : [grant],
+        }),
+    };
+    await expect(
+      dispatchReceiptRecovery({ ...f.options, preparePolicyAdmission: true, policySha }, client),
+    ).rejects.toThrow("new job");
+  });
+
   it("does not read the witness or receipt for an undispatched waived role", async () => {
     const f = fixture();
     const originalSource = f.client.getWorkflowSource.getMockImplementation()!;
