@@ -99,7 +99,7 @@ struct ChatAttachmentRailTests {
 
         #expect(model.attachments.map(\.id) == [ids[0]])
         #expect(model.preparingAttachments.map(\.id) == [ids[1]])
-        #expect(model.preparingAttachments.first?.failure == "Couldn’t attach gone.pdf")
+        #expect(model.preparingAttachments.first?.failure == "Couldn’t attach gone.pdf.")
         #expect(model.preparingAttachments.first?.retry != nil)
         #expect(model.errorText == nil)
 
@@ -123,6 +123,77 @@ struct ChatAttachmentRailTests {
 
         #expect(model.attachments.isEmpty)
         #expect(model.preparingAttachments.isEmpty)
+        #expect(model.errorText == nil)
+    }
+
+    @Test func `a failed tile is read once, by its name, and a voice note never by its file name`() {
+        var photo = OpenClawPreparingAttachment(
+            id: UUID(), fileName: "camera-8B1D07E2.jpg", mimeType: "image/jpeg", preview: nil, durationSeconds: nil)
+        photo.failure = OpenClawChatViewModel.couldNotAttachSentence("camera-8B1D07E2.jpg")
+        #expect(ChatAttachmentTile.accessibilityValue(for: ChatAttachmentTileModel(photo)).isEmpty)
+        photo.failure = "camera-8B1D07E2.jpg is too large to send."
+        #expect(ChatAttachmentTile.accessibilityValue(for: ChatAttachmentTileModel(photo)) == photo.failure)
+
+        let note = OpenClawPreparingAttachment(
+            id: UUID(), fileName: "voice-note-1F2E.m4a", mimeType: "audio/mp4", preview: nil, durationSeconds: 12)
+        #expect(ChatAttachmentTileModel(note).name == "Voice note")
+    }
+
+    @Test func `image failures name their case, not the processor's text`() {
+        typealias Failure = ChatImageProcessor.ProcessError
+        #expect(OpenClawChatViewModel.imageProcessingMessage(Failure.notAnImage, fileName: "a.heic")
+            == "a.heic isn’t a supported image.")
+        #expect(OpenClawChatViewModel.imageProcessingMessage(Failure.decodeFailed, fileName: "a.heic")
+            == "a.heic isn’t a supported image.")
+        #expect(OpenClawChatViewModel.imageProcessingMessage(Failure.encodeFailed, fileName: "a.heic")
+            == "Couldn’t attach a.heic.")
+    }
+
+    @Test func `a file that fits alone but not with the others says so on its tile`() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let small = directory.appendingPathComponent("notes.pdf")
+        try Data(count: 100).write(to: small)
+        // Sparse: the size check reads the metadata and stops before reading the bytes.
+        let huge = directory.appendingPathComponent("archive.zip")
+        FileManager.default.createFile(atPath: huge.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: huge)
+        let maxBytes = GatewayAttachmentLimits.legacyClientFallback.maxBytes
+        try handle.truncate(atOffset: UInt64(maxBytes + 1))
+        try handle.close()
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+        defer { model.detachTransport() }
+        model.attachments = [Self.attachment("big.pdf", "application/pdf", bytes: maxBytes - 50)]
+
+        model.addAttachments(urls: [small, huge])
+        await Self.settled(model)
+
+        #expect(model.preparingAttachments.map(\.failure) == [
+            "notes.pdf is too large to send with the other attachments.",
+            "archive.zip is too large to send.",
+        ])
+        #expect(model.errorText == nil)
+    }
+
+    @Test func `a voice note that fails says so by name, with no retry`() async throws {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+        defer { model.detachTransport() }
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("voice-note-\(UUID()).m4a")
+        await model.addVoiceNoteAttachment(fileURL: missing, durationSeconds: 4)
+        let tooLong = FileManager.default.temporaryDirectory.appendingPathComponent("voice-note-\(UUID()).m4a")
+        try Data(count: OpenClawChatViewModel.maxAttachmentBytes + 1).write(to: tooLong)
+        await model.addVoiceNoteAttachment(fileURL: tooLong, durationSeconds: 300)
+
+        #expect(model.preparingAttachments.map(\.failure) == [
+            "Couldn’t attach voice note. Try recording again.",
+            "Voice note is over the 5 MB limit. Record a shorter one.",
+        ])
+        #expect(model.preparingAttachments.allSatisfy { $0.retry == nil })
         #expect(model.errorText == nil)
     }
 

@@ -118,17 +118,42 @@ extension OpenClawChatViewModel {
         }
     }
 
-    /// The iPhone tile says what failed with the file's name first; without a tile the chat error keeps its wording.
+    /// The iPhone tile says what failed as a sentence that starts with the attachment's name; without a tile the
+    /// chat error keeps its wording.
     static func couldNotAttachMessage(_ fileName: String, preparation: UUID?) -> String {
         preparation == nil
             ? String(format: String(localized: "Could not attach: %@"), fileName)
-            : String(format: String(localized: "Couldn’t attach %@"), fileName)
+            : self.couldNotAttachSentence(fileName)
+    }
+
+    static func couldNotAttachSentence(_ name: String) -> String {
+        String(format: String(localized: "Couldn’t attach %@."), name)
     }
 
     static func tooLargeMessage(_ fileName: String, preparation: UUID?) -> String {
         preparation == nil
             ? String(format: String(localized: "Too large to send: %@"), fileName)
             : String(format: String(localized: "%@ is too large to send."), fileName)
+    }
+
+    /// What a person calls an attachment: a recorded voice note is "Voice note", never its temporary file name.
+    static func displayName(_ attachment: OpenClawPendingAttachment) -> String {
+        attachment.mimeType.hasPrefix("audio/") && attachment.durationSeconds != nil
+            ? String(localized: "Voice note")
+            : attachment.fileName
+    }
+
+    private static func unsupportedImageMessage(_ fileName: String) -> String {
+        String(format: String(localized: "%@ isn’t a supported image."), fileName)
+    }
+
+    /// The tile names the failure by its case instead of printing the processor's own text. `encodeFailed` covers
+    /// both "could not fit the upload limit" and a failed JPEG encode, so it says only that the file did not attach.
+    static func imageProcessingMessage(_ error: Error, fileName: String) -> String {
+        switch error as? ChatImageProcessor.ProcessError {
+        case .notAnImage, .decodeFailed: self.unsupportedImageMessage(fileName)
+        case .encodeFailed, nil: self.couldNotAttachSentence(fileName)
+        }
     }
 
     func isAttachmentPreparationRemoved(_ id: UUID?) -> Bool {
@@ -170,9 +195,13 @@ extension OpenClawChatViewModel {
         var remaining = limits.maxBytes
         for attachment in candidates {
             guard attachment.data.count <= remaining else {
-                self.reportAttachmentFailure(
-                    Self.tooLargeMessage(attachment.fileName, preparation: preparation),
-                    preparation: preparation)
+                // The chat error keeps the file name; a tile says what a person calls it.
+                let name = preparation == nil ? attachment.fileName : Self.displayName(attachment)
+                // On a tile, say whether the file is too large on its own or only with what is already attached.
+                let message = preparation != nil && attachment.data.count <= limits.maxBytes
+                    ? String(format: String(localized: "%@ is too large to send with the other attachments."), name)
+                    : Self.tooLargeMessage(name, preparation: preparation)
+                self.reportAttachmentFailure(message, preparation: preparation)
                 return false
             }
             remaining -= attachment.data.count
@@ -281,17 +310,23 @@ extension OpenClawChatViewModel {
                 try Data(contentsOf: fileURL)
             }.value
         } catch {
+            // The recording is deleted once read, so the tile offers no retry, only another recording.
             self.reportAttachmentFailure(
-                String(
-                    format: String(localized: "Could not attach voice note: %@"),
-                    error.localizedDescription),
+                preparation == nil
+                    ? String(
+                        format: String(localized: "Could not attach voice note: %@"),
+                        error.localizedDescription)
+                    : String(localized: "Couldn’t attach voice note. Try recording again."),
                 preparation: preparation)
             return
         }
 
         guard data.count <= Self.maxAttachmentBytes else {
+            // `maxAttachmentBytes` is 5 MB.
             self.reportAttachmentFailure(
-                String(localized: "Voice note exceeds the 5 MB attachment limit"),
+                preparation == nil
+                    ? String(localized: "Voice note exceeds the 5 MB attachment limit")
+                    : String(localized: "Voice note is over the 5 MB limit. Record a shorter one."),
                 preparation: preparation)
             return
         }
@@ -405,7 +440,9 @@ extension OpenClawChatViewModel {
         }()
         guard uti.conforms(to: .image) else {
             self.reportAttachmentFailure(
-                String(localized: "Only image attachments are supported right now"),
+                preparation == nil
+                    ? String(localized: "Only image attachments are supported right now")
+                    : Self.unsupportedImageMessage(fileName),
                 preparation: preparation)
             return .unreadable
         }
@@ -418,10 +455,12 @@ extension OpenClawChatViewModel {
         } catch {
             guard self.ownsAttachmentSession(expectedSession) else { return nil }
             self.reportAttachmentFailure(
-                String(
-                    format: String(localized: "Could not process %1$@: %2$@"),
-                    fileName,
-                    error.localizedDescription),
+                preparation == nil
+                    ? String(
+                        format: String(localized: "Could not process %1$@: %2$@"),
+                        fileName,
+                        error.localizedDescription)
+                    : Self.imageProcessingMessage(error, fileName: fileName),
                 preparation: preparation)
             return .unreadable
         }

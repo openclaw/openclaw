@@ -570,6 +570,11 @@ struct ChatAttachmentTileModel: Identifiable {
         self.mimeType.hasPrefix("audio/") && self.durationSeconds != nil
     }
 
+    /// A recorded voice note is "Voice note", never its temporary file name.
+    var name: String {
+        self.isVoiceNote ? String(localized: "Voice note") : self.fileName
+    }
+
     var isReady: Bool {
         if case .ready = self.status { return true }
         return false
@@ -593,7 +598,7 @@ struct ChatAttachmentTile: View {
     }
 
     private var name: String {
-        self.isVoiceNote ? String(localized: "Voice note") : self.tile.fileName
+        self.tile.name
     }
 
     var body: some View {
@@ -623,12 +628,16 @@ struct ChatAttachmentTile: View {
     }
 
     private var accessibilityValue: Text {
-        switch self.tile.status {
-        case .ready: Text(verbatim: self.isImage ? "" : self.detail)
-        case .preparing: Text(verbatim: "")
+        Text(verbatim: Self.accessibilityValue(for: self.tile))
+    }
+
+    static func accessibilityValue(for tile: ChatAttachmentTileModel) -> String {
+        switch tile.status {
+        case .ready: tile.isImage ? "" : self.detail(for: tile)
+        case .preparing: ""
         case let .failed(message, _):
-            // "Couldn’t attach <name>" is already the label.
-            Text(verbatim: message == String(format: String(localized: "Couldn’t attach %@"), self.name) ? "" : message)
+            // The label already says "Couldn’t attach <name>"; the same sentence would be read twice.
+            message == OpenClawChatViewModel.couldNotAttachSentence(tile.name) ? "" : message
         }
     }
 
@@ -792,7 +801,7 @@ struct ChatAttachmentTile: View {
         .buttonStyle(.plain)
         .offset(x: metrics.badgeOverhang, y: -metrics.badgeOverhang)
         .accessibilityLabel(String(
-            format: String(localized: "Remove attachment: %@"), self.tile.fileName))
+            format: String(localized: "Remove %@"), self.name))
     }
 }
 

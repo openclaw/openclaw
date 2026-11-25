@@ -25,7 +25,7 @@ private struct OpenClawVideoTransfer: Sendable, Transferable {
 
 private struct OpenClawPickerTransferUnavailable: LocalizedError {
     var errorDescription: String? {
-        String(localized: "Could not load this attachment. Try selecting it again.")
+        String(localized: "Couldn’t load this attachment. Try again.")
     }
 }
 
