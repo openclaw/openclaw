@@ -170,7 +170,7 @@ fi
 GATEWAY_IMAGE_RESULT="$(openclaw_prepare_gateway_image podman "$OPENCLAW_IMAGE" never)"
 IFS=$'\t' read -r GATEWAY_IMAGE_ID GATEWAY_COMMAND_MODE <<<"$GATEWAY_IMAGE_RESULT"
 if [[ "$GATEWAY_COMMAND_MODE" == "legacy" ]]; then
-  echo "Selected image predates mapped-port defaults; existing origin policy is unchanged. Upgrade the image or configure allowedOrigins for a custom published port." >&2
+  echo "Selected image predates mapped-port defaults; setup leaves existing origin policy unchanged. Upgrade the image or configure allowedOrigins for a custom published port." >&2
 fi
 
 ENV_FILE="$OPENCLAW_CONFIG_DIR/.env"

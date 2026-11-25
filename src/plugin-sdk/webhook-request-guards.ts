@@ -27,11 +27,20 @@ import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 export function resolveAcceptedBrowserOrigin(
   params: Omit<Parameters<typeof resolveAcceptedBrowserOriginForGateway>[0], "publishedPort">,
 ): string | undefined {
-  return resolveAcceptedBrowserOriginForGateway({
-    ...params,
-    publishedPort:
-      params.cfg === undefined ? undefined : getPluginRuntimeGatewayRequestScope()?.publishedPort,
-  });
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // New launch defaults require the serving policy as well as the caller's policy.
+  // Existing explicit caller-config behavior remains unchanged without this grant.
+  const publishedPort =
+    params.cfg !== undefined &&
+    scope?.browserOriginConfig !== undefined &&
+    resolveAcceptedBrowserOriginForGateway({
+      req: params.req,
+      cfg: scope.browserOriginConfig,
+      publishedPort: scope.publishedPort,
+    })
+      ? scope.publishedPort
+      : undefined;
+  return resolveAcceptedBrowserOriginForGateway({ ...params, publishedPort });
 }
 export {
   runHttpConnectionRequest,

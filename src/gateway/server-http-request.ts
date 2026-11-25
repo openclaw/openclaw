@@ -383,8 +383,7 @@ export function createGatewayHttpRequestHandler(
         remoteOwner?: RemoteControlUiHttpRoute,
       ) => addRequestStage(enabled, stage, true, remoteOwner);
 
-      const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
-      addRequestStage(workerGatewayRoute !== "outside", () => {
+      addRequestStage(classifyWorkerGatewayPath(scopedRequestPath) !== "outside", () => {
         respondNotFound(res);
         return true;
       });
@@ -659,6 +658,7 @@ export function createGatewayHttpRequestHandler(
               gatewayRequestOperatorScopes: pluginAuthorization?.operatorScopes,
               gatewayRequestClientIp: requestClientIp,
               publishedPort: opts.publishedPort,
+              browserOriginConfig: configSnapshot,
             }),
         );
       }

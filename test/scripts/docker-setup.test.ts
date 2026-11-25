@@ -302,6 +302,7 @@ describe("scripts/docker/setup.sh", () => {
       });
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toContain("predates mapped-port defaults");
+      expect(result.stderr).toContain("its Doctor may rewrite an authored []");
       const log = await readDockerLog(sandbox);
       expect(log.includes('"path":"gateway.controlUi.allowedOrigins"')).toBe(origins === undefined);
       if (origins === undefined) {

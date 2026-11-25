@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayRequestAuthorityExpiredError } from "../../infra/operator-authority-error.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -188,6 +189,7 @@ function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistratio
 
 function createPluginRouteRuntimeScope(params: {
   publishedPort?: number;
+  browserOriginConfig?: OpenClawConfig;
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
@@ -220,7 +222,9 @@ function createPluginRouteRuntimeScope(params: {
     hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
   return {
     pluginRegistry: params.registry,
-    ...(params.publishedPort !== undefined ? { publishedPort: params.publishedPort } : {}),
+    ...(params.publishedPort !== undefined
+      ? { publishedPort: params.publishedPort, browserOriginConfig: params.browserOriginConfig }
+      : {}),
     ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
     ...(requestAuth || operatorAccessAuthority || ingress ? { hasCurrentClientAuthority } : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
@@ -244,6 +248,7 @@ function createPluginRouteRuntimeScope(params: {
 
 export type PluginRouteDispatchContext = {
   publishedPort?: number;
+  browserOriginConfig?: OpenClawConfig;
   gatewayAuthSatisfied?: boolean;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
@@ -395,6 +400,7 @@ export function createGatewayPluginRequestHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
                 publishedPort: dispatchContext?.publishedPort,
+                browserOriginConfig: dispatchContext?.browserOriginConfig,
               }),
               async () =>
                 runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
@@ -511,6 +517,7 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
                 publishedPort: dispatchContext?.publishedPort,
+                browserOriginConfig: dispatchContext?.browserOriginConfig,
               }),
               async () => {
                 const handleUpgrade = route.handleUpgrade!;

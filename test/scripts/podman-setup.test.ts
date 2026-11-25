@@ -168,6 +168,7 @@ esac`,
         writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
         const result = sandbox.run("scripts/podman/setup.sh", ["--container"]);
         expect(result.stderr).toContain("predates mapped-port defaults");
+        expect(result.stderr).toContain("its Doctor may rewrite an authored []");
         const saved = readFileSync(sandbox.file, "utf8");
         expect(JSON.parse(saved).gateway.controlUi.allowedOrigins).toEqual(
           origins ?? ["http://localhost:19123", "http://127.0.0.1:19123"],

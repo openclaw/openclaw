@@ -73,3 +73,18 @@ it.each([
     expect(fsSafeEnvInput(env).OPENCLAW_FS_SAFE_NATIVE_MODE).toBe("off");
   },
 );
+
+// The launcher-only transport must not be reconstructed from persisted dotenv.
+it.each([
+  { name: "sync", load: loadGlobalRuntimeDotEnvFilesCore },
+  { name: "async", load: loadGlobalRuntimeDotEnvFilesAsyncCore },
+])("excludes launch-only port metadata from $name dotenv", async ({ load }) => {
+  const home = tmpDir();
+  const stateEnvPath = tmpFile("runtime.env", "OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT=25432\n");
+  const env: NodeJS.ProcessEnv = { HOME: home, OPENCLAW_STATE_DIR: home };
+  await load({ env, stateEnvPath });
+  expect(env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT).toBeUndefined();
+  env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT = "26789";
+  await load({ env, stateEnvPath });
+  expect(env.OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT).toBe("26789");
+});

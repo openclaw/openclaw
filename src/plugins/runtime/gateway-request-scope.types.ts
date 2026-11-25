@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   GatewayContextResolver,
   GatewayRequestContext,
@@ -25,6 +26,8 @@ export type GatewayRequestAuthorityV1 = Readonly<{
 export type PluginRuntimeGatewayRequestScope = {
   /** Launch-owned host mapping for the Gateway serving this HTTP route. */
   publishedPort?: number;
+  /** Serving request policy paired with that launch fact, never plugin-provided config. */
+  browserOriginConfig?: OpenClawConfig;
   readRequestAuthority?: (
     client: PluginRuntimeGatewayRequestScope["client"],
   ) => GatewayRequestAuthorityV1 | undefined;

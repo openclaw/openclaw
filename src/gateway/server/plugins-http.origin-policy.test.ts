@@ -1,80 +1,92 @@
-import type { IncomingMessage } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { request as httpRequest } from "node:http";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAcceptedBrowserOrigin } from "../../plugin-sdk/webhook-request-guards.js";
 import type { PluginHttpRouteRegistration } from "../../plugins/registry.js";
-import { makeMockHttpResponse } from "../test-http-response.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
+import { pickPrimaryLanIPv4 } from "../net.js";
+import { createGatewayHttpServer } from "../server-http.js";
 import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
 
-function createMockLogger(): SubsystemLogger {
-  const child = vi.fn<(name: string) => SubsystemLogger>();
-  const logger = {
-    subsystem: "test/plugins-http-origin-policy",
-    isEnabled: () => true,
-    trace: vi.fn(),
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    fatal: vi.fn(),
-    raw: vi.fn(),
-    child,
-  } satisfies SubsystemLogger;
-  child.mockImplementation(() => logger);
-  return logger;
-}
-
 describe("plugin HTTP origin policy", () => {
-  it("carries mapped origins through dispatch without leaking them to other requests", async () => {
+  it("bounds mapped HTTP origins by serving policy and caller config", async () => {
     const cfg: OpenClawConfig = { gateway: { publicOrigin: "https://old.example.test" } };
-    let accepted: string | undefined;
-    let omitConfig = false;
+    let pluginConfig: OpenClawConfig | undefined = cfg;
     const route: PluginHttpRouteRegistration = {
       pluginId: "origin-proof",
       source: "origin-proof",
       path: "/origin-proof",
-      auth: "gateway",
+      auth: "plugin",
       match: "exact",
-      handler: async (req) => {
+      handler: async (req, res) => {
         await Promise.resolve();
-        accepted = resolveAcceptedBrowserOrigin({ req, cfg: omitConfig ? undefined : cfg });
+        res.end(resolveAcceptedBrowserOrigin({ req, cfg: pluginConfig }) ?? "denied");
         return true;
       },
     };
-    const handler = createGatewayPluginRequestHandler({
-      registry: createGatewayTestRegistry({ httpRoutes: [route] }),
-      log: createMockLogger(),
-    });
-    const request = async (origin: string, publishedPort?: number) => {
-      const req = {
-        url: route.path,
-        headers: { origin, host: "gateway.example.test:18789" },
-        socket: { remoteAddress: "198.51.100.4" },
-      } as IncomingMessage;
-      const response = makeMockHttpResponse();
-      expect(
-        await handler(req, response.res, undefined, {
-          gatewayAuthSatisfied: true,
-          gatewayRequestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
-          gatewayRequestOperatorScopes: ["operator.write"],
-          publishedPort,
+    const host = pickPrimaryLanIPv4();
+    if (!host) {
+      throw new Error("Origin dispatch proof requires a non-loopback local interface");
+    }
+    const listener = await reserveTestPortListener({
+      host,
+      offsets: [0],
+      createListener: () =>
+        createGatewayHttpServer({
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "",
+          resolvedAuth: { mode: "none", allowTailscale: false },
+          getRuntimeConfig: () => cfg,
+          publishedPort: 25432,
+          handleHooksRequest: async () => false,
+          shouldEnforcePluginGatewayAuth: () => false,
+          handlePluginRequest: createGatewayPluginRequestHandler({
+            registry: createGatewayTestRegistry({ httpRoutes: [route] }),
+            log: createSubsystemLogger("test/plugin-origin"),
+          }),
         }),
-      ).toBe(true);
-      return accepted;
-    };
-
-    const mappedOrigin = "http://localhost:25432";
-    expect(await request(mappedOrigin, 25432)).toBe(mappedOrigin);
-    expect(await request(mappedOrigin)).toBeUndefined();
-    cfg.gateway!.publicOrigin = "https://new.example.test";
-    expect(await request("https://old.example.test", 25432)).toBeUndefined();
-    expect(await request("https://new.example.test", 25432)).toBe("https://new.example.test");
-    expect(await request(mappedOrigin, 25432)).toBe(mappedOrigin);
-    cfg.gateway!.controlUi = { allowedOrigins: [] };
-    expect(await request(mappedOrigin, 25432)).toBeUndefined();
-    omitConfig = true;
-    expect(await request(mappedOrigin, 25432)).toBeUndefined();
+    });
+    const request = (origin: string) =>
+      new Promise<string>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host,
+            port: listener.claim.port,
+            path: route.path,
+            headers: { origin, host: "gateway.example.test:18789" },
+            agent: false,
+          },
+          (res) => {
+            let body = "";
+            res.setEncoding("utf8");
+            res.on("data", (chunk) => {
+              body += chunk;
+            });
+            res.on("end", () => resolve(body));
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      });
+    try {
+      const mappedOrigin = "http://localhost:25432";
+      expect(await request(mappedOrigin)).toBe(mappedOrigin);
+      cfg.gateway!.publicOrigin = "https://new.example.test";
+      expect(await request("https://old.example.test")).toBe("denied");
+      expect(await request("https://new.example.test")).toBe("https://new.example.test");
+      expect(await request(mappedOrigin)).toBe(mappedOrigin);
+      cfg.gateway!.controlUi = { allowedOrigins: [] };
+      expect(await request(mappedOrigin)).toBe("denied");
+      pluginConfig = {};
+      expect(await request(mappedOrigin)).toBe("denied");
+      pluginConfig = undefined;
+      expect(await request(mappedOrigin)).toBe("denied");
+    } finally {
+      await listener.releaseListener();
+      await listener.claim.release();
+    }
   });
 });

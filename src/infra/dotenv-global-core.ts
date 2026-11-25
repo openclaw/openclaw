@@ -43,7 +43,12 @@ function parseDotEnvFile(params: ReadDotEnvFileOptions, content: Buffer): Loaded
   const entries: DotEnvEntry[] = [];
   for (const [rawKey, value] of Object.entries(parseDotEnv(content))) {
     const key = normalizeEnvVarKey(rawKey, { portable: true });
-    if (key && (params.entryFilter?.(key, value) ?? true)) {
+    // This fact belongs to the container launcher, never a persisted dotenv file.
+    if (
+      key &&
+      key.toUpperCase() !== "OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT" &&
+      (params.entryFilter?.(key, value) ?? true)
+    ) {
       entries.push({ key, value });
     }
   }

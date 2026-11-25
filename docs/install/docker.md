@@ -19,7 +19,7 @@ Trusted-proxy authentication retains its configured origin policy and does not
 inherit those direct-container loopback grants. Managed Tailscale Serve/Funnel
 and relayed ingress likewise retain their own origin policy.
 Changing the public origin updates the inherited origin without saving a copy
-in the allowlist. An explicit list, including `[]`, remains authoritative and
+in the allowlist. With a current image, an explicit list, including `[]`, remains authoritative and
 is not changed by setup or launch; include any desired browser origins yourself.
 Previously saved lists, including entries written by older setup versions,
 remain authoritative. If browser access fails after changing the published
@@ -32,7 +32,11 @@ Setup checks the selected image before changing saved configuration or replacing
 the Gateway. Images with the existing `gateway --port` command remain supported;
 setup reports when an older image lacks runtime mapped-port defaults. For those
 images only, setup retains its legacy seed for an omitted origin policy with no
-public origin. Existing lists, including `[]`, are never inferred or rewritten.
+public origin. Setup never infers or rewrites existing lists. An older image
+may still rewrite an authored `[]` during its own Doctor activation, using internal
+listener origins rather than the published port. Setup warns before replacement;
+it does not skip Doctor or change your policy. Upgrade the selected image before
+launch if `[]` must remain authoritative.
 Upgrade the image to inherit launch defaults without saving origins. Setup
 does not upgrade your selected image or rewrite saved origin policy automatically.
 Custom images must provide `sh` and `node` for the isolated setup probe. Failed or

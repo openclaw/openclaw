@@ -32,5 +32,8 @@ process.stdout.write(hasPublishedPort ? "published-port" : "legacy");
     echo "Invalid Gateway image capability result." >&2
     return 1
   }
+  if [[ "$capability" == "legacy" ]]; then
+    echo "Warning: selected legacy image retains its own activation behavior: its Doctor may rewrite an authored [] origin list using the internal listener port. Setup preserves your list, but upgrade the selected image before launch if [] must remain authoritative." >&2
+  fi
   printf '%s\t%s\n' "$image_id" "$capability"
 )

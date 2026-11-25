@@ -388,6 +388,7 @@ export function attachGatewayUpgradeHandler(opts: {
             gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
             gatewayRequestClientIp: requestClientIp,
             publishedPort: opts.publishedPort,
+            browserOriginConfig: configSnapshot,
           })
         ) {
           return;
