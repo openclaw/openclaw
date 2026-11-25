@@ -26,6 +26,7 @@ import {
   getRpcSourceProjectSessionActive,
   isRpcSourceRegistered,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { isExplicitRunStopSource } from "../../sessions/session-run-stopped.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
@@ -336,6 +337,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
           plan.abort();
           return plan.canCascade;
         },
+        stopSource: isExplicitRunStopSource(params.stopSource) ? params.stopSource : undefined,
       });
     } else {
       if (prepare) {

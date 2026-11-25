@@ -354,6 +354,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               sessionEntry?.sessionId === embeddedRun.sessionId ? lifecycleRevision : undefined,
             assertCurrent: assertAbortCurrent,
             beforeKill: applyParentStop,
+            stopSource: "client-run",
           });
           return {
             stopped: descendants?.killed ?? 0,

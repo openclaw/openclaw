@@ -12,6 +12,38 @@ import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureExecRequestCustodySelection } from "../../infra/exec-request-context.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { ExplicitRunStopSource } from "../../sessions/session-run-stopped.js";
+
+const STOP_NOTICE_SOURCES: Record<ExplicitRunStopSource, string> = {
+  "client-session": "A session Stop from a connected app",
+  "client-run": "A Stop of your turn",
+  "channel-user": "A /stop command",
+};
+const STOP_NOTICE_MAX_LABELS = 10;
+
+/**
+ * Stop retires the cancelled children's completions, so without this notice the requester
+ * never learns they ended. It waits for the requester's next turn and starts none itself.
+ */
+function formatStoppedSubagentsNotice(
+  source: ExplicitRunStopSource,
+  killed: number,
+  labels: readonly string[],
+): string {
+  const shown = labels
+    .slice(0, STOP_NOTICE_MAX_LABELS)
+    .map((label) => label.replace(/\s+/g, " ").trim().slice(0, 80));
+  const more = killed - shown.length;
+  const names = shown.length ? `: ${shown.join(", ")}${more > 0 ? `, and ${more} more` : ""}` : "";
+  return (
+    `${STOP_NOTICE_SOURCES[source]} cancelled ${killed} running ` +
+    `${killed === 1 ? "sub-agent" : "sub-agents"}${names}. ` +
+    "They won't report back. Check their sessions before you rely on their work, " +
+    "and spawn them again if it's still needed."
+  );
+}
 
 export async function abortControlledSubagents(params: {
   cfg: OpenClawConfig;
@@ -27,6 +59,8 @@ export async function abortControlledSubagents(params: {
   beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
   /** Accepted parent effects retain cleanup reporting after a later guard rejects. */
   parentStopAccepted?: () => boolean;
+  /** An explicit Stop tells the requester's next turn which children it cancelled. */
+  stopSource?: ExplicitRunStopSource;
   prepareSelection?: {
     acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"];
     prepare: () => Promise<{
@@ -253,6 +287,15 @@ export async function abortControlledSubagents(params: {
     ...registryCancelledRequesters,
     ...(settledNative?.status === "fulfilled" ? settledNative.value.cancelledRequesters : []),
   ];
+  if (params.stopSource && killed > 0) {
+    enqueueSystemEvent(
+      formatStoppedSubagentsNotice(params.stopSource, killed, descendants?.labels ?? []),
+      withSystemEventOwner(
+        { sessionKey: controller.controllerSessionKey },
+        controller.controllerAgentId,
+      ),
+    );
+  }
   if (failure && !settledNative && !descendants && !execAborted && !params.parentStopAccepted?.()) {
     throw commandErrors.length > 0
       ? new AggregateError([failure.error, ...commandErrors], "Request cancellation was incomplete")

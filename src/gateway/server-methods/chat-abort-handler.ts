@@ -499,6 +499,7 @@ export async function handleChatAbortRequestWithLifecycle(
                 ? selectedEntry.lifecycleRevision
                 : undefined,
             assertCurrent: assertReserved,
+            stopSource: "client-run",
           });
           return {
             stopped: descendants?.killed ?? 0,
@@ -554,6 +555,7 @@ export async function handleChatAbortRequestWithLifecycle(
           await stopWithoutCapturedRun("rpc", cancelWorker);
           return true;
         },
+        stopSource: "client-run",
       });
       const error = descendantAbortError(descendants, "Parent run");
       if (error) {
