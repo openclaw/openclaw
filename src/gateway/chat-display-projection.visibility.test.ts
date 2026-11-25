@@ -501,3 +501,48 @@ it("projects recorded subagent completions without exposing the private continua
   expect(JSON.stringify(direct)).not.toContain(collected.result);
   expect(projectChatDisplayMessages([direct])[0]?.subagentCompletions).toEqual([completion]);
 });
+
+it.each([
+  "PRIVATE_DIAGNOSTIC_CANARY",
+  "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+])("does not attach an unrelated diagnostic to a curated startup report: %s", (diagnostic) => {
+  const [result] = projectChatDisplayMessages([
+    {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content:
+        "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.",
+      details: { runId: "run-1", diagnostic },
+    },
+  ]);
+  expect(result).not.toHaveProperty("details");
+  expect(JSON.stringify(result)).not.toContain(diagnostic);
+});
+
+it("projects only a safe startup category while preserving certified notice metadata", () => {
+  const content =
+    "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.";
+  const cause = { provider: "openai", code: "harness_update_required" };
+  const [result] = projectChatDisplayMessages([
+    {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content,
+      details: {
+        runId: "run-1",
+        desktopNotice: "Use the desktop recovery action",
+        cause,
+        diagnostic:
+          "thread not loaded: synthetic-thread\nCaused by: rollback failed at /private/operator/workspaces/secret-project",
+      },
+    },
+  ]);
+  expect(result).toHaveProperty("details", { diagnostic: "thread not loaded" });
+  expect(result).toHaveProperty(
+    "openclawRunError.desktopSummary",
+    "Use the desktop recovery action",
+  );
+  expect(result).toHaveProperty("openclawRunError.cause", cause);
+  expect(JSON.stringify(result)).not.toContain("/private/operator");
+  expect(projectChatDisplayMessages([result])[0]).toEqual(result);
+});

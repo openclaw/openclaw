@@ -685,6 +685,7 @@ it.each([undefined, "", "   ", "Desktop-specific failure details"])(
     } else {
       expect(projected.openclawRunError).not.toHaveProperty("desktopSummary");
     }
+    expect(projectChatDisplayMessages([projected])[0]).toEqual(projected);
   },
 );
 

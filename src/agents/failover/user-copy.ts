@@ -14,6 +14,7 @@ import {
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
+import { resolveSessionStartupErrorPresentation } from "../../shared/session-startup-error-presentation.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
   API_KEY_EXPIRED_ERROR_CODE,
@@ -320,6 +321,10 @@ export function renderSanitizedUserFacingText(
     return shouldRewriteRawPayloadWithoutErrorContext(trimmed)
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
+  }
+  const startupFailure = resolveSessionStartupErrorPresentation(trimmed);
+  if (startupFailure) {
+    return startupFailure.message;
   }
   for (const format of [
     formatCommandErrorForUser,

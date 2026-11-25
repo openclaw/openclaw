@@ -8,6 +8,7 @@ import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
 import { ReportIssueLink } from "../../components/report-issue-link.tsx";
@@ -29,6 +30,7 @@ import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
 import type { ChatRunError } from "./run-lifecycle.ts";
+import { resolveChatStartupErrorPresentation } from "./session-startup-error-presentation.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -314,11 +316,15 @@ function ChatErrorNotice(props: {
     props.detail === undefined
       ? (props.displayError ?? formatWebUiIconErrorText(props.error))
       : formatUiErrorDetails(props.detail);
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(props.error));
   // Keep an expanded diagnostic stable across unrelated session refreshes.
   const toast = createMemo(
     () => {
       const summary = props.detail === undefined ? displayError() : props.error;
-      const message = props.summary ?? (summary.trim().split(/\r?\n/u)[0]?.trim() || props.error);
+      const message =
+        startup()?.message ??
+        props.summary ??
+        (summary.trim().split(/\r?\n/u)[0]?.trim() || props.error);
       // Offer details only when they add something beyond the visible message.
       const diagnostic = displayError().trim();
       return {
@@ -371,13 +377,16 @@ function ChatReplyErrorNotice(props: {
   const app = useOptionalApplication();
   const busy = () => props.error.kind === "state_contention";
   const signIn = () => props.error.kind === "auth_refresh";
-  const message = createMemo(() =>
+  const diagnostic = createMemo(() =>
     formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim(),
   );
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(diagnostic()));
+  const message = () => startup()?.message ?? diagnostic();
   return (
     <div
       class={[
         "chat-error chat-error--reply chat-composer-neighbor-card",
+        { "chat-error--startup": startup() !== undefined },
         busy() ? "chat-composer-neighbor-card--warn" : "chat-composer-neighbor-card--danger",
       ]}
       onKeyDown={(event) => {
@@ -391,7 +400,23 @@ function ChatReplyErrorNotice(props: {
         <Icon name={busy() ? "alertTriangle" : "circleAlert"} />
       </span>
       <div class="app-toast__message" role={busy() ? "status" : "alert"}>
-        {message()}
+        <Show when={startup()} fallback={message()}>
+          {(presentation) => (
+            <>
+              <strong>{presentation().title}</strong>
+              <span class="chat-error__recovery">{presentation().recovery}</span>
+            </>
+          )}
+        </Show>
+        <Show when={startup()}>
+          <ErrorDetails
+            error={diagnostic()}
+            label={t("chat.errorDetails")}
+            action={
+              <CopyButton text={diagnostic()} idleLabel={t("chat.copyError")} bare iconFeedback />
+            }
+          />
+        </Show>
       </div>
       <div class="row chat-error__actions">
         <Show when={signIn() ? app : props.onRefresh}>

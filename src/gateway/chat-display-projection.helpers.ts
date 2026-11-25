@@ -12,10 +12,13 @@ import {
   isCompletionReportInputProvenance,
   normalizeInputProvenance,
 } from "../sessions/input-provenance.js";
+import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   extractAssistantPhaseText,
   isAssistantTextContentBlockType as isAssistantTextContentType,
 } from "../shared/chat-message-content.js";
+import { readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 import {
   readSubagentCompletions,
   subagentCompletionMessage,
@@ -359,5 +362,42 @@ export function attachProjectedTurnBoundary(
       ...(boundary === "subagent" ? {} : { turnBoundary: true }),
       ...(boundary === true ? {} : { continuation: { source: boundary } }),
     },
+  };
+}
+
+/** Project certified failure presentation and closed, bounded startup categories only. */
+export function projectChatRunFailureDetails(
+  entry: Record<string, unknown>,
+  maxChars: number,
+):
+  | {
+      details: { errorKind?: "state_contention"; diagnostic: string };
+      noticeSummary?: string;
+      truncated: boolean;
+    }
+  | undefined {
+  if (entry.role !== "custom" || entry.customType !== "run-failed-before-reply") {
+    return undefined;
+  }
+  const details = readRecord(entry.details);
+  if (details?.errorKind === "state_contention") {
+    return {
+      details: { errorKind: "state_contention", diagnostic: STATE_CONTENTION_DIAGNOSTIC },
+      truncated: false,
+    };
+  }
+  if (typeof details?.diagnostic !== "string") {
+    return undefined;
+  }
+  const startup = resolveSessionStartupErrorPresentation(details.diagnostic);
+  if (!startup || entry.content !== startup.message) {
+    return undefined;
+  }
+  const diagnostic = truncateChatHistoryText(startup.diagnostic, Math.min(maxChars, 512));
+  const notice = readRunFailureNotice(entry);
+  return {
+    details: { diagnostic: diagnostic.text },
+    noticeSummary: notice ? `${startup.message}\n\n${diagnostic.text}` : undefined,
+    truncated: diagnostic.truncated,
   };
 }

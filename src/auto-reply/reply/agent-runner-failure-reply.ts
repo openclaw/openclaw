@@ -61,6 +61,7 @@ import {
 import { readProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
+import { resolveSessionStartupErrorPresentation } from "../../shared/session-startup-error-presentation.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
@@ -424,7 +425,9 @@ export function buildExternalRunFailureReply(
   if (missingApiKeyFailure) {
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
-  const codexAppServerFailure = renderCodexAppServerFailureCopy(normalizedMessage);
+  const codexAppServerFailure =
+    resolveSessionStartupErrorPresentation(normalizedMessage)?.channelMessage ??
+    renderCodexAppServerFailureCopy(normalizedMessage);
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }

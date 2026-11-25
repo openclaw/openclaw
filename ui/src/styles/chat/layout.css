@@ -66,6 +66,14 @@ openclaw-pending-session-create {
     white-space: nowrap;
   }
 
+  &.chat-error--startup .app-toast__message {
+    white-space: normal;
+  }
+
+  .chat-error__recovery {
+    display: block;
+  }
+
   .chat-error__actions {
     grid-row: 1;
     grid-column: 3;

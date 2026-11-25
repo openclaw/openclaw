@@ -17,6 +17,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
+import { resolveChatStartupErrorPresentation } from "../session-startup-error-presentation.ts";
 
 let nextPanelId = 0;
 // A rejected key or billing problem is fixed under Models, not by another attempt.
@@ -47,6 +48,7 @@ export function ChatRunFailureNotice(props: {
   onRetry?: () => void;
   onStartNewSession?: () => void;
 }) {
+  const startup = createMemo(() => resolveChatStartupErrorPresentation(props.summary));
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
   const [open, setOpen] = createSignal(false);
@@ -54,6 +56,7 @@ export function ChatRunFailureNotice(props: {
   let panel: PopoverHandle | undefined;
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
   const title = () =>
+    startup()?.title ??
     t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
       provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
     });
@@ -85,7 +88,12 @@ export function ChatRunFailureNotice(props: {
   onSettled(() => () => stopFollowing?.());
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
-      <div class="chat-run-failure" role="status" data-placement={placement()} ref={setLine}>
+      <div
+        class={["chat-run-failure", { "chat-run-failure--startup": startup() !== undefined }]}
+        role="status"
+        data-placement={placement()}
+        ref={setLine}
+      >
         <Popover
           id={panelId}
           class="chat-run-failure__panel"
@@ -161,6 +169,11 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
+        <Show when={startup()}>
+          {(presentation) => (
+            <span class="chat-run-failure__recovery">{presentation().recovery}</span>
+          )}
+        </Show>
         <Switch>
           <Match when={openModels()}>
             {(provider) => (
@@ -186,7 +199,7 @@ export function ChatRunFailureNotice(props: {
               {t("chat.recovery.startNewSession")}
             </button>
           </Match>
-          <Match when={props.onRetry}>
+          <Match when={props.onRetry && !startup()?.newConversation}>
             <button
               type="button"
               class="btn primary btn--sm chat-run-failure__retry"

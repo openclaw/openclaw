@@ -492,7 +492,9 @@ function projectRunFailureNotices(
       const cause =
         readRunFailureNotice(message)?.cause ??
         readRunFailureCause(asOptionalRecord(message.details)?.cause);
-      const desktopNotice = asOptionalRecord(message.details)?.desktopNotice;
+      const desktopNotice =
+        asOptionalRecord(message.details)?.desktopNotice ??
+        asOptionalRecord(message.openclawRunError)?.desktopSummary;
       const desktopSummary =
         typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
       return runId && summary
