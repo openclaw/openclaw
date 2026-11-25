@@ -44,6 +44,7 @@ import {
 import { resolveFeishuGroupSession, resolveFeishuMediaList } from "./bot-content.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import { resolveFeishuBotName } from "./bot-name.js";
+import { resolveFeishuQuotedContext } from "./bot-quoted-context.js";
 import { resolveFeishuSenderName, type FeishuPermissionError } from "./bot-sender-name.js";
 import { prepareFeishuThreadRoot } from "./bot-thread-mentions.js";
 import { createFeishuClient } from "./client.js";
@@ -742,6 +743,22 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    // Fetch quoted/replied message content before the empty-message guard
+    // so a reply with only @bot (no text, no media) is not dropped when
+    // the quoted message carries meaningful content.
+    const quoted = await resolveFeishuQuotedContext({
+      cfg,
+      parentId: ctx.parentId,
+      rootId: ctx.rootId,
+      getRootMessageInfo,
+      fetchedContextPolicy,
+      mediaMaxBytes,
+      log,
+      accountId: account.accountId,
+    });
+    const quotedContent = quoted.content;
+    mediaList.push(...quoted.media);
+
     const unavailableMediaCount = mediaList.filter((media) => !media.path).length;
     const mediaFailureContent =
       unavailableMediaCount > 0
@@ -750,39 +767,6 @@ export async function handleFeishuMessage(params: {
             notice: `[feishu ${unavailableMediaCount > 1 ? `${unavailableMediaCount} attachments` : "attachment"} unavailable]`,
           })
         : ctx.content;
-    // Fetch quoted/replied message content before the empty-message guard
-    // so a reply with only @bot (no text, no media) is not dropped when
-    // the quoted message carries meaningful content.
-    let quotedContent: string | undefined;
-    if (ctx.parentId) {
-      try {
-        const quotedMessageInfo =
-          ctx.parentId === ctx.rootId
-            ? await getRootMessageInfo()
-            : await getMessageFeishu({
-                cfg,
-                messageId: ctx.parentId,
-                accountId: account.accountId,
-              });
-        if (
-          quotedMessageInfo &&
-          (await shouldIncludeFetchedGroupContextMessage({
-            ...fetchedContextPolicy,
-            kind: "quote",
-            senderId: quotedMessageInfo.senderId,
-            senderType: quotedMessageInfo.senderType,
-          }))
-        ) {
-          quotedContent = quotedMessageInfo.content;
-        } else if (quotedMessageInfo) {
-          log(
-            `feishu[${account.accountId}]: skipped quoted message from sender ${quotedMessageInfo.senderId ?? "unknown"} (mode=${contextVisibilityMode})`,
-          );
-        }
-      } catch (err) {
-        log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
-      }
-    }
 
     // Providers reject empty turns; a reply-only @bot still carries quoted context.
     if (!mediaFailureContent.trim() && mediaList.length === 0 && !quotedContent?.trim()) {

@@ -132,7 +132,13 @@ describe("getMessageFeishu", () => {
       page([apiMessage(messageId, card, "interactive", { chat_id: chatId })]),
     );
     const result = await getMessage(messageId);
-    expect(result).toMatchObject({ messageId, chatId, content, contentType: "interactive" });
+    expect(result).toMatchObject({
+      messageId,
+      chatId,
+      content,
+      contentType: "interactive",
+      rawContent: JSON.stringify(card),
+    });
   });
 
   it("looks up senders only for the first 50 chronological forwarded children", async () => {

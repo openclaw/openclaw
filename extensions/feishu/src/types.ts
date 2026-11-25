@@ -90,6 +90,7 @@ export type FeishuMessageInfo = {
   senderOpenId?: string;
   senderType?: string;
   content: string;
+  rawContent?: string;
   contentType: string;
   createTime?: number;
   /** Root message ID for replies inside Feishu topics. */
