@@ -5,6 +5,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import { normalizeCatalogTimestamp } from "../../../packages/gateway-protocol/src/public-session-catalog.ts";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
@@ -22,7 +23,6 @@ import {
 import {
   catalogErrorMessages,
   formatSidebarTimestamp,
-  normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
   type CatalogRowControls,
   catalogSessionActivity,

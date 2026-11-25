@@ -17,6 +17,7 @@ const PROJECT_ONLY_INSTALL_SCRIPTS = [
 
 export async function preparePackage(params: {
   spec: string;
+  archivePath?: string;
   staging: string;
   npm: string[];
   node: string;
@@ -40,27 +41,30 @@ export async function preparePackage(params: {
   try {
     await fs.mkdir(params.staging, { recursive: true });
     await params.onStep?.("pack", "in_progress");
-    const packed = await runCommandWithTimeout(
-      [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
-      {
-        cwd: params.staging,
-        baseEnv: env,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        killProcessTree: true,
-      },
-    );
-    if (packed.code !== 0 || packed.killed || packed.signal) {
-      throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
+    let archivePath = params.archivePath;
+    if (!archivePath) {
+      const packed = await runCommandWithTimeout(
+        [...params.npm, "pack", params.spec, "--ignore-scripts", "--quiet"],
+        {
+          cwd: params.staging,
+          baseEnv: env,
+          timeoutMs: Math.max(1, deadline - Date.now()),
+          killProcessTree: true,
+        },
+      );
+      if (packed.code !== 0 || packed.killed || packed.signal) {
+        throw new Error(packed.stderr || packed.stdout || `npm pack exited ${packed.code}`);
+      }
+      // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
+      const packages = (await fs.readdir(params.staging, { withFileTypes: true })).filter(
+        (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
+      );
+      const archive = packages[0];
+      if (packages.length !== 1 || !archive) {
+        throw new Error("npm pack did not produce one package archive.");
+      }
+      archivePath = path.join(params.staging, archive.name);
     }
-    // The owned staging directory, not npm's potentially large/truncated stdout, owns the archive.
-    const packages = (await fs.readdir(params.staging, { withFileTypes: true })).filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".tgz"),
-    );
-    const archive = packages[0];
-    if (packages.length !== 1 || !archive) {
-      throw new Error("npm pack did not produce one package archive.");
-    }
-    const archivePath = path.join(params.staging, archive.name);
     await fs.mkdir(releaseRoot);
     await extractArchive({
       archivePath,

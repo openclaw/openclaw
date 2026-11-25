@@ -108,7 +108,7 @@ it("gives a restored update one next step without claiming an unknown cause", ()
   const report = render({
     status: "failed",
     reason: "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
-    origin: { cause: "unknown" },
+    origin: { cause: "unknown", doctorHint: "Run openclaw doctor" },
     verification: {
       runningVersion: "2026.9.1",
       serviceRunning: true,
@@ -122,8 +122,125 @@ it("gives a restored update one next step without claiming an unknown cause", ()
       "The new version did not finish starting within 10 minutes; v2026.9.1 is still running",
       "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
     ],
-    ["Cause: unknown", "triage", "Diagnose"],
+    ["Cause: unknown", "triage", "Diagnose", "Run openclaw doctor"],
   );
+});
+
+it.each([
+  ["new build refused the configuration (exit 78)", true],
+  ["new build failed to start", false],
+] as const)(
+  "projects startup cause detail only for configuration refusal (%s)",
+  (reason, visible) => {
+    const remedy =
+      "53100: The PostgreSQL server has insufficient disk space for the protected database copy. The original PostgreSQL data was not migrated. Free space on the PostgreSQL server, then run openclaw update.";
+    const diagnostic = `${"debug: Gateway startup phase\n".repeat(40)}${remedy}`;
+    const report = render({
+      status: "failed",
+      reason: `${reason}; v2026.9.1 is still running`,
+      steps: [
+        {
+          step: "diagnostic:startup",
+          status: "completed",
+          detail: diagnostic.slice(0, 1024),
+          stderrTail: diagnostic,
+        },
+      ],
+      verification: {
+        runningVersion: "2026.9.1",
+        serviceRunning: true,
+        coreReady: true,
+        rollbackOutcome: { status: "succeeded", reason },
+      },
+    });
+    expect(report.lines[0]).toBe(
+      "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+    );
+    if (visible) {
+      const cause = report.lines.find((line) => line.startsWith("Cause detail:"));
+      expect(cause).toContain(remedy);
+      expect(cause!.length).toBeLessThanOrEqual(500);
+      expect(report.markdown).toContain(remedy);
+    } else {
+      expect(report.lines.join("\n")).not.toContain(remedy);
+      expect(report.markdown).not.toContain(remedy);
+    }
+    expectChatBudget(report.markdown);
+  },
+);
+
+it.each([
+  "Failed: restarting",
+  "Failing check update (update-failed)",
+  "Current health unavailable; saved verification describes the update attempt only.",
+])("omits redundant rollback text: %s", (line) => {
+  const record = failed({
+    reason: "The new version did not start; v2026.9.1 is still running",
+    steps: [
+      failedStep("restarting", {
+        failureFacts: [{ check: "update", code: "update-failed" }],
+      }),
+    ],
+    verification: {
+      booted: true,
+      runningVersion: "2026.9.1",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "The new version did not start" },
+    },
+  });
+  const report = renderRecord(record, { currentHealth: { kind: "unavailable" } });
+  expect(report.lines.join("\n")).not.toContain(line);
+  expect(report.markdown).not.toContain(line);
+  expect(report.lines).toContain(
+    "Recorded verification: gateway booted; service running (2026.9.1); core ready.",
+  );
+});
+
+it.each<Partial<ReportRecord>>([
+  { reason: "staging failed", verification: {} },
+  {
+    reason: null,
+    verification: { rollbackOutcome: { status: "succeeded", reason: "startup failed" } },
+  },
+])("keeps failed-phase details without a recorded rollback cause (%j)", (patch) => {
+  const report = render({
+    status: "failed",
+    ...patch,
+    steps: [failedStep("staging", { detail: "Package download failed." })],
+  });
+  expect(report.lines).toContain("Failed: staging — Package download failed.");
+});
+
+it("keeps a downgrade's plugin failure below the rollback cause and next step", () => {
+  const report = render({
+    status: "failed",
+    reason: "The new version did not start; v2026.9.2 is still running",
+    target: { kind: "package", version: "2026.9.1" },
+    steps: [
+      failedStep("plugins", {
+        detail: "Plugin update failed. Run `openclaw plugins update --all` to retry.",
+      }),
+      failedStep("restarting", {
+        failureFacts: [{ check: "update", code: "update-failed" }],
+      }),
+      { step: "diagnostic:startup", status: "completed", detail: "private startup output" },
+    ],
+    verification: {
+      runningVersion: "2026.9.2",
+      serviceRunning: true,
+      coreReady: true,
+      rollbackOutcome: { status: "succeeded", reason: "The new version did not start" },
+    },
+  });
+  expect(report.headline).toContain("The new version did not start; v2026.9.2 is still running");
+  expect(report.lines[0]).toBe(
+    "Retry the update. If it fails again, choose Report update failure in Settings → Updates.",
+  );
+  expect(report.lines.slice(1)).toContain(
+    "Failed: plugins — Plugin update failed. Run `openclaw plugins update --all` to retry.",
+  );
+  expect(report.markdown).not.toContain("private startup output");
 });
 
 it("labels standalone repair and leads with the update it repaired", () => {

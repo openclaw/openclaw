@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
+import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-errors.js";
+import {
+  acquireGatewayStateOwner,
+  acquireStateDatabaseSchemaLease,
+} from "../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   readSqliteCleanCloseSeal,
@@ -38,6 +44,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import {
   expectLiveReadSourceManifest,
   snapshotPreflightSourceManifest,
@@ -59,6 +66,68 @@ function transcriptRows(reader: OpenClawAgentReadOnlyDatabase) {
     includeRowTranscriptProjection: true,
   });
 }
+
+it.each(["schema lease", "offline maintenance"] as const)(
+  "handles a foreign %s observed by the native startup inspection child",
+  async (holder) => {
+    const fixture = databaseFixture(tempDirs.make("startup-inspection-handoff-"));
+    const { path: pathname } = fixture.state();
+    await closeOpenClawStateDatabaseAsync();
+    const lease =
+      holder === "schema lease"
+        ? acquireStateDatabaseSchemaLease(pathname)
+        : acquireGatewayStateOwner({ databasePath: pathname });
+    const receipt = path.join(fixture.dir, "observed-owner");
+    const preload = path.join(fixture.dir, "observe-owner.cjs");
+    try {
+      // Release only after the native child reads the real record, without guessing its startup time.
+      fs.writeFileSync(
+        preload,
+        [
+          'const fs = require("node:fs");',
+          "const read = fs.readFileSync;",
+          "fs.readFileSync = function (file, ...args) {",
+          "  const raw = read.call(this, file, ...args);",
+          "  if (file === " + JSON.stringify(lease.path) + ") {",
+          "    fs.writeFileSync(" + JSON.stringify(receipt) + ', "observed");',
+          "  }",
+          "  return raw;",
+          "};",
+        ].join("\n"),
+      );
+      for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+        vi.stubEnv(key, value);
+      }
+      await using worker = createAgentSchemaInspectionWorker();
+      const inspection = worker.inspectState(
+        {
+          pathname,
+          supportedVersion: supportedVersions.state,
+          requireStartupMigrationReadiness: true,
+          purpose: "runtime",
+        },
+        undefined,
+      );
+      const asserted =
+        holder === "schema lease"
+          ? expect(inspection).resolves.toMatchObject({
+              schemas: { incompatible: [], indeterminate: [] },
+              registeredDatabases: [],
+            })
+          : expect(inspection).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+      void asserted.catch(() => {});
+      if (holder === "schema lease") {
+        // The inspection already owns the deadline for its cold child.
+        await waitForFixtureFile(receipt, inspection);
+        lease.release();
+      }
+      await asserted;
+    } finally {
+      lease.release();
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 it("cold-loads a compatible storage seal without validation SQL or snapshots", async () => {
   const fixture = databaseFixture(tempDirs.make("openclaw-clean-startup-"));

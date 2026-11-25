@@ -38,9 +38,16 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
     agentId,
     sessionKey,
     sessionId: sessionKey,
+    storePath: "/synthetic/sessions.json",
     generation: "test",
   }),
   enqueueSessionEventForHost: enqueueSessionEventMock,
+}));
+// mock-isolation: Owed-result storage has its own owner suite; these destinations have no store.
+vi.mock("../sessions/owed.js", () => ({
+  owe: async () => {},
+  readPendingOwed: async () => undefined,
+  withhold: async () => {},
 }));
 vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -91,7 +98,6 @@ function createExecOperatorSource(profileId = "exec-guest") {
     profileId,
     scopes: ["operator.write"],
     signal: controller.signal,
-    assertCurrent: () => controller.signal.throwIfAborted(),
     retain,
   });
   return { controller, authority, retain, release };
@@ -617,7 +623,7 @@ describe("operator source lifetime", () => {
       expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
-      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(source.authority.signal?.aborted).toBe(true);
       expect(staff.session.exited).toBe(false);
       cleanup.release();
       await expect(guest.promise).resolves.toMatchObject({

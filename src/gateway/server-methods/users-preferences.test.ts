@@ -1,3 +1,4 @@
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -9,7 +10,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { holdNextReply } from "../../state/github-publication.worker.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -185,7 +185,6 @@ async function withPreferenceToolTurn(
   run: (params: {
     ownerId: string;
     steer: () => Promise<void>;
-    revoke: () => void;
     request: (method: PreferenceMethod, params?: Record<string, unknown>) => Promise<unknown>;
   }) => Promise<void>,
 ) {
@@ -216,7 +215,6 @@ async function withPreferenceToolTurn(
                   await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
                 ).toMatchObject({ status: "accepted" });
               },
-              revoke: () => turn.revoke(owner.id),
               request: (method, params = {}) =>
                 dispatchGatewayMethodInProcess(method, params, {
                   forceSyntheticClient: true,
@@ -302,29 +300,6 @@ test.each(["read", "write"] as const)(
     });
   },
 );
-
-test("users.prefs refuses a pending write when the participant is revoked before worker commit", async () => {
-  await withPreferenceToolTurn(async ({ ownerId, revoke, request }) => {
-    await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    let reachedCommit = false;
-    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
-    admission.mockImplementation((admit, attachment) =>
-      createAdmission((workerRequest, grant) => {
-        if (workerRequest.stage === "commit") {
-          reachedCommit = true;
-          revoke();
-        }
-        admit(workerRequest, grant);
-      }, attachment),
-    );
-    await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow();
-    expect(reachedCommit).toBe(true);
-    expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
-      entries: { "ui.theme": "claw" },
-    });
-  });
-});
 
 test.each(["current", "staff"] as const)(
   "users.self keeps its original %s authority through the handler's identity sync",
@@ -657,7 +632,6 @@ test("users.prefs.set returns typed profile quota details and recovery advice", 
     });
   });
 });
-import { Worker } from "node:worker_threads";
 
 test("rejects consent from a GitHub-only view after another request imports proxy details", async () => {
   await withPreferenceState(async () => {

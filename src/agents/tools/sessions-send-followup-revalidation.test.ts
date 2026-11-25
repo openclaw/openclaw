@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import {
@@ -63,18 +62,13 @@ it.each([
       throw new Error("Requester completion requires admitted operator authority");
     }
     client.internal = { operatorRunAuthority: source.authority };
-    const ownerCurrent = () =>
-      isConfiguredCommandOwner(getRuntimeConfig(), {
-        channel: "telegram",
-        senderId: "synthetic-owner",
-      });
     const capability = createCronCreatorAuthorityCapability(
       "parent",
       { kind: "unknown" },
-      { source: "channel-owner", isCurrent: ownerCurrent },
+      { source: "channel-owner" },
       () => true,
       undefined,
-      { senderId: "synthetic-owner", channel: "telegram", isCurrent: ownerCurrent },
+      { senderId: "synthetic-owner", channel: "telegram" },
     )!;
     const { operationalRunInstance } = createTestAdmittedRunContext("parent");
     const approvalAuthority = runs.claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -216,8 +210,6 @@ it.each([
           testing.setDepsForTest();
           vi.useRealTimers();
         }
-      } else if (change === "revoked") {
-        await expect(attempt()).rejects.toThrow("Requester followup ended");
       } else {
         await expect(attempt()).resolves.toBe("accepted");
       }

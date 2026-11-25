@@ -351,28 +351,16 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it.each(["grant", "role", "profile", "same-object config"] as const)(
-    "retains admitted grants but fences selected disclosure data after %s changes",
-    (change) =>
-      withFixture(async (fixture, { consume }) => {
-        await consume(async () => "prepared snapshot");
-        const pending = consume(async () => {
-          if (change === "same-object config") {
-            fixture.cfg.gateway!.roles!.definitions.reader!.scopes = [];
-            setRuntimeConfigSnapshot(fixture.cfg);
-          } else {
-            await fixture.changeReader(change);
-          }
-          return "private cached snapshot";
-        });
-        if (change === "grant") {
-          await expect(pending).resolves.toBe("private cached snapshot");
-          await expect(consume(async () => "new disclosure")).rejects.toThrow();
-        } else {
-          await expect(pending).rejects.toThrow();
-        }
-      }),
-  );
+  it("retains admitted grants but refuses the next disclosure after a grant change", () =>
+    withFixture(async (fixture, { consume }) => {
+      await consume(async () => "prepared snapshot");
+      const pending = consume(async () => {
+        await fixture.changeReader("grant");
+        return "private cached snapshot";
+      });
+      await expect(pending).resolves.toBe("private cached snapshot");
+      await expect(consume(async () => "new disclosure")).rejects.toThrow();
+    }));
 
   it("distinguishes failed facts acquisition from an omitted current identity", () =>
     withFixture(async (fixture, { selected, getProjection }) => {

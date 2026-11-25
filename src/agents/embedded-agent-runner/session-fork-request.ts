@@ -193,6 +193,8 @@ export type SessionForkRequest = {
   pin?: SessionForkPin;
   /** The caller set its own output limit; keep it over the parent's. */
   ownOutputLimit: boolean;
+  /** Read the session's cached prefix without output (`StreamOptions.cachePrewarm`). */
+  cachePrewarm?: true;
 };
 
 /**
@@ -250,7 +252,9 @@ export function applySessionForkRequest(
       }
     }
   }
-  if (!toolFree) {
+  // A prewarm generates nothing, so no tool can run; changing tool_choice would change
+  // the cached prefix it exists to read.
+  if (!toolFree || fork.cachePrewarm) {
     return;
   }
   const shape = TOOL_CHOICE_NONE.get(api);

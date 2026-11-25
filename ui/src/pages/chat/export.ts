@@ -1,4 +1,5 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
@@ -11,6 +12,19 @@ import { resolveMessageSenderLabel } from "../../lib/chat/sender-label.ts";
 import { downloadTextFile } from "../../lib/download.ts";
 
 export type ChatExportResult = "downloaded" | "empty";
+
+// A capped row retains its role and tool envelope. Its text is only known after recovery.
+function chatMarkdownRole(message: unknown) {
+  const rawRole = asOptionalRecord(message)?.role;
+  const role = typeof rawRole === "string" ? normalizeRoleForGrouping(rawRole) : undefined;
+  return (role === "user" || role === "assistant") && !isStandaloneToolMessageForDisplay(message)
+    ? role
+    : undefined;
+}
+
+export function isChatMarkdownTurn(message: unknown): boolean {
+  return chatMarkdownRole(message) !== undefined;
+}
 
 export function exportChatMarkdown(messages: unknown[], assistantName: string): ChatExportResult {
   const markdown = buildChatMarkdown(messages, assistantName);
@@ -26,11 +40,8 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
   const lines: string[] = [];
   const seen = new Set<string>();
   for (const [index, msg] of history.entries()) {
-    const m = msg as Record<string, unknown>;
-    // The export is the readable conversation: user and assistant turns only.
-    // Tool calls, tool results, and system traffic are activity, not turns.
-    const role = normalizeRoleForGrouping(typeof m.role === "string" ? m.role : "unknown");
-    if ((role !== "user" && role !== "assistant") || isStandaloneToolMessageForDisplay(msg)) {
+    const role = chatMarkdownRole(msg);
+    if (!role) {
       continue;
     }
     const text = extractTextCached(msg) ?? "";
@@ -49,7 +60,7 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
       role === "user"
         ? (resolveMessageSenderLabel(msg) ?? t("chat.messages.unattributedSender"))
         : (resolveMessageSenderLabel(msg) ?? assistantName);
-    const ts = timestampMsToIsoString(m.timestamp) ?? "";
+    const ts = timestampMsToIsoString(asOptionalRecord(msg)?.timestamp) ?? "";
     lines.push(`## ${speaker}${ts ? ` (${ts})` : ""}`, "", content, "");
   }
   return lines.length > 0 ? [`# Chat with ${assistantName}`, "", ...lines].join("\n") : null;

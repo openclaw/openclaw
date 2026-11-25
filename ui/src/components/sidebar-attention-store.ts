@@ -10,10 +10,7 @@ import type {
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../lib/cron/inventory-connection.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { createCronReadState, readCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -106,16 +103,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         if (event.event === "openclawId.people.changed") {
           this.refreshOpenClawId();
         } else if (event.event === "cron") {
-          if (
-            !this.#applyCronEvent(event.payload) &&
-            !hasCronInventoryEvents(sources.gateway.snapshot)
-          ) {
-            this.#load(false);
-          }
+          this.#applyCronEvent(event.payload);
           if (document.visibilityState === "hidden") {
             this.#cronRefreshNeeded = true;
           }
-        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
+        } else if (isCronInventoryInvalidation(event)) {
           this.#load(false);
         } else if (
           modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)

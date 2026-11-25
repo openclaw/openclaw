@@ -312,7 +312,6 @@ export async function createWorkerSessionToolTestFixture(
         ? createTestOperatorAuthority({
             profileId: options.operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
-            assertCurrent: () => {},
           })
         : undefined,
     );

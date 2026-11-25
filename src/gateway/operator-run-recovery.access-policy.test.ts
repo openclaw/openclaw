@@ -149,7 +149,7 @@ it.each([false, true])(
         // Current identity scopes narrow the next start to read, which starts no chat-like work.
         await expect(
           restoreGatewayOperatorSource({ snapshot, context: fixture.context, assertCurrent() {} }),
-        ).rejects.toThrow("no longer allows sending messages");
+        ).rejects.toThrow("I did not run your queued request. Your role on this Gateway");
         expectCurrent(admitted.authority);
         expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
       } finally {

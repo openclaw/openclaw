@@ -754,6 +754,41 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
   },
 );
 
+test("projects.rename renames a registry project in place and rejects other targets", async () => {
+  return withProjectState(async (state) => {
+    const repo = await initializeRepository(state.root);
+    const project = await registerProjectRegistry({ path: repo, name: "Registered" });
+    expect(
+      await invoke("projects.rename", { projectId: project.id, name: "  Handbook  " }),
+    ).toEqual({
+      ok: true,
+      payload: {
+        id: project.id,
+        displayName: "Handbook",
+        repoRoot: repo,
+        originUrl: "https://github.com/openclaw/openclaw.git",
+        source: "registered",
+      },
+      error: undefined,
+    });
+    // Re-registering keeps the renamed display name and the same ID.
+    await expect(registerProjectRegistry({ path: repo, name: "Other" })).resolves.toMatchObject({
+      id: project.id,
+      displayName: "Handbook",
+    });
+    for (const params of [
+      { projectId: "missing", name: "Missing" },
+      { projectId: "workspace:main", name: "Workspace" },
+      { projectId: project.id, name: "   " },
+      { projectId: project.id },
+    ]) {
+      expect(
+        await invoke("projects.rename", params, projectConfig("/workspace/alpha")),
+      ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+    }
+  });
+});
+
 test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
   return withProjectState(async () => {
     expect(await invoke("projects.remove", { id: "missing" })).toMatchObject({

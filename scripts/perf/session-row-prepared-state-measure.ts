@@ -129,6 +129,8 @@ const owner: Parameters<typeof readPreparedSessionRows>[0] = {
   readSource: unused,
   describe: unused,
   readMembership: unused,
+  hasMembership: unused,
+  memberAccess: unused,
   present: unused,
   selectEntries: unused,
   physicalPaths: unused,

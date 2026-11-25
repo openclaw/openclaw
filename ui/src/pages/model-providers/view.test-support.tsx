@@ -87,6 +87,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onUtilityChange: () => undefined,
     onUtilityFallbackChange: () => undefined,
     onDecisionChange: () => undefined,
+    onSubagentChange: () => undefined,
     onThinkingChange: () => undefined,
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,

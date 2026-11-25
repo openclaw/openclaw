@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
+import { listDirectoryTreeStrict } from "../src/infra/directory-walk.js";
 import { runBuiltCli } from "./cli-json-stdout.test-support.js";
 
 // Literal commands have no shell quoting; retain argv arrays for empty or spaced values.
@@ -35,6 +36,33 @@ export const expectCliError = (stdout: string, message: unknown) =>
 export async function expectMissing(...paths: string[]) {
   for (const file of paths) {
     await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
+
+export async function expectOnlyLoggingState(stateDir: string) {
+  const root = await fs.lstat(stateDir).catch((error: unknown) => {
+    expect(error).toMatchObject({ code: "ENOENT" });
+  });
+  if (!root) {
+    return;
+  }
+  expect(root.isDirectory(), stateDir).toBe(true);
+
+  // Validation errors may log, but must not bootstrap config or operational state.
+  const uid = process.getuid?.();
+  const fallback = path.join("tmp", `openclaw${uid === undefined ? "" : `-${uid}`}`);
+  const logRoots = new Set(["logs", fallback]);
+  const directories = new Set(["tmp", ...logRoots]);
+  for (const { relativePath: relative, dirent } of await listDirectoryTreeStrict(stateDir)) {
+    if (dirent.isDirectory()) {
+      expect(directories.has(relative), relative).toBe(true);
+    } else {
+      expect(dirent.isFile(), relative).toBe(true);
+      expect(logRoots.has(path.dirname(relative)), relative).toBe(true);
+      expect(path.basename(relative)).toMatch(
+        /^openclaw(?:-[a-z0-9-]+)?-\d{4}-\d{2}-\d{2}(?:\.[1-5])?\.log$/u,
+      );
+    }
   }
 }
 

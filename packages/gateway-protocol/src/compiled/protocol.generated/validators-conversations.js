@@ -57,6 +57,7 @@ export {
   isChatMetadataParams,
   isChatMessageGetParams,
   isChatToolTitlesParams,
+  isChatPendingInputsOwnParams,
   isChatPendingInputsDismissParams,
   isChatSteerNowParams,
   isChatPredictParams,

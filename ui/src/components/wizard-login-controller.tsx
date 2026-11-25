@@ -35,6 +35,7 @@ export function createWizardLogin(options: {
   onClose: () => void;
   onCancelled?: () => void;
   onSessionMissing?: () => void;
+  readLostSession?: WizardRunnerOptions["readLostSession"];
   requestFailedMessage: () => string;
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;

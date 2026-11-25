@@ -395,6 +395,8 @@ export async function runSessionEntryWorkerOperation<
     commit: (send: () => Promise<unknown>) => Promise<Result>,
     identity: AgentDatabaseExecutionFileIdentity,
   ): Promise<Result>;
+  /** Retain the exact agent receipt before fallible companion settlement. Must not throw. */
+  onAgentCommitReceipt?: (candidate: Candidate) => void;
   onAcknowledged?: (candidate: Candidate, fileIdentity: AgentDatabaseExecutionFileIdentity) => void;
   onTransactionFacts?: (facts: unknown) => boolean;
   onCommitted(
@@ -480,6 +482,10 @@ export async function runSessionEntryWorkerOperation<
                 settlement.admitted.admission.settlement?.kind !== "completed" ||
                 (unknown && !acknowledged);
             }
+            const committed = acknowledged ? settlement.candidate : undefined;
+            if (committed) {
+              params.onAgentCommitReceipt?.(committed);
+            }
             const nativeOutcome = await params.nativeSettlement?.settle(outcome, acknowledged);
             // Completed native failure without a receipt is rollback, not an unknown write.
             unknown ||=
@@ -489,7 +495,6 @@ export async function runSessionEntryWorkerOperation<
                   Boolean(
                     settlement.admitted?.admission.committed && nativeOutcome !== "rolled-back",
                   )));
-            const committed = acknowledged ? settlement.candidate : undefined;
             let publicationError: unknown;
             let publishedResult: { value: Result } | undefined;
             try {

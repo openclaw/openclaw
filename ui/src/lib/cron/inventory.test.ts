@@ -47,10 +47,10 @@ const page = (
 ): CronJobsListResult<CronCompactJob> => ({ ...cronJobsListResponse(), jobs, total: jobs.length });
 const changed: GatewayEventFrame = { type: "event", event: "cron.inventory.changed" };
 const clients: GatewayBrowserClient[] = [];
-function fixture(request = createGatewayRequestMock(async () => page()), advertised = true) {
+function fixture(request = createGatewayRequestMock(async () => page())) {
   const client = createTestGatewayClient(request);
   clients.push(client);
-  bindCronInventory(client, advertised ? hello : { ...hello, features: { events: [] } });
+  bindCronInventory(client, hello);
   return { client, request };
 }
 function runtime(
@@ -86,7 +86,6 @@ afterEach(() => {
 function routeLoad(
   client: GatewayBrowserClient,
   options: {
-    advertised?: boolean;
     search?: string;
     cause?: "navigation" | "preload";
     signal?: AbortSignal;
@@ -96,7 +95,7 @@ function routeLoad(
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      hello: options.advertised === false ? { ...hello, features: { events: [] } } : hello,
+      hello,
     }),
   ).gateway;
   return cronRoute.loader!(
@@ -124,20 +123,6 @@ it("starts the default Cron inventory during navigation and shares it with the p
   controller.abort();
   response.resolve(cronJobsListResponse([fullJob]));
   await loaded;
-  expect(state.cronJobs).toEqual([fullJob]);
-  expect(request).toHaveBeenCalledTimes(1);
-});
-
-it("keeps one page-owned read on Gateways without shared inventory support", async () => {
-  const { client, request } = fixture(
-    createGatewayRequestMock(async () => cronJobsListResponse([fullJob])),
-    false,
-  );
-  expect(routeLoad(client, { advertised: false })).toBe("");
-  expect(request).not.toHaveBeenCalled();
-  const state = createInitialCronState({ client, connected: true });
-  state.cronAgentId = "ops";
-  await loadCronJobsPage(state, { tableFilters: true });
   expect(state.cronJobs).toEqual([fullJob]);
   expect(request).toHaveBeenCalledTimes(1);
 });
@@ -416,6 +401,26 @@ it("lets one consumer cancel without cancelling a sibling's inventory", async ()
   expect(request).toHaveBeenCalledTimes(1);
 });
 
+it("replaces the last cancelled reader without letting its rejection retire the new inventory", async () => {
+  const oldResponse = Promise.withResolvers<CronJobsListResult<CronCompactJob>>();
+  const request = createGatewayRequestMock()
+    .mockResolvedValueOnce(oldResponse.promise)
+    .mockResolvedValue(page([]));
+  const { client } = fixture(request);
+  const controller = new AbortController();
+  const cancelled = readCronInventory(client, query, { signal: controller.signal });
+  const rejected = expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+  controller.abort();
+  const replacement = readCronInventory(client, query);
+  await rejected;
+  expect((await replacement).jobs).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(2);
+  oldResponse.reject(new Error("Cancelled read settled late"));
+  await vi.waitFor(() => expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true));
+  expect((await readCronInventory(client, query)).jobs).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
 it("retires late responses and cached results with the connection's admitted hello", async () => {
   const response = Promise.withResolvers<CronJobsListResult<CronCompactJob>>();
   const request = createGatewayRequestMock()
@@ -429,17 +434,4 @@ it("retires late responses and cached results with the connection's admitted hel
   await rejected;
   expect((await readCronInventory(client, query)).jobs).toEqual([]);
   expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("retains uncached reads and legacy palette invalidation on unadvertised Gateways", async () => {
-  const { client, request } = fixture(undefined, false);
-  await readCronInventory(client, query);
-  await readCronInventory(client, query);
-  expect(request).toHaveBeenCalledTimes(2);
-  await readCronInventory(client, query, { legacyCache: true });
-  await readCronInventory(client, query, { legacyCache: true });
-  expect(request).toHaveBeenCalledTimes(3);
-  receiveCronInventoryEvent(client, runtime("unknown", "started", 1));
-  await readCronInventory(client, query, { legacyCache: true });
-  expect(request).toHaveBeenCalledTimes(4);
 });

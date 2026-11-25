@@ -362,7 +362,7 @@ describe("subagent registry scoped reads", () => {
     });
     const suspendedRun = row("suspended", {
       requesterSessionKey: parent,
-      delivery: { status: "suspended", disposition: "permanent_failure" },
+      delivery: { status: "suspended" },
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
     const snapshot = runMap(

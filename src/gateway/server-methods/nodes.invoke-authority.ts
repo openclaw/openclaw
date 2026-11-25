@@ -27,7 +27,6 @@ export async function captureNodeSystemRunEventSource(
     );
     const expectedTarget = await captureSessionEventTargetForHost(agentId, destination, {
       operatorAuthority: captured?.authority,
-      assertCurrent: captured?.authority.assertCurrent,
       retainRequesterOwner: true,
     });
     return { expectedTarget, release: captured?.release ?? (() => {}) };

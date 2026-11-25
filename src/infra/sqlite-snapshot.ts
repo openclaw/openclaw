@@ -14,8 +14,6 @@ import {
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
-import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
-import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -24,6 +22,7 @@ import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js"
 import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
 import {
+  createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyCopyInProcess,
 } from "./sqlite-readonly-location.js";
@@ -491,8 +490,8 @@ async function publishSqliteFile(
 /**
  * Compact one SQLite database into a fresh private file and verify the result.
  *
- * The final private image receives integrity and foreign-key checks before
- * publication. Source checks also precede rewrites, backups, and caller validators.
+ * The final private image receives integrity and foreign-key checks before publication.
+ * Raw-image checks precede normalization, rewrites, and caller validators.
  * SQLite copies and checks vec0 shadow tables without loading sqlite-vec;
  * native extension loading here can crash backups on unsupported CPUs.
  */
@@ -571,7 +570,31 @@ export async function createVerifiedSqliteSnapshot(
         cleanupOptions,
       );
     }
-    return verifyAndPublishSqliteSnapshot(options);
+    const prepared = await acquireSource(() =>
+      withSqliteSnapshotSource(sourcePath, async (snapshotSourcePath) => {
+        const sourceBytes = options.onStage ? (await fs.stat(snapshotSourcePath)).size : 0;
+        options.onStage?.("online-copy", "start", sourceBytes);
+        return createOnlineReadOnlyBackup(
+          snapshotSourcePath,
+          path.dirname(options.targetPath),
+          undefined,
+          options.onProgress,
+        );
+      }),
+    ).catch((error: unknown) => {
+      throw new Error(
+        `SQLite database cannot be snapshotted safely: ${options.sourcePath}. ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    });
+    return withPreparedSqliteSnapshot(prepared, async (privateSourcePath) => {
+      if (options.onStage) {
+        options.onStage("online-copy", "done", (await fs.stat(privateSourcePath)).size);
+      }
+      await reportAcquired(privateSourcePath);
+      // This acquired snapshot cannot certify the concurrently changing canonical source.
+      return verifyAndPublishSqliteSnapshot(options, privateSourcePath);
+    });
   };
   return retained
     ? withPreparedSqliteSnapshot(retained.prepared, create, cleanupOptions)
@@ -580,26 +603,21 @@ export async function createVerifiedSqliteSnapshot(
 
 async function verifyAndPublishSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
-  privateSourcePath?: string,
+  privateSourcePath: string,
   recordSourceIntegrity?: () => void,
 ): Promise<VerifiedSqliteSnapshot> {
-  const stagingDir = privateSourcePath
-    ? path.dirname(privateSourcePath)
-    : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
+  const stagingDir = path.dirname(privateSourcePath);
   await fs.chmod(stagingDir, 0o700);
-  const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
+  const stagedPath = privateSourcePath;
   let outputPath = stagedPath;
   let sourceBytes = 0;
   let stagedIdentity: BigIntStats | undefined;
   try {
     await withSqliteSnapshotSource(
-      privateSourcePath ?? options.sourcePath,
+      privateSourcePath,
       async (snapshotSourcePath) => {
         if (options.onStage) {
           sourceBytes = (await fs.stat(snapshotSourcePath)).size;
-        }
-        if (!privateSourcePath) {
-          await fs.rm(stagedPath, { force: true });
         }
         const source = openNodeSqliteDatabase(snapshotSourcePath, {
           readOnly: true,
@@ -607,18 +625,13 @@ async function verifyAndPublishSqliteSnapshot(
         try {
           source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
           try {
-            // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
-            source.prepare("PRAGMA schema_version;").get();
             const autoVacuum =
-              privateSourcePath &&
-              options.preserveRowIds === true &&
-              !options.transform &&
-              !options.validate
+              options.preserveRowIds === true && !options.transform && !options.validate
                 ? source.prepare("PRAGMA auto_vacuum;").get()?.auto_vacuum
                 : undefined;
             // FULL auto-vacuum can rewrite pages when journal normalization commits.
-            // Only normalization without rewrites or callbacks can defer admission
-            // to the final private image; all publication byte checks still apply.
+            // Only a no-rewrite, no-callback image can defer to publication's check.
+            // Compaction and transforms must always verify the raw acquired pages.
             if (autoVacuum !== 0 && autoVacuum !== 2) {
               options.onStage?.("source-integrity", "start", sourceBytes);
               assertSqliteIntegrity(source, options.sourcePath, options.integrity);
@@ -626,13 +639,6 @@ async function verifyAndPublishSqliteSnapshot(
               recordSourceIntegrity?.();
             }
             options.validate?.(source, options.sourcePath);
-            if (!privateSourcePath) {
-              options.onStage?.("online-copy", "start", sourceBytes);
-              await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
-              if (options.onStage) {
-                options.onStage("online-copy", "done", (await fs.stat(stagedPath)).size);
-              }
-            }
           } finally {
             source.exec("ROLLBACK;");
           }
@@ -720,11 +726,5 @@ async function verifyAndPublishSqliteSnapshot(
       `SQLite database cannot be snapshotted safely: ${options.sourcePath}. ${formatErrorMessage(error)}`,
       { cause: error },
     );
-  } finally {
-    if (!privateSourcePath) {
-      // The staged copy was admitted when opened; deleting it alone keeps its bytes until exit.
-      retireSqliteDatabaseAdmissionForPath(stagedPath);
-      await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
-    }
   }
 }

@@ -27,6 +27,7 @@ import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
   type SqliteWalCheckpointOptions,
+  type SqliteWalCheckpointSnapshot,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
 import { resolvePathJournalPolicy } from "./sqlite-wal-filesystem.js";
@@ -98,6 +99,9 @@ function sharedCompletedCheckpoint(
 export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
+  /** Internal reply transport checks the cursor before copying a newly recorded snapshot. */
+  readonly checkpointObservedAtNs?: bigint;
+  readonly checkpointSnapshot?: SqliteWalCheckpointSnapshot;
   checkpoint: () => boolean;
   maintainPeriodic?: (
     request: SqliteWalPeriodicRequest,
@@ -599,6 +603,12 @@ export function configureSqliteWalMaintenance(
   return {
     get health() {
       return checkpointOwner.health;
+    },
+    get checkpointObservedAtNs() {
+      return checkpointOwner.observedAtNs;
+    },
+    get checkpointSnapshot() {
+      return checkpointOwner.snapshot;
     },
     checkpoint,
     maintainPeriodic,

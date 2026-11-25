@@ -23,7 +23,6 @@ const authority = (profileId: string, scopes = ["operator.write"], signal?: Abor
     profileId,
     scopes,
     signal,
-    assertCurrent: () => {},
   });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({
   method: "sessions.patch",

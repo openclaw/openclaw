@@ -109,3 +109,57 @@ export function resolveGitReleaseEntrypointForLauncher(entrypoint: string): stri
     ? path.join(servingGitReleaseSlot(path.dirname(entrypoint)), "dist", "index.js")
     : null;
 }
+
+/**
+ * The release entry that a converted Git checkout's `openclaw.mjs` or `dist/index.js` forwards
+ * to. Git conversions keep a service written for the checkout; the update's forwarding marker
+ * (`markForwarding` in `src/update/run.ts`) sends that entry to the launcher, and
+ * `release-launcher-forward.mjs` follows the marker with the rules read here. Package trees
+ * are left to their own service staging.
+ */
+export function resolveGitReleaseEntrypointForForwardingTree(entrypoint: string): string | null {
+  const resolved = path.resolve(entrypoint);
+  const tree =
+    path.basename(resolved) === "openclaw.mjs"
+      ? path.dirname(resolved)
+      : path.basename(resolved) === "index.js" && path.basename(path.dirname(resolved)) === "dist"
+        ? path.dirname(path.dirname(resolved))
+        : null;
+  if (!tree) {
+    return null;
+  }
+  let root: string;
+  try {
+    root = fs.realpathSync(tree);
+  } catch {
+    return null;
+  }
+  // Only a checkout whose entries carry the forwarder runs the launcher instead of itself.
+  if (
+    !fs.existsSync(path.join(root, ".git")) ||
+    !fs.existsSync(path.join(root, "release-launcher-forward.mjs"))
+  ) {
+    return null;
+  }
+  for (const marker of [
+    path.join(root, ".openclaw-launcher"),
+    path.join(root, ".git", "openclaw-launcher"),
+  ]) {
+    let launcher: string;
+    try {
+      launcher = fs.readFileSync(marker, "utf8").trim();
+    } catch {
+      continue;
+    }
+    if (!launcher || !fs.existsSync(launcher)) {
+      continue;
+    }
+    // A release never forwards: it is what the launcher starts.
+    if (root.startsWith(path.join(path.dirname(launcher), "releases") + path.sep)) {
+      return null;
+    }
+    const release = resolveGitReleaseEntrypointForLauncher(launcher);
+    return release && fs.existsSync(release) ? release : null;
+  }
+  return null;
+}
