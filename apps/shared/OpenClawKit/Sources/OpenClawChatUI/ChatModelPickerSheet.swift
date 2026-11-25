@@ -16,8 +16,8 @@ struct ChatModelPickerSheet: View {
     /// never shrinks, and holds through a push, a search and the way back.
     @State private var fittedHeight: CGFloat?
     @State private var fittedWithCatalog = false
-    /// The least it rests at: the height it had before it fitted its content, growing with the text size.
-    @ScaledMetric(relativeTo: .body) private var scaledMinimumHeight: CGFloat = Self.minimumHeight
+    /// The least it rests at, for a catalog that is loading, failed or empty. It does not grow with the text
+    /// size: the fitted height already does, and a scaled floor left empty space above search at large sizes.
     private static let minimumHeight: CGFloat = 456
     /// The first card sits this far below the title bar, as in the system's own sheets with a headerless first
     /// section (Reminders' New List: 8.7 pt); the list's default top inset left 33.6 pt.
@@ -87,7 +87,7 @@ struct ChatModelPickerSheet: View {
 
     private var restingDetent: PresentationDetent {
         // Above the large detent the system rests at large, and the list scrolls.
-        .height(max(Self.minimumHeight, self.scaledMinimumHeight, self.fittedHeight ?? 0))
+        .height(max(Self.minimumHeight, self.fittedHeight ?? 0))
     }
 
     private func fitRestingHeight(to height: CGFloat) {
