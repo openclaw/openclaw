@@ -26,6 +26,8 @@ type LocalMutationScope = {
   config: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
+  /** This invocation acquired offline custody instead of borrowing an in-process owner. */
+  localGatewayAbsent?: true;
 };
 
 /**
@@ -151,7 +153,10 @@ export async function runWithLocalStateOwner<T>(params: {
       return refuse(error);
     }
   };
-  const runLocal = async (assertOwnerCurrent: () => void): Promise<T> => {
+  const runLocal = async (
+    assertOwnerCurrent: () => void,
+    localGatewayAbsent?: true,
+  ): Promise<T> => {
     const assertCurrent = () => {
       assertTargetCurrent();
       assertOwnerCurrent();
@@ -172,6 +177,7 @@ export async function runWithLocalStateOwner<T>(params: {
         },
         signal: controller.signal,
         assertCurrent,
+        ...(localGatewayAbsent ? { localGatewayAbsent } : {}),
       }),
     );
   };
@@ -399,7 +405,9 @@ export async function runWithLocalStateOwner<T>(params: {
       const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
+        return await (resources ?? lock).run(() =>
+          cleanup.run(() => runLocal(lock.assertCurrent, true)),
+        );
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
