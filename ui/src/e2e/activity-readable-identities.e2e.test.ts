@@ -34,7 +34,7 @@ suite.define(() => {
           for (const [selector, fullText] of [
             [".activity-current-work__title", row.label],
             [".activity-current-work__agent", row.key],
-          ]) {
+          ] as const) {
             const label = link.locator(selector);
             await expect(label).toHaveText(fullText);
             await expect(label).toHaveCSS("white-space", "nowrap");
@@ -45,7 +45,7 @@ suite.define(() => {
             expect(bounds.x + bounds.width).toBeLessThan(statusBounds.x);
           }
         }
-        const queued = page.getByRole("link", { name: new RegExp(rows[1].label) });
+        const queued = page.getByRole("link", { name: new RegExp(rows[1]!.label) });
         const href = await queued.getAttribute("href");
         await queued.tap();
         await expect(page).toHaveURL(new URL(href!, suite.server.baseUrl).toString());
