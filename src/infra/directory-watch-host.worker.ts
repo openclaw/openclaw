@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import { Worker } from "node:worker_threads";
-import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 
 const caller = Number(process.argv[2]);
 if (process.platform === "linux") {
@@ -15,6 +13,8 @@ if (process.platform === "linux") {
 } else {
   // Watch errors can block this event loop in native FSEvents cleanup. The separate
   // thread still ends the helper if its caller dies while the input pipes stay open.
+  const [{ resolveRuntimeProcessEntrypointUrl }, { resolveRuntimeWorkerThreadExecArgv }] =
+    await Promise.all([import("./runtime-process-url.js"), import("./runtime-worker-url.js")]);
   const parentMonitor = resolveRuntimeProcessEntrypointUrl("directoryWatchParent");
   new Worker(parentMonitor, {
     execArgv: resolveRuntimeWorkerThreadExecArgv(parentMonitor),
