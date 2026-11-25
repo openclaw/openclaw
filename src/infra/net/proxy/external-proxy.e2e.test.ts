@@ -220,11 +220,12 @@ describe("SSRF external proxy routing", () => {
     );
 
     expect(child.stderr).toBe("");
-    expect(child.stdout).toContain('"fetch":{"status":218');
-    expect(child.stdout).toContain('"globalFetch":{"status":219');
-    expect(child.stdout).toContain('"nodeHttp":{"status":218');
-    expect(child.stdout).toContain('"explicitAgent":{"status":218');
-    expect(child.stdout).toContain('"body":"from loopback target"');
+    expect(child.stdout).toContain('"fetch":{"status":218,"body":"from loopback target"}');
+    expect(child.stdout).toContain(
+      '"globalFetch":{"status":219,"body":"from global fetch target"}',
+    );
+    expect(child.stdout).toContain('"nodeHttp":{"status":218,"body":"from loopback target"}');
+    expect(child.stdout).toContain('"explicitAgent":{"status":218,"body":"from loopback target"}');
     expect(seenConnectTargets).toEqual(["gateway.example.com:443"]);
   });
 

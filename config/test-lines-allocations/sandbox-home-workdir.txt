@@ -1,3 +1,0 @@
-# Sandbox exec keeps HOME stable across task directories and honors explicit overrides.
-# Exact grant: 21 regression/comment lines plus 12 inherited lines above the base ceiling.
-33

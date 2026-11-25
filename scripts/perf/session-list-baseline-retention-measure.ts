@@ -18,6 +18,10 @@
  * and conditional bytes for identical retained baselines, bounded added heap,
  * and no controlled adverse CPU/allocation change. Revisions are opaque random
  * IDs, so the cross-revision digest contains row contents, not revision tokens.
+ * For sustained byte pressure with several dozen clients and 5k sessions, use
+ * --clients 35 --sessions 5000 --limit 1000 --rounds 48. The larger page is a
+ * retention stressor, not the default UI page size. Per-source CPU measures the
+ * main thread through selection, baseline admission, delta encoding and framing.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -37,6 +41,8 @@ const { values } = parseArgs({
     module: { type: "string" },
     clients: { type: "string", default: "70" },
     rounds: { type: "string", default: "8" },
+    sessions: { type: "string", default: "25000" },
+    limit: { type: "string", default: "200" },
     mode: { type: "string", default: "cpu" },
     output: { type: "string" },
   },
@@ -79,8 +85,12 @@ const { buildSubagentSessionListReadIndex } =
 hook.deregister();
 const clients = Number(values.clients);
 const rounds = Number(values.rounds);
+const sessions = Number(values.sessions);
+const limit = Number(values.limit);
 assert(Number.isSafeInteger(clients) && clients > 0 && clients <= 70);
 assert(Number.isSafeInteger(rounds) && rounds > 0);
+assert(Number.isSafeInteger(sessions) && sessions >= 44);
+assert(Number.isSafeInteger(limit) && limit > 0);
 assert(values.mode === "cpu" || values.mode === "allocation");
 assert(globalThis.gc, "Run with --expose-gc for retained-heap attribution");
 const viewers = Math.ceil((clients * 22) / 70);
@@ -140,6 +150,7 @@ function put(index: number, updatedAt: number) {
     id: identity(row),
     key,
     agentId: "main",
+    storePath: row.storeTarget.storePath,
     row: selectionRow(row),
     scope: "session-entry",
   });
@@ -159,25 +170,25 @@ function put(index: number, updatedAt: number) {
     }),
   );
 }
-for (let index = 0; index < 25_000; index++) {
+for (let index = 0; index < sessions; index++) {
   put(index, now + index);
 }
 const queryMix = (viewer: string): SessionsListParams[] => [
-  { rowMode: "sidebar", source: "sidebar", limit: 200, ownerFirst: true },
-  { rowMode: "sidebar", source: "sidebar", limit: 200, ownerId: viewer },
-  { rowMode: "sidebar", source: "sidebar", limit: 200, involvingMe: true },
+  { rowMode: "sidebar", source: "sidebar", limit, ownerFirst: true },
+  { rowMode: "sidebar", source: "sidebar", limit, ownerId: viewer },
+  { rowMode: "sidebar", source: "sidebar", limit, involvingMe: true },
   {
     rowMode: "sidebar",
     source: "sidebar",
-    limit: 200,
+    limit,
     spawnedBy: `agent:main:parent-${viewer.slice(7)}`,
   },
-  { rowMode: "compact", source: "chat-pane", limit: 200, archived: "all" },
-  { rowMode: "sidebar", source: "agent-roster", limit: 200, archived: "all", excludeDock: true },
+  { rowMode: "compact", source: "chat-pane", limit, archived: "all" },
+  { rowMode: "sidebar", source: "agent-roster", limit, archived: "all", excludeDock: true },
   {
     rowMode: "compact",
     source: "sessions-page",
-    limit: 200,
+    limit,
     archived: "all",
     excludeDock: true,
     includeGlobal: true,
@@ -284,8 +295,8 @@ function read(query: Query) {
   return reply;
 }
 function churn(round: number) {
-  const index = 24_991 - (round % 22);
-  put(index, now + 25_000 + round);
+  const index = sessions - 9 - (round % 22);
+  put(index, now + sessions + round);
   const key = `agent:main:baseline-${index}`;
   for (const view of cache.values()) {
     view.selection = undefined;
@@ -318,7 +329,18 @@ try {
     });
   }
   const misses: Record<string, number> = {};
+  const sources: Record<
+    string,
+    {
+      reads: number;
+      misses: number;
+      fullResponseBytes: number;
+      wireBytes: number;
+      cpuMs: number;
+    }
+  > = {};
   let wireBytes = 0,
+    fullResponseBytes = 0,
     fullResponses = 0,
     deltas = 0,
     unchanged = 0;
@@ -329,10 +351,19 @@ try {
     churn(round);
     for (const connection of queries) {
       for (const query of connection) {
+        const source = (sources[query.opts.source ?? "unspecified"] ??= {
+          reads: 0,
+          misses: 0,
+          fullResponseBytes: 0,
+          wireBytes: 0,
+          cpuMs: 0,
+        });
+        const callCpu = process.threadCpuUsage();
         const reply = read(query);
         const miss = getSessionListBaseMiss(reply);
         if (miss) {
           misses[miss] = (misses[miss] ?? 0) + 1;
+          source.misses++;
         }
         if (reply.rowsUnchanged) {
           unchanged++;
@@ -342,7 +373,16 @@ try {
           fullResponses++;
         }
         const encoded = frame(reply);
-        wireBytes += typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength;
+        const bytes = typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength;
+        wireBytes += bytes;
+        source.wireBytes += bytes;
+        source.reads++;
+        if (!reply.rowsUnchanged && !reply.rowsDelta) {
+          fullResponseBytes += bytes;
+          source.fullResponseBytes += bytes;
+        }
+        const callCpuDelta = process.threadCpuUsage(callCpu);
+        source.cpuMs += (callCpuDelta.user + callCpuDelta.system) / 1000;
       }
     }
     await flush();
@@ -363,8 +403,14 @@ try {
   const measuredRetirements = { ...retirements };
   let selectionPairRefs = 0,
     selectionFacetRefs = 0,
-    partitions = 0;
+    partitions = 0,
+    historyBytes = 0,
+    encodedBytes = 0,
+    largestViewBytes = 0;
   for (const view of cache.values()) {
+    historyBytes += view.historyRefs * 8 + (view.rowHistory?.length ?? 0) * 160;
+    encodedBytes += view.encodedBytes ?? 0;
+    largestViewBytes = Math.max(largestViewBytes, view.bytes);
     const selections = [
       ...(view.partitions?.values() ?? []),
       ...(view.selection ? [view.selection] : []),
@@ -414,8 +460,10 @@ try {
       distinctKeys: declaredKeys.size,
       corpusRows: rows.size,
       rounds,
+      limit,
       listReads: clients * 7 * rounds,
       misses,
+      sources,
       fullResponses,
       deltas,
       unchanged,
@@ -424,6 +472,10 @@ try {
       selectionFacetRefs,
       partitions,
       wireBytes,
+      fullResponseBytes,
+      historyBytes,
+      encodedBytes,
+      largestViewBytes,
       finalEstimatedBytes,
       finalRetainedViews,
       retainedHeapBytes: retained.heapUsed - cleared.heapUsed,

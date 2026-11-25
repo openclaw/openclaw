@@ -1,0 +1,16 @@
+# Class A stage 2: 776 net test lines against origin/main 1bec22471a;
+# allocate exactly the excess above the unchanged 400-line allowance.
+# upgrade-survivor-sqlite-observer.test.ts: real native authorization,
+# cached execution/iterator provenance, callback restoration, process escapes,
+# frozen failure evidence, and the unmodified binding in a fresh ESM process.
+# upgrade-survivor-bulk-access.test.ts: independent catalog/authorization
+# policy, constant DDL versus floor rises, staging lineage, triggers and FTS.
+# upgrade-survivor-migration-chain.test.ts: real leased maintenance and unchanged
+# integrity checks; forbidden step/callback SQL, frozen-DDL same-version repair,
+# and sanitized failure artifacts.
+# ci-test-runtime.test.ts: explicit Node routing for SQLite-native contracts.
+# ci-workflow-guards.test.ts: retain the sanitized artifact allowlist entry.
+# ci-node-test-volume.test.ts: match measured profiles to actual execution routes,
+# including the newly split Node/Bun isolated owner, not a fixed row/config count.
+# Removed the overlapping classifier integrity-only case before allocation.
+376

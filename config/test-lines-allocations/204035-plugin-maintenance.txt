@@ -1,0 +1,2 @@
+# #204035: real schema admission, both downgrade decisions, consent transport, final-only receipts, watcher child cancellation, and exact-install reload hashes. Duplicate report assertions removed; remaining cases protect distinct owner boundaries.
+65

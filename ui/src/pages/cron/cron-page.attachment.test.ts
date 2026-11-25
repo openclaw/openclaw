@@ -31,13 +31,10 @@ describe("CronPage lifecycle", () => {
       document.body.append(page);
       page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();
       await waitForCronPage(() =>
-        expect(page.querySelector("#cron-payload-model-picker")).not.toBeNull(),
+        expect(page.querySelector('[data-chat-model-select="true"]')).not.toBeNull(),
       );
-      page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!.click();
       await waitForCronPage(() =>
-        expect(
-          page.querySelector('[role="option"][data-value="fixture/catalog-choice"]'),
-        ).not.toBeNull(),
+        expect(page.cronCatalogModels).toEqual(["fixture/catalog-choice"]),
       );
       expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
     } finally {

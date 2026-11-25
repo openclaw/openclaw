@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { ActiveTranscriptsSession } from "./capture-types.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 export class TranscriptStartError extends Error {
   constructor(

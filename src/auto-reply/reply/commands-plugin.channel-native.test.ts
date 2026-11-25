@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as EmbeddedAgent from "../../agents/embedded-agent.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { prepareSubagentRunsByRunIds } from "../../agents/subagents/registry/subagent-registry.js";
 import {
   closeSwarmScheduler,
   isSwarmRunActive,
@@ -240,7 +239,6 @@ async function withChannelCommandPlugin(
       bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
-      const previousSubagentRuns = new Set(subagentRuns.keys());
       try {
         registry = loadOpenClawPlugins({
           config: cfg,
@@ -362,29 +360,7 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
-        const revokedChildren = [...subagentRuns.values()].filter(
-          (entry) =>
-            !previousSubagentRuns.has(entry.runId) &&
-            entry.requesterSessionKey === sessionKey &&
-            entry.collectorLaunchCleanupPending &&
-            entry.execution.outcome?.error ===
-              "Channel operator authority changed; send a new request.",
-        );
-        // Revocation cleanup dispatches through the still-live Gateway lifecycle.
         await closeSwarmScheduler(resolveGatewayContext);
-        for (const child of revokedChildren) {
-          expect
-            .soft(
-              loadSessionEntry({
-                agentId: child.childAgentId ?? "main",
-                sessionKey: child.childSessionKey,
-                storePath,
-              }),
-              "revoked native child session is physically deleted before fixture retirement",
-            )
-            .toBeUndefined();
-          expect.soft(subagentRuns.get(child.runId)?.collectorLaunchCleanupPending).toBe(false);
-        }
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }
@@ -497,20 +473,14 @@ describe("plugin command native capabilities through channel ingress", () => {
     });
   });
 
-  it("rechecks the channel operator on every native call and fences the revoked turn", async () => {
+  it("finishes an admitted command after its requester is demoted", async () => {
     await withChannelCommandPlugin(async ({ handler, send, demoteAdmin }) => {
-      let failure: unknown;
-      handler.mockImplementationOnce(async (ctx) => {
-        const native = expectDefined(ctx.runtimeContext?.subagents, "channel command capability");
+      handler.mockImplementationOnce(async () => {
         demoteAdmin();
-        failure = await native.spawn({ requestId: "after-demotion", task: "Review" }).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        return { text: "demoted" };
+        return { text: "completed" };
       });
-      expect(await send("/review-panel")).toEqual([]);
-      expect(failure).toEqual(new Error("Channel operator authority changed; send a new request."));
+      expect(await send("/review-panel")).toEqual(["completed"]);
+      expect(readProbe(await send("/review-panel"))).toMatchObject({ subagents: false });
     });
   });
 
@@ -555,9 +525,7 @@ describe("plugin command native capabilities through channel ingress", () => {
   });
 });
 
-describe("channel requester revocation of native children", () => {
-  const revocation = new Error("Channel operator authority changed; send a new request.");
-
+describe("queued native child custody", () => {
   async function queueChild(fixture: Fixture) {
     const capacity = fixture.holdChildCapacity();
     let accepted: { runId: string; childSessionKey: string } | undefined;
@@ -577,38 +545,20 @@ describe("channel requester revocation of native children", () => {
     return { child, capacity };
   }
 
-  async function expectRefused(child: { runId: string; childSessionKey: string }) {
-    await vi.waitFor(
-      () => {
-        expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal");
-        expect(listSwarmRunReservationIds()).not.toContain(child.runId);
-      },
-      { timeout: 10_000 },
-    );
-    // Completed cleanup can evict resident payloads; the public reader retains the result.
-    const prepared = await prepareSubagentRunsByRunIds([child.runId]);
-    expect(prepared.consume((runs) => runs.get(child.runId))).toMatchObject({
-      ready: true,
-      value: {
-        execution: { outcome: { status: "error", error: revocation.message } },
-        endedReason: "subagent-error",
-        completion: { resultText: revocation.message },
-        collectorCompletion: { status: "failed" },
-      },
-    });
+  function expectWaiting(child: { runId: string }) {
+    expect(subagentRuns.get(child.runId)?.execution.status).toBe("queued");
+    expect(listSwarmRunReservationIds()).toContain(child.runId);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   }
 
   it.each(["demotion", "role removal", "identity unlink"] as const)(
-    "fails a queued child on %s without waiting for capacity",
+    "keeps queued custody after %s until a launch slot is available",
     async (change) => {
       await withChannelCommandPlugin(
         async (fixture) => {
           const { child, capacity } = await queueChild(fixture);
           await fixture.changeAuthority(change);
-          await expectRefused(child);
-          // The lane is still full: revocation, not a launch attempt, settled the child.
-          expect(listSwarmRunReservationIds()).toEqual([expect.stringMatching(/^capacity-/u)]);
+          expectWaiting(child);
           capacity.release();
         },
         { nativeChildren: true },
@@ -616,16 +566,14 @@ describe("channel requester revocation of native children", () => {
     },
   );
 
-  it("refuses a queued child at its launch check when no revocation is published", async () => {
+  it("keeps a queued child waiting after an unannounced role change", async () => {
     await withChannelCommandPlugin(
       async (fixture) => {
         const { child, capacity } = await queueChild(fixture);
         fixture.narrowAdminRoleUnannounced();
-        // Nothing announced the change, so the child is still waiting for its slot.
-        await delay(50);
         capacity.expectQueued(child.runId);
+        expectWaiting(child);
         capacity.release();
-        await expectRefused(child);
       },
       { nativeChildren: true },
     );
@@ -642,9 +590,9 @@ describe("channel requester revocation of native children", () => {
         await delay(50);
         capacity.expectQueued(child.runId);
         expect(subagentRuns.get(child.runId)?.execution.status).toBe("queued");
-        // The subscription stays live for the sender's own later change.
+        // Permission publications do not settle a queued owner's custody.
         await fixture.changeAuthority("demotion");
-        await expectRefused(child);
+        expectWaiting(child);
         capacity.release();
       },
       { nativeChildren: true },

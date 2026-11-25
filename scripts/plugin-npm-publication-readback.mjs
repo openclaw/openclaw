@@ -20,6 +20,7 @@ import {
 } from "./plugin-npm-prepared-release.mjs";
 import { verifyPluginPublicationArtifact } from "./plugin-publication-artifact.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
+import { validateCorePluginDeferrals } from "./release-approval-receipt.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 
 const WORKFLOW = ".github/workflows/plugin-npm-release.yml";
@@ -339,6 +340,21 @@ export async function createPluginNpmPublicationReadback(options) {
     `plugin-npm-plan-${runId}-${planner.run_attempt}`,
     "npm-publication-plan.json",
   );
+  // The exact trusted planner verifies the complete qualified roster and reads
+  // these declarations from its live, human-approved parent receipt. They are
+  // distinct from both published skips and automatic ENEEDAUTH checkpoints.
+  const coreDeferrals = plan.coreDeferrals?.length
+    ? validateCorePluginDeferrals(plan.coreDeferrals, {
+        targetSha: sourceSha,
+        releaseTag: `v${packages[0]?.version}`,
+        npmDistTag: options.npmDistTag ?? "beta",
+      })
+    : [];
+  const deferredPackages = coreDeferrals.map((deferred) => {
+    const entry = packages.find((candidate) => candidate.packageName === deferred.packageName);
+    requireValue(entry, "Deferred npm package is outside the frozen roster.");
+    return entry;
+  });
   const identities = (entries) => {
     requireValue(Array.isArray(entries) && entries.length <= 256, "Invalid npm planning roster.");
     const values = entries.map((entry) =>
@@ -350,8 +366,9 @@ export async function createPluginNpmPublicationReadback(options) {
   requireValue(
     plan.sourceSha === sourceSha &&
       JSON.stringify(identities(plan.all)) === JSON.stringify(identities(packages)) &&
-      JSON.stringify(identities([...plan.candidates, ...plan.skippedPublished])) ===
-        JSON.stringify(identities(packages)),
+      JSON.stringify(
+        identities([...plan.candidates, ...plan.skippedPublished, ...deferredPackages]),
+      ) === JSON.stringify(identities(packages)),
     "Resolved npm publication plan differs from the frozen package roster.",
   );
   requireValue(
@@ -370,6 +387,7 @@ export async function createPluginNpmPublicationReadback(options) {
     );
   }
   const evidence = [];
+  const publisherPolicies = new Map();
   return {
     evidence,
     /**
@@ -382,6 +400,31 @@ export async function createPluginNpmPublicationReadback(options) {
         "Qualified plugin version differs from the parent release version.",
       );
       const job = publishers.get(`${JOB_PREFIX}${packageName})`);
+      const coreDeferral = coreDeferrals.find((deferred) => deferred.packageName === packageName);
+      if (coreDeferral) {
+        requireValue(!job, "Explicitly deferred package unexpectedly has a publisher job.");
+        const { alreadyPublished, supersededBy } = await verifyPublishedNpmRegistry({
+          packageName,
+          version: releaseVersion,
+          publishTags: [releaseDistTag],
+          allowMissing: true,
+          fetchImpl: options.fetchImpl,
+        });
+        evidence.push({
+          ...coreDeferral,
+          verification: alreadyPublished ? "published-registry" : "operator-deferred-auth",
+          supersededBy,
+          childRunId: runId,
+          planAttempt: planner.run_attempt,
+          planArtifactId: planMetadata.id,
+        });
+        return {
+          disposition: alreadyPublished ? "published" : "deferred-auth",
+          note: alreadyPublished
+            ? `${packageName}@${releaseVersion} is public after its explicit deferral; original failure ${coreDeferral.evidence}.`
+            : `${packageName}@${releaseVersion} explicitly deferred: ${coreDeferral.reason}; original failure ${coreDeferral.evidence}. Publication is not asserted.`,
+        };
+      }
       if (!job) {
         requireValue(
           skipped.has(packageName),
@@ -429,8 +472,8 @@ export async function createPluginNpmPublicationReadback(options) {
           Number.isSafeInteger(receipt.artifactId) &&
           receipt.artifactId > 0 &&
           receipt.workflowEvent === "workflow_dispatch" &&
-          (receipt.workflowSha === workflowSha ||
-            (receipt.runId !== runId && receipt.workflowSha === sourceSha)) &&
+          SHA.test(receipt.workflowSha) &&
+          (receipt.runId !== runId || receipt.workflowSha === workflowSha) &&
           receipt.targetSha === sourceSha &&
           receipt.packageName === packageName &&
           receipt.packageDir === entry.packageDir &&
@@ -488,6 +531,36 @@ export async function createPluginNpmPublicationReadback(options) {
       if (qualified.workflowJobs) {
         writeFileSync(jobsPath, JSON.stringify(qualified.workflowJobs));
       }
+      if (!publisherPolicies.has(receipt.workflowSha)) {
+        // The exact P-owned consumed receipt authenticates the original Q.
+        // Read Q's policy, not C's checkout or the current publisher's policy.
+        const policy =
+          receipt.workflowSha === workflowSha
+            ? readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url))
+            : await api(`contents/${WORKFLOW}?ref=${receipt.workflowSha}`, (value) => {
+                requireValue(
+                  value.type === "file" &&
+                    value.path === WORKFLOW &&
+                    value.encoding === "base64" &&
+                    Number.isSafeInteger(value.size) &&
+                    value.size > 0 &&
+                    value.size <= 1024 * 1024 &&
+                    typeof value.content === "string" &&
+                    value.content.length <= 2 * 1024 * 1024,
+                  "Invalid immutable npm publisher policy response.",
+                );
+                const bytes = Buffer.from(value.content, "base64");
+                requireValue(
+                  bytes.length === value.size,
+                  "Immutable npm publisher policy size mismatch.",
+                );
+                return bytes;
+              });
+        publisherPolicies.set(
+          receipt.workflowSha,
+          createHash("sha256").update(policy).digest("hex"),
+        );
+      }
       const consumed = verifyPluginPublicationArtifact({
         ...qualifiedBinding,
         packageDir: entry.packageDir,
@@ -500,20 +573,7 @@ export async function createPluginNpmPublicationReadback(options) {
         publisherPolicy: {
           schema: "openclaw.plugin-npm-publisher-policy/v1",
           policyId: "plugin-npm-release-workflow",
-          sha256: createHash("sha256")
-            .update(
-              // The authenticated P receipt records the original producer, not
-              // a new publication authority. Q's archive retains Q's policy.
-              receipt.workflowSha === workflowSha
-                ? readFileSync(
-                    new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url),
-                  )
-                : readBoundedRegularFile(join(sourceRoot, WORKFLOW), {
-                    label: "frozen source npm publisher policy",
-                    maxBytes: 1024 * 1024,
-                  }),
-            )
-            .digest("hex"),
+          sha256: publisherPolicies.get(receipt.workflowSha),
         },
         sourcePackageJsonSha256: createHash("sha256")
           .update(

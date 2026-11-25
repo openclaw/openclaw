@@ -1,8 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  clampFreshnessState,
   isClawId,
   isEd25519PublicKey,
   isKeyFingerprint,
+  isNodeDiscoveryOrigin,
   parseStatement,
   type BindingEvidence,
   type ClawPin,
@@ -81,7 +83,8 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
         !isRecord(marker) ||
         !isNonNegativeInteger(marker.seq) ||
         !isNonNegativeInteger(marker.issued_at) ||
-        !isNonNegativeInteger(marker.binding_seq)
+        !isNonNegativeInteger(marker.binding_seq) ||
+        (marker.k_gw !== undefined && !isEd25519PublicKey(marker.k_gw))
       ) {
         throw new Error("invalid OpenClaw ID node freshness state");
       }
@@ -91,6 +94,7 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
           seq: marker.seq,
           issued_at: marker.issued_at,
           binding_seq: marker.binding_seq,
+          ...(marker.k_gw !== undefined ? { k_gw: marker.k_gw } : {}),
         },
       };
     }
@@ -119,7 +123,8 @@ export function parseSavedNodeHostOpenClawIdTarget(value: unknown): SavedNodeHos
     evidence: { root_pub: value.evidence.root_pub, binding: binding.statement },
     relayUrl,
     ...(discoveryUrl ? { discoveryUrl } : {}),
-    ...(freshness ? { freshness } : {}),
+    // Only verified bindings raise the high-water; a marker saved before that rule is capped.
+    ...(freshness ? { freshness: clampFreshnessState(freshness, value.pin.binding_seq) } : {}),
   };
 }
 
@@ -140,22 +145,10 @@ export function parseNodeRelayUrl(value: unknown): string | undefined {
 
 /** Discovery routing is deployment configuration, not an authority or a relay hint. */
 export function parseNodeDiscoveryOrigin(value: unknown): string {
-  const discovery = typeof value === "string" ? URL.parse(value) : null;
-  const localHttp =
-    discovery?.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(discovery.hostname);
-  if (
-    !discovery ||
-    (!localHttp && discovery.protocol !== "https:") ||
-    discovery.username ||
-    discovery.password ||
-    discovery.pathname !== "/" ||
-    discovery.search ||
-    discovery.hash
-  ) {
+  if (typeof value !== "string" || !isNodeDiscoveryOrigin(value)) {
     throw new Error("invalid OpenClaw ID Discovery origin");
   }
-  return discovery.origin;
+  return new URL(value).origin;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

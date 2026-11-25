@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { validateWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
@@ -49,6 +50,7 @@ import {
   type SessionEntryProjection,
 } from "./session-entry-snapshot-values.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
 
 function errorFacts(error: unknown) {
   return error instanceof Error
@@ -165,7 +167,7 @@ export function createMemorySessionActorOwner(
             snapshotEntry: snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
             command: (phase, input, authority, observer) =>
-              enqueue(() => {
+              enqueue(async () => {
                 type Value = SessionActorPhaseResults[typeof phase];
                 try {
                   const before = current();
@@ -237,6 +239,14 @@ export function createMemorySessionActorOwner(
                   }
                   prepareInstall(working);
                   advanceSessionActorMemoryState(working);
+                  if (authority.readCustody?.length) {
+                    await prepareSessionStoreCandidatesInWorker({
+                      validate: { readCustody: authority.readCustody, candidates: [], sources: [] },
+                    });
+                  }
+                  for (const evidence of authority.workspaceEvidence ?? []) {
+                    await validateWorkspaceFilesystemEvidence(evidence);
+                  }
                   // This is the sole effect boundary; no asynchronous work runs inside it.
                   authority.authorize("commit", structuredClone(working.hot));
                   guards.assertAccepted();

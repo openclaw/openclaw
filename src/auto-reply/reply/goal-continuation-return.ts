@@ -111,20 +111,20 @@ export function bindGoalContinuationExecution(runId: string, sessionKey: string 
   }
 }
 
-/** A Goal created by this execution can use its admitted chat return, never another command's. */
-export function bindCreatedGoalContinuation(params: {
+type GoalToolContinuation = {
   runId?: string;
   sessionKey: string;
   agentId: string;
   storePath: string;
   goalId: string;
-}): void {
+};
+
+function activeGoalReturnForTool(params: GoalToolContinuation): GoalReturn | undefined {
   const owner = goalReturns.getStore();
   if (
     !owner ||
     owner.closed ||
     owner.signal.aborted ||
-    owner.continuation ||
     owner.params.base.run.scheduledAutomation ||
     owner.params.operation.result !== null ||
     owner.generation !== getAgentRunLifecycleGeneration() ||
@@ -134,9 +134,42 @@ export function bindCreatedGoalContinuation(params: {
     owner.params.base.run.agentId !== params.agentId ||
     owner.params.storePath !== params.storePath
   ) {
-    return;
+    return undefined;
   }
-  owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
+  return owner;
+}
+
+/** A Goal created by this execution can use its admitted chat return, never another command's. */
+export function bindCreatedGoalContinuation(params: GoalToolContinuation): void {
+  const owner = activeGoalReturnForTool(params);
+  if (owner && !owner.continuation) {
+    owner.continuation = { ...owner.params.expectedSession, goalId: params.goalId };
+  }
+}
+
+/** Only the committed completion of this return's goal permits its next explicit creation. */
+export function releaseCompletedGoalContinuation(params: GoalToolContinuation): void {
+  const owner = activeGoalReturnForTool(params);
+  if (owner?.continuation?.goalId === params.goalId) {
+    owner.continuation = undefined;
+  }
+}
+
+/** A created successor overrides the old goal fence only within its own execution. */
+export function readCreatedGoalContinuationId(
+  runId: string,
+  operation: ReplyOperation,
+): string | undefined {
+  const owner = goalReturns.getStore();
+  return owner &&
+    !owner.closed &&
+    !owner.signal.aborted &&
+    owner.generation === getAgentRunLifecycleGeneration() &&
+    owner.sourceRunId === runId &&
+    owner.params.operation === operation &&
+    owner.continuation?.goalId !== owner.params.initialGoalId
+    ? owner.continuation?.goalId
+    : undefined;
 }
 
 /** The committed yield publisher binds the return before the completion wake becomes eligible. */
@@ -172,16 +205,12 @@ export function promoteGoalContinuationYield(params: {
       (entry) =>
         entry.requesterSessionKey !== sessionKey ||
         entry.requesterAgentId !== base.run.agentId ||
-        (entry.completionRequesterSessionId !== undefined &&
-          (entry.completionRequesterSessionId !== continuation.sessionId ||
-            entry.completionRequesterLifecycleRevision !== continuation.lifecycleRevision)) ||
         entry.requesterSettleWake?.rearmGeneration !== params.rearmGeneration ||
         entry.requesterSettleWake?.requesterYieldBatch !== true,
     )
   ) {
     return;
   }
-  base.operatorAuthority?.assertCurrent();
   if (!owner.cohort) {
     const source = base.queuedFollowupReplyDisposition;
     if (source?.kind === "drop") {
@@ -289,7 +318,6 @@ export function readGoalContinuationContext(params: {
   if (!context) {
     return undefined;
   }
-  settlement.owner.params.base.operatorAuthority?.assertCurrent();
   settlement.admitted = true;
   return context;
 }
@@ -322,6 +350,14 @@ export async function finishGoalContinuationSettlement(
 ): Promise<void> {
   const owner = findGoalReturn(entries);
   if (!owner) {
+    // A partition settled ahead of its siblings leaves the cohort; the last one resumes the Goal.
+    for (const key of entries.map(getSubagentRunRuntimeKey)) {
+      const member = cohortReturns.get(key);
+      if (member?.cohort) {
+        member.cohort = { ...member.cohort, keys: member.cohort.keys.filter((k) => k !== key) };
+        cohortReturns.delete(key);
+      }
+    }
     return;
   }
   try {
@@ -335,11 +371,6 @@ export async function finishGoalContinuationSettlement(
     }
   } catch (error) {
     if (owner.closed) {
-      return;
-    }
-    try {
-      owner.params.base.operatorAuthority?.assertCurrent();
-    } catch {
       return;
     }
     throw error;

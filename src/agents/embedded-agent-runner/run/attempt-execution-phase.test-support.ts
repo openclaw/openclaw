@@ -157,6 +157,7 @@ export async function createFixture(
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
+        bindRunAbortDeadline: vi.fn(),
         skillInstructionDeliveryCache,
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },

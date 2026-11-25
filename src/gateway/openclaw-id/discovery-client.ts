@@ -15,6 +15,7 @@ import {
   type SendMailResponse,
   type SignedStatement,
   type StatementSigner,
+  type UnlinkClawResponse,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 
 /** A Discovery error with its stable code (`error.code` in the body). */
@@ -23,6 +24,8 @@ export class DiscoveryRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The published binding a descriptor refusal carries (untrusted until verified). */
+    readonly binding?: unknown,
   ) {
     super(message);
   }
@@ -80,15 +83,19 @@ export function createDiscoveryClient(params: {
     if (!response.ok) {
       let code = "unavailable";
       let message = `Discovery ${endpoint} failed with HTTP ${response.status}`;
+      let binding: unknown;
       try {
         // SAFETY: every field is optional and read with ?? fallbacks; a non-object body throws into the catch.
-        const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+        const parsed = JSON.parse(text) as {
+          error?: { code?: string; message?: string; binding?: unknown };
+        };
         code = parsed.error?.code ?? code;
         message = parsed.error?.message ?? message;
+        binding = parsed.error?.binding;
       } catch {
         // Non-JSON error bodies keep the generic message.
       }
-      throw new DiscoveryRequestError(response.status, code, message);
+      throw new DiscoveryRequestError(response.status, code, message, binding);
     }
     // SAFETY: T is the response shape Discovery's API documents for this endpoint; callers read it defensively.
     return (text ? JSON.parse(text) : undefined) as T;
@@ -104,8 +111,25 @@ export function createDiscoveryClient(params: {
     /** Reads only this Gateway's registration, authenticated by the currently registered K_gw. */
     getRegistration: (clawId: string) =>
       call<GetRegistrationResponse>("getRegistration", { claw_id: clawId }),
-    publishDescriptor: (descriptor: ClawDescriptor) =>
-      call<void>("publishDescriptor", { claw_id: descriptor.claw_id }, { descriptor }),
+    /**
+     * Publishes the descriptor; a re-bind's new binding carries its snapshot in the same
+     * write (discovery.md, "Re-bind"), so Discovery never holds one without the other.
+     */
+    publishDescriptor: (
+      descriptor: ClawDescriptor,
+      rebind?: { snapshot: SignedStatement<"MembershipSnapshot">; code: string },
+    ) =>
+      call<void>(
+        "publishDescriptor",
+        { claw_id: descriptor.claw_id },
+        rebind ? { descriptor, ...rebind } : { descriptor },
+      ),
+    /**
+     * The descriptor Discovery publishes for this claw, read with the owner account's one-time
+     * code (not spent). Untrusted: the owner verifies it with the root before using it.
+     */
+    getPublishedDescriptor: (clawId: string, code: string) =>
+      call<{ descriptor: unknown }>("getPublishedDescriptor", { claw_id: clawId }, { code }),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>
       call<void>("publishSnapshot", { claw_id: clawId }, { snapshot }),
     /** Long-polls the Gateway mailbox after `cursor`. */
@@ -125,6 +149,12 @@ export function createDiscoveryClient(params: {
       ),
     ackMail: (clawId: string, cursor: string) =>
       call<void>("ackMail", { claw_id: clawId }, { cursor }),
+    /**
+     * Unlinks a claw for good with its K_gw-signed ClawUnlink. The statement is the credential,
+     * so it can be sent after this computer cleared the claw's link.
+     */
+    unlinkClaw: (unlink: SignedStatement<"ClawUnlink">) =>
+      call<UnlinkClawResponse>("unlinkClaw", { claw_id: unlink.body.claw_id }, { unlink }),
     /** Mails a notice to every owner device (K_gw-signed, no bearer; notices are never authority). */
     sendOwnerNotice: (clawId: string, payload: Extract<MailboxPayload, { kind: "notice" }>) =>
       call<SendMailResponse>("sendMail", { claw_id: clawId }, { to: "owners", payload }),

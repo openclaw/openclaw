@@ -14,6 +14,9 @@ extended-stable package and publication constraints.
 
 ## Boundaries
 
+- Generally select only P0 and P1 product hotfixes, plus all applicable
+  release-tooling and validation changes regardless of severity; use the shared
+  [release-track selection policy](backport-discovery.md#select-by-release-track).
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
@@ -31,7 +34,10 @@ extended-stable package and publication constraints.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
-- Present the full proposed release set before changing release refs.
+- Present the full proposed release set before changing release refs, or obtain
+  explicit approval for dependency-closed groups under the
+  [shared intake procedure](backport-discovery.md#decide-and-present-the-set).
+  Progressive integration does not shorten the complete mainline audit.
 - Discovery is read-only. After set approval, push individual backports directly
   to the canonical branch. Preparation does not authorize release tags, package
   publication, or npm dist-tag mutation.
@@ -232,10 +238,13 @@ contracts.
 
 ## Filter by Publication Surface
 
-Include only fixes that affect the core package, an npm-publishable official
-plugin in the exact release inventory, or the official Docker image/runtime
-path. Prove package or image inclusion rather than inferring it from the source
-path alone.
+For product fixes, include only changes that affect the core package, an
+npm-publishable official plugin in the exact release inventory, or the official
+Docker image/runtime path. Prove package or image inclusion rather than
+inferring it from the source path alone. Applicable release-tooling and
+validation changes are also included even when they do not ship in those
+artifacts; use the shared release-process improvement rules for branch
+backports and independently pinned Q/P tooling.
 
 - Do not exclude `extensions/**` by path. Determine whether the package appears
   in the canonical `all-publishable` inventory.
@@ -244,9 +253,11 @@ path alone.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
 - Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
-  Release-only fixes as `skip` for this Gateway extended-stable line.
-- Keep GitHub Release automation repairs in trusted current-main release
-  tooling; they are not product backports for the maintenance branch.
+  Release-only product fixes as `skip` for this Gateway extended-stable line.
+  Do not apply this exclusion to tooling or validation used by this line.
+- Include applicable GitHub Release automation changes as release tooling, not
+  product hotfixes. Keep independently pinned publishing tooling P on trusted
+  `main`; backport branch-owned changes when the selected tooling route needs them.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -272,7 +283,7 @@ private refs into the public ledger, branch, PR, or chat output.
 
 ## Assess Every Plausible Fix
 
-For each candidate, prove:
+For each product candidate, prove:
 
 1. The faulty behavior exists in the published extended-stable package set or
    canonical branch.
@@ -299,20 +310,23 @@ overlapping or dependent commits to the smallest final fix before proposing it.
 
 ## Present the Full Release Set
 
-Before mutation, report:
+Before each approved integration, report the proposed set or exact group:
 
 | Source commit | Decision | Published impact | Dependencies | Adaptation | Proof |
 | ------------- | -------- | ---------------- | ------------ | ---------- | ----- |
 
 Include the published npm selector/version, canonical branch, intended patch,
 protected `main` version, scan bounds, total commits, batch count, dependency
-order, complete proposed set, blocked/high-risk decisions, carry-forward items,
+order, proposed set or exact group, current inventory coverage, unfinished audit
+scope, blocked/high-risk decisions, carry-forward items,
 affected core/plugin packages, out-of-scope publication surfaces, and
 confidential security status.
 
 Use PR links when they exist, but retain source commit identities in internal
 evidence. Obtain explicit maintainer approval for the complete categorized
-ledger and release set before changing branches.
+ledger and release set, or for exact dependency-closed groups under the shared
+intake procedure. Keep the remaining inventory open until fully accounted for;
+complete the inventory and final selection before freezing the candidate.
 
 ## Prepare the Approved Patch Set
 

@@ -1,6 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import { claimCard, summaryLink } from "./claim-view.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { assertionOrigin as origin, confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -88,7 +88,7 @@ function pageTable(ui: Page, records: Summary[]) {
 /** Load one Browse page for the current kind, type and filters. */
 export async function browse(ui: Page, n: number, target: HTMLElement) {
   const { s, feature, live } = ui;
-  const result = await feature.invoke("records", {
+  const result = await feature.invoke("records_detail", {
     kind: s.kind,
     offset: s.offset,
     limit: s.kind === "claim" ? 20 : 50,
@@ -109,7 +109,7 @@ export function renderBrowse(
   ui: Page,
   n: number,
   target: HTMLElement,
-  result?: FeatureOutput<typeof contract, "records">,
+  result?: FeatureOutput<FullOutputContract, "records_detail">,
 ) {
   const { s, empty, open, load } = ui;
   const layout = el("div", undefined, "knowledge-browse"),
@@ -331,8 +331,14 @@ export function renderBrowse(
     data.append(pageTable(ui, result.records));
   }
   if (!result.records.length) {
+    const filtered = Boolean(s.browseQuery || s.type || (s.kind === "claim" && s.originFilter));
     data.append(
-      empty("Nothing here yet", "Tell your agent in chat and saved knowledge will appear here."),
+      empty(
+        filtered ? "No matching records" : "Nothing here yet",
+        filtered
+          ? "Try a different search or clear the filters."
+          : "Tell your agent in chat and saved knowledge will appear here.",
+      ),
     );
   }
   const pages = el("div", undefined, "knowledge-pagination");

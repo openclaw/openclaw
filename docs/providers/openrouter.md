@@ -379,6 +379,36 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter's STT contract), not as multipart OpenAI form
 uploads.
 
+`providerOptions.openrouter` on `tools.media.audio` or an audio entry in
+`tools.media.models[]` sets `temperature` on the request; every other key is
+sent to the upstream provider as OpenRouter `provider.options.<slug>`, where
+`<slug>` is the model's prefix (`elevenlabs` for `elevenlabs/scribe-v2`).
+OpenRouter drops options when a different provider serves the model. For
+example, to turn off ElevenLabs Scribe's audio-event tags such as
+`(laughter)`:
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "openrouter",
+          model: "elevenlabs/scribe-v2",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: {
+        enabled: true,
+        providerOptions: {
+          openrouter: { tag_audio_events: false },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Fusion router
 
 OpenRouter Fusion sends one OpenClaw model ref to several OpenRouter models in
@@ -520,7 +550,9 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
   <Accordion title="Anthropic cache markers">
     On verified OpenRouter routes, Anthropic model refs keep OpenRouter's
     Anthropic `cache_control` markers for better prompt-cache reuse on
-    system/developer prompt blocks.
+    system/developer prompt blocks. Opening turns also checkpoint session-shared
+    guidance before producer-delimited Runtime facts; later turns reserve the
+    fourth marker for conversation history.
   </Accordion>
 
   <Accordion title="Anthropic reasoning prefill">
@@ -575,11 +607,14 @@ does **not** inject those OpenRouter-specific headers or prompt-cache markers.
 
     On verified OpenRouter routes, `google/gemini*` refs (including `~google/`
     aliases and `:variant` suffixes) receive one `cache_control: { type:
-    "ephemeral" }` marker on the stable system/developer prompt prefix. Gemini
-    uses only the last breakpoint, so OpenClaw does not mark tools or history.
-    `cacheRetention: "none"` disables it; `"short"` and `"long"` keep the
-    provider's default cache window. The model's minimum cacheable prompt size
-    still applies. See [Prompt caching](/reference/prompt-caching#openrouter).
+    "ephemeral" }` marker on the complete system/developer message. OpenClaw
+    moves only producer-delimited Runtime facts to the first eligible user turn;
+    other instructions remain in the system message. Without a user carrier,
+    the complete prompt stays there. Gemini caches the whole `systemInstruction`,
+    so OpenClaw does not mark tools or history. `cacheRetention: "none"` disables
+    the marker; `"short"` and `"long"` keep the provider's default cache window.
+    The model's minimum cacheable prompt size still applies. See
+    [Prompt caching](/reference/prompt-caching#openrouter).
 
   </Accordion>
 

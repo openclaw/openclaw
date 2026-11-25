@@ -12,7 +12,7 @@
   min-height: 0;
   max-height: var(--openclaw-modal-height-limit, 85dvh);
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -28,7 +28,7 @@
   margin: 0;
   font-size: var(--overlay-modal-title-size);
   font-weight: 600;
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
 }
 
 .session-move__close {
@@ -113,8 +113,8 @@
 .session-move__notice {
   margin: 14px 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .session-move__notice--warning {
@@ -128,9 +128,9 @@
 .session-move__group h3 {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .session-move__list {
@@ -214,13 +214,13 @@
 
 .session-move__name {
   overflow-wrap: anywhere;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .session-move__support {
   color: color-mix(in srgb, var(--muted) 68%, transparent);
-  font-size: var(--control-ui-text-xs);
-  line-height: calc(16px * var(--control-ui-text-scale));
+  font-size: 11px;
+  line-height: 16px;
   overflow-wrap: anywhere;
 }
 
@@ -243,7 +243,7 @@
   border-radius: 4px;
   color: var(--muted);
   background: color-mix(in srgb, var(--text) 4%, transparent);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -258,7 +258,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .session-move__disclosure svg {
@@ -277,7 +277,7 @@
   min-height: 32px;
   gap: 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .session-move__config-menu {
@@ -289,7 +289,7 @@
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .session-move__config-trigger > .oc-menu-item__label {
@@ -320,7 +320,7 @@
   background: color-mix(in srgb, var(--text) 4%, transparent);
   color: var(--muted);
   text-align: right;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .session-move__actions {

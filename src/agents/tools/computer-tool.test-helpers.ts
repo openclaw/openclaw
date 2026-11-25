@@ -27,9 +27,9 @@ vi.mock("./gateway.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
-vi.mock("./computer-tool-gateway.js", () => ({
+vi.mock("./computer-tool-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-tool-gateway.js")>()),
   loadGatewayComputerStatus: gatewayComputerStatusMock,
-  bindGatewayComputerCleanup: async () => undefined,
 }));
 
 export { invalidateComputerFrameIfMissing } from "./computer-tool-shared.js";

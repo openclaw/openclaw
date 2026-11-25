@@ -60,7 +60,10 @@ OpenClaw-owned process is required; a loopback CDP address alone is insufficient
 The exception belongs to one tool invocation. OpenClaw checks its authority again
 before navigation and before continuing each intercepted redirect hop, including
 out-of-process iframe documents. It does not widen stored policy or grant private
-network access to other tools. Playwright is required for the exception; without
+network access to other tools. After the invocation ends, the tab is back under the
+configured policy: a loopback page the exception opened stays open and can reload
+itself or follow links within its own origin, but a document it requests from another
+loopback origin between tool calls (a different port, for example) is stopped. Playwright is required for the exception; without
 it, the existing browser policy applies.
 
 A runtime config reload retires the current automatic grant. A fresh assistant

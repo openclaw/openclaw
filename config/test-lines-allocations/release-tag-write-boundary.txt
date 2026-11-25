@@ -1,2 +1,0 @@
-# Refuse release evidence uploads after candidate tag movement or deletion.
-52

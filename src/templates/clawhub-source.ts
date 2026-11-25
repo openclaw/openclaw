@@ -7,25 +7,34 @@ import {
   downloadClawHubPackageArchive,
   type ClawHubDownloadResult,
 } from "../infra/clawhub-artifacts.js";
-import {
-  resolveClawHubBaseUrl,
-  resolveClawHubImageUrl,
-  type ClawHubFetchOptions,
-} from "../infra/clawhub-client.js";
+import { resolveClawHubBaseUrl, type ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
+  fetchClawHubPackageSecurity,
   fetchClawHubPackageVersion,
   fetchClawHubTemplatesOverview,
   listClawHubPackages,
   searchClawHubPackages,
-  type ClawHubPackageDetail,
-  type ClawHubPackageListItem,
+  type ClawHubTemplatesOverviewOptions,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
+import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
+import {
+  requirePublicTemplatePackage,
+  projectCatalogEntry,
+  projectPublicEntries,
+  rankByInstalls,
+} from "./clawhub-catalog-entry.js";
+import type {
+  ClawHubTemplateCatalogDetail,
+  ClawHubTemplateCatalogEntry,
+  ClawHubTemplateCatalogOverview,
+} from "./clawhub-catalog-types.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
+  readClawHubCatalogExcerpt,
   readClawHubCatalogPreview,
   type ClawHubTemplateCatalogPreview,
 } from "./clawhub-preview-content.js";
@@ -37,10 +46,18 @@ import {
   ClawHubSourceError,
   persistExtractedSource,
   readVerifiedArtifactSource,
+  requireTemplateName,
+  requireExactVersion,
   type ResolvedClawHubSource,
 } from "./clawhub-source-artifact.js";
-import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
+import { templateDependencyInventory } from "./dependency-inventory.js";
+import { measureTemplateAddStage, startTemplateAddStage } from "./timings.js";
 
+export type {
+  ClawHubTemplateCatalogDetail,
+  ClawHubTemplateCatalogEntry,
+  ClawHubTemplateCatalogOverview,
+} from "./clawhub-catalog-types.js";
 export type { ClawHubTemplateCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
 
@@ -53,159 +70,12 @@ function toCatalogExcerpt(content: string | undefined): string {
 }
 
 export type ClawHubCoordinate = { packageName: string; version: string };
-export type ClawHubTemplateCatalogEntry = {
-  packageName: string;
-  displayName: string;
-  summary?: string;
-  iconUrl?: string;
-  latestVersion?: string;
-  channel: "official" | "community";
-  official: boolean;
-  ownerHandle: string;
-  downloads: number;
-  installs: number;
-  featuredAt?: number;
-  updatedAtMs: number;
-};
-export type ClawHubTemplateCatalogOverview = {
-  featured: ClawHubTemplateCatalogEntry[];
-  sections: Array<{ category: string; entries: ClawHubTemplateCatalogEntry[] }>;
-};
-export type ClawHubTemplateCatalogDetail = ClawHubTemplateCatalogEntry & {
-  version: string;
-  agentName?: string;
-  agentDescription?: string;
-  workspaceFiles: number;
-  skills: number;
-  plugins: number;
-  mcpServers: number;
-  scheduledJobs: number;
-  contents: {
-    instructions: Array<{ name: string; source: string; excerpt?: string }>;
-    skills: Array<{ name: string; version: string; excerpt?: string }>;
-    integrations: Array<{ name: string; kind: "plugin" | "mcpServer"; version?: string }>;
-    automations: Array<{ name: string; schedule: string; timezone: string }>;
-  };
-  scanStatus?: string;
-};
 type AcceptedTrust = Extract<Awaited<ReturnType<typeof checkClawHubPackageTrust>>, { ok: true }>;
 export type ClawHubTemplateTrust = {
   trustWarning?: string;
   riskAcknowledgementRequired: boolean;
   trustRecord: AcceptedTrust["trustInstallRecordFields"];
 };
-
-type PublicTemplatePackage = ClawHubPackageListItem & { channel: "official" | "community" };
-type OwnedTemplatePackage = PublicTemplatePackage & { ownerHandle: string };
-
-function isPublicTemplatePackage(pkg: unknown): pkg is PublicTemplatePackage {
-  return (
-    isJsonObject(pkg) &&
-    typeof pkg.name === "string" &&
-    typeof pkg.displayName === "string" &&
-    typeof pkg.updatedAt === "number" &&
-    Number.isFinite(pkg.updatedAt) &&
-    (pkg.summary === undefined || pkg.summary === null || typeof pkg.summary === "string") &&
-    (pkg.latestVersion === undefined ||
-      pkg.latestVersion === null ||
-      typeof pkg.latestVersion === "string") &&
-    pkg.family === "template" &&
-    ((pkg.channel === "official" && pkg.isOfficial === true) ||
-      (pkg.channel === "community" && pkg.isOfficial === false)) &&
-    isCanonicalClawHubPackageName(pkg.name)
-  );
-}
-
-function matchesTemplatePublisher(name: string, ownerHandle: unknown): ownerHandle is string {
-  return (
-    typeof ownerHandle === "string" &&
-    ownerHandle.length > 0 &&
-    (!name.startsWith("@") || name.slice(1, name.indexOf("/")) === ownerHandle)
-  );
-}
-
-function isPublicTemplateListItem(pkg: unknown): pkg is OwnedTemplatePackage {
-  return isPublicTemplatePackage(pkg) && matchesTemplatePublisher(pkg.name, pkg.ownerHandle);
-}
-
-function requirePublicTemplatePackage(
-  detail: ClawHubPackageDetail,
-  requestedName: string,
-): OwnedTemplatePackage {
-  const pkg = detail.package;
-  const ownerHandle = detail.owner?.handle;
-  if (
-    !isPublicTemplatePackage(pkg) ||
-    pkg.name !== requestedName ||
-    !matchesTemplatePublisher(pkg.name, ownerHandle) ||
-    (pkg.ownerHandle !== undefined && pkg.ownerHandle !== null && pkg.ownerHandle !== ownerHandle)
-  ) {
-    throw new ClawHubSourceError(
-      "clawhub_identity_mismatch",
-      "ClawHub returned a different public Template package identity.",
-    );
-  }
-  return { ...pkg, ownerHandle, ownerOfficial: detail.owner?.official === true };
-}
-
-function requireTemplateName(packageName: string): void {
-  if (!isCanonicalClawHubPackageName(packageName)) {
-    throw new ClawHubSourceError(
-      "clawhub_package_name_invalid",
-      "Select a canonical ClawHub package name without a version selector.",
-    );
-  }
-}
-
-function requireExactVersion(version: string): void {
-  if (!isExactSemVer(version)) {
-    throw new ClawHubSourceError(
-      "clawhub_version_unavailable",
-      "Select an exact published Template version.",
-    );
-  }
-}
-
-function projectCatalogEntry(
-  pkg: OwnedTemplatePackage,
-  baseUrl?: string,
-): ClawHubTemplateCatalogEntry {
-  const iconUrl = resolveClawHubImageUrl(
-    typeof pkg.icon === "string" ? pkg.icon : undefined,
-    baseUrl,
-  );
-  const downloads = pkg.stats?.downloads;
-  const installs = pkg.stats?.installs;
-  return {
-    packageName: pkg.name,
-    ...(iconUrl ? { iconUrl } : {}),
-    displayName: pkg.displayName,
-    ...(pkg.summary ? { summary: pkg.summary } : {}),
-    ...(pkg.latestVersion ? { latestVersion: pkg.latestVersion } : {}),
-    channel: pkg.channel,
-    official: pkg.ownerOfficial === true,
-    ownerHandle: pkg.ownerHandle,
-    downloads:
-      typeof downloads === "number" && Number.isFinite(downloads) ? Math.max(0, downloads) : 0,
-    installs: typeof installs === "number" && Number.isFinite(installs) ? Math.max(0, installs) : 0,
-    ...(typeof pkg.featuredAt === "number" ? { featuredAt: pkg.featuredAt } : {}),
-    updatedAtMs: Math.max(0, pkg.updatedAt),
-  };
-}
-
-function projectPublicEntries(
-  packages: unknown[],
-  baseUrl?: string,
-): ClawHubTemplateCatalogEntry[] {
-  return packages.filter(isPublicTemplateListItem).map((pkg) => projectCatalogEntry(pkg, baseUrl));
-}
-
-function rankByInstalls(
-  left: ClawHubTemplateCatalogEntry,
-  right: ClawHubTemplateCatalogEntry,
-): number {
-  return right.installs - left.installs || left.packageName.localeCompare(right.packageName);
-}
 
 export async function listClawHubTemplates(
   params: ClawHubFetchOptions & { limit?: number; category?: string; featured?: boolean } = {},
@@ -257,7 +127,7 @@ export async function listClawHubTemplates(
 
 /** Only an unavailable endpoint or an explicitly incomplete overview uses legacy shelves. */
 export async function readClawHubTemplatesOverview(
-  params: ClawHubFetchOptions & { limit?: number } = {},
+  params: ClawHubTemplatesOverviewOptions = {},
 ): Promise<ClawHubTemplateCatalogOverview | undefined> {
   const result = await fetchClawHubTemplatesOverview(params);
   if (isJsonObject(result) && result.complete === false) {
@@ -280,15 +150,19 @@ export async function readClawHubTemplatesOverview(
       "ClawHub returned a malformed Template overview.",
     );
   }
-  const limit = params.limit ?? 8;
+  const { limit = 8, includeCategoryEntries } = params;
   return {
     featured: projectPublicEntries(result.featured, params.baseUrl).slice(0, limit),
-    sections: result.sections.map((section) => ({
-      category: section.category,
-      entries: projectPublicEntries(section.items, params.baseUrl)
-        .toSorted(rankByInstalls)
-        .slice(0, limit),
-    })),
+    sections: result.sections.map(({ category, items }) => {
+      const projected = projectPublicEntries(items, params.baseUrl);
+      if (includeCategoryEntries !== true || result.completeCategoryEntries !== true) {
+        return { category, entries: projected.toSorted(rankByInstalls).slice(0, limit) };
+      }
+      // Match the paginated category list: the last valid row for a package wins before ranking.
+      const unique = new Map(projected.map((entry) => [entry.packageName, entry]));
+      const ranked = [...unique.values()].toSorted(rankByInstalls);
+      return { category, entries: ranked.slice(0, limit), additionalEntries: ranked.slice(limit) };
+    }),
   };
 }
 
@@ -339,6 +213,12 @@ export async function readClawHubTemplateDetail(
   const releasePromise = versionPromise.then((version) =>
     fetchClawHubPackageVersion({ ...params, name: params.packageName, version }),
   );
+  // The audit only informs the detail rail; Add enforces trust on its own read.
+  const securityPromise = versionPromise
+    .then((version) =>
+      fetchClawHubPackageSecurity({ ...params, name: params.packageName, version }),
+    )
+    .catch(() => undefined);
   // Each endpoint enforces current visibility. Fetch exact-release data concurrently,
   // but consume archive bytes only after checking every identity.
   const downloadAbort = new AbortController();
@@ -355,11 +235,12 @@ export async function readClawHubTemplateDetail(
     }),
   );
   try {
-    const [pkg, release, download, version] = await Promise.all([
+    const [pkg, release, download, version, security] = await Promise.all([
       packagePromise,
       releasePromise,
       downloadPromise,
       versionPromise,
+      securityPromise,
     ]);
     if (release.package?.name !== pkg.name || release.package.family !== "template") {
       throw new ClawHubSourceError(
@@ -374,6 +255,9 @@ export async function readClawHubTemplateDetail(
       );
     }
     const summary = parseTemplateManifestSummary(release.version.templateManifestSummary);
+    const categories = Array.isArray(pkg.categories)
+      ? pkg.categories.filter((category) => typeof category === "string" && category.length > 0)
+      : [];
     const { contents } = await readClawHubTemplateContents(
       {
         ...params,
@@ -389,6 +273,7 @@ export async function readClawHubTemplateDetail(
     return {
       ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
       version,
+      agentId: summary.id,
       ...(summary.name ? { agentName: summary.name } : {}),
       ...(summary.description ? { agentDescription: summary.description } : {}),
       workspaceFiles: contents.instructions.length,
@@ -397,6 +282,17 @@ export async function readClawHubTemplateDetail(
       mcpServers: contents.integrations.filter((item) => item.kind === "mcpServer").length,
       scheduledJobs: contents.automations.length,
       contents,
+      ...(Number.isFinite(pkg.createdAt) ? { createdAtMs: Math.max(0, pkg.createdAt) } : {}),
+      ...(categories.length ? { categories } : {}),
+      // A report for another package or release is not evidence about this one.
+      ...(security?.package?.name === pkg.name && security.release?.version === version
+        ? {
+            security: {
+              ...(security.verdict ? { verdict: security.verdict } : {}),
+              auditUrl: security.securityAuditUrl,
+            },
+          }
+        : {}),
     };
   } catch (error) {
     downloadAbort.abort(error);
@@ -420,11 +316,12 @@ export async function readClawHubTemplatePreview(
   requireTemplateName(params.packageName);
   requireExactVersion(params.version);
   const detail = await fetchClawHubPackageDetail({ ...params, name: params.packageName });
-  requirePublicTemplatePackage(detail, params.packageName);
-  const { preview } = await readClawHubTemplateContents(params, {
-    kind: params.kind,
-    name: params.name,
-  });
+  // `@publisher/slug` may name an unscoped package; the artifact binds to the stored name.
+  const pkg = requirePublicTemplatePackage(detail, params.packageName);
+  const { preview } = await readClawHubTemplateContents(
+    { ...params, packageName: pkg.name },
+    { kind: params.kind, name: params.name },
+  );
   if (!preview) {
     throw new ClawHubSourceError(
       "clawhub_preview_unavailable",
@@ -495,15 +392,16 @@ async function readClawHubTemplateContents(
         ) {
           instructions.push({ name: "SOUL.md", source: "CLAW.md#body" });
         }
-        const skills = manifest.packages
-          .filter((pkg) => pkg.kind === "skill")
-          .map((pkg) => ({ name: pkg.ref, version: pkg.version }));
+        const { skills, integrations } = projectTemplateCatalogDependencies(
+          manifest,
+          verified.snapshot.bundledSources,
+        );
         const [describedInstructions, describedSkills] = requestedPreview
           ? [instructions, skills]
           : await Promise.all([
               Promise.all(
                 instructions.map(async (instruction) => {
-                  const preview = await readClawHubCatalogPreview({
+                  const preview = await readClawHubCatalogExcerpt({
                     params,
                     requested: { kind: "instruction", name: instruction.name },
                     instructions,
@@ -546,19 +444,13 @@ async function readClawHubTemplateContents(
             contents: {
               instructions: describedInstructions,
               skills: describedSkills,
-              integrations: [
-                ...manifest.packages
-                  .filter((pkg) => pkg.kind === "plugin")
-                  .map((pkg) => ({ name: pkg.ref, kind: "plugin" as const, version: pkg.version })),
-                ...Object.keys(manifest.mcpServers).map((name) => ({
-                  name,
-                  kind: "mcpServer" as const,
-                })),
-              ],
+              integrations,
               automations: manifest.automations.map((job) => ({
                 name: job.name || job.id,
+                enabled: job.enabled ?? true,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
+                message: job.message,
               })),
             },
             ...(preview ? { preview } : {}),
@@ -579,26 +471,47 @@ async function readClawHubTemplateContents(
 
 type PersistClawHubSource = () => Promise<ResolvedClawHubSource>;
 
-export async function withResolvedClawHubSource<T>(
-  params: ClawHubFetchOptions & {
-    coordinate: { packageName: string; version?: string };
-    mode: "preview" | "apply";
-    acknowledgeClawHubRisk?: boolean;
-    stateDir?: string;
-    run: (
-      source: ResolvedClawHubSource,
-      trust: ClawHubTemplateTrust,
-      persistSource: PersistClawHubSource,
-    ) => Promise<T>;
-  },
-): Promise<{ value: T } & ClawHubTemplateTrust> {
-  const { packageName } = params.coordinate;
-  requireTemplateName(packageName);
+type ClawHubSourceRequest = ClawHubFetchOptions & {
+  coordinate: { packageName: string; version?: string };
+  mode: "preview" | "apply";
+  acknowledgeClawHubRisk?: boolean;
+};
+
+type FetchedClawHubSource = {
+  packageName: string;
+  version: string;
+  resolvedArtifact: ReturnType<typeof readExactTemplateArtifact>;
+  trust: ClawHubTemplateTrust;
+  download: ClawHubDownloadResult;
+};
+
+/** Registry reads for one exact release: identity, then trust, then the archive. */
+async function fetchClawHubSource(params: ClawHubSourceRequest): Promise<FetchedClawHubSource> {
+  const requestedName = params.coordinate.packageName;
+  requireTemplateName(requestedName);
   if (params.coordinate.version !== undefined) {
     requireExactVersion(params.coordinate.version);
   }
-  const detail = await fetchClawHubPackageDetail({ ...params, name: packageName });
-  const pkg = requirePublicTemplatePackage(detail, packageName);
+  // Exact releases can fetch independent metadata together; latest needs the catalog version first.
+  const [detail, exactArtifact] = await measureTemplateAddStage("source.metadata", () =>
+    Promise.all([
+      measureTemplateAddStage("source.metadata.detail", () =>
+        fetchClawHubPackageDetail({ ...params, name: requestedName }),
+      ),
+      params.coordinate.version === undefined
+        ? Promise.resolve(undefined)
+        : fetchClawHubPackageArtifact({
+            ...params,
+            name: requestedName,
+            version: params.coordinate.version,
+          }),
+    ]),
+  );
+
+  // `@publisher/slug` may name an unscoped package; exact-release identity, trust
+  // and archive checks all bind to the stored name.
+  const pkg = requirePublicTemplatePackage(detail, requestedName);
+  const packageName = pkg.name;
   const version = params.coordinate.version ?? pkg.latestVersion;
   if (!version) {
     throw new ClawHubSourceError(
@@ -607,23 +520,25 @@ export async function withResolvedClawHubSource<T>(
     );
   }
   requireExactVersion(version);
-  const artifact = await fetchClawHubPackageArtifact({ ...params, name: packageName, version });
+  const artifact =
+    exactArtifact ?? (await fetchClawHubPackageArtifact({ ...params, name: packageName, version }));
   const resolvedArtifact = readExactTemplateArtifact(artifact, { packageName, version });
-  const expectedSha256 = resolvedArtifact.sha256;
-  const trust = await checkClawHubPackageTrust({
-    subject: { kind: "template", packageName },
-    version,
-    expectedTemplateArtifact: {
-      sha256: expectedSha256,
-      npmIntegrity: resolvedArtifact.npmIntegrity,
-      ...(resolvedArtifact.npmShasum !== undefined
-        ? { npmShasum: resolvedArtifact.npmShasum }
-        : {}),
-    },
-    baseUrl: params.baseUrl,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-  });
+  const trust = await measureTemplateAddStage("source.trust", () =>
+    checkClawHubPackageTrust({
+      subject: { kind: "template", packageName },
+      version,
+      expectedTemplateArtifact: {
+        sha256: resolvedArtifact.sha256,
+        npmIntegrity: resolvedArtifact.npmIntegrity,
+        ...(resolvedArtifact.npmShasum !== undefined
+          ? { npmShasum: resolvedArtifact.npmShasum }
+          : {}),
+      },
+      baseUrl: params.baseUrl,
+      token: params.token,
+      timeoutMs: params.timeoutMs,
+    }),
+  );
   if (!trust.ok) {
     throw new ClawHubSourceError(trust.code ?? "clawhub_trust_failed", trust.error, trust.warning);
   }
@@ -636,40 +551,113 @@ export async function withResolvedClawHubSource<T>(
       trust.warning,
     );
   }
-  const trustProjection: ClawHubTemplateTrust = {
-    ...(trust.warning ? { trustWarning: trust.warning } : {}),
-    riskAcknowledgementRequired,
-    trustRecord: trust.trustInstallRecordFields,
-  };
-
-  const download = await downloadClawHubPackageArchive({
-    name: packageName,
+  const download = await measureTemplateAddStage("source.download", () =>
+    downloadClawHubPackageArchive({
+      name: packageName,
+      version,
+      artifact: "clawpack",
+      baseUrl: params.baseUrl,
+      token: params.token,
+      timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
+  );
+  return {
+    packageName,
     version,
-    artifact: "clawpack",
-    baseUrl: params.baseUrl,
-    token: params.token,
-    timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
+    resolvedArtifact,
+    trust: {
+      ...(trust.warning ? { trustWarning: trust.warning } : {}),
+      riskAcknowledgementRequired,
+      trustRecord: trust.trustInstallRecordFields,
+    },
+    download,
+  };
+}
+
+/** Registry reads started ahead of their consumer, which owns the downloaded archive. */
+export type PrefetchedClawHubSource = {
+  /** The one consumer takes the fetched release; its cleanup then belongs to that consumer. */
+  claim: () => Promise<FetchedClawHubSource>;
+  /** Cancel an unclaimed fetch and remove anything it downloaded. */
+  discard: () => Promise<void>;
+};
+
+/**
+ * Start the registry reads of an Add before its other preparation finishes. The archive
+ * is only downloaded here: `withResolvedClawHubSource` still verifies and extracts it.
+ */
+export function prefetchClawHubSource(params: ClawHubSourceRequest): PrefetchedClawHubSource {
+  const abort = new AbortController();
+  const fetched = fetchClawHubSource({
+    ...params,
+    signal: params.signal ? AbortSignal.any([params.signal, abort.signal]) : abort.signal,
   });
+  fetched.catch(() => undefined);
+  let claimed = false;
+  return {
+    claim: () => {
+      claimed = true;
+      return fetched;
+    },
+    discard: async () => {
+      if (claimed) {
+        return;
+      }
+      claimed = true;
+      abort.abort();
+      await fetched.then(
+        (source) => source.download.cleanup(),
+        () => undefined,
+      );
+    },
+  };
+}
+
+export async function withResolvedClawHubSource<T>(
+  params: ClawHubSourceRequest & {
+    stateDir?: string;
+    /** Registry reads this request already started; used instead of fetching again. */
+    prefetched?: PrefetchedClawHubSource;
+    run: (
+      source: ResolvedClawHubSource,
+      trust: ClawHubTemplateTrust,
+      persistSource: PersistClawHubSource,
+    ) => Promise<T>;
+  },
+): Promise<{ value: T } & ClawHubTemplateTrust> {
+  const {
+    packageName,
+    version,
+    resolvedArtifact,
+    trust: trustProjection,
+    download,
+  } = await (params.prefetched ? params.prefetched.claim() : fetchClawHubSource(params));
+  const expectedSha256 = resolvedArtifact.sha256;
   try {
     assertClawHubDownloadIntegrity(download, resolvedArtifact);
     const artifactByteLength = (await fs.stat(download.archivePath)).size;
+    using extraction = startTemplateAddStage("source.extract");
     const extracted = await withExtractedArchiveRoot({
       archivePath: download.archivePath,
       tempDirPrefix: "openclaw-template-source-",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
       rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
-        const artifactSource = await readVerifiedArtifactSource({
-          sourceRoot: rootDir,
-          packageName,
-          version,
-          artifactSha256: expectedSha256,
-          artifactByteLength,
-        });
+        extraction.end("ok");
+        const artifactSource = await measureTemplateAddStage("source.verify", () =>
+          readVerifiedArtifactSource({
+            sourceRoot: rootDir,
+            packageName,
+            version,
+            artifactSha256: expectedSha256,
+            artifactByteLength,
+          }),
+        );
         if (
           params.baseUrl !== undefined &&
           resolveClawHubBaseUrl(params.baseUrl) !== resolveClawHubBaseUrl() &&
-          artifactSource.manifest.packages.length > 0
+          templateDependencyInventory(artifactSource.manifest).length > 0
         ) {
           throw new ClawHubSourceError(
             "clawhub_registry_mismatch",
@@ -685,20 +673,24 @@ export async function withResolvedClawHubSource<T>(
             );
           }
           persistedSource ??= (async () => {
-            const sourceRoot = await persistExtractedSource({
-              rootDir,
-              archivePath: download.archivePath,
-              artifactSha256: expectedSha256,
-              artifactByteLength,
-              stateDir: params.stateDir,
-            });
-            return await readVerifiedArtifactSource({
-              sourceRoot,
-              packageName,
-              version,
-              artifactSha256: expectedSha256,
-              artifactByteLength,
-            });
+            const sourceRoot = await measureTemplateAddStage("source.persist", () =>
+              persistExtractedSource({
+                rootDir,
+                archivePath: download.archivePath,
+                artifactSha256: expectedSha256,
+                artifactByteLength,
+                stateDir: params.stateDir,
+              }),
+            );
+            return await measureTemplateAddStage("source.verify", () =>
+              readVerifiedArtifactSource({
+                sourceRoot,
+                packageName,
+                version,
+                artifactSha256: expectedSha256,
+                artifactByteLength,
+              }),
+            );
           })();
           return await persistedSource;
         };

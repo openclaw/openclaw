@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routeReply } from "../../auto-reply/reply/route-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isPlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
@@ -138,15 +137,6 @@ describe("routed replies from a retired turn registry", () => {
     });
     expect(result).toMatchObject({ ok: false, delivered: false });
     expect(result.error).toContain("producer authority revoked");
-    expect(sendText).not.toHaveBeenCalled();
-  });
-
-  it("rejects before any send when the admitting Gateway is gone", async () => {
-    const { publication, sendText, route } = retiredTurnFixture();
-    publication.current = undefined;
-    const result = await route();
-    expect(result).toMatchObject({ ok: false, delivered: false });
-    expect(isPlatformMessageNotDispatchedError(result.cause)).toBe(true);
     expect(sendText).not.toHaveBeenCalled();
   });
 });

@@ -294,6 +294,94 @@ it.each([
 );
 
 it.each([
+  ["pointer", {}, false, false],
+  ["touch", {}, false, false],
+  ["horizontal wheel", { deltaX: 120, deltaY: 0 }, false, false],
+  ["horizontal up", { deltaX: 120, deltaY: -1 }, false, false],
+  ["horizontal down", { deltaX: 120, deltaY: 1 }, true, true],
+  ["vertical up", { deltaY: -120 }, false, true],
+  ["vertical down", { deltaY: 120 }, true, false],
+  ["ctrl wheel", { ctrlKey: true }, false, false],
+  ["shift wheel", { shiftKey: true }, false, false],
+  ["alt wheel", { altKey: true }, false, false],
+  ["meta wheel", { metaKey: true }, false, false],
+] as const)("preserves reader ownership for %s", async (input, wheel, reading, expectedReader) => {
+  stubAnimationFrames();
+  const { policy, transcript, mount } = createPolicyTranscript(`contact-${input}`);
+  const { container } = await mount();
+  viewport(container, 400, 2000);
+  connectPolicy(policy, transcript, container);
+  transcript.scrollToEnd({ behavior: "auto" });
+  nativeScroll(container, 1600);
+  if (reading) {
+    handleChatScrollTakeover(policy, false);
+  }
+
+  if (input === "pointer") {
+    container.dispatchEvent(new PointerEvent("pointerdown"));
+  } else if (input === "touch") {
+    const touches = [contact(1, container)];
+    container.dispatchEvent(new TouchEvent("touchstart", { touches, changedTouches: touches }));
+    container.dispatchEvent(new TouchEvent("touchend", { touches: [], changedTouches: touches }));
+  } else {
+    container.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, ...wheel }));
+  }
+  expectReader(policy, expectedReader);
+  publishTranscriptScroll(container, { type: "composer-input" });
+  nativeScroll(container, 1572);
+  expect(container.scrollTop).toBe(expectedReader ? 1572 : 1600);
+  expectReader(policy, expectedReader);
+});
+
+it.each([
+  { top: 120, overscroll: "auto", follows: true, input: "wheel" },
+  { top: 0, overscroll: "auto", follows: false, input: "wheel" },
+  { top: 0, overscroll: "contain", follows: true, input: "wheel" },
+  { top: 0, overscroll: "contain", follows: true, input: "PageUp" },
+])(
+  "respects nested $input ownership at $top with $overscroll chaining",
+  async ({ top, overscroll, follows, input }) => {
+    stubAnimationFrames();
+    const { policy, transcript, mount } = createPolicyTranscript(`nested-${top}-${overscroll}`);
+    const { container } = await mount();
+    viewport(container, 400, 2000);
+    connectPolicy(policy, transcript, container);
+    transcript.scrollToEnd({ behavior: "auto" });
+    nativeScroll(container, 1600);
+    const nested = container.appendChild(document.createElement("div"));
+    nested.style.overflowY = "auto";
+    nested.style.overscrollBehaviorY = overscroll;
+    viewport(nested, 100, 400);
+    nested.scrollTop = top;
+    nested.dispatchEvent(
+      input === "wheel"
+        ? new WheelEvent("wheel", { deltaY: -120, bubbles: true })
+        : new KeyboardEvent("keydown", { key: input, bubbles: true }),
+    );
+    expectReader(policy, !follows);
+  },
+);
+
+it("keeps a wheel departure when adjacent composer input precedes its native scroll event", async () => {
+  stubAnimationFrames();
+  const { policy, transcript, mount } = createPolicyTranscript("wheel-before-composer-input");
+  const { container } = await mount();
+  viewport(container, 400, 2000);
+  connectPolicy(policy, transcript, container);
+  transcript.scrollToEnd({ behavior: "auto" });
+  nativeScroll(container, 1600);
+
+  container.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+  publishTranscriptScroll(container, { type: "composer-input" });
+  nativeScroll(container, 1480);
+
+  expect(container.scrollTop).toBe(1480);
+  expectReader(policy, true);
+  publishTranscriptScroll(container, { type: "composer-layout", changed: true });
+  expect(container.scrollTop).toBe(1480);
+});
+
+it.each([
   ["PageUp", () => new KeyboardEvent("keydown", { key: "PageUp" }), true],
   ["ArrowUp", () => new KeyboardEvent("keydown", { key: "ArrowUp" }), true],
   ["Home", () => new KeyboardEvent("keydown", { key: "Home" }), true],

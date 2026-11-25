@@ -64,6 +64,17 @@ describe("message schema variants", () => {
     expect(buildMessageToolSchemaFromActions(["send"], { ...options, [flag]: true })).toBe(changed);
   });
 
+  it("admits a ClawHub search or one exact plugin package name", () => {
+    const schema = buildMessageToolSchemaFromActions(["send"], {
+      ...options,
+      includeClawHub: true,
+    });
+    const check = (clawhub: unknown) => Value.Check(schema, { action: "send", clawhub });
+    expect(check({ query: "whatsapp", kind: "plugin" })).toBe(true);
+    expect(check({ plugin: "@scope/name" })).toBe(true);
+    expect(check({ plugin: "@scope/name", official: true })).toBe(false);
+  });
+
   it("refreshes the action surface without changing an earlier schema", () => {
     const actions = ["send"];
     const first = buildMessageToolSchemaFromActions(actions, options);

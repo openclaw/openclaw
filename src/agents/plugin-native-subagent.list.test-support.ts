@@ -132,12 +132,15 @@ async function withListing(
                 },
                 lifecycleRevision: "parent-revision",
                 operatorAuthority: source.authority,
-                assertCurrent: source.authority.assertCurrent,
+                assertCurrent: () => source.authority.signal?.throwIfAborted(),
                 prepareSpawn: async () => {
                   throw new Error("listing must not admit a new spawn");
                 },
               },
-              { pluginId: "test-plugin", assertCurrent: source.authority.assertCurrent },
+              {
+                pluginId: "test-plugin",
+                assertCurrent: () => source.authority.signal?.throwIfAborted(),
+              },
             );
             await run(expectDefined(native.list, "native list"));
           },
@@ -154,7 +157,7 @@ async function withListing(
 
 export function registerNativePluginListCases() {
   describe("persisted native plugin child listing", () => {
-    it("hydrates canonical custody, excludes legacy and unrelated owners, and returns no private payload", async () => {
+    it("hydrates canonical custody of the chat across resets, excludes legacy and unrelated owners, and returns no private payload", async () => {
       await withListing(async (list) => {
         const future = record("future-owner-version");
         Reflect.set(expectDefined(future.nativePluginOwner, "future owner fixture"), "version", 2);
@@ -181,7 +184,15 @@ export function registerNativePluginListCases() {
         ];
         saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
         expect(subagentRuns.size).toBe(0);
-        expect(await list()).toEqual([{ ...listed("accepted"), label: "review" }]);
+        // The chat owns its collectors: rows from an earlier session of the same chat stay listed.
+        const byRunId = (a: { runId: string }, b: { runId: string }) =>
+          a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
+        expect((await list()).toSorted(byRunId)).toEqual([
+          { ...listed("accepted"), label: "review" },
+          listed("missing-parent"),
+          listed("old-revision"),
+          listed("reset"),
+        ]);
       });
     });
 

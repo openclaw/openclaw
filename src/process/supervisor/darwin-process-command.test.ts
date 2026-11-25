@@ -43,16 +43,24 @@ it.each([
   { argv: ["node", "/app with spaces/openclaw.mjs", "", "doctor"], serviceMarker: undefined },
   { argv: ["openclaw-gateway", "", "", ""], serviceMarker: "" },
   { argv: ["node", "dist/index.js"], serviceMarker: "openclaw" },
-])("preserves exact argv $argv and selects only the service marker", ({ argv, serviceMarker }) => {
+  // Helpers the Gateway starts inherit its marker; only a JS runtime reports it, as on Linux.
+  {
+    executable: "/opt/homebrew/bin/op",
+    argv: ["op", "daemon"],
+    serviceMarker: "openclaw",
+    inherited: true,
+  },
+])("preserves exact argv $argv and selects only the service marker", (row) => {
+  const { argv, serviceMarker, executable = "/runtime path/node" } = row;
   readCommand.mockReturnValue({
-    executable: "/runtime path/node",
+    executable,
     argv: Object.freeze(argv),
     environment: serviceMarker === undefined ? {} : { OPENCLAW_SERVICE_MARKER: serviceMarker },
   });
   expect(readDarwinProcessCommand(12, "same")).toEqual({
     argv,
-    executable: "/runtime path/node",
-    ...(serviceMarker === undefined ? {} : { serviceMarker }),
+    executable,
+    ...(serviceMarker === undefined || "inherited" in row ? {} : { serviceMarker }),
   });
   expect(readCommand).toHaveBeenCalledExactlyOnceWith(12, {
     environmentKeys: ["OPENCLAW_SERVICE_MARKER"],

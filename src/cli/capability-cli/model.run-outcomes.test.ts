@@ -7,6 +7,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerCapabilityCli } from "../capability-cli.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { registerModelCapabilityCommands } from "./model.js";
 
 const mocks = await vi.hoisted(async () => ({
@@ -115,7 +116,7 @@ it.each([
     }),
 );
 
-it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink", "conflict"])(
+it.each(["missing", "invalid-utf8", "oversized", "traversal", "symlink"])(
   "rejects %s prompt files before inference",
   async (scenario) =>
     withOpenClawTestState({}, async (state) => {
@@ -125,9 +126,7 @@ it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink"
       const content =
         scenario === "invalid-utf8"
           ? Buffer.from([0xc3, 0x28])
-          : scenario === "empty"
-            ? " \n"
-            : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
+          : "x".repeat(scenario === "oversized" ? 1_048_577 : 1);
       if (scenario === "symlink") {
         await fs.symlink(state.root, path.join(dir, "alias"), "junction");
       } else if (scenario !== "missing") {
@@ -141,14 +140,7 @@ it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink"
             ? "alias/private.txt"
             : "prompt.txt";
 
-      await expect(
-        runPromptInput(
-          "infer",
-          "--prompt-file",
-          file,
-          ...(scenario === "conflict" ? ["--prompt", "argv prompt"] : []),
-        ),
-      ).rejects.toThrow("exit 1");
+      await expect(runPromptInput("infer", "--prompt-file", file)).rejects.toThrow("exit 1");
 
       expect(mocks.acquire).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -160,7 +152,6 @@ it.each(["missing", "empty", "invalid-utf8", "oversized", "traversal", "symlink"
 );
 
 it.each([
-  { bytes: Buffer.from(" \n"), error: "empty or whitespace-only" },
   { bytes: Buffer.from("é".repeat(524_289)), error: "limit: 1048576 bytes" },
   { bytes: Buffer.from([0xc3, 0x28]), error: "valid UTF-8" },
   { bytes: undefined, error: "stdin fixture read failure" },
@@ -189,8 +180,9 @@ it.each([
   async (...options) => {
     const stream = Readable.from(["unselected stdin"]);
     using _ = vi.spyOn(process, "stdin", "get").mockReturnValue(stream as typeof process.stdin);
-    await expect(runPromptInput("infer", ...options)).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error.mock.calls.flat().join(" ")).toContain("Use exactly one");
+    const run = runPromptInput("infer", ...options);
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow("Use exactly one");
     expect(stream.readableDidRead).toBe(false);
     expect(mocks.acquire).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();

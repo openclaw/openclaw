@@ -156,12 +156,19 @@ it.each([false, true])(
     }
     writeTool("git", '#!/bin/sh\nprintf "%s\\n" fixture-base\n');
     writeTool("sudo", '#!/bin/sh\nexec "$@"\n');
-    fs.writeFileSync(
-      path.join(root, "corepack.cjs"),
-      '#!/bin/bash\nprintf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n',
-      { mode: 0o755 },
-    );
-    fs.symlinkSync(path.join(root, "corepack.cjs"), path.join(bin, "corepack"));
+    const recordCall =
+      'if [ -n "${TESTBOX_CALLS:-}" ]; then exec >>"$TESTBOX_CALLS"; fi\n' +
+      'printf "%s\\0" "${COREPACK_HOME-}" "${PNPM_CONFIG_STORE_DIR-}" "${PNPM_CONFIG_CACHE_DIR-}" "$@"\n' +
+      'exit "${TESTBOX_EXIT:-0}"\n';
+    const implementations = {
+      corepack: `#!/bin/bash\n${recordCall}`,
+      pnpm: `#!/bin/bash\nset -- pnpm "$@"\n${recordCall}`,
+    };
+    for (const [program, contents] of Object.entries(implementations)) {
+      const implementation = path.join(root, `${program}.cjs`);
+      fs.writeFileSync(implementation, contents, { mode: 0o755 });
+      fs.symlinkSync(implementation, path.join(bin, program));
+    }
     const prepared = Object.fromEntries(
       ["COREPACK_HOME", "PNPM_CONFIG_STORE_DIR", "PNPM_CONFIG_CACHE_DIR"].map((key) => [
         key,
@@ -188,32 +195,76 @@ it.each([false, true])(
       },
     );
     expect(result.status, result.stderr).toBe(0);
-    for (const program of ["pnpm", "corepack"]) {
-      const overrides: Record<string, string>[] = [
-        {},
-        { PNPM_CONFIG_STORE_DIR: "/explicit/store" },
-      ];
-      for (const override of overrides) {
-        const args = [
-          ...(program === "corepack" ? ["pnpm"] : []),
-          "install",
-          "--offline",
-          "two words",
+    for (const first of new Set([exposed, bin])) {
+      const commandEnv = { PATH: `${first}:${exposed}:/usr/bin:/bin`, HOME: root };
+      for (const program of ["pnpm", "corepack"]) {
+        const overrides: Record<string, string>[] = [
+          {},
+          Object.fromEntries(Object.keys(prepared).map((key) => [key, `/explicit/${key}`])),
         ];
-        const command = spawnSync(path.join(exposed, program), args, {
+        for (const override of overrides) {
+          const args = [
+            ...(program === "corepack" ? ["pnpm"] : []),
+            "install",
+            "--offline",
+            "two words",
+          ];
+          for (const status of [0, 23]) {
+            const command = spawnSync("/bin/bash", ["-c", 'exec "$@"', "--", program, ...args], {
+              encoding: "utf8",
+              timeout: 5_000,
+              env: { ...commandEnv, ...override, TESTBOX_EXIT: String(status) },
+            });
+            expect(command.status, command.stderr).toBe(status);
+            expect(command.stdout.split("\0").slice(0, -1)).toEqual([
+              ...Object.values({ ...prepared, ...override }),
+              "pnpm",
+              "install",
+              "--offline",
+              "two words",
+            ]);
+          }
+        }
+      }
+      const calls = path.join(root, "install-calls");
+      fs.writeFileSync(calls, "");
+      const install = spawnSync(
+        "/bin/bash",
+        [path.resolve(".github/actions/setup-node-env/install-dependencies.sh")],
+        {
+          cwd: root,
           encoding: "utf8",
           timeout: 5_000,
-          env: { PATH: "/usr/bin:/bin", HOME: root, ...override },
-        });
-        expect(command.status, command.stderr).toBe(0);
-        expect(command.stdout.split("\0").slice(0, -1)).toEqual([
-          ...Object.values({ ...prepared, ...override }),
-          "pnpm",
-          "install",
-          "--offline",
-          "two words",
-        ]);
-      }
+          env: {
+            ...commandEnv,
+            NODE_BIN: bin,
+            TESTBOX_NODE: path.join(bin, "node"),
+            TESTBOX_CALLS: calls,
+            GITHUB_WORKSPACE: root,
+            FROZEN_LOCKFILE: "true",
+            DEPENDENCY_CACHE: "false",
+            DEPENDENCY_CACHE_HIT: "false",
+          },
+        },
+      );
+      expect(install.status, install.stderr).toBe(0);
+      expect(fs.readFileSync(calls, "utf8").split("\0").slice(0, -1)).toEqual([
+        ...Object.values(prepared),
+        "pnpm",
+        "-v",
+        ...Object.values(prepared),
+        "pnpm",
+        "install",
+        "--config.ignore-scripts=false",
+        "--config.engine-strict=false",
+        "--config.enable-pre-post-scripts=true",
+        "--config.side-effects-cache=true",
+        "--frozen-lockfile",
+        "--prefer-offline",
+      ]);
+    }
+    for (const [program, contents] of Object.entries(implementations)) {
+      expect(fs.readFileSync(path.join(root, `${program}.cjs`), "utf8")).toBe(contents);
     }
   },
 );

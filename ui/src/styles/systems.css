@@ -36,14 +36,14 @@ openclaw-systems-page {
 }
 .systems-heading h2 {
   margin: 0;
-  font-size: calc(15px * var(--control-ui-text-scale));
+  font-size: 15px;
   font-weight: 600;
   overflow-wrap: anywhere;
   color: var(--text-strong);
 }
 .systems-heading > span {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-icon-button {
   display: inline-grid;
@@ -139,7 +139,7 @@ openclaw-systems-page {
   gap: 4px 12px;
   margin-top: 6px;
   color: var(--muted);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 .systems-sample-time {
   margin-left: auto;
@@ -148,25 +148,25 @@ openclaw-systems-page {
   margin: 0;
   padding: 10px 18px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   border-bottom: 1px solid var(--border);
 }
 .systems-backups {
   padding: 12px 18px;
   border-bottom: 1px solid var(--border);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.5;
 }
 .systems-backups h2 {
   margin: 0 0 8px;
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
 }
 .systems-backups h3 {
   margin: 12px 0 4px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
 }
 .systems-backups__targets,
@@ -237,7 +237,7 @@ openclaw-systems-page {
   border-radius: 4px;
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-body {
   display: flex;
@@ -252,6 +252,23 @@ openclaw-systems-page {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+/* A customizable select sizes to its selected option. Reserve the widest translated
+   choice without moving the other controls when the operator changes modes. */
+.systems-desktop .desktop-toolbar select.desktop-sizing {
+  display: inline-block;
+  width: max-content;
+  min-width: 88px;
+  max-width: 100%;
+  white-space: nowrap;
+}
+.systems-desktop .desktop-sizing::after {
+  display: block;
+  height: 0;
+  visibility: hidden;
+  content: attr(data-sizing-labels);
+  white-space: pre;
+  letter-spacing: normal;
 }
 .systems-state {
   display: flex;
@@ -270,13 +287,13 @@ openclaw-systems-page {
   height: 34px;
 }
 .systems-state h2 {
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
   color: var(--text-strong);
   font-weight: 550;
   margin: 18px 0 10px;
 }
 .systems-state p {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   max-width: 430px;
   line-height: 1.7;
   margin: 0;
@@ -288,11 +305,11 @@ openclaw-systems-page {
   border-radius: var(--radius-sm);
   color: var(--text);
   margin-top: 18px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 .systems-callout {
   padding: 8px 18px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.5;
   color: var(--muted);
   background: var(--bg-elevated);
@@ -327,13 +344,13 @@ openclaw-systems-page {
   gap: 8px;
 }
 .systems-details h2 {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-strong);
   margin: 0;
 }
 .systems-details h3 {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
   color: var(--text);
   margin: 22px 0 9px;
@@ -343,7 +360,7 @@ openclaw-systems-page {
   grid-template-columns: 1fr;
   gap: 4px;
   margin: 18px 0;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-details dt {
   color: var(--muted);
@@ -370,13 +387,13 @@ openclaw-systems-page {
   line-height: 1.6;
 }
 .systems-details ul {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   padding-left: 15px;
   overflow-wrap: anywhere;
   color: var(--muted);
 }
 .systems-detail-hint {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   line-height: 1.6;
   color: var(--muted);
   margin: 7px 0;
@@ -391,7 +408,7 @@ openclaw-systems-page {
   border-radius: 4px;
   padding: 3px 5px;
   font-family: var(--mono);
-  font-size: calc(9px * var(--control-ui-text-scale));
+  font-size: 9px;
   overflow-wrap: anywhere;
 }
 .systems-session-link {
@@ -400,7 +417,7 @@ openclaw-systems-page {
   gap: 4px;
   margin: 10px 0;
   text-decoration: none;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   overflow-wrap: anywhere;
 }
 .systems-session-link__title {
@@ -696,7 +713,7 @@ openclaw-systems-page {
     letter-spacing: normal;
   }
   .systems-vital .sparkline-tile__value {
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     white-space: nowrap;
   }
 }
@@ -723,46 +740,45 @@ openclaw-systems-page {
     display: none;
   }
 
-  /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
-  .systems-desktop .bp:not(:fullscreen) {
-    background: transparent;
-  }
-
-  /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
-  .systems-desktop .desktop-toolbar__spacer {
-    display: none;
-  }
-  .systems-desktop .desktop-toolbar--connection > :last-child {
-    margin-inline-start: auto;
-  }
-  /* Without app launchers the spacer breaks view controls from window controls, and its
-     empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
-  .systems-desktop .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
-    row-gap: 4px;
-
-    & > .desktop-toolbar__spacer {
-      display: block;
-      flex: 0 0 100%;
-      order: 1;
+  .systems-desktop {
+    /* The panel tint belongs to the viewer's stage; the bar sits on the page. */
+    .bp:not(:fullscreen) {
+      background: transparent;
     }
 
-    & > :nth-last-child(-n + 4),
-    & .desktop-fullscreen-button {
-      order: 2;
+    /* Keep the label's leading edge and the 88px hit area. Only reserve the
+       compact chevron inset used by the device picker above. */
+    @media (forced-colors: none) {
+      .desktop-toolbar select.desktop-sizing {
+        padding-inline-end: 28px;
+      }
+    }
+
+    /* Wrapped rows start at one edge and Disconnect closes the bar on the right. */
+    .desktop-toolbar__spacer {
+      display: none;
+    }
+    .desktop-toolbar--connection > :last-child {
+      margin-inline-start: auto;
+    }
+    /* Without app launchers the spacer breaks view controls from window controls, and its
+       empty line takes two row gaps. Fullscreen's tooltip wrapper has no box of its own. */
+    .desktop-toolbar.desktop-toolbar--connection:not(:has(> .desktop-apps)) {
+      row-gap: 4px;
+
+      & > .desktop-toolbar__spacer {
+        display: block;
+        flex: 0 0 100%;
+        order: 1;
+      }
+
+      & > :nth-last-child(-n + 4),
+      & .desktop-fullscreen-button {
+        order: 2;
+      }
     }
   }
-  /* The window controls share one box; fullscreen otherwise keeps the browser's button. */
-  .systems-desktop .desktop-fullscreen-button {
-    display: inline-flex;
-    border: 0;
-    border-radius: 4px;
-    padding: 5px 7px;
-    background: transparent;
-    color: var(--muted);
-  }
-  .systems-desktop .desktop-fullscreen-icon {
-    display: inline-flex;
-  }
+
   /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
   .systems-toolbar > .systems-mobile-picker {
     height: 32px;
@@ -795,7 +811,7 @@ openclaw-systems-page {
 .systems-volume-summary {
   margin-top: 6px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .systems-volume-summary ul {
   padding: 0;
@@ -806,8 +822,8 @@ openclaw-systems-page {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  min-height: calc(20px * var(--control-ui-text-scale));
-  line-height: calc(20px * var(--control-ui-text-scale));
+  height: 20px;
+  line-height: 20px;
 }
 .systems-volume-summary li > span:first-child {
   min-width: 0;
@@ -825,7 +841,7 @@ openclaw-systems-page {
   background: transparent;
   color: var(--accent);
   font: inherit;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
   text-decoration: underline;
 }
 .systems-summary-link:focus-visible {

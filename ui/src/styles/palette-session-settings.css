@@ -1,20 +1,21 @@
+/* The settings trigger sits in the composer's lead slot and follows its chip sizing. */
 .palette-session-settings__trigger {
   display: grid;
   place-items: center;
-  flex: 0 0 30px;
-  width: 30px;
-  height: 30px;
-  padding: 6px;
+  flex: none;
+  width: var(--chat-composer-chip-height);
+  height: var(--chat-composer-chip-height);
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-full);
   background: transparent;
-  color: var(--muted);
+  color: var(--chat-composer-secondary);
 }
 
 .palette-session-settings__trigger:hover,
 .palette-session-settings__trigger[aria-expanded="true"] {
-  background: var(--bg-hover);
-  color: var(--text);
+  background: var(--chat-composer-hover);
+  color: var(--text-strong);
 }
 
 .oc-popover.palette-session-settings {
@@ -29,7 +30,7 @@
 .palette-session-settings__content {
   width: min(292px, calc(100vw - 40px));
   font-family: var(--font-body);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.4;
 }
 
@@ -118,6 +119,7 @@
   height: 18px;
 }
 
+.palette-session-settings .agent-select__chevron svg,
 .palette-session-settings__chevron svg,
 .palette-session-settings__check svg {
   width: 14px;
@@ -134,7 +136,7 @@
 .palette-session-settings__secondary,
 .palette-session-settings__unavailable {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .palette-session-settings__unavailable {
@@ -180,15 +182,22 @@
   padding-top: 0;
   padding-bottom: 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .palette-session-settings__remember input {
   justify-self: center;
 }
 
+/* Back takes the rows' icon column, so the field starts on their labels without a second leading icon. */
 .palette-session-settings__heading {
-  padding-inline: 7px 2px;
+  --header-search-gap: 11px;
+
+  padding-inline: 10px 2px;
+}
+
+.palette-session-settings__heading > .header-search__icon {
+  display: none;
 }
 
 .palette-session-settings__back {
@@ -216,6 +225,6 @@
 .palette-session-settings__error {
   padding: 6px 10px 0;
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   white-space: normal;
 }

@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { ignoreMissingPath, isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { root as createRoot, type Root } from "./fs-safe.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
@@ -33,6 +35,19 @@ export type BackupScratchReport = {
 };
 
 export async function createBackupScratchDirectory(root: string): Promise<BackupScratch> {
+  try {
+    return await claimBackupScratchDirectory(root);
+  } catch (error) {
+    if (!isSqliteLockError(error) && !(error instanceof SqliteStagingRetiredError)) {
+      throw error;
+    }
+    // A concurrent repair can claim a visible directory before the creator does.
+    // Leave that directory with its owner and try one fresh allocation before staging any data.
+    return await claimBackupScratchDirectory(root);
+  }
+}
+
+async function claimBackupScratchDirectory(root: string): Promise<BackupScratch> {
   const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
   let boundary: Root | undefined;
   try {
@@ -46,7 +61,13 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
     ) {
       throw new Error("Backup scratch directory identity changed");
     }
-    return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
+    // Backup roots have one owner; nested snapshots have their own reader-sharing
+    // tokens. Exclusive creation keeps reclamation out of the retirement handoff.
+    return {
+      directory,
+      boundary,
+      release: acquireSqliteStagingToken(directory, "create", { exclusiveCreate: true }),
+    };
   } catch (error) {
     // Busy or retired tokens belong to reclamation; leave that owner's cleanup intact.
     if (isSqliteLockError(error) || error instanceof SqliteStagingRetiredError) {
@@ -142,6 +163,26 @@ async function inspectScratchPayload(
   }
 }
 
+/**
+ * Snapshot and verification databases were admitted when opened; deletion alone keeps their
+ * bytes until exit. The staging token still has its control database open and retires it itself.
+ */
+async function retireBackupScratchDatabaseAdmissions(directory: string): Promise<void> {
+  // Payload removal below is unbounded too; a walk limit must not preserve the scratch.
+  const limit = Number.MAX_SAFE_INTEGER;
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(directory, {
+    maxDepth: limit,
+    maxEntries: limit,
+  })) {
+    if (
+      dirent.isFile() &&
+      !SQLITE_STAGING_TOKEN_FILES.some((control) => control === relativePath)
+    ) {
+      retireSqliteDatabaseAdmissionForPath(path.join(directory, relativePath));
+    }
+  }
+}
+
 async function removeBackupScratchPayload(boundary: Root): Promise<void> {
   for await (const entry of boundary.entries(".")) {
     if (!SQLITE_STAGING_TOKEN_FILES.some((control) => control === entry.name)) {
@@ -233,6 +274,7 @@ export async function finishBackupScratch(
   let retirementFailure: unknown;
   try {
     scratch.release = scratch.release.beginRetirement();
+    await retireBackupScratchDatabaseAdmissions(scratch.directory);
     // The exclusive token excludes readers while payload deletion makes space
     // for SQLite's retirement page/journal without a filesystem-specific reserve.
     await removeBackupScratchPayload(scratch.boundary);

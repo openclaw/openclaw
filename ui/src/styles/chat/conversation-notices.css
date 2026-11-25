@@ -16,7 +16,7 @@
   min-height: 260px;
   padding: 24px;
   color: var(--muted);
-  font: var(--control-ui-text-md)/calc(21px * var(--control-ui-text-scale)) var(--font-body);
+  font: 14px/21px var(--font-body);
   text-align: center;
 }
 
@@ -30,9 +30,9 @@
 .chat-history-error__stage h2 {
   margin: 0;
   color: var(--text);
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
   font-weight: 500;
-  line-height: calc(24px * var(--control-ui-text-scale));
+  line-height: 24px;
   letter-spacing: -0.3px;
 }
 
@@ -71,7 +71,7 @@
   gap: 36px;
   width: 100%;
   min-width: 0;
-  padding: 36px 35px 58px;
+  padding: 36px 0 58px;
 }
 
 .chat-conversation-loading--delayed {
@@ -127,17 +127,8 @@
 }
 
 @media (max-width: 560px) {
-  .chat-conversation-loading {
-    padding-inline: 24px;
-  }
   .chat-conversation-loading__user {
     max-width: 86%;
-  }
-}
-
-@media (max-width: 400px) {
-  .chat-conversation-loading {
-    padding-inline: 20px;
   }
 }
 

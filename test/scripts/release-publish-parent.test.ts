@@ -84,7 +84,7 @@ type Fixture = {
   capped?: boolean;
   completedBeforeSweep?: boolean;
   registry?: (Record<string, unknown> | null)[];
-  ledger?: { status: string; conclusion?: string }[];
+  ledger?: ({ status: string; conclusion?: string } | number)[];
   dispatchFails?: boolean;
   dispatchFailAt?: number;
   dispatchResponse?: Record<string, unknown> | string;
@@ -212,7 +212,9 @@ elif '/actions/runs/' in endpoint:
     run_id = endpoint.split('/')[-1]
     if run_id in config.get('runs', {}): emit(config['runs'][run_id][0])
     elif endpoint.startswith('repos/openclaw/releases/'):
-        emit(advance('ledger', config.get('ledger', [dict(status='completed', conclusion='success')])))
+        response = advance('ledger', config.get('ledger', [dict(status='completed', conclusion='success')]))
+        if isinstance(response, int): fail('gh: read failed (HTTP ' + str(response) + ')')
+        emit(response)
     else:
         run = next((run for run in children if str(run['id']) == run_id), None)
         if run is None: emit(dict(status='waiting') if run_id == '92' and state.get('dispatched') else parent(run_id))
@@ -245,6 +247,7 @@ else: fail('Unexpected call: ' + json.dumps(args))
           PLUGINS: "",
           PREPARED_PLUGINS: "",
           QUALIFIED_PLUGIN_NPM: "",
+          CLAWHUB_ONLY: "false",
           GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-100",
           GITHUB_REPOSITORY: repo,
           GITHUB_RUN_ID: "100",
@@ -385,9 +388,9 @@ describe("accepted publish child identity", () => {
     expect(cancellations(result)).toEqual([]);
   });
 
-  it("preserves earlier batch children when a later POST has unknown acceptance", () => {
+  it("preserves earlier detached children when a later POST has unknown acceptance", () => {
     const result = fixture({
-      dispatchFailAt: 3,
+      dispatchFailAt: 2,
       harness: `
 ${noops("verify_release_tag_target", "render_github_release_notes", "guard_existing_public_release")}
 resolve_openclaw_npm_publish_state() { openclaw_npm_already_published=false; }
@@ -399,16 +402,15 @@ verify_bootstrap_workflow_sha() { echo "$PARENT_WORKFLOW_SHA"; }
 append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
 `,
     }).run(step("Dispatch publish workflows").run!, {
-      PUBLISH_OPENCLAW_NPM: "true",
-      WAIT_FOR_CLAWHUB: "false",
+      PUBLISH_OPENCLAW_NPM: "false",
+      CLAWHUB_ONLY: "true",
     });
     expect(result.status, result.stderr).toBe(1);
-    expect(result.outputs).toBe("plugin_npm_run_id=92\nplugin_clawhub_run_id=93\n");
-    expect(result.savedEnv).toBe("CHILD_PLUGIN_NPM_RUN_ID=92\nRELEASE_CLAWHUB_RUN_ID=93\n");
+    expect(result.outputs).toBe("plugin_clawhub_run_id=92\n");
+    expect(result.savedEnv).toBe("RELEASE_CLAWHUB_RUN_ID=92\n");
     expect(result.summary).toContain(url(92));
-    expect(result.summary).toContain(url(93));
     expect(result.summary).toContain(`acceptance unknown (POST failed): parent=100/2`);
-    expect(result.calls.filter(isDispatch)).toHaveLength(3);
+    expect(result.calls.filter(isDispatch)).toHaveLength(2);
   });
 });
 
@@ -473,7 +475,7 @@ describe("plugin npm child lifecycle", () => {
     expect(result).toMatchObject({ status: 1, dispatches: [], outputs: "" });
     expect(result.stderr).toContain("Plugin npm publish failed");
     expect(result.events).toEqual(states.map(({ status }) => `observed 91 ${status}`));
-    expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
+    expect(result.stderr).toContain("detached ClawHub publication is unaffected");
   });
 
   it.each([
@@ -494,41 +496,7 @@ describe("plugin npm child lifecycle", () => {
   });
 });
 
-it.each([false, true])(
-  "defers ClawHub only after core registry authentication (published=%s)",
-  (published) => {
-    const result = fixture({
-      harness:
-        noops(
-          "verify_release_tag_target",
-          "render_github_release_notes",
-          "guard_existing_public_release",
-        ) +
-        "\nnpm() { return 1; }\n" +
-        (published
-          ? "resolve_openclaw_npm_publish_state() { openclaw_npm_already_published=true; }\n"
-          : "") +
-        "resolve_clawhub_release_plan() { echo authenticated-resume >&2; exit 23; }",
-    }).run(step("Dispatch publish workflows").run!, {
-      PUBLISH_OPENCLAW_NPM: "true",
-      WAIT_FOR_CLAWHUB: "false",
-      DEFER_CLAWHUB: "true",
-      OPENCLAW_NPM_RESUME_RUN_ID: "91",
-    });
-    expect(result.status).toBe(published ? 23 : 1);
-    expect(result.stderr).toContain(
-      published
-        ? "authenticated-resume"
-        : "defer_clawhub requires an authenticated already-published core",
-    );
-    expect(result.calls.some(isDispatch)).toBe(false);
-  },
-);
-
-it.each([
-  { name: coreNpm, blocked: false },
-  { name: bootstrap, blocked: true },
-])("preflights a gate-blocked stale $name before any dispatch", ({ name, blocked }) => {
+it.each([coreNpm, bootstrap])("keeps a stale %s child from blocking core dispatch", (name) => {
   const result = fixture({
     children: [child(childWorkflow(name))],
     rejectFails: true,
@@ -545,25 +513,22 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
 `,
   }).run(step("Dispatch publish workflows").run!, {
     PUBLISH_OPENCLAW_NPM: "true",
-    WAIT_FOR_CLAWHUB: "false",
     RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
   });
-  expect(result.status, result.stderr).toBe(blocked ? 1 : 0);
-  expect(result.stderr).toContain("needs a reviewer:");
-  expect(result.summary).toContain(url(91));
-  expect(result.summary).toContain("cancellation unconfirmed");
-  expect(result.stderr.match(/HTTP 403/g)).toHaveLength(1);
-  expect(cancellations(result)).toEqual(["91"]);
-  const firstDispatch = result.calls.findIndex(isDispatch);
-  if (blocked) {
-    expect(firstDispatch).toBe(-1);
-    expect(result.stderr).toContain("Publisher slot for plugin-clawhub-new.yml remains occupied");
+  expect(result.status, result.stderr).toBe(0);
+  if (name === coreNpm) {
+    expect(result.stderr).toContain("needs a reviewer:");
+    expect(result.summary).toContain("cancellation unconfirmed");
+    expect(cancellations(result)).toEqual(["91"]);
   } else {
-    expect(firstDispatch).toBeGreaterThan(result.calls.findIndex(isCancel));
-    expect(
-      result.calls.slice(firstDispatch).some((call) => call.args[1] === "list" || isCancel(call)),
-    ).toBe(false);
+    expect(cancellations(result)).toEqual([]);
+    expect(result.calls.some((call) => call.args.includes("plugin-clawhub-new.yml"))).toBe(false);
   }
+  const firstDispatch = result.calls.findIndex(isDispatch);
+  expect(firstDispatch).toBeGreaterThan(result.calls.findIndex(isCancel));
+  expect(
+    result.calls.slice(firstDispatch).some((call) => call.args[1] === "list" || isCancel(call)),
+  ).toBe(false);
 });
 
 it.each([
@@ -632,7 +597,7 @@ it.each([
   },
 );
 
-it.each([false, true])(
+it.each(["none", "core", "clawhub", "untrusted-clawhub"])(
   "reclaims only older unowned plugin npm children (live parent=%s)",
   (otherParent) => {
     const npm = {
@@ -644,12 +609,16 @@ it.each([false, true])(
       child({ ...npm, id: 93, created_at: "2026-09-24T02:00:00Z" }),
       child({ ...npm, id: 94 }),
     ];
-    if (otherParent) {
+    if (otherParent !== "none") {
       children.push(
         child({
           ...childWorkflow("openclaw-release-publish.yml"),
           id: 80,
-          display_title: "OpenClaw Release Publish",
+          display_title: otherParent.includes("clawhub")
+            ? `ClawHub registry update [${tag}]`
+            : "OpenClaw Release Publish",
+          head_branch:
+            otherParent === "untrusted-clawhub" ? "main" : "release-publish/aaaaaaaaaaaa-80",
           status: "in_progress",
         }),
       );
@@ -658,8 +627,9 @@ it.each([false, true])(
       CHILD_PLUGIN_NPM_RUN_ID: "94",
     });
     expect(result.status, result.stderr).toBe(0);
-    expect(cancellations(result)).toEqual(otherParent ? [] : ["91"]);
-    if (otherParent) {
+    const ownsNpm = otherParent === "core" || otherParent === "untrusted-clawhub";
+    expect(cancellations(result)).toEqual(ownsNpm ? [] : ["91"]);
+    if (ownsNpm) {
       expect(result.stderr).toContain("Another publish parent is live");
       expect(result.calls.some(isDispatch)).toBe(true);
     } else {
@@ -707,6 +677,15 @@ it("cleans up recorded ClawHub children after a later dispatch fails", () => {
   expect([rejection >= 0, rejection < cleanup.calls.findIndex(isCancel)]).toEqual([true, true]);
 });
 
+it("cleans up the current parent's unfinished sealed recovery child", () => {
+  const recovery = "plugin-clawhub-recovery.yml";
+  const result = fixture({
+    children: [child({ id: 94, ...childWorkflow(recovery) })],
+  }).run(`${source}cleanup_clawhub_children`, { CHILD_CLAWHUB_RECOVERY_RUN_ID: "94" });
+  expect(result.status, result.stderr).toBe(0);
+  expect(cancellations(result)).toEqual(["94"]);
+});
+
 it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([
   { config: { capped: true }, env: {}, messages: [] },
   {
@@ -743,6 +722,7 @@ it.each(["in_progress", "completed"])(
 );
 
 const visible = { versions: { "2026.9.6": {} }, "dist-tags": { latest: "2026.9.6" } };
+const ledgerRunUrl = "https://github.com/openclaw/releases/actions/runs/92";
 it.each<[string, Fixture, number]>([
   ["failed dispatch", { dispatchFails: true }, 1],
   ["failed sync", { ledger: ledgerStates("failure") }, 2],
@@ -767,6 +747,22 @@ it("does not sync non-latest channels", () => {
 });
 
 it.each([
+  { error: 404, reads: 4 },
+  { error: 403, reads: 1 },
+])("stops publication when an accepted sync stays unreadable (HTTP $error)", ({ error, reads }) => {
+  const result = fixture({ ledger: [error], dispatchResponse: { workflow_run_id: 92 } }).run(
+    `${source}sync_npm_beta_floor`,
+    { RELEASE_LEDGER_TOKEN: "fixture-ledger" },
+  );
+  expect(result.status).toBe(1);
+  expect(result.calls.filter(isDispatch)).toHaveLength(1);
+  expect(
+    result.calls.filter((call) => call.args.includes("repos/openclaw/releases/actions/runs/92")),
+  ).toHaveLength(reads);
+  expect(result.summary).toContain(ledgerRunUrl);
+});
+
+it.each([
   { resume: false, visible: true, sync: "absent" },
   { resume: true, visible: true, sync: "absent" },
   { resume: false, visible: false, sync: "absent" },
@@ -780,9 +776,6 @@ it.each([
 ${noops("resolve_clawhub_release_plan", "verify_release_tag_target", "record_postpublish_diagnostics", "upload_dependency_evidence_release_asset", "upload_release_evidence_assets", "append_release_proof_to_github_release")}
 wait_for_run_background() { (printf success > "$4") & wait_run_pid=$!; }
 verify_published_release() {
-  if [[ "$DEFER_CLAWHUB" == "true" ]]; then
-    node --import "${import.meta.resolve("tsx")}" "${resolve("scripts/openclaw-release-clawhub-runtime-state.ts")}" --repository "$GITHUB_REPOSITORY" --wait-for-clawhub "$WAIT_FOR_CLAWHUB" --force-skip-clawhub false --deferred true --normal-publication-staged "$clawhub_authorized" --bootstrap-completed false >> "$GITHUB_STEP_SUMMARY" || return $?
-  fi
   echo VERIFIED >> "$GITHUB_STEP_SUMMARY"
 }
 `;
@@ -795,7 +788,11 @@ verify_published_release() {
       ledger:
         sync === "timeout"
           ? ledgerStates("in_progress")
-          : ledgerStates("queued", "in_progress", "in_progress", "in_progress", "success"),
+          : [
+              404,
+              502,
+              ...ledgerStates("queued", "in_progress", "in_progress", "in_progress", "success"),
+            ],
     }).run(step("Complete publish workflows").run!, {
       DEFER_CLAWHUB: String(resume),
       CHILD_PLUGIN_NPM_RUN_ID: "90",
@@ -810,7 +807,6 @@ verify_published_release() {
       CORE_START_OUTCOME: "success",
       CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
       CLAWHUB_RECEIPT_OUTCOME: "skipped",
-      WAIT_FOR_CLAWHUB: "false",
       RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: transientRegistry ? "1800" : "0",
       ...(sync !== "absent" ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {}),
       ...(sync === "timeout" ? { RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "900" } : {}),
@@ -820,7 +816,9 @@ verify_published_release() {
     expect(registryReads).toHaveLength(transientRegistry ? 4 : 1);
     expect(registryReads[0]?.args).toContain("Cache-Control: no-cache");
     if (sync === "timeout") {
-      expect(result.stderr).toContain(`parent's own sync run is still in progress (${url(92)})`);
+      expect(result.stderr).toContain(
+        `parent's own sync run is still in progress (${ledgerRunUrl})`,
+      );
       expect(result.summary).toContain("verification was not judged against it");
       expect(result.summary).not.toContain("VERIFIED");
     } else if (isVisible) {
@@ -833,6 +831,7 @@ verify_published_release() {
           call.args.some((arg) => arg.startsWith("repos/openclaw/releases/")),
         );
         expect(ledgerCalls.every((call) => call.ledgerToken)).toBe(true);
+        expect(ledgerCalls.filter(isDispatch)).toHaveLength(1);
         expect(JSON.parse(ledgerCalls[0]!.body!)).toEqual({
           ref: "main",
           inputs: { mode: "sync_beta_to_stable" },

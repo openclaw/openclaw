@@ -10,6 +10,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
+  encodeGitHubPublicationRequester,
   type GitHubPublicationOrigin,
 } from "../state/github-publication-requester.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
+  resumeGitHubPublicationSessionRequests,
   type GitHubPublicationClaimRequest,
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequest,
@@ -50,6 +52,8 @@ import { insertGitHubPublicationRequestAsync } from "./github-publication-reques
 import {
   restoreGitHubPublicationRequester,
   isGitHubPublicationRequesterV2,
+  type GitHubPublicationRequesterPolicyV2,
+  type GitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
@@ -114,6 +118,7 @@ export type GitHubPublicationCoordinator = ReturnType<typeof createGitHubPublica
 export function createGitHubPublicationCoordinator(params: {
   placements: WorkerSessionPlacementStore;
   environments?: Parameters<typeof createRepositoryGitHubPublicationCoordinator>[0]["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;
@@ -226,11 +231,8 @@ export function createGitHubPublicationCoordinator(params: {
         assertCurrent();
         assertRequester();
         worktreeOwner.assertCurrent();
-        if (
-          !params.placements.validateTurnClaim(request.claim) ||
-          !matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })
-        ) {
-          throw new Error("GitHub publication authority changed before recording.");
+        if (!params.placements.validateTurnClaim(request.claim)) {
+          throw new Error("GitHub publication turn ended. Retry the publication.");
         }
         bindGitHubPublicationSourceLifetime(source, signal);
         row = await insertGitHubPublicationRequestAsync(input, source);
@@ -250,6 +252,7 @@ export function createGitHubPublicationCoordinator(params: {
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
     recoveryResult?: SessionGitHubPublicationResult,
+    admittedRequester?: GitHubPublicationRequesterV2,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -279,9 +282,10 @@ export function createGitHubPublicationCoordinator(params: {
           };
           let effect: SessionGitHubPublicationResult["effect"];
           let dispatched = false;
-          let requester: Awaited<ReturnType<typeof restoreGitHubPublicationRequester>> | undefined;
+          let requester: GitHubPublicationRequesterPolicyV2 | undefined;
+          let releaseRequester: (() => void) | undefined;
           let lifecycleRevision: string | null | undefined;
-          const revokeInvocation = () => requester?.release();
+          const revokeInvocation = () => releaseRequester?.();
           invocationSignal?.addEventListener("abort", revokeInvocation, { once: true });
           signal.addEventListener("abort", revokeInvocation, { once: true });
           const getRequester = () => {
@@ -374,11 +378,21 @@ export function createGitHubPublicationCoordinator(params: {
                 assertInvocationCurrent?.();
                 invocationSignal?.throwIfAborted();
                 signal.throwIfAborted();
-                requester = await restoreGitHubPublicationRequester(
-                  lifecycle?.requester_authority_json,
-                  { sessionKey: claimed.session_key, agentId: claimed.agent_id },
-                  params.getCommittedRuntimeConfig,
-                );
+                if (
+                  admittedRequester &&
+                  encodeGitHubPublicationRequester(admittedRequester.snapshot) ===
+                    lifecycle?.requester_authority_json
+                ) {
+                  requester = admittedRequester;
+                } else {
+                  const restored = await restoreGitHubPublicationRequester(
+                    lifecycle?.requester_authority_json,
+                    { sessionKey: claimed.session_key, agentId: claimed.agent_id },
+                    params.getCommittedRuntimeConfig,
+                  );
+                  requester = restored;
+                  releaseRequester = restored.release;
+                }
                 lifecycleRevision = lifecycle?.lifecycle_revision;
                 signal.throwIfAborted();
                 invocationSignal?.throwIfAborted();
@@ -467,7 +481,7 @@ export function createGitHubPublicationCoordinator(params: {
           } finally {
             signal.removeEventListener("abort", revokeInvocation);
             invocationSignal?.removeEventListener("abort", revokeInvocation);
-            requester?.release();
+            releaseRequester?.();
             await lease.release();
           }
         }),
@@ -641,32 +655,15 @@ export function createGitHubPublicationCoordinator(params: {
     async resumeSessionRequests(
       isStopping?: () => boolean,
       isPendingEmpty?: (kind: "shared" | "repository") => boolean,
+      sharedRequestId?: string,
     ) {
-      const failures: unknown[] = [];
-      for (const coordinator of [methods, repository]) {
-        if (isStopping?.()) {
-          break;
-        }
-        if (coordinator === repository && isPendingEmpty?.("repository")) {
-          continue;
-        }
-        try {
-          await coordinator.resumeSessionRequests(
-            isStopping,
-            () => isPendingEmpty?.("shared") ?? false,
-          );
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          failures
-            .map((error) => (error instanceof Error ? error.message : String(error)))
-            .join("; "),
-        );
-      }
+      await resumeGitHubPublicationSessionRequests({
+        shared: methods,
+        repository,
+        isStopping,
+        isPendingEmpty,
+        sharedRequestId,
+      });
     },
     /** @deprecated Use deferOrphanedRequestsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     deferOrphanedRequests(): void {

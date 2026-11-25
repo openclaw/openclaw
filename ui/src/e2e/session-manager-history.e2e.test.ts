@@ -59,7 +59,7 @@ suite.define(() =>
       const row = (label: string) =>
         page
           .locator(".session-data-row")
-          .filter({ has: page.locator(`.session-label-chip[title="${label}"]`) });
+          .filter({ has: page.getByRole("link", { name: label, exact: true }) });
       const mainRow = row(main.label);
       const researchRow = row(research.label);
       await mainRow.waitFor({ state: "visible", timeout: 10_000 });
@@ -67,7 +67,6 @@ suite.define(() =>
 
       await ui.button(page, "Filters").click();
       const filters = page.locator(".sessions-filter-popover:popover-open");
-      await filters.locator(".header-search__toggle").click();
       const rosterFilter = filters.getByRole("searchbox");
       await rosterFilter.fill("Research");
       await gateway.waitForRequest("sessions.list", { match: { search: "Research" } });
@@ -75,7 +74,7 @@ suite.define(() =>
         .poll(() =>
           page.locator(".session-data-row").evaluateAll((rows) =>
             rows.map((element) => ({
-              label: element.querySelector(".session-label-chip")?.getAttribute("title"),
+              label: element.querySelector(".session-key-cell__primary .session-link")?.textContent,
               visible: element.checkVisibility({ visibilityProperty: true }),
             })),
           ),
@@ -85,12 +84,11 @@ suite.define(() =>
       await rosterFilter.fill("");
       await mainRow.waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
-      await page.keyboard.press("Escape");
 
-      const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
-      await ui.button(transcriptSearch, "Search transcripts", false).click();
+      const transcriptSearch = page.getByRole("search", { name: "Search chats" });
+      await ui.button(transcriptSearch, "Search chats", false).click();
       const transcriptInput = transcriptSearch.getByRole("searchbox", {
-        name: "Search session transcripts",
+        name: "Search chats",
       });
       await transcriptInput.fill("deployment history");
       await transcriptInput.press("Enter");

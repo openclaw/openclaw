@@ -42,6 +42,14 @@ function isRedactedSystemImage(image: string): boolean {
   return result.status === 0 && REDACTED_ARGUMENTS_ENTITLEMENT.test(result.stdout);
 }
 
+// As on Linux, the marker identifies only a JS runtime. Other executables inherit
+// it from the Gateway service environment, such as credential helpers and adb.
+function isJavaScriptRuntime(command: { executable: string; argv: readonly string[] }) {
+  return [command.executable, command.argv[0] ?? ""].some(
+    (value) => isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx",
+  );
+}
+
 function readCommandWithServiceMarker(pid: number) {
   try {
     return readProcessCommand(pid, { environmentKeys: ["OPENCLAW_SERVICE_MARKER"] });
@@ -51,13 +59,10 @@ function readCommandWithServiceMarker(pid: number) {
     }
     // macOS 27 omits envp for hardened executables, and a JS runtime that set
     // process.title (the Gateway, every OpenClaw CLI) leaves no terminated
-    // environment on earlier releases. As on Linux, only a JS runtime needs the
-    // marker; its argv still classifies, and only a marker decision stays unknown.
+    // environment on earlier releases. Its argv still classifies, and only a
+    // marker decision stays unknown.
     const command = readProcessCommand(pid);
-    return command &&
-      [command.executable, command.argv[0] ?? ""].some(
-        (value) => isNodeRuntime(value) || isBunRuntime(value) || path.basename(value) === "tsx",
-      )
+    return command && isJavaScriptRuntime(command)
       ? { ...command, serviceMarkerUnavailable: true as const }
       : command;
   }
@@ -77,7 +82,9 @@ export function readDarwinProcessCommand(
     if (!command) {
       return undefined;
     }
-    const serviceMarker = command.environment.OPENCLAW_SERVICE_MARKER;
+    const serviceMarker = isJavaScriptRuntime(command)
+      ? command.environment.OPENCLAW_SERVICE_MARKER
+      : undefined;
     return {
       argv: [...command.argv],
       executable: command.executable,

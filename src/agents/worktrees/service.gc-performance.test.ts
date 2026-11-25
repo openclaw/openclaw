@@ -22,6 +22,7 @@ import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -463,7 +464,7 @@ describe("worktree Git maintenance", () => {
     const commands = vi
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
-        if (args.at(-1) === "openclaw-consolidate") {
+        if (args.includes("openclaw-consolidate")) {
           throw new Error("pack publication failed");
         }
         return execute(cwd, args, options);
@@ -474,6 +475,9 @@ describe("worktree Git maintenance", () => {
     expect(failed.result.gitMaintenance?.stage).toBe("suspended");
     expect(await packNames(repo)).toEqual(beforeFailure);
     commands.mockImplementation(execute);
+    // The retirement-budget case below separately covers elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
@@ -484,56 +488,22 @@ describe("worktree Git maintenance", () => {
         }
       },
     });
-    expect(result).toMatchObject({ outcome: "completed", packsRemoved: 16 });
+    expect(result).toMatchObject({ outcome: "completed", packsRemoved: 15 });
     expect(checkpoints).toEqual(
       expect.arrayContaining([
         { repoRoot: repo, stage: "packs", packsBefore: 19, packsAfter: undefined },
-        { repoRoot: repo, stage: "maintenance", packsBefore: 19, packsAfter: 3 },
+        { repoRoot: repo, stage: "maintenance", packsBefore: 19, packsAfter: 4 },
       ]),
     );
     const remaining = await fs.readdir(packDirectory);
-    expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(3);
+    expect(remaining.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
     expect(remaining).toContain(`${kept}.pack`);
     expect(remaining).toContain(`${generated[17]}.pack`);
-    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(2);
+    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
     expect(await objectTypes(repo, objects)).toBe(objects.map(() => "blob").join("\n"));
     expect(await git(repo, "rev-list", "--objects", "--all", "--missing=print")).toBe(missing);
     await git(repo, "multi-pack-index", "verify");
     expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-    // A tiny duplicate does not force rewriting its dominant pack or rebuilding
-    // a full MIDX just to discover redundant copies.
-    const duplicate = await pack(repo, [objects[1]!]);
-    await fs.writeFile(path.join(packDirectory, `${duplicate}.promisor`), "");
-    await createWorktreeGitMaintenance(env)({});
-    const afterDuplicate = await fs.readdir(packDirectory);
-    expect(afterDuplicate.filter((name) => name.endsWith(".pack"))).toHaveLength(4);
-    expect(afterDuplicate.filter((name) => name.endsWith(".promisor"))).toHaveLength(3);
-    expect(await git(repo, "cat-file", "-t", objects[1]!)).toBe("blob");
-    await git(repo, "multi-pack-index", "verify");
-  });
-
-  it("rolls up equal-sized small packs while leaving a dominant pack untouched", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
-    const directory = path.join(repo, ".git", "objects", "pack");
-    const dominant = Buffer.alloc(4096);
-    for (let offset = 0; offset < dominant.length; offset += 4) {
-      dominant.writeUInt32BE(offset, offset);
-    }
-    const { objects, packs: stems } = await packBlobs(repo, ["small-a", "small-b", dominant]);
-    const packs = stems.map((stem) => path.join(directory, `${stem}.pack`));
-    const sizes = await Promise.all(packs.map(async (name) => (await fs.stat(name)).size));
-    expect(sizes[2]).toBeGreaterThan(sizes[0]! + sizes[1]!);
-    await git(repo, "prune-packed");
-    await register(repo, "geometric-packs", { branch: "main" });
-    const progress = new WorktreeGcProgress();
-    await createWorktreeGitMaintenance(env)({ progress });
-    expect(progress.result.gitMaintenance).toMatchObject({
-      stage: "completed",
-      packsBefore: 3,
-      packsAfter: 2,
-    });
-    await fs.access(packs[2]!);
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
   it.each([
@@ -542,6 +512,8 @@ describe("worktree Git maintenance", () => {
   ])(
     "consolidates a backlog exceeding the old $label budget",
     async ({ packBytes, indexBytes }) => {
+      // This proves byte-budget admission; retirement deadlines are covered separately.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const repo = await initRepo(tempDirs.make("worktree-backlog-"));
       const { objects, packs: stems } = await packBlobs(repo, [
         "backlog-a",
@@ -577,14 +549,18 @@ describe("worktree Git maintenance", () => {
     await packBlobs(repo, ["busy-a", "busy-b", "busy-c"]);
     await register(repo, "busy-maintenance", { branch: "main" });
     const maintain = createWorktreeGitMaintenance(env);
-    await withProjectCheckoutLifecycle(repo, { env }, async () => {
-      const progress = new WorktreeGcProgress();
-      await maintain({ progress });
-      expect(await packNames(repo)).toHaveLength(3);
-      expect(progress.result.issues).toEqual([
-        expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
-      ]);
-    });
+    await withProjectCheckoutLifecycle(
+      repo,
+      { context: captureOpenClawStateWorkerContext({ env }) },
+      async () => {
+        const progress = new WorktreeGcProgress();
+        await maintain({ progress });
+        expect(await packNames(repo)).toHaveLength(3);
+        expect(progress.result.issues).toEqual([
+          expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+        ]);
+      },
+    );
     await maintain({});
     expect(await packNames(repo)).toHaveLength(1);
   });
@@ -602,7 +578,7 @@ describe("worktree Git maintenance", () => {
     let stalled = false;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate" && !stalled) {
+      if (args.includes("openclaw-consolidate") && !stalled) {
         stalled = true;
         // The host misses every renewal while Git rewrites packs, as in production.
         now = real + 60_000;
@@ -632,22 +608,26 @@ describe("worktree Git maintenance", () => {
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       // A base-ref fetch must not wait for the whole verification and rewrite.
       const signal = AbortSignal.timeout(5_000);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         const peer = new WorktreeGcProgress();
         await createWorktreeGitMaintenance(env)({ progress: peer });
         expect(peer.result.issues).toEqual([
           expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
         ]);
-        await withProjectCheckoutLifecycle(repo, { env, signal, waitMs: 0 }, async (lease) => {
-          await requireGit(
-            repo,
-            ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
-            {
-              signal: lease.signal,
-              beforeRun: () => lease.assertCurrent(),
-            },
-          );
-        });
+        await withProjectCheckoutLifecycle(
+          repo,
+          { context: captureOpenClawStateWorkerContext({ env }), signal, waitMs: 0 },
+          async (lease) => {
+            await requireGit(
+              repo,
+              ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
+              {
+                signal: lease.signal,
+                beforeRun: () => lease.assertCurrent(),
+              },
+            );
+          },
+        );
       }
       return await execute(cwd, args, options);
     });
@@ -673,11 +653,15 @@ describe("worktree Git maintenance", () => {
       .spyOn(gitExec, "executeGitCommand")
       .mockImplementation(async (cwd, args, options) => {
         const result = await execute(cwd, args, options);
-        if (args.at(-1) === "openclaw-consolidate") {
-          foreground = withProjectCheckoutLifecycle(repo, { env, waitMs: 0 }, async () => {
-            entered.resolve();
-            await release.promise;
-          });
+        if (args.includes("openclaw-consolidate")) {
+          foreground = withProjectCheckoutLifecycle(
+            repo,
+            { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
+            async () => {
+              entered.resolve();
+              await release.promise;
+            },
+          );
           await Promise.race([entered.promise, foreground]);
         }
         return result;
@@ -696,43 +680,102 @@ describe("worktree Git maintenance", () => {
       await foreground;
       commands.mockRestore();
     }
-    await maintain({});
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const remove = fs.rm;
+    const retired: string[] = [];
+    const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      await remove(target, options);
+      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+        retired.push(String(target).slice(0, -4));
+        now += 251;
+      }
+    });
+    // Each settled pass may finish one pack's sidecars, then must yield.
+    for (const [before, after] of [
+      [4, 3],
+      [3, 2],
+    ] as const) {
+      const bounded = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: bounded });
+      expect(bounded.result.gitMaintenance).toMatchObject({
+        stage: "completed",
+        packsBefore: before,
+        packsAfter: after,
+      });
+      expect(bounded.result.issues).toEqual([]);
+      expect(retired).toHaveLength(4 - after);
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expectMissing(`${retired.at(-1)}.${extension}`);
+      }
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    }
+    retirement.mockRestore();
+    for (const name of await packNames(repo)) {
+      await git(repo, "verify-pack", "-v", path.join(packsPath(repo), name));
+    }
+    // Even with no further clock advancement, geometric admission used to strand
+    // the last small input beside the larger union. Recreating the owner must
+    // preserve the retirement continuation as well.
+    const final = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true, progress: final });
+    expect(final.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 1 });
+    expect(final.result.issues).toEqual([]);
     expect(await packNames(repo)).toHaveLength(1);
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
-  it("bounds retirement while finishing the current pack's sidecars", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
-    const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
-    await git(repo, "prune-packed");
-    await register(repo, "retirement-budget", { branch: "main" });
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const remove = fs.rm;
-    let retired: string | undefined;
-    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      await remove(target, options);
-      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
-        retired = String(target).slice(0, -4);
-        now += 251;
+  it.each([false, true])(
+    "bounds retirement while finishing the current pack's sidecars (repacked=%s)",
+    async (repacked) => {
+      const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
+      const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
+      await git(repo, "prune-packed");
+      await register(repo, "retirement-budget", { branch: "main" });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const remove = fs.rm;
+      let retired: string | undefined;
+      const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+          retired = String(target).slice(0, -4);
+          now += 251;
+        }
+      });
+      const progress = new WorktreeGcProgress();
+      const maintain = createWorktreeGitMaintenance(env);
+      await maintain({ progress });
+      expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
+      expect(retired).toBeDefined();
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
       }
-    });
-    const progress = new WorktreeGcProgress();
-    await createWorktreeGitMaintenance(env)({ progress });
-    expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
-    expect(retired).toBeDefined();
-    for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-      await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
-    }
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
-  });
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+      retirement.mockRestore();
+      if (repacked) {
+        for (const [index, object] of objects.entries()) {
+          await git(repo, "update-ref", `refs/tags/blob-${index}`, object);
+        }
+        const beforeRepack = await packNames(repo);
+        await git(repo, "repack", "-a", "-d");
+        expect((await packNames(repo)).some((name) => beforeRepack.includes(name))).toBe(false);
+      }
+      const resumed = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: resumed });
+      expect(resumed.result.gitMaintenance?.stage).toBe("completed");
+      expect(resumed.result.issues).toEqual([]);
+      expect((await packNames(repo)).length).toBeLessThan(3);
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    },
+  );
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));
     const directory = path.join(repo, ".git", "objects", "pack");
     const { objects, packs: inputs } = await packBlobs(
       repo,
-      Array.from({ length: 15 }, (_, index) => `retained-${index}`),
+      Array.from({ length: 2 }, (_, index) => `retained-${index}`),
       true,
     );
     for (const stem of inputs) {
@@ -745,7 +788,7 @@ describe("worktree Git maintenance", () => {
     const execute = gitExec.executeGitCommand;
     vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
       const result = await execute(cwd, args, options);
-      if (args.at(-1) === "openclaw-consolidate") {
+      if (args.includes("openclaw-consolidate")) {
         expect(result.stdout.trim()).toBe(`pack\t${union.slice(5)}`);
         await fs.writeFile(
           path.join(directory, `${inputs[0]}.keep`),
@@ -755,10 +798,13 @@ describe("worktree Git maintenance", () => {
       return result;
     });
     const progress = new WorktreeGcProgress();
+    // The retirement-budget cases separately cover elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({
       stage: "completed",
-      packsBefore: 16,
+      packsBefore: 3,
       packsAfter: 2,
     });
     expect(await packNames(repo)).toEqual([`${inputs[0]}.pack`, `${union}.pack`].toSorted());
@@ -777,11 +823,25 @@ describe("worktree Git maintenance", () => {
       const young = path.join(directory, "tmp_pack_young");
       const unrelated = path.join(directory, "operator-note");
       const link = path.join(directory, "tmp_pack_symlink");
-      for (const file of [old, oldIndex, active, young, unrelated]) {
+      const repack = ["pack", "idx", "rev", "bitmap", "mtimes"].map((extension) =>
+        path.join(directory, `.tmp-2147483647-pack-${"a".repeat(40)}.${extension}`),
+      );
+      const liveRepack = path.join(directory, `.tmp-${process.pid}-pack-${"b".repeat(40)}.idx`);
+      const freshRepack = path.join(directory, `.tmp-2147483647-pack-${"c".repeat(40)}.pack`);
+      for (const file of [
+        old,
+        oldIndex,
+        active,
+        young,
+        unrelated,
+        ...repack,
+        liveRepack,
+        freshRepack,
+      ]) {
         await fs.writeFile(file, "retain or reclaim");
       }
       const yesterday = new Date(Date.now() - 48 * 60 * 60_000);
-      for (const file of [old, oldIndex, active, unrelated]) {
+      for (const file of [old, oldIndex, active, unrelated, ...repack, liveRepack]) {
         await fs.utimes(file, yesterday, yesterday);
       }
       await fs.symlink(unrelated, link);
@@ -797,13 +857,16 @@ describe("worktree Git maintenance", () => {
         await fs.access(active);
         await expectMissing(old);
         await expectMissing(oldIndex);
+        for (const file of repack) {
+          await expectMissing(file);
+        }
       } finally {
         await writer.close();
       }
       await service.gc({ retryDeferred: true });
       await expectMissing(old);
       await expectMissing(active);
-      for (const file of [young, unrelated, link]) {
+      for (const file of [young, unrelated, link, liveRepack, freshRepack]) {
         await fs.access(file);
       }
     },

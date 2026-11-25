@@ -44,12 +44,14 @@ const { values } = parseArgs({
     tools: { type: "string", default: "2" },
     clients: { type: "string", default: "4" },
     "ignore-term": { type: "boolean" },
+    "yield-tools": { type: "boolean" },
     "pressure-directory": { type: "string" },
     "hold-ms": { type: "string", default: "0" },
     fixture: { type: "string" },
     allocation: { type: "boolean" },
     "cpu-profile": { type: "boolean" },
     "seeded-history": { type: "boolean" },
+    "channel-transports": { type: "boolean" },
   },
 });
 assert(values.output);
@@ -107,6 +109,7 @@ const resumed = new Set<string>();
 let restarting = false;
 let heldFinalizers = 0;
 const issuedTools = new Set<string>();
+const yieldedTools = new Set<string>();
 const toolPids = new Set<number>();
 const reservation = await reserveTestPortListener({
   offsets: [0],
@@ -146,13 +149,19 @@ const reservation = await reserveTestPortListener({
             "exec",
             {
               command: `${shellQuote(process.execPath)} -e ${shellQuote(script)}`,
-              yieldMs: 120_000,
+              yieldMs: values["yield-tools"] ? 10 : 120_000,
               timeoutSeconds: 600,
             },
             1,
           );
         } else if (marker && !restarting && restartToolNames(body).length > 0) {
-          assert(!marker.startsWith("TOOL_"), "Exec returned before shutdown");
+          assert(
+            values["yield-tools"] || !marker.startsWith("TOOL_"),
+            "Exec returned before shutdown",
+          );
+          if (marker.startsWith("TOOL_")) {
+            yieldedTools.add(marker);
+          }
           const id = randomUUID();
           response.writeHead(200, {
             "content-type": "text/event-stream",
@@ -241,6 +250,7 @@ const instance = await createOpenClawTestInstance({
   gracefulShutdownTimeoutMs: 90_000,
   env: {
     ...restartEnv,
+    OPENCLAW_SKIP_CHANNELS: values["channel-transports"] ? undefined : "1",
     OPENCLAW_SKIP_CRON: undefined,
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_GATEWAY_RESTART_TRACE: "1",
@@ -254,7 +264,7 @@ const instance = await createOpenClawTestInstance({
     discovery: { mdns: { mode: "off" } },
     cron: { enabled: true },
     tools: {
-      allow: ["cron", "exec"],
+      allow: values["yield-tools"] ? ["cron", "exec", "process"] : ["cron", "exec"],
       codeMode: { enabled: false },
       exec: { host: "gateway", security: "full", ask: "off" },
     },
@@ -282,6 +292,7 @@ const result: Record<string, unknown> = {
   cronCount,
   holdMs,
   ignoreTerm: values["ignore-term"] === true,
+  yieldTools: values["yield-tools"] === true,
   seededHistory: values["seeded-history"] === true,
   valid: false,
 };
@@ -296,7 +307,10 @@ async function stopPressure() {
 const wait = async (predicate: () => boolean, timeoutMs = 60_000) => {
   const end = Date.now() + timeoutMs;
   while (!predicate()) {
-    assert(Date.now() < end, `Fixture wait exceeded ${timeoutMs}ms; ready=${[...ready].join(",")}`);
+    assert(
+      Date.now() < end,
+      `Fixture wait exceeded ${timeoutMs}ms; ready=${[...ready].join(",")}; childPids=${toolPids.size}; yielded=${yieldedTools.size}`,
+    );
     await Promise.race([delay(50, undefined, { signal }), failure.promise]);
   }
 };
@@ -335,16 +349,52 @@ try {
         mode: constants.COPYFILE_FICLONE,
       });
     }
+    // A copied database needs its own verification seal before modeling a warm Gateway.
+    const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
+      await import("../../src/state/openclaw-agent-db.js");
+    const { closeOpenClawStateDatabaseAsync } =
+      await import("../../src/state/openclaw-state-db.js");
+    const { assertSqliteIntegrity } = await import("../../src/infra/sqlite-integrity.js");
+    const fixtureDatabase = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: instance.state.env,
+    });
+    assert(fixtureDatabase.db instanceof DatabaseSync, "This fixture requires SQLite");
+    assertSqliteIntegrity(fixtureDatabase.db, "synthetic shutdown fixture", { check: "full" });
+    await closeOpenClawAgentDatabasesAsync(instance.state.env.OPENCLAW_STATE_DIR);
+    await closeOpenClawStateDatabaseAsync();
   }
   const pluginDir = instance.state.path("slow-cron-finalizer");
+  const channelIds = values["channel-transports"] ? ["discord", "slack", "clickclack", "x"] : [];
   await writeRestartPlugin(
     pluginDir,
     {
       id: "slow-cron-finalizer",
       activation: { onStartup: true },
       configSchema: { type: "object", properties: {} },
+      channels: channelIds,
+      channelConfigs: Object.fromEntries(
+        channelIds.map((id) => [
+          id,
+          {
+            schema: { type: "object", properties: { enabled: { type: "boolean" } } },
+          },
+        ]),
+      ),
     },
     `export default { id: "slow-cron-finalizer", register(api) {
+      for (const id of ${JSON.stringify(channelIds)}) api.registerChannel({ plugin: {
+        id, meta: { id, label: id, selectionLabel: id, docsPath: "/channels/" + id, blurb: "Synthetic shutdown transport" },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => ({ accountId: "default", enabled: true }) },
+        gateway: {
+          startAccount: ({ abortSignal }) => new Promise(resolve => {
+            console.log("[shutdown-fixture] transport-ready " + id);
+            abortSignal.addEventListener("abort", resolve, { once: true });
+          }),
+          stopAccount: async () => console.log("[shutdown-fixture] transport-stopped " + id),
+        },
+      }});
       api.on("agent_end", async (event, ctx) => {
         if (!event.success && ctx.sessionKey?.includes(":cron:"))
           await fetch("http://127.0.0.1:${reservation.claim.port}/finalize", { method: "POST", body: "{}" });
@@ -357,8 +407,14 @@ try {
     allow: ["openai", "slow-cron-finalizer"],
     slots: { memory: "none" },
     load: { paths: [pluginDir] },
-    entries: { "slow-cron-finalizer": { enabled: true, hooks: { allowConversationAccess: true } } },
+    entries: {
+      ...Object.fromEntries(channelIds.map((id) => [id, { enabled: false }])),
+      "slow-cron-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+    },
   };
+  if (channelIds.length) {
+    config.channels = Object.fromEntries(channelIds.map((id) => [id, { enabled: true }]));
+  }
   await instance.state.writeConfig(config);
   await instance.startGateway();
   console.log("gateway ready");
@@ -402,7 +458,12 @@ try {
       }),
     );
   }
-  await wait(() => ready.size === turnCount + cronCount);
+  await wait(
+    () =>
+      ready.size === turnCount + cronCount &&
+      toolPids.size === toolCount &&
+      (!values["yield-tools"] || yieldedTools.size === toolCount),
+  );
   console.log(`loaded ${ready.size} model requests`);
   for (const [index, connection] of clients.entries()) {
     waits.push(
@@ -512,12 +573,22 @@ try {
     result.agentDatabaseBytes = (await stat(databasePath)).size;
   }
   const stopLog = instance.logs();
+  for (const id of channelIds) {
+    assert(stopLog.includes(`[shutdown-fixture] transport-ready ${id}`), `${id} did not start`);
+    assert(stopLog.includes(`[shutdown-fixture] transport-stopped ${id}`), `${id} did not stop`);
+  }
   result.shutdownSteps = Object.fromEntries(
     [...stopLog.matchAll(/restart trace: ((?:restart\.close|shutdown)\.[\w.-]+) ([\d.]+)ms/g)]
       .filter((match) => !match[1]!.endsWith(".begin"))
       .map((match) => [match[1], Number(match[2])]),
   );
   await writeFile(path.join(output, "stop.log"), stopLog);
+  if (values.fixture) {
+    result.cleanCloseReceipt = [
+      ...stopLog.matchAll(/agent database clean-close receipt: ([\w-]+); agent=main\b/g),
+    ].at(-1)?.[1];
+    assert.equal(result.cleanCloseReceipt, "written", "Final agent database seal was not written");
+  }
   console.log(JSON.stringify(result));
   await client.stopAndWait();
   client = undefined;

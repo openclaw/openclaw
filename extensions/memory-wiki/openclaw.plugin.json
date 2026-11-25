@@ -20,7 +20,7 @@
       "hasSubcommands": true
     }
   ],
-  "catalog": { "featured": true, "order": 30 },
+  "catalog": { "featured": true, "order": 30, "sidebar": true },
   "contracts": {
     "tools": ["wiki_apply", "wiki_get", "wiki_lint", "wiki_search", "wiki_status"]
   },

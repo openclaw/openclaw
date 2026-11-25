@@ -537,12 +537,17 @@ describe("embedded run session prompt state", () => {
       }
       const messages = [makeUserMessage("attempt snapshot")];
 
-      state.continueFromCurrentTranscript({ messages, replayCurrentUserTurn: true });
+      state.continueFromCurrentTranscript({ messages });
 
       expect(state.continuation?.messages).toEqual(messages);
       expect(state.activePrompt).toEqual(
         replays
-          ? { override: undefined, persisted: true, internal: false }
+          ? {
+              override: undefined,
+              persisted: true,
+              internal: false,
+              replayCurrentTranscript: true,
+            }
           : { override: CONTINUE_FROM_TRANSCRIPT_PROMPT, persisted: true, internal: true },
       );
     },

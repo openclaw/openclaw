@@ -7,7 +7,8 @@ export function PanelIconButton(props: {
   icon: IconButtonProps["icon"];
   onClick: () => void;
   class: JSX.ClassValue;
-  title?: string;
+  /** Tooltip copy; `false` when the icon already says what the button does. */
+  title?: string | false;
   disabled?: boolean;
   busy?: boolean;
   pressed?: boolean;

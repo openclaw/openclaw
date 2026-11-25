@@ -101,11 +101,8 @@ vi.mock("./comment-reaction.js", () => ({
 }));
 
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import {
-  FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER,
-  feishuOutbound,
-  type FeishuOutboundSendMedia,
-} from "./outbound.js";
+import type { FeishuOutboundSendMedia } from "./outbound-types.js";
+import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER, feishuOutbound } from "./outbound.js";
 
 type TextContext = Parameters<NonNullable<typeof feishuOutbound.sendText>>[0];
 type PayloadContext = Parameters<NonNullable<typeof feishuOutbound.sendPayload>>[0];

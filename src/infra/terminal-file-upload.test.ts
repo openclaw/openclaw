@@ -9,6 +9,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { createMainThreadStallMonitor, getMainThreadTaskName } from "./main-thread-stall.js";
 import { ensureTerminalUploadCleanup, stageTerminalUpload } from "./terminal-file-upload.js";
 
 vi.mock("node:os", { spy: true });
@@ -91,10 +92,13 @@ async function advanceUploadCleanup(root: string, ms: number): Promise<void> {
 }
 
 let root: string;
+let stallMonitor: ReturnType<typeof createMainThreadStallMonitor> | undefined;
 beforeEach(() => {
   root = tempDirs.make("openclaw-terminal-upload-test-");
 });
 afterEach(() => {
+  stallMonitor?.stop();
+  stallMonitor = undefined;
   vi.restoreAllMocks();
   vi.mocked(os.homedir).mockReset();
   vi.mocked(os.tmpdir).mockReset();
@@ -286,6 +290,14 @@ it("expires a future-dated upload without extending retention on each recovery s
   const directory = path.join(root, "openclaw-terminal-upload-future");
   const retainedFile = await makeUpload(directory, "retained", nowMs + 2 ** 31 + retentionMs);
   await ensureTerminalUploadCleanup({ tempRoot: root, retentionMs });
+  stallMonitor = createMainThreadStallMonitor();
+  let cleanupTask: string | undefined;
+  rmMock.mockImplementation((target, options) => {
+    if (String(target) === directory) {
+      cleanupTask = getMainThreadTaskName();
+    }
+    return actualFs.rm(target, options);
+  });
   expect((await fs.stat(directory)).mtimeMs).toBe(nowMs);
   expect(vi.getTimerCount()).toBe(1);
   await vi.advanceTimersByTimeAsync(retentionMs / 2);
@@ -293,6 +305,7 @@ it("expires a future-dated upload without extending retention on each recovery s
   expect((await fs.stat(directory)).mtimeMs).toBe(nowMs);
   expect(await fs.readFile(retainedFile, "utf8")).toBe("retained");
   await advanceUploadCleanup(root, retentionMs / 2);
+  expect(cleanupTask).toBe("terminal-upload:cleanup");
   await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(retentionMs * 2);

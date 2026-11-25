@@ -27,7 +27,7 @@ struct ChatTalkControlTests {
         var selectedID: String? = "unchanged"
         var flipCount = 0
         let devices = [OpenClawChatAudioInputDevice(id: "mic-1", name: "Desk Mic")]
-        let control = OpenClawChatTalkControl(
+        var control = OpenClawChatTalkControl(
             isEnabled: true,
             isListening: true,
             isSpeaking: false,
@@ -55,6 +55,26 @@ struct ChatTalkControlTests {
         #expect(selectedID == nil)
         #expect(control.cameraFacing == .back)
         #expect(flipCount == 1)
+        #expect(control.resolvedLevel == 0.6)
+        control.level = 0.3
+        #expect(control.resolvedLevel == 0.3)
+    }
+}
+
+@MainActor
+struct ChatDictationControlTests {
+    @Test func `scalar metering remains mutable without a provider`() {
+        var control = OpenClawChatDictationControl(
+            phase: .listening,
+            isAvailable: true,
+            partialTranscript: "",
+            level: 0.6,
+            start: { nil },
+            finish: {},
+            cancel: {})
+        #expect(control.resolvedLevel == 0.6)
+        control.level = 0.3
+        #expect(control.resolvedLevel == 0.3)
     }
 }
 

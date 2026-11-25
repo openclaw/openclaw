@@ -15,6 +15,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import * as workerUrls from "./runtime-worker-url.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
@@ -139,9 +140,14 @@ it.skipIf(process.platform === "win32")(
     const original = fs.readFileSync(source);
     const root = tempDirs.make("sqlite-sigterm-");
     const ready = path.join(root, "ready");
-    const preload = path.join(root, "hold-copy.mjs");
+    const copyEntry = path.join(root, "hold-copy.mjs");
+    const copyWorker = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
+    const generationModule = new URL(
+      `./runtime-worker-generation${path.extname(new URL(import.meta.url).pathname)}`,
+      import.meta.url,
+    );
     fs.writeFileSync(
-      preload,
+      copyEntry,
       `
     import fs from "node:fs";
     const open = fs.openSync;
@@ -154,6 +160,7 @@ it.skipIf(process.platform === "win32")(
       }
       return descriptor;
     };
+    await import(${JSON.stringify(copyWorker.href)});
   `,
     );
     const snapshotModule = workerUrls.resolveRuntimeWorkerUrl(
@@ -162,30 +169,35 @@ it.skipIf(process.platform === "win32")(
     const child = spawn(
       process.execPath,
       [
-        ...workerUrls.resolveRuntimeWorkerArgv(snapshotModule).slice(0, -1),
+        ...workerUrls.resolveRuntimeWorkerArgv(generationModule).slice(0, -1),
         "--input-type=module",
         "-e",
         `
       import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(snapshotModule.href)};
+      import { withRuntimeWorkerGeneration } from ${JSON.stringify(generationModule.href)};
       const controller = new AbortController();
       process.once("SIGTERM", () => controller.abort(new Error("snapshot interrupted by SIGTERM")));
-      try {
-        const snapshot = await prepareSqliteReadOnlyLocation(${JSON.stringify(source)}, {
-          preserveSourceArtifacts: true, signal: controller.signal,
-        });
-        await snapshot.cleanupAsync();
-        throw new Error("snapshot unexpectedly completed before cancellation");
-      } catch (error) {
-        if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
-        process.exitCode = 143;
-      }
+      await withRuntimeWorkerGeneration(async (bind) => {
+        bind((url) => url.href === ${JSON.stringify(copyWorker.href)}
+          ? new URL(${JSON.stringify(pathToFileURL(copyEntry).href)})
+          : url);
+        try {
+          const snapshot = await prepareSqliteReadOnlyLocation(${JSON.stringify(source)}, {
+            preserveSourceArtifacts: true, signal: controller.signal,
+          });
+          await snapshot.cleanupAsync();
+          throw new Error("snapshot unexpectedly completed before cancellation");
+        } catch (error) {
+          if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
+          process.exitCode = 143;
+        }
+      }, async () => {});
     `,
       ],
       {
         env: {
           ...process.env,
           XDG_CACHE_HOME: root,
-          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
         },
         stdio: ["ignore", "ignore", "pipe"],
       },

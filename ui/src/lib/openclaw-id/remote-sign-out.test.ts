@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { signOutOfRemoteOpenClawId } from "./remote-sign-out.ts";
 
 // Model only the loader's public message/ack boundary; no live session is touched.
-function loader(ok: boolean, logoutUrl?: string) {
+function loader(ok: boolean | "never answers", logoutUrl?: string) {
   const assign = vi.fn();
   const close = vi.fn();
   let receive: ((event: MessageEvent) => void) | undefined;
@@ -20,6 +20,9 @@ function loader(ok: boolean, logoutUrl?: string) {
   }
   const postMessage = vi.fn((message) => {
     expect(message).toEqual({ type: "ocl-signout", endIssuer: true });
+    if (ok === "never answers") {
+      return;
+    }
     queueMicrotask(() =>
       receive?.({ data: { ok, value: logoutUrl ? { logoutUrl } : undefined } } as MessageEvent),
     );
@@ -32,6 +35,7 @@ function loader(ok: boolean, logoutUrl?: string) {
 
 describe("remote account sign-out", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
   it("waits for the loader acknowledgement and keeps its signed-out page from auto-signing-in", async () => {
@@ -61,5 +65,13 @@ describe("remote account sign-out", () => {
   it("rejects an invalid issuer handoff instead of leaving the promise unsettled", async () => {
     loader(true, "not a URL");
     await expect(signOutOfRemoteOpenClawId()).rejects.toThrow("invalid sign-out address");
+  });
+  it("hands a tab whose loader never answers to the loader's issuer sign-out, without an error", async () => {
+    vi.useFakeTimers();
+    const { assign } = loader("never answers");
+    const signedOut = signOutOfRemoteOpenClawId();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(signedOut).resolves.toBeUndefined();
+    expect(assign).toHaveBeenCalledExactlyOnceWith("/_loader/?stay=1&end_issuer=1");
   });
 });

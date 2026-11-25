@@ -54,7 +54,13 @@ describe("async login-shell PATH preparation", () => {
       const stdout = new PassThrough();
       const stderr = new PassThrough();
       const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
-      child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio, kill });
+      child = Object.defineProperties(new ChildProcess(), {
+        stdin: { value: null },
+        stdout: { value: stdout },
+        stderr: { value: stderr },
+        stdio: { value: stdio },
+        kill: { value: kill },
+      }) as ShellProcess;
       return child;
     });
     vi.doMock("node:child_process", () => ({
