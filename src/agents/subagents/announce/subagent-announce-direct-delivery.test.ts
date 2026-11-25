@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createLifecycleTypingManager } from "../../../gateway/lifecycle-typing.js";
 import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
 import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
@@ -14,7 +15,11 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
-import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRegistryForContext,
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
@@ -26,6 +31,8 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../admitted-run-context.test-support.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
@@ -58,7 +65,12 @@ function setup(sourceTool = "subagent_settle") {
     lifecycleRevision: "requester-revision",
     updatedAt: 1,
   };
-  const state = { entry: initialEntry, allowed: true, active: false };
+  const state = {
+    entry: initialEntry,
+    childEntry: undefined as SessionEntry | undefined,
+    allowed: true,
+    active: false,
+  };
   const storePath = "/synthetic/requester-completion/sessions.json";
   const cfg: OpenClawConfig = { session: { store: storePath } };
   const target = captureSessionTarget({
@@ -68,9 +80,12 @@ function setup(sourceTool = "subagent_settle") {
     incarnation: initialEntry.sessionId,
   });
   let executionStarted: (() => unknown) | undefined;
+  let dispatchedAuthority: AdmittedRunOperatorAuthority | undefined;
   const dispatch = vi.fn(async function <T>(
     ...args: Parameters<typeof dispatchGatewayMethodInProcess>
   ) {
+    dispatchedAuthority =
+      getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
     executionStarted = args[2]?.onExecutionStarted;
     args[2]?.onAccepted?.({ status: "accepted" });
     dispatchEntered.resolve();
@@ -93,7 +108,7 @@ function setup(sourceTool = "subagent_settle") {
       canonicalKey: key,
       agentId: "main",
       storePath,
-      entry: state.entry,
+      entry: key === sessionKey ? state.entry : (state.childEntry ?? state.entry),
     }),
     getRequesterSessionActivity: () => ({
       sessionId: initialEntry.sessionId,
@@ -118,6 +133,9 @@ function setup(sourceTool = "subagent_settle") {
     signal: controller.signal,
   };
   return {
+    get dispatchedAuthority() {
+      return dispatchedAuthority;
+    },
     target,
     startDelivery: () => (ownedDelivery = deliverSubagentAnnouncement(params)),
     state,
@@ -444,6 +462,51 @@ it("keeps the same completion input when timeout recovery ends without a backend
     await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
     abandonment.mockRestore();
   }
+});
+
+it("queues participant completion as a capped new turn instead of steering an active owner", async () => {
+  const fixture = setup("subagent_announce");
+  const ceiling = {
+    kind: "send" as const,
+    profileId: "participant",
+    sessionKey,
+    tools: ["read"],
+    source: {
+      agentId: "main",
+      sessionId: "requester-session",
+      lifecycleRevision: "requester-revision",
+      creatorProfileId: "creator",
+      root: "/synthetic/root",
+    },
+  };
+  const operatorAuthority = createTestOperatorAuthority({
+    canonicalIdentity: null,
+    profileId: ceiling.profileId,
+    scopes: ["operator.write"],
+    participationCeiling: { ...ceiling, permission: "guarded" },
+  });
+  await withPluginRuntimeGatewayRequestScope(
+    {
+      client: createSyntheticPluginRuntimeClient({
+        operatorRunAuthority: operatorAuthority,
+        scopes: ["operator.write"],
+      }),
+      isWebchatConnect: () => false,
+    },
+    async () => {
+      const { queueMessage, input } = steering(fixture, async () => {});
+      fixture.dispatchDone.resolve(response([{ text: "Private participant result" }]));
+      await deliverSubagentAnnouncement({
+        ...fixture.params,
+        controllerInput: input,
+        sourceSessionKey: "agent:main:subagent:participant-child",
+      });
+      expect(queueMessage).not.toHaveBeenCalled();
+    },
+  );
+  expect(fixture.dispatch).toHaveBeenCalledTimes(1);
+  expect(fixture.dispatchedAuthority).toBe(operatorAuthority);
+  expect(fixture.dispatch.mock.calls[0]![1]).toMatchObject({ deliver: false });
 });
 
 it("reports no attempted completion phase when cancelled before dispatch", async () => {

@@ -42,7 +42,8 @@ it.each([
 ])("handles snapshot invalidation: %s through the real maintenance scheduler", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     resetGatewayWorkAdmission();
-    setRuntimeConfigSnapshot({});
+    // Keep prewarming from consuming the discovery pause intended for retention.
+    setRuntimeConfigSnapshot({ agents: { defaults: { promptCacheKeepWarm: false } } });
     vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -104,6 +105,8 @@ it.each([
     }
     const logs = createWarnLogCapture("cron-maintenance-snapshot");
     try {
+      // A cached module must not change which maintenance pass the fixture pauses.
+      await import("../agents/prompt-cache-keep-warm.js");
       startCronMaintenance(scheduler, () => cronStorePath);
       sweep = clock.advanceBy(5_000);
       await discovered.promise;

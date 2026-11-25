@@ -172,9 +172,10 @@ function readPool(state: ReadRuntime, admitted: boolean, awaitedOnly: boolean) {
   if ((state.sealed && !admitted) || state.closing) {
     throw new WorkerTaskError("Shared-state readers are closing", "unavailable");
   }
-  // Long-lived hosts reuse their boot readers; one-shot inspection avoids a native supervisor.
+  // Explicit one-shot callers never inherit a retained pool from earlier ordinary reads.
+  const role = getDatabaseProcessRole();
   const retained =
-    !awaitedOnly || state.pool !== undefined || getDatabaseProcessRole() === "gateway";
+    role !== "cli-oneshot" && (!awaitedOnly || state.pool !== undefined || role === "gateway");
   const key = retained ? "pool" : "awaitedPool";
   if (!state[key]) {
     state[key] = createStateReadPool(state.workerUrl, retained ? state.nativeSource : undefined);
@@ -433,6 +434,9 @@ class StateReadTransport {
         releaseAdmission = undefined;
         // Native closes and quarantine cleanup can require exit even when the domain read succeeds.
         cleanup.retire ||= "error" in outcome;
+        if (retireAfterRead && !("error" in outcome)) {
+          await this.closeTask(task);
+        }
         return outcome;
       })();
       return { task, result };

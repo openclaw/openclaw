@@ -26,7 +26,8 @@ type Kind =
   | "plugin-grant"
   | Exclude<OperatorRunRecoverySnapshot["sourceIngress"], Ingress>
   | LiveAdmissionKind
-  | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable">;
+  // A saved channel owner has no socket handshake to replay; owed-exec-requester.test.ts has its cells.
+  | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable" | "channel-owner">;
 const rows: Record<Kind, Row> = {
   "token:control-ui": { credential: "token", ingress: "control-ui" },
   "token:internal": { credential: "token", ingress: "internal" },
@@ -92,20 +93,30 @@ const modeFor = (row: Row): Mode =>
 // Turn grant matrix: same principal, same answer. Each `after-start` row below also checks the
 // grant at fresh admission (accepted input) and at saved-source replay admission. OWNER is the
 // installation owner (shared secret, OpenClaw ID owner) and PERSON is operator@example.test; the
-// harness admits both with operator.read + operator.write. A linked channel sender gets its
-// profile's Control UI grant. Cron runs, restart and durable exec wakes, subagent completion and
-// HTTP columns join with the PRs that move them.
+// harness admits both with operator.read + operator.write over a socket. A linked channel sender
+// gets its profile's Control UI grant. An HTTP shared-secret request names the same owner with
+// the documented HTTP scope set (operator.admin included), so it gets the owner's full grant.
+// Durable exec wakes (requester x session principal, configured channel owner) have their cells
+// in owed-exec-requester.test.ts. Cron runs and subagent completion join with the PRs that move
+// them.
 const WRITER_GRANT: TurnGrant = {
   owner: false,
   skillAuthoring: true,
   questionReplace: true,
   commands: "none",
 };
+const OWNER_GRANT: TurnGrant = {
+  owner: true,
+  skillAuthoring: true,
+  questionReplace: true,
+  commands: "all",
+};
 const MATRIX: Partial<Record<Kind, ["OWNER" | "PERSON", TurnGrant]>> = {
   "token:control-ui": ["OWNER", WRITER_GRANT],
   "password:control-ui": ["OWNER", WRITER_GRANT],
   "ocid-owner": ["OWNER", WRITER_GRANT],
   "token:internal": ["OWNER", WRITER_GRANT],
+  "http-bearer": ["OWNER", OWNER_GRANT],
   "tailscale:control-ui": ["PERSON", WRITER_GRANT],
   "tailscale-device:control-ui": ["PERSON", WRITER_GRANT],
   "trusted-proxy:control-ui": ["PERSON", WRITER_GRANT],
@@ -114,12 +125,7 @@ const MATRIX: Partial<Record<Kind, ["OWNER" | "PERSON", TurnGrant]>> = {
 // Unlinked Discord senders: a verified `commands.ownerAllowFrom` sender is the owner principal,
 // with the owner's full grant; an allowlisted non-owner (guest) gets no operator grant.
 const CHANNEL_SENDER_GRANT: Record<string, TurnGrant | undefined> = {
-  "owner-revoked-before-start": {
-    owner: true,
-    skillAuthoring: true,
-    questionReplace: true,
-    commands: "all",
-  },
+  "owner-revoked-before-start": OWNER_GRANT,
   "mixed-owner-group": undefined,
 };
 

@@ -8,23 +8,26 @@ import {
   operatorScopeSatisfied,
 } from "../shared/operator-scope-compat.js";
 import {
+  decideChannelOwnerPrincipal,
   decideOperatorAdmission,
   decideTurnGrant,
   prepareOperatorAdmission,
   type OperatorAdmissionContext,
 } from "./operator-admission.js";
 import {
+  captureChannelOperatorRunAuthority,
   prepareGatewayOperatorRunAuthority,
   type GatewayOperatorRunAdmissionInput,
   type PreparedGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
+import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
-  type RestartRecoveryOperatorSource,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
+import { prepareRecoveredParticipation } from "./session-participation-recovery.js";
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
@@ -38,7 +41,6 @@ export type RestoredGatewayOperatorAuthority = {
 type QueuedRecoveryParams = {
   source: unknown;
   liveAuthority?: AdmittedRunOperatorAuthority;
-  operatorSource?: RestartRecoveryOperatorSource;
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
@@ -47,14 +49,12 @@ type QueuedRecoveryParams = {
 /** Restore owner-held saved facts at the next start, never during the admitted run. */
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
-  source?: RestartRecoveryOperatorSource;
   agentId?: string;
   context: OperatorAdmissionContext;
   assertCurrent: () => void;
 }): Promise<RestoredGatewayOperatorAuthority> {
   return restoreGatewayQueuedOperatorRecovery({
     source: { kind: "gateway", snapshot: params.snapshot },
-    operatorSource: params.source,
     agentId: params.agentId,
     context: params.context,
     assertCurrent: params.assertCurrent,
@@ -87,7 +87,15 @@ async function admitStart(
 ): Promise<RestoredGatewayOperatorAuthority> {
   const admitted = await admitQueuedSource(params);
   const { channelRecoverySource, scopes } = admitted.authority;
-  if (!channelRecoverySource && !operatorScopeSatisfied(grant, scopes)) {
+  if (
+    !channelRecoverySource &&
+    !operatorScopeSatisfied(
+      admitted.authority.participationCeiling && grant === "operator.sessions.write"
+        ? "operator.sessions.read"
+        : grant,
+      scopes,
+    )
+  ) {
     admitted.release();
     throw new GatewayOperatorRecoveryAuthorizationError(
       `Your operator role no longer allows ${action}; ask an administrator to restore access.`,
@@ -101,13 +109,23 @@ async function admitQueuedSource(
 ): Promise<RestoredGatewayOperatorAuthority> {
   params.assertCurrent();
   const captured = decodeQueuedOperatorRecoverySource(params.source);
-  const capturedFacts =
-    captured.kind === "unavailable" && params.liveAuthority
-      ? ({ kind: "live", authority: params.liveAuthority } as const)
-      : captured.kind === "gateway" && params.operatorSource
-        ? { ...captured, source: params.operatorSource }
-        : captured;
-  if (capturedFacts.kind === "unavailable") {
+  // Same-process work keeps its live facts; a saved channel owner is admitted again from config.
+  let live =
+    captured.kind === "unavailable" || captured.kind === "channel-owner"
+      ? params.liveAuthority
+      : undefined;
+  if (!live && captured.kind === "channel-owner") {
+    const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
+    const principal = decideChannelOwnerPrincipal(getConfig(), captured.sender);
+    if (!principal) {
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "This sender is no longer in commands.ownerAllowFrom, so its saved work cannot run. Send a new message.",
+      );
+    }
+    live = captureChannelOperatorRunAuthority({ ...principal, getRuntimeConfig: getConfig });
+  }
+  const capturedFacts = live ? ({ kind: "live", authority: live } as const) : captured;
+  if (capturedFacts.kind === "unavailable" || capturedFacts.kind === "channel-owner") {
     throw new Error("Queued operator authority cannot be recovered; submit a new request.");
   }
   const facts = { ...capturedFacts, agentId: params.agentId };
@@ -120,7 +138,46 @@ async function admitQueuedSource(
     prepared.identity?.release();
     throw error;
   }
-  return decideOperatorAdmission(facts, prepared);
+  const admitted = decideOperatorAdmission(facts, prepared);
+  const ceiling =
+    facts.kind === "gateway"
+      ? facts.snapshot.participationCeiling
+      : facts.kind === "live"
+        ? facts.authority.participationCeiling
+        : undefined;
+  if (!ceiling) {
+    return admitted;
+  }
+  try {
+    const context = params.context.resolveGatewayContext?.();
+    if (!context) {
+      throw new GatewayOperatorRecoveryAuthorizationError(
+        "Participant continuation requires its original Gateway.",
+      );
+    }
+    const revoked = new AbortController();
+    const participation = await prepareRecoveredParticipation({
+      context,
+      authority: admitted.authority,
+      ceiling,
+      revoke: (cause) => revoked.abort(cause),
+    });
+    return {
+      ...admitted,
+      ...retainGatewayOperatorInvocation(admitted, {
+        participationCeiling: participation.ceiling,
+        assertCurrent: () => {
+          revoked.signal.throwIfAborted();
+          participation.assertCurrent();
+        },
+        signal: revoked.signal,
+        release: participation.release,
+      }),
+    };
+  } catch (error) {
+    admitted.release();
+    throw error;
+  }
 }
 
 /** Accepted work runs on its origin's saved facts and current policy, not its accepting request. */
@@ -152,5 +209,8 @@ export async function captureGatewayOperatorContinuation(
     scopes,
     grant: decideTurnGrant(scopes),
   });
-  return { authority, release: restored.release };
+  return retainGatewayOperatorInvocation(
+    { authority, release: restored.release },
+    input.invocationAuthority,
+  );
 }

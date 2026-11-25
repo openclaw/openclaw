@@ -17,7 +17,7 @@ import {
   normalizeToolDisplayName,
   resolveToolDetailForArgs,
 } from "./tool-display-common.js";
-import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-detail-config.js";
 import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {

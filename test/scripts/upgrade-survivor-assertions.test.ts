@@ -336,6 +336,35 @@ describe("upgrade recovery result assertions", () => {
     expect(result.status, result.stderr).toBe(status);
   });
 
+  it.each([true, false])(
+    "requires serving Gateway verification for resident restart: %s",
+    (ready) => {
+      const version = lifecycle.after.version;
+      const buildId = "fixture-build";
+      const result = runJsonAssertion(
+        "assert-successful-update-json",
+        {
+          ...lifecycle,
+          target: { version },
+          after: { version, buildId },
+          verification: {
+            runningVersion: version,
+            runningBuildId: buildId,
+            booted: true,
+            coreReady: ready,
+            serviceRunning: true,
+            versionMatch: true,
+          },
+        },
+        version,
+        "",
+        "1",
+      );
+      expect(result.status, result.stderr).toBe(ready ? 0 : 1);
+      expect(result.stdout).toBe(ready ? "resident" : "");
+    },
+  );
+
   it.each([
     { name: "skipped startup", patch: {}, succeeds: true },
     { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },
@@ -1096,6 +1125,7 @@ function assertCompanionPluginRecords(
       for (const file of [
         "release-version.mjs",
         "sqlite-transcript-payload.mjs",
+        "update-receipt.mjs",
         "upgrade-survivor-policy.mjs",
         "upgrade-survivor-scenarios.json",
       ]) {

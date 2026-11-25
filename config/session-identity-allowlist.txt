@@ -698,7 +698,6 @@ src/context-engine/delegate.ts	2
 src/context-engine/transcript-byte-limit.ts	2
 src/cron/active-jobs.ts	4
 src/cron/isolated-agent/run-prepare-runtime.ts	2
-src/cron/isolated-agent/run-prompt-executor.ts	1
 src/cron/isolated-agent/run-session-state.ts	2
 src/cron/isolated-agent/session-cleanup.ts	2
 src/cron/run-continuation-cleanup.ts	2
@@ -1056,7 +1055,6 @@ src/gateway/session-row-provider-review.ts	2
 src/gateway/session-row-selection-facts.ts	2
 src/gateway/session-row-transcript-backfill.ts	2
 src/gateway/session-send-delivery.ts	4
-src/gateway/session-sharing-authorization-async.ts	2
 src/gateway/session-sharing-authorization.ts	2
 src/gateway/session-sharing-policy.ts	4
 src/gateway/session-sharing-preparation.ts	4
@@ -1065,7 +1063,6 @@ src/gateway/session-sharing-target-read.ts	4
 src/gateway/session-sharing.ts	5
 src/gateway/session-subagent-reactivation.ts	4
 src/gateway/session-subagent-resume.ts	14
-src/gateway/session-system-turn-authority.ts	2
 src/gateway/session-transcript-files.fs.ts	4
 src/gateway/session-transcript-memory-reader.ts	3
 src/gateway/session-transcript-read-kernel.ts	2

@@ -374,6 +374,7 @@ src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
+src/agents/tool-search-protocol.ts
 src/agents/tools/automations-tool-name.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
@@ -2305,6 +2306,7 @@ src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
 src/state/openclaw-state-db-schema-v41-approval-profile.ts
+src/state/openclaw-state-db-schema-v42-worker-loss-recovery.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2535,6 +2537,7 @@ src/config/sessions/session-accessor.sqlite-participant-projection.ts
 src/config/sessions/session-actor-entry-publication.worker.ts
 src/config/sessions/session-participant-identity.ts
 src/config/sessions/session-participant-prepared-read.ts
+src/config/sessions/session-participation-source.ts
 packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts

@@ -5,9 +5,11 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import type { AdmittedRunInvocationAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import { bindSharedGatewayOwnerRunAuthority } from "../agents/harness/host-private-capabilities.js";
 import {
   prepareOperatorModelPolicy,
+  intersectOperatorModelPolicy,
   readOperatorModelPolicyMembership,
 } from "../agents/operator-model-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,13 +37,18 @@ import {
   openclawIdSubjectRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { decideTurnGrant } from "./operator-admission.js";
+import {
+  decideOperatorAdmission,
+  decideTurnGrant,
+  prepareOperatorAdmission,
+} from "./operator-admission.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -203,11 +210,7 @@ export type GatewayOperatorRunAdmissionInput = {
     release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
-  invocationAuthority?: Readonly<{
-    assertCurrent: () => void;
-    signal?: AbortSignal;
-    release?: () => void;
-  }>;
+  invocationAuthority?: AdmittedRunInvocationAuthority;
 };
 
 export type PreparedGatewayOperatorRunAuthority = {
@@ -239,7 +242,10 @@ export async function prepareGatewayOperatorRunAuthority(
             return inherited.modelPolicy;
           },
         });
-    return { authority, release: inherited.retain?.() ?? (() => {}) };
+    return retainGatewayOperatorInvocation(
+      { authority, release: inherited.retain?.() ?? (() => {}) },
+      params.invocationAuthority,
+    );
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
@@ -460,6 +466,9 @@ export async function prepareGatewayOperatorRunAuthority(
       openclawIdPrincipal,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
+      participationCeiling: params.invocationAuthority?.participationAuthority
+        ? undefined
+        : params.invocationAuthority?.participationCeiling,
     };
     const {
       snapshot: recoverySnapshot,
@@ -502,6 +511,7 @@ export async function prepareGatewayOperatorRunAuthority(
         policy: capturedRole,
       }),
       source: source.token,
+      participationCeiling: admission.participationCeiling,
       invocation: params.invocationAuthority,
       signal: params.invocationAuthority?.signal,
       retain: () => {
@@ -509,7 +519,10 @@ export async function prepareGatewayOperatorRunAuthority(
         references += 1;
         return releaseHold();
       },
-      modelPolicy,
+      modelPolicy: intersectOperatorModelPolicy(
+        modelPolicy,
+        params.invocationAuthority?.participationAuthority?.modelPolicy,
+      ),
     });
     if (
       authenticatedOwner &&
@@ -523,9 +536,39 @@ export async function prepareGatewayOperatorRunAuthority(
       // reconnects bound to that shared credential. The profile name grants nothing.
       bindSharedGatewayOwnerRunAuthority(authority);
     }
-    return { authority, release };
+    return params.invocationAuthority?.participationAuthority
+      ? retainGatewayOperatorInvocation(
+          { authority, release },
+          { ...params.invocationAuthority, release: undefined },
+        )
+      : { authority, release };
   } catch (error) {
     release();
     throw error;
   }
+}
+
+/** Admits an HTTP request once, as the principal its credential names on a socket. */
+export async function prepareGatewayHttpOperatorRunAuthority(
+  input: GatewayOperatorRunAdmissionInput & { client: GatewayClient },
+): Promise<PreparedGatewayOperatorRunAuthority | undefined> {
+  const { client } = input;
+  // The owner's own credential (shared token or password, private no-auth) names the owner
+  // principal with the request's scopes, as on a Control UI socket; admission decides the grant.
+  if (
+    client.authenticatedUserProfile?.profileId !== GATEWAY_OWNER_PROFILE_ID ||
+    client.internal?.openclawIdPrincipal
+  ) {
+    return prepareGatewayOperatorRunAuthority(input);
+  }
+  const facts = {
+    kind: "recorded",
+    snapshot: {
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      scopes: client.connect.scopes ?? [],
+      gatewayAccessGrant: null,
+      assignedRole: null,
+    },
+  } as const;
+  return decideOperatorAdmission(facts, await prepareOperatorAdmission(facts, input.context));
 }
