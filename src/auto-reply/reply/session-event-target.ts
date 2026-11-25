@@ -133,11 +133,7 @@ export async function captureSessionEventTargetForHost(
      * The identity comes from the host-owned caller, never from the producer.
      */
     retainRequesterOwner?: true;
-    /**
-     * The host names the work's originating requester from its own record (a scheduled
-     * job saved without an operator source). The event admits it when its work starts; a
-     * requester without the owner grant is a known caller, so no session-principal fallback.
-     */
+    /** A source-less scheduled job's requester, admitted when the event starts; a known caller. */
     scheduledRequester?: SessionEventScheduledRequester["requester"];
   } = {},
 ): Promise<SessionEventTarget> {

@@ -109,34 +109,32 @@ function creatorRoleSandbox(
  */
 function checkRequesterOwnerReadOnly(
   cfg: OpenClawConfig,
+  agentId: string,
   requester: ScheduledRequesterRef,
   profile: CreatorProfile | undefined,
 ): OwnerResult {
   switch (requester.kind) {
     case "unknown":
       return { owner: false, check: "checked" };
-    case "profile":
-      if (profile === "unreadable") {
-        return { owner: false, check: "unverified" };
+    case "profile": {
+      if (typeof profile !== "object") {
+        return { owner: false, check: profile === "unreadable" ? "unverified" : "checked" };
       }
-      // Admission's rule: a current profile on an untiered install, the Gateway owner
-      // profile, or a profile whose named role grants operator.admin.
-      return {
-        owner:
-          typeof profile === "object" &&
-          (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
-            requester.profileId === GATEWAY_OWNER_PROFILE_ID ||
-            operatorScopeSatisfied(
-              "operator.admin",
-              resolveOperatorRolePolicyForAssignment(
-                requester.profileId,
-                profile.assignedRole,
-                cfg,
-                profile.githubLogin,
-              )?.scopes ?? [],
-            )),
-        check: "checked",
-      };
+      // Admission's rule: an untiered install, the Gateway owner profile, or a named role
+      // that grants operator.admin for this agent.
+      const role = resolveOperatorRolePolicyForAssignment(
+        requester.profileId,
+        profile.assignedRole,
+        cfg,
+        profile.githubLogin,
+      );
+      const owner =
+        !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+        requester.profileId === GATEWAY_OWNER_PROFILE_ID ||
+        (operatorScopeSatisfied("operator.admin", role?.scopes ?? []) &&
+          (role?.agents === "*" || role?.agents.includes(agentId) === true));
+      return { owner, check: "checked" };
+    }
     case "channel": {
       const { channel, accountId, senderId } = requester.requester;
       if (isConfiguredCommandOwner(cfg, { channel, accountId, senderId })) {
@@ -229,7 +227,7 @@ async function reviewJob(
     entry = await readParentEntry(cfg, agentId, parentKey);
     const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
     parentRow = parentRowFactsFromEntry(entry, worktreePath ? await exists(worktreePath) : false);
-    owner = checkRequesterOwnerReadOnly(cfg, resolveScheduledRequester(job), profile);
+    owner = checkRequesterOwnerReadOnly(cfg, agentId, resolveScheduledRequester(job), profile);
   }
   const runSessionKey =
     job.sessionTarget === "main"

@@ -335,7 +335,6 @@ export function buildSessionEventContext(params: {
       },
     });
   } else if (scheduled?.grant?.owner) {
-    // A successor re-admits the native sender, as any channel owner's queued work does.
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
       isCurrent: () => {

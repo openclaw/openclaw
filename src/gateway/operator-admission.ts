@@ -654,9 +654,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
 }
 
 /**
- * The grant of a scheduled job saved without an operator source: a configured channel owner,
- * else the sender's linked admin profile; or a profile requester as a session person. The run
- * takes only this grant, never operator scopes. Undefined when admission refuses the requester.
+ * A source-less scheduled job's requester grant (configured owner, linked admin, or the profile
+ * as a session person); the run takes only this grant. Undefined when admission refuses.
  */
 export async function admitScheduledRequesterGrant(
   config: OpenClawConfig,
@@ -674,18 +673,15 @@ export async function admitScheduledRequesterGrant(
         (await prepareChannelOperatorAdmin(config, sender))?.operatorProfile.scopes;
       return scopes && decideTurnGrant(scopes);
     }
+    const { profileId } = requester;
     const subject = operatorRoleSubject(
-      captureResidentUserProfileAccess(requester.profileId).readCurrentFacts(),
+      captureResidentUserProfileAccess(profileId).readCurrentFacts(),
     );
     // Accepted edge: without named roles, a profile requester has always been the owner.
     if (!isOperatorRoleEnforcedFor(config, subject)) {
       return decideTurnGrant(["operator.admin"]);
     }
-    const facts = {
-      kind: "person",
-      snapshot: { profileId: requester.profileId },
-      agentId,
-    } as const;
+    const facts = { kind: "person", snapshot: { profileId }, agentId } as const;
     const admitted = decideOperatorAdmission(
       facts,
       await prepareOperatorAdmission(facts, { getRuntimeConfig: () => config }),

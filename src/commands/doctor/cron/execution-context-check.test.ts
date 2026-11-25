@@ -86,6 +86,8 @@ const roleConfig: OpenClawConfig = {
       definitions: {
         member,
         contractor: { ...member, sandbox: "required" },
+        admin: { ...member, scopes: ["operator.admin"] },
+        "research-admin": { ...member, scopes: ["operator.admin"], agents: ["research"] },
       },
     },
   },
@@ -109,6 +111,8 @@ it.each([
     false,
   ],
   ["member", null, roleConfig, true],
+  ["admin-role", "admin", roleConfig, false],
+  ["other-agent admin-role", "research-admin", roleConfig, true],
   ["removed", undefined, {}, true],
   ["sandboxed", "contractor", roleConfig, true],
 ] as const)("checks a %s profile requester", async (_kind, role, cfg, losesAccess) => {
