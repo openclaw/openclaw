@@ -561,6 +561,13 @@ upgrades publish changed includes with the existing backed-up file swap. Changed
 config files and their Doctor backups are staged beside their destinations before
 the swap plan is published, including when an included file is on a separately
 mounted workspace and the root config is inside the state directory.
+Read-only config inputs and inputs below retained dependency-directory symlinks
+are copied into independent private files without changing their live permissions
+or contents. If a changed config cannot be published safely, including a
+single-file mount or a path omitted by the swap under a symlinked directory,
+startup refuses before publishing the database plan and leaves live state unchanged.
+Run `openclaw doctor --fix` before retrying; a single-file mount must also allow
+the config replacement.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on
