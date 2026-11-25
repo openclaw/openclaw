@@ -298,7 +298,9 @@ describe("Hugging Face device login", () => {
       clientId: "test-public-client",
     };
     await expect(registerProvider().refreshOAuth?.(credential)).rejects.toThrow(
-      "Hugging Face OAuth: The Hugging Face session expired or was revoked. Run login again.",
+      new Error(
+        "Hugging Face OAuth: The Hugging Face session expired or was revoked. Run login again.",
+      ),
     );
     expect(credential.access).toBe("test-old-access");
   });
