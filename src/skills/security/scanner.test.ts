@@ -221,6 +221,12 @@ describe("scanSource", () => {
         1,
       ],
       ["dangerous-exec", 'const run = exec;\nrun("id");\nimport { exec } from "child_process";', 2],
+      ["dangerous-exec", 'var { exec: run } = require("child_process");\nvar run;\nrun("id");'],
+      [
+        "dangerous-exec",
+        'var mod = require("child_process");\nvar mod;\nconst run = mod.exec;\nrun("id");',
+      ],
+      ["dynamic-code-execution", 'var run = eval;\nvar run;\nrun("1+1");'],
       [
         "dangerous-exec",
         'import { exec as run } from "child_process";\nconst label = <string>"ok";\nrun("id");',
@@ -295,6 +301,8 @@ describe("scanSource", () => {
       'function safe(launch) { launch("ok"); }\nimport { spawn as launch } from "child_process";',
       'let run = proc.exec;\nrun = x => x;\nrun("ok");\nimport proc from "child_process";',
       'function task(run) { run("ok"); }\nconst { exec: run } = require("child_process");\ntask(x => x);',
+      'var { exec: run } = require("child_process");\nvar run = x => x;\nrun("ok");',
+      'function safe(run) { var run; run("ok"); }\nconst { exec: run } = require("child_process");\nsafe(x => x);',
       'const unused = eval;\nconst run = x => x;\nconst view = <div>{run("ok")}</div>;',
       'const box = { run: eval, ...{ run: x => x } };\nbox.run("ok");',
       'const safe = {};\nsafe.run = x => x;\nconst box = { run: eval, ...safe };\nbox.run("ok");',
@@ -329,6 +337,12 @@ describe("scanSource", () => {
     ]);
     for (const [example, ruleId, line] of [
       [
+        '```js\nconst { exec: run } = require("child_process");\nrun("id");\n```',
+        "dangerous-exec",
+        3,
+      ],
+      ['```js\nconst run = eval;\nrun("1+1");\n```', "dynamic-code-execution", 3],
+      [
         '> ```js\n> const { exec: run } = require("child_process");\n> run("id");\n> ```',
         "dangerous-exec",
         3,
@@ -350,6 +364,12 @@ describe("scanSource", () => {
         expect.objectContaining({ ruleId, line }),
       ]);
     }
+    expect(
+      scanSource(
+        '```js\nconst { exec: run } = require("child_process");\nrun("id");\n```',
+        "example.js",
+      ),
+    ).toEqual([]);
   });
 
   it("does not flag a computed exec-style call on a non-child_process object", () => {

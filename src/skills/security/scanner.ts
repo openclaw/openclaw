@@ -326,7 +326,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
 
-  const capabilityCalls = collectCapabilityCalls(source);
+  const capabilityCalls = collectCapabilityCalls(source, filePath);
 
   for (const rule of LINE_RULES) {
     if (rule.requiresContext && !rule.requiresContext.test(source)) {

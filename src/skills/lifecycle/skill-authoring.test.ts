@@ -80,12 +80,12 @@ it("refuses unsafe content before anything is written", async () => {
 
 it("refuses aliased child_process and eval calls but saves benign aliases", async () => {
   const fenced = (code: string) => `Run the deploy.\n\n\`\`\`js\n${code}\n\`\`\``;
-  const write = (skillName: string, body: string) =>
+  const write = (skillName: string, body: string, filePath = "SKILL.md") =>
     writeSkillRootFile({
       skillsRoot,
       skillName,
-      filePath: "SKILL.md",
-      content: skill(skillName, body),
+      filePath,
+      content: filePath === "SKILL.md" ? skill(skillName, body) : body,
     });
   await expect(
     write(
@@ -105,6 +105,14 @@ it("refuses aliased child_process and eval calls but saves benign aliases", asyn
   ).rejects.toEqual(
     refusal("unsafe_content", /line 11 matches security rule "dynamic-code-execution"/),
   );
+  for (const [body, ruleId] of [
+    ['```js\nconst { exec: run } = require("child_process");\nrun("id");\n```', "dangerous-exec"],
+    ['```js\nconst run = eval;\nrun("1+1");\n```', "dynamic-code-execution"],
+  ] as const) {
+    await expect(write("support", body, "references/example.md")).rejects.toEqual(
+      refusal("unsafe_content", new RegExp(`line 3 matches security rule "${ruleId}"`)),
+    );
+  }
   await expect(fs.readdir(skillsRoot)).rejects.toMatchObject({ code: "ENOENT" });
 
   const benign = fenced(
@@ -114,6 +122,11 @@ it("refuses aliased child_process and eval calls but saves benign aliases", asyn
   await expect(readSkillDirFile(path.join(skillsRoot, "deploy"), "SKILL.md")).resolves.toBe(
     skill("deploy", benign),
   );
+  const support = '```js\nvar run = x => x;\nvar run;\nrun("ok");\n```';
+  await expect(write("deploy", support, "references/benign.md")).resolves.toEqual({});
+  await expect(
+    readSkillDirFile(path.join(skillsRoot, "deploy"), "references/benign.md"),
+  ).resolves.toBe(support);
 });
 
 it("parses frontmatter strictly for writes and leniently for reads", () => {

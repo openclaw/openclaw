@@ -62,7 +62,7 @@ function isProcessModule(name: string | undefined): boolean {
  * This does not interpret branches/loops, call arguments/returns, arbitrary computed values,
  * call/apply/bind, prototypes, or cross-file flows. Unparseable fragments retain literal rules.
  */
-export function collectCapabilityCalls(source: string): CallMatches {
+export function collectCapabilityCalls(source: string, filePath: string): CallMatches {
   const matches: CallMatches = new Map();
   if (!/child_process|\b(?:eval|Function)\b/.test(source)) {
     return matches;
@@ -288,6 +288,9 @@ export function collectCapabilityCalls(source: string): CallMatches {
       },
       VariableDeclarator: {
         exit(path) {
+          if (!path.node.init && path.parentPath.isVariableDeclaration({ kind: "var" })) {
+            return;
+          }
           assign(path.node.id, value(path.node.init, path.scope), path.scope);
         },
       },
@@ -346,7 +349,8 @@ export function collectCapabilityCalls(source: string): CallMatches {
     return true;
   }
 
-  if (analyze(source, 1, 0)) {
+  const markdown = /\.(?:md|markdown|mdx)$/i.test(filePath);
+  if (!markdown && analyze(source, 1, 0)) {
     return matches;
   }
   // Parse the Markdown owner's decoded code, with original line/column mappings. Container
@@ -359,6 +363,7 @@ export function collectCapabilityCalls(source: string): CallMatches {
     offset += line.length + 1;
   }
   const { ir } = markdownToIRWithMeta(source);
+  let hasCodeBlocks = false;
   for (const block of ir.blocks ?? []) {
     if (
       block.kind !== "code_block" ||
@@ -367,6 +372,7 @@ export function collectCapabilityCalls(source: string): CallMatches {
     ) {
       continue;
     }
+    hasCodeBlocks = true;
     const start = block.sourceStartLine + (block.codeOrigin === "fenced" ? 1 : 0);
     const code = ir.text.slice(block.start, block.end);
     const columns = code.split("\n").map((line, index) => {
@@ -375,6 +381,9 @@ export function collectCapabilityCalls(source: string): CallMatches {
       return content && rawColumn >= 0 ? rawColumn - (line.length - content.length) : 0;
     });
     analyze(code, start + 1, starts[start] ?? source.length, columns);
+  }
+  if (markdown && !hasCodeBlocks) {
+    analyze(source, 1, 0);
   }
   return matches;
 }
