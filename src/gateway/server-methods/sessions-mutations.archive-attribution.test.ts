@@ -13,10 +13,21 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { readSessionColdTranscript } from "../../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../../config/sessions/session-cold-storage.js";
+import { setTranscriptActivity } from "../../config/sessions/session-cold-storage.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -281,6 +292,58 @@ it("preserves a grandchild through hidden runs when its persistent ancestor beco
     drain.mockRestore();
     operation.complete();
   }
+});
+
+it("keeps an inactive transcript eligible for cold storage after a guarded batch archive", async () => {
+  const config = {
+    session: {
+      maintenance: { mode: "warn" as const, coldStorage: { enabled: true, afterDays: 7 } },
+    },
+  };
+  setRuntimeConfigSnapshot(config);
+  const options = { agentId: "main" };
+  const scope = (sessionId: string) => ({
+    ...options,
+    sessionId,
+    sessionKey: `agent:main:dashboard:${sessionId}`,
+  });
+  const inactive = scope("inactive");
+  const recent = scope("recent");
+  const targets = [inactive, recent];
+  for (const target of targets) {
+    await seedSession(target.sessionKey, { sessionId: target.sessionId });
+    await appendTranscriptMessage(target, {
+      eventId: "message",
+      message: { role: "user", content: target.sessionId, timestamp: Date.now() },
+    });
+  }
+  await waitForSessionTranscriptIndexReconcile(options);
+  const original = await loadTranscriptEvents(inactive);
+  expect(original).toContainEqual(expect.objectContaining({ id: "message" }));
+  const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  await replaceSessionEntry(inactive, { sessionId: inactive.sessionId, updatedAt: twoWeeksAgo });
+  setTranscriptActivity(options, inactive.sessionId, twoWeeksAgo);
+
+  const responses = await invokePatchSession(
+    {
+      targets: targets.map(({ sessionKey: key, sessionId: expectedSessionId }) => ({
+        key,
+        expectedSessionId,
+        ...organizationExpectation,
+      })),
+      patch: { archived: true },
+    },
+    client(),
+    "sessions.patchMany",
+  );
+  expect(responses[0]?.[1]).toMatchObject({ outcomes: [{ ok: true }, { ok: true }] });
+  await runSessionColdStorageMaintenance({ config });
+  const { db } = openOpenClawAgentDatabase(options);
+  expect(readSessionColdTranscript(db, inactive.sessionId)).toBeDefined();
+  expect(readSessionColdTranscript(db, recent.sessionId)).toBeUndefined();
+  await restoreSessionColdTranscript(inactive);
+  expect(readSessionColdTranscript(db, inactive.sessionId)).toBeUndefined();
+  expect(await loadTranscriptEvents(inactive)).toEqual(original);
 });
 
 it("returns per-target batch outcomes without acquiring independently archived rows", async () => {
