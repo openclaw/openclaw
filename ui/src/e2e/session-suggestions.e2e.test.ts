@@ -353,13 +353,6 @@ suite.define(() => {
     await expect(credit).toHaveText("Suggested by Alice");
     await expect(group).not.toHaveClass(/chat-group--peer/);
     await expect(group.locator(".chat-avatar")).not.toHaveText("SB");
-    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-      const frame = await takeControlUiScreenshotFrame(page, group, [credit], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(suite.artifactDir, "accepted-suggestion.png"), frame.png);
-      console.info("Accepted suggestion proof:", suite.artifactDir);
-    }
   });
 
   it("keeps a long guest suggestion and its approval state on one line", async () => {

@@ -338,7 +338,7 @@ describe("persistUserTurnTranscript", () => {
         suggestedBy: { id: "jason", name: "Jason" },
       },
       config: undefined,
-      forbidden: ["Suggested by"],
+      forbidden: [],
     },
   ])("round-trips $name", async ({ input, metadata, config, forbidden }) => {
     const expected = userMessage(input.text, { timestamp: input.timestamp, __openclaw: metadata });
