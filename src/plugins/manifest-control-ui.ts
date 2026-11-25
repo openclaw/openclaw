@@ -120,20 +120,17 @@ export function normalizeManifestControlUi(
         return err("invalid Control UI Settings placement");
       }
       let normalized: ControlUiSettingsPlacement;
-      // Every view lists the settings it draws, even when that list is empty.
-      if (!("settings" in placement)) {
-        return err(
-          "controlUi.settingsViews[].settings is required: list the setting IDs the view draws, or {} for none",
-        );
-      }
+      // Views published before setting IDs omit `settings`; they keep loading and draw no
+      // linkable rows, since the host refuses any ID a view did not declare.
+      const { settings: declared = {}, ...place } = placement;
       if (
-        Object.keys(placement).length === 3 &&
+        Object.keys(place).length === 2 &&
         placement.section === "memory" &&
         (placement.panel === "overview" || placement.panel === "memories")
       ) {
         normalized = { section: "memory", panel: placement.panel };
       } else if (
-        Object.keys(placement).length === 4 &&
+        Object.keys(place).length === 3 &&
         placement.section === "channels" &&
         placement.panel === "detail" &&
         typeof placement.channelId === "string" &&
@@ -149,7 +146,7 @@ export function normalizeManifestControlUi(
         return err("controlUi.settingsViews must declare unique Settings placements");
       }
       placements.add(key);
-      const settings = normalizeViewSettings(placement.settings, pluginId, ownedChannels, claimed);
+      const settings = normalizeViewSettings(declared, pluginId, ownedChannels, claimed);
       if (!settings.ok) {
         return settings;
       }

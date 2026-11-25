@@ -54,7 +54,7 @@ it("admits channel detail presentations only for the manifest's declared channel
   expect(readManifest(duplicate, undefined, ["custom"])).toMatchObject({ ok: false });
 });
 
-it("requires each Settings view to declare the setting IDs it draws in namespaces the plugin owns", () => {
+it("holds each Settings view's setting IDs to namespaces the plugin owns", () => {
   const settingsOf = (settings: unknown, extra: Record<string, unknown> = {}) => ({
     entry,
     activation: "settings-only",
@@ -77,8 +77,12 @@ it("requires each Settings view to declare the setting IDs it draws in namespace
     ok: true,
     manifest: { controlUi: settingsOf(owned) },
   });
+  // A view published before setting IDs keeps loading and declares none.
+  expect(readManifest(settingsOf(undefined), undefined, ["custom"])).toMatchObject({
+    ok: true,
+    manifest: { controlUi: { settingsViews: [{ channelId: "custom", settings: {} }, {}] } },
+  });
   const rejected: Array<[unknown, Record<string, unknown>, string]> = [
-    [undefined, {}, "settings is required"],
     [[], {}, "must map each setting ID"],
     [{ "gateway.port": { label: "Port" } }, {}, 'setting ID "gateway.port" must continue one of'],
     [{ "channels.other.token": { label: "Token" } }, {}, '"channels.other.token"'],

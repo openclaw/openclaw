@@ -578,8 +578,9 @@ after changing the declaration or artwork.
 `controlUi.settingsViews` places a packaged presentation on a host-owned Settings page
 (`{ "section": "memory", "panel": "overview" | "memories" }` or
 `{ "section": "channels", "panel": "detail", "channelId": "<owned channel>" }`). Each view
-must declare `settings`: an object mapping every setting ID the view draws to
-`{ "label": "<English row title>" }`, or `{}` when it draws none. IDs continue
+declares `settings`: an object mapping every setting ID the view draws to
+`{ "label": "<English row title>" }`. A view without `settings` draws no linkable rows; the
+host refuses any row ID its view did not declare. IDs continue
 `channels.<owned channel>.`, `plugins.entries.<plugin id>.`, or the UI-only
 `plugin.<plugin id>.`; a key may end in `.*` for one row per item. See
 [Setting IDs](/plugins/feature-plugins#setting-ids).

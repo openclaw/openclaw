@@ -749,7 +749,7 @@ Declare the placement alongside the built entry:
 #### Setting IDs
 
 Each Settings view lists, in `settings`, every setting it draws: the setting ID and the
-row's English title. A view that draws no setting declares `"settings": {}`. A link to
+row's English title. A view that draws no setting may omit `settings`. A link to
 `/settings/<page>#<setting-id>` then opens the page, scrolls to the row, and marks it, as it
 does for core settings. Memory views live on `/settings/memory` and
 `/settings/memory/memories`; a channel detail opens from
