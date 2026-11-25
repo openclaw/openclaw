@@ -467,7 +467,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
   );
 
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
-    const snapshots: string[] = [];
+    const notice = "⚠️ Compaction completed with a degraded summary.";
     let progressId: number | undefined;
     await dispatch(
       async (options) => {
@@ -482,28 +482,25 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
         await options?.onCompactionStart?.();
         await waitForCall((call) => String(call.fields.text).includes("Compacting context"));
         progressId = [...visibleMessages.keys()][0];
-        snapshots.push(visibleMessages.get(progressId!)!);
+        expect(visibleMessages.get(progressId!)).toContain("Compacting context");
         expect(visibleMessages.get(progressId!)).toContain("Checking the retained context.");
         expect(visibleMessages.get(progressId!)).toContain("Retain the current goal");
         await preamble(options, "compaction", "", "start");
         await options?.onCompactionEnd?.({ completed: false });
         await waitForCall((call) => String(call.fields.text).includes("Compaction incomplete"));
-        snapshots.push(visibleMessages.get(progressId!)!);
+        expect(visibleMessages.get(progressId!)).toContain("Compaction incomplete");
         expect(visibleMessages.get(progressId!)).not.toContain("Checking the retained context.");
         expect(visibleMessages.get(progressId!)).toContain("Retain the current goal");
         await options?.onCompactionStart?.();
         await options?.onCompactionEnd?.({ completed: true });
         await waitForCall((call) => String(call.fields.text).includes("Compaction complete"));
-        snapshots.push(visibleMessages.get(progressId!)!);
+        expect(visibleMessages.get(progressId!)).toContain("Compaction complete");
+        await options?.onBlockReply?.({ text: notice, isCompactionNotice: true });
+        await options?.onBlockReply?.({ text: "Interim answer prose." });
       },
       { finalReply: { text: "Compaction finished." } },
     );
-    expect(snapshots).toEqual([
-      expect.stringContaining("Compacting context"),
-      expect.stringContaining("Compaction incomplete"),
-      expect.stringContaining("Compaction complete"),
-    ]);
-    expect(texts()).toEqual(["Compaction finished."]);
+    expect(texts()).toEqual([notice, "Compaction finished."]);
     expect(JSON.stringify(acceptedCalls)).not.toContain("Incomplete preamble");
     const finalAt = acceptedCalls.findIndex(
       (call) => call.method === "sendMessage" && call.fields.text === "Compaction finished.",

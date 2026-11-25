@@ -13,13 +13,14 @@ export function createGatewayStateProcessOwnerRetiredError(): Error {
   return new Error(GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE);
 }
 
-export function isGatewayStateProcessOwnerRetiredError(error: unknown): boolean {
-  return error instanceof Error && error.message === GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE;
-}
-
-export class StateDatabaseAccessError extends Error {
-  override name = "StateDatabaseAccessError";
-}
+export const StateDatabaseAccessError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseAccessError"),
+  () =>
+    class extends Error {
+      override name = "StateDatabaseAccessError";
+    },
+);
+export type StateDatabaseAccessError = InstanceType<typeof StateDatabaseAccessError>;
 
 export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateOwnerContentionError"),

@@ -125,6 +125,30 @@ export function createDiagnosticsMetrics(
       `${metricNamePrefix}sessions.list.retained_bytes`,
       { unit: "By", description: "Estimated memory retained by session-list views" },
     ),
+    sessionProjectionOwnersGauge: meter.createGauge(
+      `${metricNamePrefix}session_projection_owners`,
+      { unit: "1", description: "Live resident session-row projections" },
+    ),
+    sessionProjectionRowsRetainedEntriesGauge: meter.createGauge(
+      `${metricNamePrefix}session_projection_rows_retained_entries`,
+      { unit: "1", description: "Resident entries in session-row projection maps" },
+    ),
+    sessionProjectionRowsRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}session_projection_rows_retained_bytes`,
+      {
+        unit: "By",
+        description:
+          "Bounded estimate of data reachable from resident session-row maps; excludes closure and native storage",
+      },
+    ),
+    sessionProjectionRowsEstimateTruncatedGauge: meter.createGauge(
+      `${metricNamePrefix}session_projection_rows_estimate_truncated`,
+      {
+        unit: "1",
+        description:
+          "Projections whose retained-data estimate reached a bound or unsupported value",
+      },
+    ),
     sessionEventRowsRetainedEntriesGauge: meter.createGauge(
       `${metricNamePrefix}session_event_rows_retained_entries`,
       {

@@ -11,39 +11,60 @@ describe("durable ingress downstream handoff", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
+
   afterEach(() => {
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();
   });
-  it("keeps normal admission backpressure pending without consuming retry budget", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir);
-      await queue.enqueue("capacity-pending", { text: "wait for capacity" }, { receivedAt: 1 });
-      const dispatch = vi.fn(async () => ({ kind: "pending" as const }));
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        dispatchClaimedEvent: dispatch,
-        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
-      });
-      try {
-        for (let pass = 0; pass < 3; pass += 1) {
-          expect(await drain.drainOnce()).toEqual({ started: 1 });
-          await drain.waitForIdle();
-          expect(await queue.listPending()).toEqual([
-            expect.objectContaining({
-              id: "capacity-pending",
-              attempts: 0,
-              payload: { text: "wait for capacity" },
-            }),
-          ]);
-          expect(await queue.listClaims()).toEqual([]);
+  it.each(["pending", "queue-cap-old", "queue-cap-new"] as const)(
+    "preserves the durable disposition for %s across repeated drains",
+    async (outcome) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("capacity-pending", { text: "wait for capacity" }, { receivedAt: 1 });
+        const dispatch = vi.fn<
+          Parameters<typeof createChannelIngressDrain<Payload>>[0]["dispatchClaimedEvent"]
+        >(async (_claim, lifecycle) => {
+          if (outcome === "pending") {
+            return { kind: "pending" };
+          }
+          await lifecycle.onDropped?.(outcome);
+          return { kind: "deferred" };
+        });
+        const onDeadLetter = vi.fn();
+        const onLog = vi.fn();
+        const drain = createChannelIngressDrain<Payload>({
+          queue,
+          onDeadLetter,
+          onLog,
+          dispatchClaimedEvent: dispatch,
+          retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
+        });
+        try {
+          for (let pass = 0; pass < 3; pass += 1) {
+            expect(await drain.drainOnce()).toEqual({
+              started: outcome === "pending" || pass === 0 ? 1 : 0,
+            });
+            await drain.waitForIdle();
+            expect(await queue.listPending()).toMatchObject(
+              outcome === "pending"
+                ? [{ id: "capacity-pending", attempts: 0, payload: { text: "wait for capacity" } }]
+                : [],
+            );
+            expect(await queue.listClaims()).toEqual([]);
+          }
+          expect(dispatch).toHaveBeenCalledTimes(outcome === "pending" ? 3 : 1);
+          expect(onDeadLetter).not.toHaveBeenCalled();
+          expect(onLog.mock.calls.flat().join(" ")).not.toMatch(/failed after|dead-lettered/);
+          expect(await queue.listFailed?.()).toMatchObject(
+            outcome === "pending" ? [] : [{ id: "capacity-pending", reason: outcome }],
+          );
+        } finally {
+          drain.dispose();
         }
-        expect(dispatch).toHaveBeenCalledTimes(3);
-      } finally {
-        drain.dispose();
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("accepts an atomic downstream receipt transfer without a second completion even after abort", async () => {
     await withTempState(async (stateDir) => {

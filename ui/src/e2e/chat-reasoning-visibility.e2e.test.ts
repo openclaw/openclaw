@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -30,20 +31,27 @@ suite.define(() => {
         sessions: [{ key: sessionKey, kind: "direct", reasoningLevel }],
         historyMessages: [
           { role: "user", content: "Check the evidence." },
-          { role: "assistant", content: [{ type: "thinking", thinking }] },
+          ...["reasoning-1", "reasoning-2"].map((id) => ({
+            role: "assistant",
+            provider: openAiAuthor.provider,
+            model: openAiAuthor.model,
+            content: [{ type: "thinking", thinking }],
+            __openclaw: { id },
+          })),
           ...(withTools
             ? [
-                { role: "assistant", content: [tool] },
+                { role: "assistant", ...openAiAuthor, content: [tool] },
                 { role: "toolResult", toolCallId: "read", toolName: "read", content: "Read." },
               ]
             : []),
-          { role: "assistant", content: [{ type: "text", text: finalText }] },
+          { role: "assistant", ...openAiAuthor, content: [{ type: "text", text: finalText }] },
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const answer = pane.getByText(finalText, { exact: true });
-      const reasoning = pane.locator(".chat-thinking", { hasText: reasoningText });
+      const reasoningItems = pane.locator(".chat-thinking", { hasText: reasoningText });
+      const reasoning = reasoningItems.first();
       const worked = pane.locator(".chat-work-group > .chat-activity-group__summary");
 
       for (const reload of [false, true]) {
@@ -60,12 +68,32 @@ suite.define(() => {
         }
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
         if (reasoningLevel === "on") {
-          expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);
-          expect(await reasoning.locator("p").allTextContents()).toEqual([
-            "Reasoning:",
+          expect(await reasoningItems.count()).toBe(2);
+          expect(await reasoningItems.locator("pre code").allTextContents()).toEqual([code, code]);
+          expect(await reasoningItems.locator("p").allTextContents()).toEqual([
+            reasoningText,
+            conclusion,
             reasoningText,
             conclusion,
           ]);
+          // Each thought is a one-line step until its reader opens it.
+          const toggle = pane.getByRole("button", { name: "Reasoning", exact: true }).first();
+          const row = reasoning.locator("xpath=..");
+          const collapsed = await row.boundingBox();
+          expect(collapsed?.height).toBeLessThan(24);
+          // The preview stays out of focus and selection until it opens.
+          expect(await reasoning.getAttribute("inert")).not.toBeNull();
+          await toggle.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+          expect(await reasoning.getAttribute("inert")).toBeNull();
+          await expect
+            .poll(async () => (await row.boundingBox())?.height ?? 0)
+            .toBeGreaterThan(collapsed!.height * 3);
+          // The opened thought survives its rows remounting when Worked closes and reopens.
+          await worked.click();
+          await expect.poll(() => reasoning.isVisible()).toBe(false);
+          await worked.click();
+          await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
         }
         expect(await answer.isVisible()).toBe(true);
       }

@@ -1,7 +1,7 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { createVisitorAccessReader } from "./src/access.js";
 import { VisitorPolicyClient } from "./src/cloudflare.js";
-import { visitorConfigSchema, visitorPluginSchema } from "./src/config.js";
+import { visitorConfigSchema, visitorLimitsSchema, visitorPluginSchema } from "./src/config.js";
 import { visitorErrorText } from "./src/errors.js";
 import type { VisitorGrant } from "./src/grant-record.js";
 import { resolveVisitorSignInUrl } from "./src/invite-result.js";
@@ -36,7 +36,8 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
     overflowPolicy: "reject-new",
   });
   const service = new VisitorAccessService(
-    config,
+    () =>
+      visitorLimitsSchema.parse(api.runtime.config.current().plugins?.entries?.[api.id]?.config),
     store,
     new VisitorPolicyClient(
       config,
@@ -169,5 +170,11 @@ export default definePluginEntry({
   name: "Visitor Access",
   description: "Internal Cloudflare Access visitor grants with managed expiry.",
   configSchema: visitorPluginSchema,
+  reload: {
+    hotPrefixes: [
+      "plugins.entries.visitor-access.config.maxVisitors",
+      "plugins.entries.visitor-access.config.defaultTtlDays",
+    ],
+  },
   register: registerVisitorPlugin,
 });

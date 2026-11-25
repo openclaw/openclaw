@@ -62,7 +62,17 @@ function publisherDependencies(version: string, markdownVersion = "15.0.0") {
       lockfileVersion: 3,
       packages: {
         "": { name: "docs-test", devDependencies: { ...devDependencies } },
-        [`node_modules/${slugifyPackage}`]: { version },
+        [`node_modules/${slugifyPackage}`]: {
+          version,
+          dependencies: {
+            "@sindresorhus/transliterate": version === "4.0.1" ? "^3.0.0" : "^2.3.0",
+            "escape-string-regexp": "^5.0.0",
+          },
+        },
+        "node_modules/@sindresorhus/transliterate": {
+          version: version === "4.0.1" ? "3.0.0" : "2.3.1",
+        },
+        "node_modules/escape-string-regexp": { version: "5.0.0" },
         "node_modules/markdown-it": { version: markdownVersion },
       },
     },
@@ -100,7 +110,11 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   const { read, write, json, append } = files(root);
   const checker = path.join(root, ".openclaw-sync", "check-docs-mdx.mts");
   fs.mkdirSync(path.join(root, ".openclaw-sync", "lib"), { recursive: true });
-  for (const name of ["check-docs-mdx.mts", "lib/arg-utils.runtime.mjs"]) {
+  for (const name of [
+    "check-docs-mdx.mts",
+    "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
+  ]) {
     fs.copyFileSync(path.join("scripts", name), path.join(root, ".openclaw-sync", name));
   }
   files(path.join(root, ".openclaw-sync")).linkDependencies("junction");
@@ -139,6 +153,7 @@ it("reuses only exact successful page checks and checks docs.json on warm runs",
   expect(Object.keys(json("cache.json").files)).toEqual(["docs/b.MD"]);
   for (const name of [
     ".openclaw-sync/check-docs-mdx.mts",
+    ".openclaw-sync/lib/numeric-options.mjs",
     "package-lock.json",
     "node_modules/.package-lock.json",
   ]) {
@@ -157,7 +172,13 @@ it("executes the copied MDX checker and shared anchor runtime closures", () => {
   write("docs/fa/index.md", translation);
   files(publishRoot).linkDependencies();
   sync();
-  runNode(publishRoot, path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"), minimalMdx);
+  runNode(
+    publishRoot,
+    path.join(publishRoot, ".openclaw-sync/check-docs-mdx.mjs"),
+    minimalMdx,
+    "--max-errors",
+    "7",
+  );
   expect(read("docs/fa/index.md")).toBe(translation);
   expect(read("docs/reference/templates/AGENTS.md")).toBe(
     fs.readFileSync("docs/reference/templates/AGENTS.md", "utf8"),
@@ -210,19 +231,19 @@ it.each([
   { fault: "exit", error: "npm lock failure" },
   { fault: "stale", error: "publisher manifest and lock must both pin" },
 ])("syncs an independent publisher lock with $fault outcome", async ({ fault, error }) => {
-  const fixture = publisherFixture("2.2.0", { sourceSha: "fixture-source" });
+  const fixture = publisherFixture("4.0.1", { sourceSha: "fixture-source" });
   const { root, publishRoot, exists, read, write, json, append } = fixture;
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
-  const baseline = publisherDependencies("2.2.0");
+  const baseline = publisherDependencies("4.0.1");
   // npm's graph resolution has separate real-install proof. This CLI fixture
   // injects lock-generation failures without network or root dependency leakage.
   fs.writeFileSync(
     path.join(bin, "npm"),
     `#!${process.execPath}\n` +
       String.raw`
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
 const fault = ${JSON.stringify(fault)};
 const args = process.argv.slice(2);
 assert.deepEqual(args.slice(0, -1), ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', '--save-exact']);
@@ -234,7 +255,11 @@ const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
 manifest.devDependencies[name] = version;
 lock.packages[''].devDependencies[name] = version;
-if (fault !== 'stale') lock.packages['node_modules/' + name].version = version;
+if (fault !== 'stale') {
+  lock.packages['node_modules/' + name].version = version;
+  lock.packages['node_modules/' + name].dependencies['@sindresorhus/transliterate'] = '^2.3.0';
+  lock.packages['node_modules/@sindresorhus/transliterate'].version = '2.3.1';
+}
 fs.writeFileSync('package.json', JSON.stringify(manifest));
 fs.writeFileSync('package-lock.json', JSON.stringify(lock));
 `,
@@ -259,13 +284,23 @@ fs.writeFileSync('package-lock.json', JSON.stringify(lock));
   expect(read("npm-calls")).toBe("called\n");
 
   // Rebase validation must detect lost unrelated updates from fresh publisher main.
-  const freshMain = publisherDependencies("2.2.0", "15.0.1");
+  const freshMain = publisherDependencies("4.0.1", "15.0.1");
   expect(() => validate(freshMain)).toThrow("changed unrelated publisher dependencies");
   const rebased = publisherDependencies(sourceSlugifyVersion, "15.0.1");
   writePublisherDependencies(publishRoot, rebased);
   const reordered = Object.fromEntries(Object.entries(rebased.packageLock).toReversed());
   write("package-lock.json", JSON.stringify(reordered, null, 4));
   expect(() => validate(freshMain)).not.toThrow();
+
+  // npm can move a dependency between a package-local install and the root.
+  const nestedMain = structuredClone(freshMain);
+  const transliteratePath = "node_modules/@sindresorhus/transliterate";
+  const nestedPath = `node_modules/${slugifyPackage}/${transliteratePath}`;
+  Object.assign(nestedMain.packageLock.packages, {
+    [nestedPath]: nestedMain.packageLock.packages[transliteratePath],
+  });
+  Reflect.deleteProperty(nestedMain.packageLock.packages, transliteratePath);
+  expect(() => validate(nestedMain)).not.toThrow();
   append(".openclaw-sync/lib/docs-markdown.mjs", "\n// drift\n");
   expect(() => validate(freshMain)).toThrow("support file differs from source");
 });

@@ -357,7 +357,8 @@ export function describeMinimaxProviderDiscoveryContract(
 ) {
   describe("minimax provider discovery contract", () => {
     const getProvider = installDiscoveryHooks({ providerIds: ["minimax", "minimax-portal"], load });
-    installCatalogFetch(["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]);
+    // MiniMax still lists the retired M2 generation; every request to it returns 404.
+    installCatalogFetch(["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2"]);
 
     it("keeps API catalog provider-owned", async () => {
       await expectCatalog(
@@ -372,8 +373,18 @@ export function describeMinimaxProviderDiscoveryContract(
           authHeader: true,
           apiKey: "minimax-key",
         },
-        ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
+        ["MiniMax-M3"],
       );
+    });
+
+    it("drops retired M2 rows that MiniMax still lists", async () => {
+      const result = await runCatalog({
+        provider: getProvider("minimax"),
+        env: { MINIMAX_API_KEY: "minimax-key" },
+        ...apiKeyResolvers("minimax-key"),
+      });
+      const provider = result && "provider" in result ? result.provider : undefined;
+      expect(provider?.models.map((model) => model.id)).toEqual(["MiniMax-M3"]);
     });
 
     it("keeps portal oauth marker fallback provider-owned", async () => {
@@ -402,7 +413,7 @@ export function describeMinimaxProviderDiscoveryContract(
           authHeader: true,
           apiKey: "minimax-oauth",
         },
-        ["MiniMax-M2.7"],
+        ["MiniMax-M3"],
       );
     });
 

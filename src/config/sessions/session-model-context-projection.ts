@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql, type Expression, type RawBuilder } from "kysely";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   jsonArrayValue,
+  jsonNativeFieldsValid,
   jsonObjectValue,
   jsonPathValue,
   jsonPickObject,
@@ -30,6 +32,22 @@ import {
 
 const registeredDeepProjectors = new WeakSet<DatabaseSync>();
 
+/** JavaScript owner for rows native JSON cannot project: SQLite deep JSON, PostgreSQL JSONB-invalid escapes. */
+export function projectModelContextJson(
+  raw: string,
+  navigation: boolean,
+  omitCheckpoint = false,
+  toolResultOmission?: string,
+): string {
+  // SAFETY: This is the same canonical entry decoded by the native context reader.
+  const entry = JSON.parse(raw) as SessionTreeEntry;
+  return JSON.stringify(
+    navigation
+      ? projectSessionModelContextNavigation(entry)
+      : projectSessionModelContextEntry(entry, { entry, omitCheckpoint, toolResultOmission }),
+  );
+}
+
 /** SQLite rejects valid deep JSON; project those exceptional rows inside the reader worker. */
 function projectDeepModelContextSql(
   db: DatabaseSync,
@@ -44,16 +62,11 @@ function projectDeepModelContextSql(
       if (typeof raw !== "string") {
         throw new TypeError("Deep transcript projection requires canonical JSON text");
       }
-      // SAFETY: This is the same canonical entry decoded by the native context reader.
-      const entry = JSON.parse(raw) as SessionTreeEntry;
-      return JSON.stringify(
-        nav === 1
-          ? projectSessionModelContextNavigation(entry)
-          : projectSessionModelContextEntry(entry, {
-              entry,
-              omitCheckpoint: omit === 1,
-              toolResultOmission: typeof omission === "string" ? omission : undefined,
-            }),
+      return projectModelContextJson(
+        raw,
+        nav === 1,
+        omit === 1,
+        typeof omission === "string" ? omission : undefined,
       );
     });
     registeredDeepProjectors.add(db);
@@ -146,6 +159,23 @@ export function projectTranscriptPayloadNavigationSql(
   db: EngineConnection,
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(db)) {
+    // JSON (not JSONB) preserves duplicate members used by historical navigation.
+    return /* kysely-allow-raw: bounded native member projection preserves duplicate keys and JSON types. */ sql<string>`(
+      SELECT coalesce(json_object_agg(root_member.key, CASE
+        WHEN root_member.key = 'message' AND json_typeof(root_member.value) = 'object' THEN (
+          SELECT coalesce(json_object_agg(message_member.key, CASE
+            WHEN message_member.key = '__openclaw' AND json_typeof(message_member.value) = 'object' THEN (
+              SELECT coalesce(json_object_agg(internal.key, internal.value), '{}'::json)
+              FROM json_each(message_member.value) AS internal
+              WHERE internal.key IN ('runId', 'steerTargetRunId', 'contextFreeCommand'))
+            ELSE message_member.value END), '{}'::json)
+          FROM json_each(root_member.value) AS message_member
+          WHERE message_member.key IN ('role', 'idempotencyKey', 'provenance', 'excludeFromContext', '__openclaw'))
+        ELSE root_member.value END), '{}'::json)::text
+      FROM json_each(${event}::json) AS root_member
+      WHERE root_member.key IN (${sql.join([...MODEL_CONTEXT_NAVIGATION_KEYS, "message"])}))`;
+  }
   const memberValue =
     /* kysely-allow-raw: fixed JSON member cursor declared in the message projection below. */ sql.ref(
       "message_member.value",
@@ -172,7 +202,7 @@ export function projectTranscriptNavigationSql(
   db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
-  return /* kysely-allow-raw: Let the JS tree reader decode deep or malformed identity rows. */ sql<string>`CASE WHEN ${jsonValid(db, event)}
+  return /* kysely-allow-raw: Let the JS tree reader decode deep or malformed identity rows. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)}
     THEN ${jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS)} ELSE ${event} END`;
 }
 
@@ -189,7 +219,7 @@ export function projectResetBoundaryNavigationSql(
     "display",
   ]);
   // Malformed rows must reach JSON.parse unchanged; CASE guards the native projection.
-  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonValid(db, event)} THEN
+  return /* kysely-allow-raw: reset planning uses navigation metadata, never durable transcript payloads. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN
     CASE WHEN ${jsonType(db, event)} = 'object' THEN
       ${jsonSetPath(
         db,
@@ -239,11 +269,15 @@ export function projectModelContextNavigationSql(
     const type =
       entryType ??
       /* kysely-allow-raw: Discriminant lookup from the once-parsed event. */ sql`${source} ->> 'type'`;
-    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
-      WITH nav_input AS MATERIALIZED (SELECT ${event}::jsonb AS event),
+    // Rows JSONB cannot decode reach their JavaScript readers as the original entry. Bound
+    // writer inputs are plan-time constants, so the cast itself must stay behind the guard.
+    const native = jsonNativeFieldsValid(db, event);
+    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`CASE WHEN ${native} THEN (
+      WITH nav_input AS MATERIALIZED (SELECT (CASE WHEN ${native} THEN ${event} END)::jsonb AS event),
       nav_parts AS MATERIALIZED (SELECT event, event -> 'message' AS message,
         event #> '{message,content}' AS content FROM nav_input)
-      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)`;
+      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)
+      ELSE ${event} END`;
   }
   const sqliteEntryType = entryType ?? jsonPathValue(db, event, sql.lit("$.type"));
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
@@ -274,6 +308,20 @@ export function projectModelContextNavigationSql(
     WHEN 'custom' THEN CASE WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = 'openclaw.system-prompt'
       THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
         WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
+      WHEN ${jsonPathValue(db, event, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${jsonSetPath(
+        db,
+        entry,
+        sql.lit("$.data"),
+        // The scalar subquery loses SQLite's JSON subtype before embedding its object.
+        getNodeSqliteKysely(db).fn<string>("json", [
+          jsonPickObject(db, jsonPathValue(db, event, sql.lit("$.data")), [
+            "afterEntryId",
+            "resultEntryIds",
+          ]),
+        ]),
+        true,
+      )}
       ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
@@ -282,7 +330,11 @@ export function projectModelContextNavigationSql(
     ELSE ${projectDeepModelContextSql(db, event, true)} END`;
 }
 
-/** Project only the caller's bounded page; no write path uses this relation. */
+/**
+ * Project only the caller's bounded page; no write path uses this relation.
+ * JSONB rejects escaped NUL and unmatched surrogates that JSON text accepts; those
+ * rows return exceptional_json for projectModelContextJson instead of native views.
+ */
 export function projectPostgresModelContextRowsSql(
   rows: Expression<{ seq: number; event_json: string | null; navigation_json: string | null }>,
 ): RawBuilder<{
@@ -290,6 +342,7 @@ export function projectPostgresModelContextRowsSql(
   navigation_json: string;
   model_bytes: number;
   retained_bytes: number;
+  exceptional_json: string | null;
 }> {
   const event =
     /* kysely-allow-raw: Fixed parsed-event column from this page projection. */ sql.ref<string>(
@@ -304,6 +357,9 @@ export function projectPostgresModelContextRowsSql(
       "context_projected.content",
     );
   const type = /* kysely-allow-raw: Native lookup of the parsed entry discriminant. */ sql`${event} ->> 'type'`;
+  // Undecodable escapes only arrive as \u text; skip the second parse for ordinary rows.
+  const decodable = /* kysely-allow-raw: Fixed identity column of the caller's page rows. */ sql`(strpos(event_json, ${"\\u"}) = 0
+    OR pg_input_is_valid(event_json, 'jsonb'))`;
   const model = postgresModelEventSql(
     /* kysely-allow-raw: Fixed event column from the materialized page input. */ sql.ref(
       "context_parts.event",
@@ -312,7 +368,8 @@ export function projectPostgresModelContextRowsSql(
   );
   return /* kysely-allow-raw: One bounded read shares parsed JSONB and native model bytes across its projections. */ sql`(
     WITH context_input AS MATERIALIZED (
-      SELECT seq, CASE WHEN navigation_json IS NULL THEN event_json::jsonb END AS event,
+      SELECT seq, CASE WHEN navigation_json IS NULL AND ${decodable} THEN event_json::jsonb END AS event,
+        CASE WHEN navigation_json IS NULL AND NOT ${decodable} THEN event_json END AS exceptional_json,
         navigation_json::jsonb AS metadata FROM (${rows}) AS selected
     ), context_parts AS MATERIALIZED (
       SELECT *, event -> 'message' AS message, event #> '{message,content}' AS content FROM context_input
@@ -324,7 +381,8 @@ export function projectPostgresModelContextRowsSql(
       CASE WHEN metadata IS NULL THEN octet_length(model::text)
         ELSE (metadata ->> 'modelBytes')::double precision END AS model_bytes,
       CASE WHEN metadata IS NULL THEN octet_length((model #- '{message,providerReplay}')::text)
-        ELSE (metadata ->> 'modelWithoutCheckpointBytes')::double precision END AS retained_bytes
+        ELSE (metadata ->> 'modelWithoutCheckpointBytes')::double precision END AS retained_bytes,
+      exceptional_json
     FROM context_projected ORDER BY seq
   )`;
 }
@@ -375,6 +433,8 @@ function postgresModelNavigationSql(
       CASE WHEN ${customKind} IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('details', jsonb_build_object('kind', ${customKind})) END
     WHEN 'custom' THEN CASE WHEN ${event} ->> 'customType' = 'openclaw.system-prompt'
       THEN ${entry} || jsonb_build_object('data', jsonb_build_object('restart', coalesce((${event} #> '{data,restart}')::text, 'false') = 'true'))
+      WHEN ${event} ->> 'customType' = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      THEN ${entry} || jsonb_build_object('data', ${postgresNavigationObjectSql(sql`${event} -> 'data'`, ["afterEntryId", "resultEntryIds"])})
       ELSE ${entry} END
     WHEN 'compaction' THEN ${entry} || jsonb_build_object('summary', '')
     WHEN 'branch_summary' THEN ${entry} || jsonb_build_object('summary', '')

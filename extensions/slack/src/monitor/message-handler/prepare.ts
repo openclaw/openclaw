@@ -1293,9 +1293,9 @@ export async function prepareSlackMessage(params: {
     media: inboundMedia,
     supplemental: {
       thread: {
-        // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+        // Room follow-ups still need the subject after transcript eviction or compaction.
         starterBody:
-          !directThreadRoutedToDmSession && shouldSeedInitialThreadContext
+          !directThreadRoutedToDmSession && (isRoomish || shouldSeedInitialThreadContext)
             ? threadStarterBody
             : undefined,
         historyBody: supplementalThreadHistoryBody,

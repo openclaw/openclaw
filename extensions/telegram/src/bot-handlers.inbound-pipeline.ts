@@ -7,7 +7,7 @@ import {
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
@@ -18,16 +18,15 @@ import {
   type TelegramInboundMediaHydration,
 } from "./bot-handlers.inbound-buffer.js";
 import { createTelegramInboundMedia } from "./bot-handlers.inbound-media.js";
-import {
-  isDurablyRetryableInboundMediaError,
-  isMediaSizeLimitError,
-  TelegramBotApiFileTooLargeError,
-} from "./bot-handlers.media.js";
+import { isMediaSizeLimitError, TelegramBotApiFileTooLargeError } from "./bot-handlers.media.js";
 import {
   buildSyntheticContext,
   promptContextBoundaryOptions,
 } from "./bot-handlers.message-context.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  TelegramMediaRuntime,
+  TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
@@ -55,6 +54,9 @@ import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
 
+// The child file logger never reaches stdout, where container operators look.
+const mediaLog = createSubsystemLogger("telegram/media");
+
 export function createTelegramInboundPipeline({
   params: handlerParams,
   message: messageRuntime,
@@ -64,7 +66,7 @@ export function createTelegramInboundPipeline({
   message: TelegramMessagePipeline;
   authorization: TelegramHandlerAuthorization;
 }): TelegramInboundPipeline {
-  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes, logger } = handlerParams;
+  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes } = handlerParams;
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
@@ -287,11 +289,9 @@ export function createTelegramInboundPipeline({
       }
 
       const nativeMedia = resolveTelegramPrimaryMedia(normalizedMsg);
-      const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(syntheticContext.update);
       const hydrateMedia = async (
-        abortSignals: readonly AbortSignal[],
+        mediaRuntime: TelegramMediaRuntime,
       ): Promise<TelegramInboundMediaHydration> => {
-        const mediaRuntime = resolveMediaRuntime(...abortSignals);
         let media: Awaited<ReturnType<typeof resolveMedia>> = null;
         let unavailable: TelegramMediaRef["unavailable"];
         try {
@@ -316,10 +316,11 @@ export function createTelegramInboundPipeline({
             });
           }
         } catch (mediaErr) {
-          if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
-            // Abort mid-media-resolution must stay retryable for live updates too;
-            // a clean claim release would settle the update as handled and silently
-            // drop the message during shutdown or deadline cancellation.
+          if (mediaRuntime.abortSignal?.aborted) {
+            // The update's owner left (shutdown, lost claim) mid-fetch. Its next owner
+            // replays it; settling it here would drop the message. Any other media
+            // failure delivers the message without the attachment: retrying it would
+            // hold every later message in the chat behind one unfetchable file.
             return { kind: "retry", error: mediaErr };
           }
           if (isMediaSizeLimitError(mediaErr)) {
@@ -337,15 +338,12 @@ export function createTelegramInboundPipeline({
             if (!isChannelPost && mediaDisposition !== "silent-ingest") {
               await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limit}.`);
             }
-            logger.warn(
-              { chatId, error: String(mediaErr) },
-              isChannelPost ? "channel post media exceeds size limit" : "media exceeds size limit",
+            mediaLog.warn(
+              `${isChannelPost ? "channel post media exceeds size limit" : "media exceeds size limit"}: ${String(mediaErr)}`,
+              { chatId },
             );
           } else {
-            logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-            if (replayingSpooledUpdate && isDurablyRetryableInboundMediaError(mediaErr)) {
-              return { kind: "retry", error: mediaErr };
-            }
+            mediaLog.warn(`media fetch failed: ${String(mediaErr)}`, { chatId });
             unavailable = { reason: "download-failed" };
             if (mediaDisposition !== "silent-ingest") {
               await sendMediaWarning(mediaInput, "⚠️ Failed to download media. Please try again.");
@@ -360,6 +358,7 @@ export function createTelegramInboundPipeline({
                     contentType: media.contentType,
                     ...(media.fileName ? { fileName: media.fileName } : {}),
                     kind: media.kind,
+                    fileUniqueId: media.fileUniqueId,
                     stickerMetadata: media.stickerMetadata,
                   }
                 : { kind: nativeMedia.kind, unavailable },
@@ -402,7 +401,7 @@ export function createTelegramInboundPipeline({
         // Downloading here would spend the forward quiet window and split the burst.
         debounceEntry.hydrateMedia = hydrateMedia;
       } else {
-        const hydration = await hydrateMedia([]);
+        const hydration = await hydrateMedia(resolveMediaRuntime());
         if (hydration.kind === "retry") {
           recordTelegramMessageProcessingResult({
             kind: "failed-retryable",

@@ -7,6 +7,29 @@ import { projectPublicSessionEntry } from "./session-entry-projection.js";
 import { preserveGenerationPrivateFields } from "./session-entry-public-patch.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 
+describe("persisted delegated operator sources", () => {
+  const read = (delegatedOperatorSource: unknown) =>
+    parseCanonicalSqliteSessionEntry({
+      entry_json: JSON.stringify({ sessionId: "child", updatedAt: 1, delegatedOperatorSource }),
+    });
+  it.each([
+    null,
+    {},
+    { kind: "gateway" },
+    { kind: "unavailable", extra: true },
+    { kind: "unavailable", reason: "invalid" },
+  ])("rejects malformed bindings before typed metadata (%#)", (value) => {
+    expect(() => read(value)).toThrow(/operator recovery source/);
+  });
+  it("retains explicit unavailable bindings and leaves ordinary entries unbound", () => {
+    expect(read({ kind: "unavailable", reason: "no-source" })?.delegatedOperatorSource).toEqual({
+      kind: "unavailable",
+      reason: "no-source",
+    });
+    expect(read(undefined)).not.toHaveProperty("delegatedOperatorSource");
+  });
+});
+
 describe("canonical session numeric metadata", () => {
   it.each([
     { field: "spawnDepth", value: "2" },
@@ -96,13 +119,14 @@ describe("canonical session numeric metadata", () => {
   });
 
   it("keeps a graceful resume marker private and scoped to its current incarnation", () => {
-    const resumeAfterRestart = { queuedInputIds: ["accepted-before-shutdown"] };
+    const resumeAfterRestart = {};
     const entry = admitCanonicalSessionEntry({
       sessionId: "session",
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
-      mainRestartRecovery: { tombstone: { reason: "retired" } },
+      lifecycleRestartScope: "token-a",
+      mainRestartRecovery: { cycleId: "upgrade", revision: 1, executionIdentity: "retired" },
       restartRecoveryOperatorSource: { snapshot: { obsolete: true } },
       pendingExecNotifications: { obsolete: {} },
     });
@@ -111,19 +135,24 @@ describe("canonical session numeric metadata", () => {
       lifecycleRevision: "incarnation",
       updatedAt: 1,
       resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
+      mainRestartRecovery: { cycleId: "upgrade" },
     });
     const publicEntry = projectPublicSessionEntry(entry);
     expect(publicEntry).not.toHaveProperty("resumeAfterRestart");
+    expect(publicEntry).not.toHaveProperty("lifecycleRestartScope");
+    expect(publicEntry).not.toHaveProperty("mainRestartRecovery");
     expect(preserveGenerationPrivateFields(entry, { label: "Renamed" })).toMatchObject({
       label: "Renamed",
       resumeAfterRestart,
+      lifecycleRestartScope: "token-a",
     });
     for (const next of [
       publicEntry,
       { ...publicEntry, resumeAfterRestart: undefined },
-      { ...publicEntry, sessionId: "replacement" },
-      { ...publicEntry, lifecycleRevision: "replacement" },
-      { ...publicEntry, archivedAt: 2 },
+      { ...entry, sessionId: "replacement" },
+      { ...entry, lifecycleRevision: "replacement" },
+      { ...entry, archivedAt: 2 },
     ]) {
       const written = applySessionEntryWritePolicy(
         "main",
@@ -133,6 +162,14 @@ describe("canonical session numeric metadata", () => {
         entry,
         {},
       ).entry;
+      expect(written.mainRestartRecovery).toBeUndefined();
+      expect(written.lifecycleRestartScope).toBe(
+        next.sessionId === entry.sessionId &&
+          next.lifecycleRevision === entry.lifecycleRevision &&
+          !("archivedAt" in next)
+          ? "token-a"
+          : undefined,
+      );
       expect(written.resumeAfterRestart).toEqual(
         next === publicEntry ? resumeAfterRestart : undefined,
       );

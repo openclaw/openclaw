@@ -60,10 +60,11 @@ function expectQuestionCancelled(
   question: ReturnType<GatewayAux["questionManager"]["request"]>,
 ) {
   expect(onResolved).toHaveBeenCalledExactlyOnceWith(
-    { id: question.id, status: "cancelled" },
+    { id: question.id, status: "cancelled", resolvedBy: "requester-inactive" },
     {
       record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
       ordinary: false,
+      requesterRun: undefined,
       sessionAccess: undefined,
       isCurrent: expect.any(Function),
       refreshRequester: expect.any(Function),

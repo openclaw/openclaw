@@ -46,6 +46,15 @@ export type WindowsJobLaunch = {
   stdio: Array<number | "ignore" | "ipc">;
 };
 
+export type WindowsJobControlMessage = { job: string | undefined } & (
+  | { type: "ready" }
+  | { type: "spawned"; pid: number | undefined }
+  | ({ type: "error" | "job-error"; error: string } & Pick<
+      NodeJS.ErrnoException,
+      "code" | "errno" | "syscall" | "path"
+    >)
+);
+
 /** One retained kernel Job owns the launcher and every command descendant. */
 export function spawnWindowsJobChild(
   command: string,
@@ -227,12 +236,10 @@ export function spawnWindowsJobChild(
       admission.reject(new WindowsJobSetupError("job-admission-failed", error));
       ready.reject(error);
     });
-    launched.on("message", (message: unknown) => {
-      if (!job.isControlMessage(message)) {
+    launched.on("message", (control: WindowsJobControlMessage) => {
+      if (!job.isControlMessage(control)) {
         return;
       }
-      // SAFETY: only our launcher writes control messages carrying this private Job token.
-      const control = message as { type: string; pid: number; error: string; code?: string };
       if (control.type === "ready" && !admitted && !stopped) {
         try {
           admission.resolve();
@@ -261,7 +268,15 @@ export function spawnWindowsJobChild(
           new WindowsJobSetupError("job-admission-failed", new Error(control.error)),
         );
       } else if (control.type === "error") {
-        launched.emit("error", Object.assign(new Error(control.error), { code: control.code }));
+        launched.emit(
+          "error",
+          Object.assign(new Error(control.error), {
+            code: control.code,
+            errno: control.errno,
+            syscall: control.syscall,
+            path: control.path,
+          }),
+        );
       }
     });
     return { child: launched, job };

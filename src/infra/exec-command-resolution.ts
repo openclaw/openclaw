@@ -1,12 +1,15 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { safeRealpathSync } from "@openclaw/fs-safe/path";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { hasErrnoCode } from "./errno.js";
 import { compileExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import {
-  resolveExecutablePath as resolveExecutableCandidatePath,
+  resolveExecutablePathAsync as resolveExecutableCandidatePath,
   resolveExecutablePathCandidate,
 } from "./executable-path.js";
 
@@ -28,20 +31,46 @@ export type CommandResolution = {
   blockedWrapper?: string;
 };
 
-function tryResolveRealpath(filePath: string | undefined): string | undefined {
-  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
+/** Preserve Windows ordinary resolution; Bun's required native resolver runs off-thread. */
+export async function realpathForExec(filePath: string): Promise<string> {
+  if (process.platform === "win32") {
+    return new Promise((resolve, reject) => {
+      fs.realpath(filePath, (error, result) => (error ? reject(error) : resolve(result)));
+    });
+  }
+  if (!process.versions.bun) {
+    return fsp.realpath(filePath);
+  }
+  const mode = getFsSafeNativeConfig().mode;
+  if (mode !== "require") {
+    try {
+      return await fsp.realpath(filePath);
+    } catch (error) {
+      if (mode === "off" || !hasErrnoCode(error, "EACCES")) {
+        throw error;
+      }
+    }
+  }
+  const { resolveExecRealpathInWorker } = await import("./exec-realpath-worker.js");
+  return resolveExecRealpathInWorker(filePath, mode);
 }
 
-function buildExecutableResolution(
+export async function resolveExecutableRealPath(
+  filePath: string | undefined,
+): Promise<string | undefined> {
+  return filePath ? realpathForExec(filePath).catch(() => undefined) : undefined;
+}
+
+async function buildExecutableResolution(
   rawExecutable: string,
   params: {
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     useCache?: boolean;
   },
-): ExecutableResolution {
-  const resolvedPath = resolveExecutableCandidatePath(rawExecutable, params);
-  const resolvedRealPath = tryResolveRealpath(resolvedPath);
+): Promise<ExecutableResolution> {
+  const resolvedPath = await resolveExecutableCandidatePath(rawExecutable, params);
+  const resolvedRealPath = await resolveExecutableRealPath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
     kind: "executable",
@@ -52,13 +81,13 @@ function buildExecutableResolution(
   };
 }
 
-export function resolveCommandResolutionFromArgv(
+export async function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
   options?: { useCache?: boolean },
-): CommandResolution | null {
+): Promise<CommandResolution | null> {
   const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
@@ -66,14 +95,15 @@ export function resolveCommandResolutionFromArgv(
     return null;
   }
   const resolutionOptions = { cwd, env, useCache: options?.useCache };
-  const execution = buildExecutableResolution(rawExecutable, resolutionOptions);
+  const execution = await buildExecutableResolution(rawExecutable, resolutionOptions);
   const policyRawExecutable = plan.policyArgv[0]?.trim();
   return {
     kind: "command",
     execution,
-    policy: policyRawExecutable
-      ? buildExecutableResolution(policyRawExecutable, resolutionOptions)
-      : execution,
+    policy:
+      policyRawExecutable && policyRawExecutable !== rawExecutable
+        ? await buildExecutableResolution(policyRawExecutable, resolutionOptions)
+        : execution,
     effectiveArgv,
     wrapperChain: plan.wrapperChain,
     policyBlocked: plan.policyBlocked,
@@ -101,16 +131,16 @@ function resolveExecutableCandidatePathFromResolution(
   });
 }
 
-export function resolveExecutableTrustPath(
+export async function resolveExecutableTrustPath(
   resolution: ExecutableResolution | null | undefined,
   cwd?: string,
-): string | undefined {
+): Promise<string | undefined> {
   const realPath = resolution?.resolvedRealPath?.trim();
   if (realPath) {
     return realPath;
   }
   const candidatePath = resolveExecutableCandidatePathFromResolution(resolution, cwd);
-  return tryResolveRealpath(candidatePath) ?? candidatePath;
+  return (await resolveExecutableRealPath(candidatePath)) ?? candidatePath;
 }
 
 export function resolveExecutionTargetResolution(
@@ -135,10 +165,10 @@ export function resolveExecutionTargetCandidatePath(
   );
 }
 
-export function resolveExecutionTargetTrustPath(
+export async function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
-): string | undefined {
+): Promise<string | undefined> {
   return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
@@ -152,17 +182,17 @@ export function resolvePolicyTargetCandidatePath(
   );
 }
 
-export function resolvePolicyTargetTrustPath(
+export async function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
-): string | undefined {
+): Promise<string | undefined> {
   return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
-export function resolveApprovalAuditTrustPath(
+export async function resolveApprovalAuditTrustPath(
   resolution: CommandResolution | null,
   cwd?: string,
-): string | undefined {
+): Promise<string | undefined> {
   return resolvePolicyTargetTrustPath(resolution, cwd);
 }
 

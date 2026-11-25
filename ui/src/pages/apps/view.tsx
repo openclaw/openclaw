@@ -319,7 +319,7 @@ function AppCardView(props: { card: AppCard; options: AppsProps }) {
 function AppSectionView(props: { section: AppSection; options: AppsProps }) {
   return (
     <section class="apps-section" aria-label={t(props.section.labelKey)}>
-      <h2 class="apps-section__heading">{t(props.section.labelKey)}</h2>
+      <h2 class="settings-section__heading">{t(props.section.labelKey)}</h2>
       <div class="apps-grid">
         <For each={props.section.cards}>
           {(card) => <AppCardView card={card} options={props.options} />}
@@ -348,7 +348,7 @@ export function Apps(props: AppsProps) {
         {(section) => <AppSectionView section={section} options={props} />}
       </For>
       <section class="apps-section" aria-label={t("appsPage.sectionCommunity")}>
-        <h2 class="apps-section__heading">{t("appsPage.sectionCommunity")}</h2>
+        <h2 class="settings-section__heading">{t("appsPage.sectionCommunity")}</h2>
         <nav class="apps-community" aria-label={t("appsPage.sectionCommunity")}>
           <For each={COMMUNITY_LINKS}>
             {(link) => (

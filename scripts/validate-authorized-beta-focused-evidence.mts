@@ -182,6 +182,7 @@ function git(repoRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoRoot,
     encoding: "utf8",
+    env: args[0] === "cat-file" ? { ...process.env, GIT_NO_LAZY_FETCH: "1" } : process.env,
     maxBuffer: 16 * 1024 * 1024,
   }).trimEnd();
 }

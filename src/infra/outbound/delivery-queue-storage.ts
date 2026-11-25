@@ -73,7 +73,7 @@ export async function findDeliveryIntentOwner(
 }
 
 /** Resolve one ordered batch without reopening the store for each intent. */
-export async function findDeliveryIntentOwners(
+async function findDeliveryIntentOwners(
   ids: readonly string[],
   stateDir?: string,
   context?: DeliveryQueueStateContext,
@@ -464,6 +464,26 @@ export function loadPendingLegacyDeliveryPreparations(
     OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     stateDir,
   ) as LegacyQueuedDeliveryPreparation[];
+}
+
+/**
+ * Dead-letter the unsent replies of a deleted chat, so that a recreated key never
+ * sends them. A send that started stays with its recovery owner.
+ */
+export async function failChatDeliveries(
+  chat: { agentId: string; sessionKey: string },
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<void> {
+  for (const entry of await readOutboundDeliveries({ mode: "pending" }, stateDir, context)) {
+    if (
+      entry.recoveryState === undefined &&
+      entry.sessionGeneration?.agentId === chat.agentId &&
+      entry.sessionGeneration.sessionKey === chat.sessionKey
+    ) {
+      await failPendingDelivery({ id: entry.id, entry }, stateDir, context);
+    }
+  }
 }
 
 /** Move a queue entry out of the pending retry set. */

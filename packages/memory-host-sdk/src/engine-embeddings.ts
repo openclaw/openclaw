@@ -34,6 +34,7 @@ export {
 } from "./host/embedding-provider-adapter-utils.js";
 export { sanitizeAndNormalizeEmbedding } from "./host/embedding-vectors.js";
 export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
+export { extractEmbeddingUsage } from "../../llm-core/src/usage-cost.js";
 export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
 export {
   embeddingProviderOwnsDestination,

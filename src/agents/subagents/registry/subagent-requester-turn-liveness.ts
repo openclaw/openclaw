@@ -5,11 +5,14 @@ import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.j
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Persisted cohort identity is not liveness; only its current physical requester can hold it. */
-export function isClaimedByLiveRequesterTurn(entry: SubagentRunRecord): boolean {
-  if (entry.expectsCompletionMessage !== true || !entry.requesterTurnRunId) {
+export function isClaimedByLiveRequesterTurn(
+  entry: SubagentRunRecord,
+  runId = entry.requesterTurnRunId,
+): boolean {
+  if (entry.expectsCompletionMessage !== true || !runId) {
     return false;
   }
-  const operation = findSessionControllerOperationByRunId(entry.requesterTurnRunId);
+  const operation = findSessionControllerOperationByRunId(runId);
   if (!operation) {
     return false;
   }

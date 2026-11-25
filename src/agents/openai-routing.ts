@@ -13,6 +13,7 @@ import type {
   ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../plugin-sdk/provider-model-types.js";
+import type { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isDefaultAgentRuntimeId,
@@ -60,6 +61,7 @@ export function resolveOpenAIImplicitAgentRuntime(
     routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
     runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
   } & AgentRuntimePolicyScope,
+  resolveProviderRoutes?: ReturnType<typeof createProviderModelRoutesResolver>,
 ): "codex" | "openclaw" | null {
   if (!isOpenAIProvider(params.provider)) {
     return null;
@@ -84,18 +86,21 @@ export function resolveOpenAIImplicitAgentRuntime(
     params.requestTransportOverrides === "present" || hasConfiguredProviderRequestParams
       ? "present"
       : "none";
-  const resolution = resolveOpenAIModelRoutes({
-    provider: params.provider,
-    modelId,
-    api: params.api,
-    baseUrl: params.baseUrl,
-    config: params.config,
-    env: params.env,
-    agentId,
-    requestTransportOverrides,
-    primaryModel,
-    routeIntent: params.routeIntent ?? resolveModelRouteIntent({ ...params, primaryModel }),
-  });
+  const resolution = resolveOpenAIModelRoutes(
+    {
+      provider: params.provider,
+      modelId,
+      api: params.api,
+      baseUrl: params.baseUrl,
+      config: params.config,
+      env: params.env,
+      agentId,
+      requestTransportOverrides,
+      primaryModel,
+      routeIntent: params.routeIntent ?? resolveModelRouteIntent({ ...params, primaryModel }),
+    },
+    resolveProviderRoutes,
+  );
   if (!resolution) {
     // Endpoint and adapter ownership stays in the provider artifact. Without
     // that policy, keep credentials and traffic on the core OpenClaw runtime.

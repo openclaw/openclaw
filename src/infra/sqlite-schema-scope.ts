@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PostgresPhysicalFacts } from "./database-engine/physical-facts-contract.js";
+import type { PostgresSqlConnection } from "./sql-connection.js";
 import type { SqliteSchemaMarkers } from "./sqlite-pinned-read-snapshot.js";
 import type { SqliteTempTrackingSchema } from "./sqlite-temp-generation-schema.js";
 
@@ -30,6 +31,11 @@ export type PostgresReadSnapshotRevision = Readonly<{
   writeRevision: number;
 }>;
 
+export const postgresReadSnapshots = resolveGlobalSingleton(
+  Symbol.for("openclaw.postgresReadSnapshots"),
+  () => new WeakMap<PostgresSqlConnection, PostgresReadSnapshotRevision>(),
+);
+
 export type SqliteReadOperationRevision =
   | (SqliteReadRevision & { snapshot?: undefined; writeRevision: number })
   | PostgresReadSnapshotRevision;
@@ -47,6 +53,7 @@ export type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;
 
 export type SqliteSchemaOwner = {
   admitted: boolean;
+  publicationReady: boolean;
   revision: number;
   facts?: SqliteSchemaFacts;
   readDepth: number;

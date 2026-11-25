@@ -1,9 +1,13 @@
+import type { ThemeColor } from "../theme-color.ts";
+
 type Rgb = readonly [number, number, number];
+type LuminanceRange = readonly [darkest: number, lightest: number];
 export type Oklch = { l: number; c: number; h: number };
 type ParticipantPalette = {
   mode: "light" | "dark";
   background: Oklch;
   accent: Oklch;
+  viewerTone?: Pick<Oklch, "l" | "c">;
 };
 
 const PARTICIPANT_TONES = {
@@ -88,10 +92,11 @@ function participantColors(palette: ParticipantPalette, identityHue: number | nu
   const tones = PARTICIPANT_TONES[palette.mode];
   const viewer = identityHue === null;
   const h = viewer ? palette.accent.h : identityOklchHue(identityHue);
+  const viewerTone = viewer ? palette.viewerTone : undefined;
   return {
     bubble: fitSrgb({
-      l: palette.background.l + (viewer ? tones.viewerOffset : tones.peerOffset),
-      c: PARTICIPANT_TONES.bubbleC,
+      l: viewerTone?.l ?? palette.background.l + (viewer ? tones.viewerOffset : tones.peerOffset),
+      c: viewerTone ? Math.min(palette.accent.c, viewerTone.c) : PARTICIPANT_TONES.bubbleC,
       h,
     }),
     name: fitSrgb({ l: tones.nameL, c: tones.nameC, h }),
@@ -105,28 +110,39 @@ function luminance(color: Oklch): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function linkContrast(foreground: Oklch, background: Oklch): number {
-  const first = luminance(foreground);
-  const second = luminance(background);
-  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+function linkContrast(foreground: Oklch, [darkest, lightest]: LuminanceRange): number {
+  const ink = luminance(foreground);
+  if (ink < darkest) {
+    return (darkest + 0.05) / (ink + 0.05);
+  }
+  if (ink > lightest) {
+    return (ink + 0.05) / (lightest + 0.05);
+  }
+  return 1;
 }
 
 /** Keep readable ink intact; otherwise move L only, fitting C at the gamut boundary. */
-function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
-  if (linkContrast(foreground, background) >= 7) {
+function readableLinkColor(
+  foreground: Oklch,
+  backgrounds: LuminanceRange,
+  minimumContrast: number,
+): Oklch {
+  if (linkContrast(foreground, backgrounds) >= minimumContrast) {
     return foreground;
   }
+  // CSS compositing and sRGB rasterization need a small margin at the AA boundary.
+  const targetContrast = minimumContrast + 0.1;
   const ends = [0, 1].map((l) => fitSrgb({ ...foreground, l }));
   const candidates: Oklch[] = [];
   for (const end of ends) {
-    if (linkContrast(end, background) < 7.01) {
+    if (linkContrast(end, backgrounds) < targetContrast) {
       continue;
     }
     let near = foreground.l;
     let far = end.l;
     for (let index = 0; index < 24; index += 1) {
       const l = (near + far) / 2;
-      if (linkContrast(fitSrgb({ ...foreground, l }), background) >= 7.01) {
+      if (linkContrast(fitSrgb({ ...foreground, l }), backgrounds) >= targetContrast) {
         far = l;
       } else {
         near = l;
@@ -134,10 +150,10 @@ function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
     }
     candidates.push(fitSrgb({ ...foreground, l: far }));
   }
-  // Imported midtone canvases may not admit 7:1 even with black or white.
+  // A custom theme's combined surfaces may not admit one 4.5:1 ink.
   if (candidates.length === 0) {
     return ends.reduce((best, color) =>
-      linkContrast(color, background) > linkContrast(best, background) ? color : best,
+      linkContrast(color, backgrounds) > linkContrast(best, backgrounds) ? color : best,
     );
   }
   return candidates.reduce((best, color) =>
@@ -145,30 +161,64 @@ function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
   );
 }
 
-export function prepareParticipantPalette(
+/** Keep canvas and tinted-bubble inks separate while covering every supported identity hue. */
+export function prepareThemeLinks(
   palette: ParticipantPalette,
-  links: { normal: Oklch; hover: Oklch },
-) {
-  const linkStyle = (background: Oklch) => {
-    const normal = readableLinkColor(links.normal, background);
-    const hover = readableLinkColor(links.hover, background);
-    return {
-      normal: normal === links.normal ? "var(--link)" : css(normal),
-      hover: hover === links.hover ? "var(--link-hover)" : css(hover),
-    };
+  surfaces: readonly ThemeColor[],
+  overlays: readonly ThemeColor[],
+  minimumContrast = 4.5,
+): { normal: string; tint: string } {
+  const encode = (channel: number) =>
+    channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055;
+  const rgb = (color: Oklch): Rgb => {
+    const [r, g, b] = oklchToLinearRgb(color);
+    return [encode(r), encode(g), encode(b)];
   };
+  const composite = (foreground: ThemeColor, background: Rgb): Rgb => [
+    foreground.rgb[0] * foreground.alpha + background[0] * (1 - foreground.alpha),
+    foreground.rgb[1] * foreground.alpha + background[1] * (1 - foreground.alpha),
+    foreground.rgb[2] * foreground.alpha + background[2] * (1 - foreground.alpha),
+  ];
+  const normal: [number, number] = [Infinity, -Infinity];
+  const tint: [number, number] = [Infinity, -Infinity];
+  const include = (range: [number, number], [r, g, b]: Rgb) => {
+    const value = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+    range[0] = Math.min(range[0], value);
+    range[1] = Math.max(range[1], value);
+  };
+  const includeBody = (range: [number, number], background: Rgb) => {
+    include(range, background);
+    for (const overlay of overlays) {
+      include(range, composite(overlay, background));
+    }
+  };
+  const canvas = rgb(palette.background);
+  includeBody(normal, canvas);
+  for (const surface of surfaces) {
+    include(normal, composite(surface, canvas));
+  }
+  includeBody(tint, rgb(participantColors(palette, null).bubble));
+  // Identity hues are integer colorSeed % 360 values, independent of the active roster.
+  for (let hue = 0; hue < 360; hue += 1) {
+    includeBody(tint, rgb(participantColors(palette, hue).bubble));
+  }
+  return {
+    normal: css(readableLinkColor(palette.accent, normal, minimumContrast)),
+    tint: css(readableLinkColor(palette.accent, tint, minimumContrast)),
+  };
+}
+
+export function prepareParticipantPalette(palette: ParticipantPalette) {
   // One prepared string per identity in this palette; streamed tokens only read it.
   const identityStyles = new Map<number | null, string>();
   return {
-    canvasLinks: linkStyle(palette.background),
     style(identityHue: number | null): string {
       const prepared = identityStyles.get(identityHue);
       if (prepared !== undefined) {
         return prepared;
       }
       const colors = participantColors(palette, identityHue);
-      const ink = linkStyle(colors.bubble);
-      const style = `--chat-participant-surface: ${css(colors.bubble)}; --chat-sender-name-color: ${css(colors.name)}; --chat-participant-link: ${ink.normal}; --chat-participant-link-hover: ${ink.hover}`;
+      const style = `--chat-participant-surface: ${css(colors.bubble)}; --chat-sender-name-color: ${css(colors.name)}`;
       identityStyles.set(identityHue, style);
       return style;
     },

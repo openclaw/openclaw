@@ -27,6 +27,8 @@ For Gateway-backed turns, the Gateway resolves `--session-id`, including when it
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
+An earlier tool-failure warning does not hide a later provider failure. Existing usage-limit and reset details appear before the tool warning.
+
 Related: [Agent send tool](/tools/agent-send)
 
 ## `agent exec`
@@ -52,6 +54,8 @@ Existing workspace files such as `AGENTS.md` are still injected by default. For 
 When your tool policy enables `browser`, local browser control works without a Gateway. Explicit Gateway or node routing and sandbox restrictions still apply; see [Node browser proxy](/tools/browser/remote#node-browser-proxy-zero-config-default).
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. A retained state directory requires exclusive ownership: exec refuses to start while a Gateway or another embedded writer owns it, then holds the state lock for the complete run. Omit `--state-dir` for isolated temporary state, or stop the Gateway first with `openclaw gateway stop`.
+
+Temporary and `--isolated` runs always use SQLite, even when a config or override selects PostgreSQL; retained runs otherwise use the effective [database engine configuration](/reference/database-engines).
 
 When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. Plugins that adopt the managed-resource root, including llama.cpp, also keep shared model caches and managed binaries on the operator root. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
 
@@ -133,7 +137,7 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 
 Run-stat fields are additive and may be absent:
 
-- `costUsd`: sum of recorded per-call USD costs, preserving request pricing tiers and retry-model prices, including cache reads/writes. When per-call costs are incomplete, only flat-price estimates are available; tiered estimates are omitted rather than pricing combined usage as one request. Omitted when cost is unavailable.
+- `costUsd`: sum of recorded per-call USD costs, preserving request pricing tiers and retry-model prices, including cache reads/writes. When per-call costs are incomplete or are all-zero placeholders, the run is estimated from the model's resolved price, so an authored `cost: 0` still records $0. A tiered price is estimated only while the combined prompt stays inside its first tier; otherwise the estimate is omitted rather than pricing combined usage as one request. Omitted when cost is unavailable.
 - `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement, and harnesses that own their native tool surface always read `false` because OpenClaw code mode never owns their tools.
 - `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
 - `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are not provider requests and can overlap the nested activity in `toolSummary`; do not add the counters together.

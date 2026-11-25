@@ -16,12 +16,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -82,10 +83,6 @@ async function collect() {
   await nextTurn();
   gc!();
   gc!();
-}
-
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 }
 
 function verify(cache: ReturnType<typeof createPluginCache>) {
@@ -162,12 +159,7 @@ try {
   await collect();
   const memoryBefore = process.memoryUsage();
   if (values.allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   }
   const hostLoadBefore = loadavg();
   let cache: ReturnType<typeof acquire> | undefined;
@@ -179,7 +171,7 @@ try {
   const wallMs = performance.now() - started;
   const used = process.threadCpuUsage(cpu);
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   inspector.disconnect();
   await collect();

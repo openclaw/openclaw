@@ -16,7 +16,11 @@ const acpAgent = {
   model: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]",
 } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 const planFor = (options: Partial<Parameters<typeof resolveSubagentModelAndThinkingPlan>[0]>) =>
-  resolveSubagentModelAndThinkingPlan({ cfg: {}, targetAgentId: "research", ...options });
+  resolveSubagentModelAndThinkingPlan({
+    cfg: { agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } } },
+    targetAgentId: "research",
+    ...options,
+  });
 const nativeModel = "minimax/MiniMax-M2.7";
 const configFor = (
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
@@ -60,6 +64,17 @@ it("rejects invalid thinking before preparing a model", async () => {
     error: expect.stringMatching(/Invalid thinking level/i),
   });
   expect(modelChoice).not.toHaveBeenCalled();
+});
+
+it("names the selected model's row levels for invalid thinking", async () => {
+  const plan = await planFor({
+    cfg: configFor({ subagents: { model: "moonshot/kimi-k3" } }),
+    thinkingOverrideRaw: "banana",
+  });
+  expect(plan).toMatchObject({
+    status: "error",
+    error: expect.stringMatching(/Use one of: max\b/),
+  });
 });
 
 it("uses the target default provider for a bare configured subagent model", async () => {

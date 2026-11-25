@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -105,27 +105,45 @@ it.each([
   },
 );
 
-it.each([false, true])("restricts permission fallback to linear history (merge=%s)", (merge) => {
-  const f = fixture(true, merge);
-  const result = runPublisher(f, undefined, [
-    ...metadata,
-    'pr_git() { if [ "$1" = push ]; then echo push >> .local/events; echo "403 permission denied" >&2; return 73; fi; command git "$@"; }',
-  ]);
-  expect(result.status, result.stdout + result.stderr).toBe(merge ? 73 : 0);
-  expect(f.read("events")).toBe(merge ? "push\n" : "push\ngraphql\n");
-  if (merge) {
-    expect(hosted(f)).toBe(f.source);
-    expect(result.stdout).toContain("403 permission denied");
-    expect(result.stdout).not.toContain("trying GraphQL");
-  } else {
-    expect(f.git("rev-parse", hosted(f) + "^{tree}")).toBe(
-      f.git("rev-parse", f.candidate + "^{tree}"),
-    );
-  }
-});
+it.each(
+  [false, true].flatMap((merge) =>
+    [
+      "403 permission denied",
+      "permission denied 403",
+      "remote: Permission to fixture/repo.git denied to fixture.",
+      "fatal: unable to access 'https://github.com/fixture/repo.git/': The requested URL returned error: 403",
+    ].map((diagnostic) => ({ merge, diagnostic })),
+  ),
+)(
+  "restricts permission fallback to linear history (merge=$merge, diagnostic=$diagnostic)",
+  ({ merge, diagnostic }) => {
+    const f = fixture(true, merge);
+    f.env.PUSH_DIAGNOSTIC = diagnostic;
+    const result = runPublisher(f, undefined, [
+      ...metadata,
+      'pr_git() { if [ "$1" = push ]; then echo push >> .local/events; printf "%s\\n" "$PUSH_DIAGNOSTIC" >&2; return 73; fi; command git "$@"; }',
+    ]);
+    expect(result.status, result.stdout + result.stderr).toBe(merge ? 73 : 0);
+    expect(f.read("events")).toBe(merge ? "push\n" : "push\ngraphql\n");
+    if (merge) {
+      expect(hosted(f)).toBe(f.source);
+      expect(result.stdout).toContain(diagnostic);
+      expect(result.stdout).not.toContain("trying GraphQL");
+    } else {
+      expect(f.git("rev-parse", hosted(f) + "^{tree}")).toBe(
+        f.git("rev-parse", f.candidate + "^{tree}"),
+      );
+    }
+  },
+);
 
 it.each([false, true])("never replays a Git write whose response was lost (merge=%s)", (merge) => {
   const f = fixture(true, merge);
+  // Git's own progress must contain permission-like text regardless of the generated OIDs.
+  const remote = join(f.remote, "..", "permission-denied-403-forbidden.git");
+  renameSync(f.remote, remote);
+  f.remote = remote;
+  f.git("remote", "set-url", "origin", remote);
   const result = runPublisher(f, undefined, [
     ...metadata,
     'pr_git() { if [ "$1" = push ]; then echo push >> .local/events; command git "$@" || return $?; echo "connection lost after write" >&2; return 74; fi; command git "$@"; }',

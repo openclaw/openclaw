@@ -3,7 +3,7 @@ import {
   prepareNextDeliveryGroup,
   resolveFollowupDeliveryStorageKey,
 } from "../auto-reply/reply/queue/delivery-context.js";
-import { runOutsideAdmittedGenerationScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
+import { runOutsideAdmittedTurnScopes } from "../auto-reply/reply/queue/drain-admission-scope.js";
 import { requiresIndividualCollectDrain } from "../auto-reply/reply/queue/envelope.js";
 import { updateFollowupRetryHeartbeatsWithCustody } from "../auto-reply/reply/queue/pre-adoption-heartbeat.js";
 import {
@@ -25,6 +25,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import { evaluateTurnAdmission, isMutationOwnedTurn } from "./session-controller.admission-rule.js";
 import type {
@@ -202,7 +203,7 @@ async function prepareSessionControllerMailboxSelection(
     }
     for (const source of selection.sources) {
       source.controllerInput?.abortSignal.throwIfAborted();
-      source.controllerInput?.sourceAdapter?.authority?.assertCurrent();
+      source.controllerInput?.sourceAdapter?.authority?.assertCurrent?.();
     }
     currentSelection = current;
   };
@@ -214,7 +215,7 @@ async function prepareSessionControllerMailboxSelection(
       () =>
         runWithGatewayDetachedWorkContinuation(
           () =>
-            runOutsideAdmittedGenerationScopes(() =>
+            runOutsideAdmittedTurnScopes(() =>
               prepareNextDeliveryGroup(() => selection.sources, assertCurrent),
             ),
           "session:mailbox-preparation",
@@ -313,12 +314,15 @@ function disposeSessionControllerMailbox(mailbox: SessionControllerMailbox): voi
   clearTimeout(mailbox.timer);
   if (mailbox.recentSources.size) {
     const expires = Math.min(...[...mailbox.recentSources.values()].map((value) => value.expires));
-    mailbox.timer = setTimeout(
-      () => {
-        mailbox.timer = undefined;
-        disposeSessionControllerMailbox(mailbox);
-      },
-      Math.max(1, expires - now),
+    // Receipt maintenance outlives the completed turn and must not retain its async context.
+    mailbox.timer = runInDetachedAsyncContext(() =>
+      setTimeout(
+        () => {
+          mailbox.timer = undefined;
+          disposeSessionControllerMailbox(mailbox);
+        },
+        Math.max(1, expires - now),
+      ),
     );
     mailbox.timer.unref?.();
     return;

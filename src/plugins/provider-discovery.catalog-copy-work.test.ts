@@ -215,3 +215,30 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
   );
   expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ [providerId]: providerConfig });
 });
+
+it("skips a failing static catalog and keeps healthy providers", async () => {
+  const healthyConfig: ModelProviderConfig = {
+    api: "openai-completions",
+    baseUrl: "https://healthy.example.invalid/v1",
+    models: [model("healthy-model", "Healthy")],
+  };
+  const run = vi.fn(async (): Promise<{ provider: ModelProviderConfig }> => {
+    throw new Error("static catalog bug");
+  });
+  const providers = [
+    { id: "broken", label: "broken", auth: [], staticCatalog: { run } },
+    staticProvider("healthy", healthyConfig),
+  ];
+
+  const prepared = await prepareProviderStaticCatalog({ providers });
+  expect(resolvePreparedProviderStaticConfigs(prepared)).toEqual({ healthy: healthyConfig });
+
+  const controller = new AbortController();
+  run.mockImplementationOnce(async () => {
+    controller.abort();
+    throw new Error("request cancelled");
+  });
+  await expect(
+    prepareProviderStaticCatalog({ providers, signal: controller.signal }),
+  ).rejects.toThrow("request cancelled");
+});

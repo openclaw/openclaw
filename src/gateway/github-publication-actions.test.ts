@@ -14,10 +14,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -25,7 +22,6 @@ import {
   persistPublicationTestSession,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -50,6 +46,30 @@ describe("session PR actions through the agent tool and registered Gateway metho
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["local", "repository"] as const)(
+    "lets a guest manage its %s task PR from the unbound parent while preserving merge authority",
+    async (backend) => {
+      const parent = "agent:main:dashboard:publication-parent";
+      const f = await createPublicationActionFixture(backend, parent);
+      const invoke = (action: string, extra: Record<string, unknown> = {}, raw = false) =>
+        f.invoke("guest", { action, ...f.expected, ...extra }, parent, { raw });
+      await invoke("edit", { title: "Task PR title", expectedTitle: f.state.title });
+      expect(f.state.title).toBe("Task PR title");
+      expect((await invoke("ready", {}, true)).details).toMatchObject({ state: "open" });
+      expect((await invoke("request_review")).details).toMatchObject({
+        reviewRequest: { status: "posted" },
+      });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+      expect(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: parent })?.worktree,
+      ).toBeUndefined();
+      await expect(invoke("merge", { mergeMethod: "squash" })).rejects.toThrow(
+        /scope|permission/iu,
+      );
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+    },
+  );
 
   it.each(["local", "repository"] as const)(
     "posts only the fixed re-review command for the guest's current %s PR",
@@ -94,7 +114,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
                 String.raw`^invalid sessions\.github\.action params:.*unexpected property '${Object.keys(extra)[0]}'`,
                 "u",
               )
-            : "request_review only posts the fixed ClawSweeper command on the current session PR.",
+            : /request_review only posts the fixed ClawSweeper command/u,
         );
       }
     }
@@ -175,7 +195,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         admission.authorization!.assertCurrent();
         await expect(
           f.invoke("guest", { ...args, action }, SESSION_KEY, { client }),
-        ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
+        ).rejects.toThrow("This requester is not authorized to publish from this conversation.");
         expect(f.writes).toEqual([]);
         expect(f.state.draft).toBe(true);
       } finally {
@@ -185,42 +205,34 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
-  it.each(["request_review", "edit", "ready", "close"] as const)(
-    "revalidates authority after the PR read for %s",
+  it.each(["request_review", "ready"] as const)(
+    "revalidates the GitHub publisher after the PR read for %s",
     async (action) => {
       const f = await fixture();
-      const actor = action === "close" ? "admin" : "guest";
-      if (action === "edit") {
-        f.state.head.sha = "b".repeat(40);
-      }
-      const args =
-        action === "edit"
-          ? {
-              title: "New title",
-              expectedTitle: f.state.title,
-              expectedHeadCommit: f.state.head.sha,
-            }
-          : {};
-      if (action === "request_review" || action === "ready") {
-        f.onRead(async () => {
-          mocks.matchesIdentity.mockReturnValue(false);
-        });
-        await expect(f.action(actor, action, args)).rejects.toThrow("The GitHub publisher changed");
-        expect(f.writes).toEqual([]);
-        mocks.matchesIdentity.mockReturnValue(true);
-      }
       f.onRead(async () => {
-        if (actor === "admin") {
-          await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-          invalidateOperatorRolePolicy(f.maintainerProfile);
-        } else {
-          await f.revoke();
-        }
+        mocks.matchesIdentity.mockReturnValue(false);
       });
-      await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      await expect(f.action("guest", action, {})).rejects.toThrow("The GitHub publisher changed");
       expect(f.writes).toEqual([]);
+      mocks.matchesIdentity.mockReturnValue(true);
     },
   );
+
+  it("refuses an edit when the lifecycle changes during the awaited PR read", async () => {
+    const f = await fixture();
+    f.onRead(async () => {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: SESSION_KEY },
+        {
+          lifecycleRevision: randomUUID(),
+        },
+      );
+    });
+    await expect(
+      f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+    ).rejects.toThrow(/changed|lifecycle/iu);
+    expect(f.writes).toEqual([]);
+  });
 
   it("reports uncertain re-reviews without retrying the POST", async () => {
     const f = await fixture();
@@ -362,7 +374,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
   });
 
   it.each(["local", "repository"] as const)(
-    "edits the existing %s PR after a later source publication fails",
+    "edits, inspects and readies the existing %s PR after a later source publication fails",
     async (backend) => {
       const f = await fixture(backend);
       const workflow = "name: Later work\non: push\njobs: {}\n";
@@ -383,7 +395,13 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect(
         await f.action("guest", "edit", { title: "Clarify the existing PR", expectedTitle }),
       ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
-      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+      expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
+        state: "draft",
+        publication: f.publication,
+      });
+      expect(await f.action("guest", "ready")).toMatchObject({ state: "open" });
+      expect(f.writes[0]).toEqual({ action: "edit", input: { title: "Clarify the existing PR" } });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready"]);
     },
   );
 

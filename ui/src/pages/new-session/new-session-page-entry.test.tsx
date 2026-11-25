@@ -103,8 +103,12 @@ it("offers an in-page retry after a native draft render fails", async () => {
 });
 
 it("initializes the composer and retains it while loader data updates", async () => {
+  const previousUrl = window.location.href;
+  window.history.replaceState({}, "", "/new?agent=research");
+  onTestFinished(() => window.history.replaceState({}, "", previousUrl));
   const initial = routeData("research");
-  const resolved = routeData("main");
+  // A loader refresh retains this draft; another requested agent owns a new draft.
+  const resolved = routeData("research");
   const { container, setData } = mountRoute(initial);
   await waitForSolid(() => expect(pageHost(container)?.data).toBe(initial));
   const page = pageHost(container);

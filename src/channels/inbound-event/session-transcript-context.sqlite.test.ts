@@ -3,6 +3,7 @@ import { afterAll, expect, it } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
+  applySessionEntryLifecycleMutation,
   loadTranscriptEvents,
   persistSessionTranscriptTurn as persistTurn,
   replaceSessionEntry,
@@ -12,6 +13,7 @@ import {
   readRecentUserAssistantTextForSession as readRecent,
 } from "../../config/sessions/transcript.js";
 import { persistUserTurnTranscript } from "../../sessions/user-turn-transcript.persistence.js";
+import { CRON_DIRECT_DELIVERY_CONTEXT_KIND } from "../../shared/transcript-only-openclaw-assistant.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
@@ -183,6 +185,186 @@ it.each([false, true])(
     for (const turn of await readRecent(scope)) {
       expect(turn).not.toHaveProperty("messageId");
       expect(turn).not.toHaveProperty("isCompletedAnswer");
+    }
+  },
+);
+
+it("suppresses already-replayed DM turns while preserving delivery-only context after restart", async () => {
+  const scope = {
+    agentId: "main",
+    sessionId: "telegram-dm-delivery-only",
+    sessionKey: "agent:main:main",
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
+  };
+  await replaceSessionEntry(scope, {
+    sessionId: scope.sessionId,
+    chatType: "direct",
+    updatedAt: 1,
+  });
+  await persistTurn(scope, {
+    updateMode: "none",
+    messages: [
+      { message: { role: "user", content: "ordinary user turn", timestamp: 1_000 } },
+      { message: { role: "assistant", content: "ordinary assistant reply", timestamp: 2_000 } },
+    ],
+  });
+
+  const ordinaryCtx: FinalizedMsgContext = {
+    Body: "follow-up",
+    RawBody: "follow-up",
+    CommandBody: "follow-up",
+    From: "telegram:123",
+    To: "telegram:123",
+    SessionKey: scope.sessionKey,
+    AgentId: scope.agentId,
+    Provider: "telegram",
+    ChatType: "direct",
+    Timestamp: 5_000,
+    CommandAuthorized: false,
+    SessionTranscriptContext: {
+      chatWindow: true,
+      deliveryOnly: true,
+      historyLimit: 10,
+      senderLabels: { assistant: "OpenClaw", user: "User" },
+    },
+  };
+  await runPreparedChannelTurn({
+    channel: "telegram",
+    routeSessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+    ctxPayload: ordinaryCtx,
+    recordInboundSession: async () => undefined,
+    runDispatch: async () => ({ queuedFinal: false }),
+  });
+  expect(ordinaryCtx.ChannelStructuredContext).toBeUndefined();
+
+  expect(
+    await mirrorReply({
+      ...scope,
+      text: "Time for your weigh-in.",
+      idempotencyKey: "cron-weigh-in",
+      deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
+    }),
+  ).toMatchObject({ ok: true });
+
+  const restartFollowUpCtx: FinalizedMsgContext = {
+    ...ordinaryCtx,
+    Body: "200 pounds",
+    RawBody: "200 pounds",
+    CommandBody: "200 pounds",
+    Timestamp: Date.now() + 1_000,
+  };
+  let prompt = "";
+  await runPreparedChannelTurn({
+    channel: "telegram",
+    routeSessionKey: scope.sessionKey,
+    storePath: scope.storePath,
+    ctxPayload: restartFollowUpCtx,
+    recordInboundSession: async () => undefined,
+    runDispatch: async () => {
+      prompt = buildInboundUserContextPrefix(restartFollowUpCtx);
+      return { queuedFinal: false };
+    },
+  });
+
+  expect(restartFollowUpCtx.ChannelStructuredContext).toMatchObject([
+    {
+      source: "session",
+      type: "chat_window",
+      payload: {
+        messages: [{ sender: "OpenClaw", body: "Time for your weigh-in." }],
+      },
+    },
+  ]);
+  expect(prompt).toContain("Time for your weigh-in.");
+  expect(prompt).not.toContain("ordinary user turn");
+  expect(prompt).not.toContain("ordinary assistant reply");
+});
+
+it.each([
+  ["group", { historyLimit: 50 }],
+  ["direct", { historyLimit: 50, historyKind: "pending" as const }],
+] as const)(
+  "sends each replayed %s turn once and nothing from before /new",
+  async (chatType, SessionTranscriptContext) => {
+    const scope = {
+      agentId: "main",
+      sessionId: `pending-${chatType}`,
+      sessionKey: "agent:main:main",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    const sessionEntry = { sessionId: scope.sessionId, chatType, updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const exchange = async (question: string, answer: string, messageId: string) => {
+      await persistUserTurnTranscript({
+        ...scope,
+        sessionEntry,
+        input: {
+          text: question,
+          timestamp: Date.now(),
+          transport: { channel: "whatsapp", messageId },
+        },
+      });
+      await persistTurn(scope, {
+        updateMode: "none",
+        messages: [{ message: { role: "assistant", content: answer, stopReason: "stop" } }],
+      });
+    };
+    await exchange("question before reset", "answer before reset", "m-before");
+    // /new keeps the session id and writes a clear-context reset boundary.
+    await applySessionEntryLifecycleMutation({
+      skipMaintenance: true,
+      storePath: scope.storePath,
+      upserts: [
+        {
+          entry: { ...sessionEntry, updatedAt: 2 },
+          resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/workspace" },
+          sessionKey: scope.sessionKey,
+        },
+      ],
+    });
+    await exchange("question after reset", "answer after reset", "m-after");
+    const ctx: FinalizedMsgContext = {
+      Body: "next message",
+      RawBody: "next message",
+      CommandBody: "next message",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      Provider: "whatsapp",
+      ChatType: chatType,
+      Timestamp: Date.now() + 1_000,
+      CommandAuthorized: false,
+      SessionTranscriptContext,
+      InboundHistory: [
+        { messageId: "side", sender: "Bob", body: "side note", timestamp: Date.now() },
+      ],
+    };
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "whatsapp",
+      routeSessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      ctxPayload: ctx,
+      recordInboundSession: async () => undefined,
+      runDispatch: async () => {
+        prompt = buildInboundUserContextPrefix(ctx);
+        return { queuedFinal: false };
+      },
+    });
+
+    // The run replays the post-reset exchange from the session itself.
+    expect((await readRecent(scope)).map((turn) => turn.text)).toEqual([
+      "question after reset",
+      "answer after reset",
+    ]);
+    expect(prompt).toContain("side note");
+    for (const text of [
+      "question before reset",
+      "answer before reset",
+      "question after reset",
+      "answer after reset",
+    ]) {
+      expect(prompt).not.toContain(text);
     }
   },
 );

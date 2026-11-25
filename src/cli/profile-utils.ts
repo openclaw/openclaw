@@ -22,6 +22,19 @@ export function normalizeProfileName(raw?: string | null): string | null {
   return profile;
 }
 
+export function resolveProfileGatewayPort(profile: string): number {
+  if (profile === "dev") {
+    return 19001;
+  }
+  // Keep byte-for-byte aligned with AppProfile.defaultGatewayPort in
+  // apps/macos/Sources/OpenClaw/AppProfile.swift so both surfaces connect to the same Gateway.
+  let hash = 2_166_136_261;
+  for (const byte of Buffer.from(profile, "utf8")) {
+    hash = Math.imul(hash ^ byte, 16_777_619) >>> 0;
+  }
+  return 20_000 + (hash % 40_000);
+}
+
 /** Resolve the canonical home-scoped state root for a validated CLI profile. */
 export function resolveProfileStateDir(
   profile: string,

@@ -18,6 +18,7 @@ it.for([
   ["recoverWorkerSessionToolOperationsAfterRestart", "exhaust"],
   ["recoverWorkerSessionToolOperationsAfterRestart", "fatal"],
   ["pruneOrphanedWorkspaceReconciliations", "release"],
+  ["clearLocalTurnClaimsAfterRestartAsync", "release"],
 ] as const)("%s: %s", { timeout: 90_000 }, async ([operation, mode], { signal }) => {
   await using state = await createStartupTestState(`worker-recovery-${mode}`, {
     OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
@@ -65,7 +66,10 @@ it.for([
         }
       };
       const store = startup.placementStore;
-      if (operation === "recoverWorkerSessionToolOperationsAfterRestart") {
+      if (
+        operation === "recoverWorkerSessionToolOperationsAfterRestart" ||
+        operation === "clearLocalTurnClaimsAfterRestartAsync"
+      ) {
         const recover = store[operation].bind(store);
         vi.spyOn(store, operation).mockImplementation(() => contend(recover));
       } else {

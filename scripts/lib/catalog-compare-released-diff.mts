@@ -47,7 +47,7 @@ function flatten(value: unknown, field: string, into: Map<string, unknown>): voi
 }
 
 /** Every observed fact as model + level + field → value. */
-export function flattenRun(run: ReleaseRun): Map<string, unknown> {
+function flattenRun(run: ReleaseRun): Map<string, unknown> {
   const facts = new Map<string, unknown>();
   const put = (model: string, level: string, field: string, value: unknown) => {
     const fields = new Map<string, unknown>();

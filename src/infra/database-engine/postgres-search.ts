@@ -155,10 +155,10 @@ export function bindPostgresSearch(
             // Version 2 queries split punctuation-joined words, so the headline must parse the
             // same split to find the matching passage. Replacing each punctuation character with
             // one space keeps character offsets, so the selected fragment is re-sliced from the
-            // original field and keeps its displayed punctuation.
+            // original field and keeps its displayed punctuation. Both OFFSET 0 fences prevent
+            // subquery pull-up from repeating the normalization and headline at each use.
             const split = sql`regexp_replace(${column}, '[[:punct:]]', ' ', 'g')`;
-            const fragment = sql`ts_headline(${sql.lit(config)}::regconfig, ${split}, ${requireQuery(query)}, ${options})`;
-            return /* kysely-allow-raw: The native headline locates bounded text inside the admitted field. */ sql<string>`left(substr(${column}, strpos(${split}, ${fragment}), length(${fragment})), ${chars})`;
+            return /* kysely-allow-raw: The native headline locates bounded text inside the admitted field. */ sql<string>`(SELECT left(substr(${column}, strpos(normalized, headline), length(headline)), ${chars}) FROM (SELECT normalized, ts_headline(${sql.lit(config)}::regconfig, normalized, ${requireQuery(query)}, ${options}) AS headline FROM (SELECT ${split} AS normalized OFFSET 0) AS headline_input OFFSET 0) AS headline_result)`;
           },
           identity: (index) =>
             /* kysely-allow-raw: The declared source identity is the native numeric row identity. */ sql<number>`${relation(index, index.postgres!.identity)}`,

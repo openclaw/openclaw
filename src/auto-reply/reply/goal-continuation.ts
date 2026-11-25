@@ -1,3 +1,4 @@
+import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
@@ -5,6 +6,12 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../../sessions/chat-ref.js";
+import { shouldWake } from "../../sessions/owed.js";
+import {
+  hasSessionControllerQueuedTurn,
+  withSessionControllerSource,
+} from "../../sessions/session-controller.context.js";
 import {
   runAfterReplyOperationClear,
   type ReplyOperation,
@@ -21,7 +28,7 @@ import { createGoalContinuationReturnScope } from "./goal-continuation-return.js
 import type { GoalContinuation } from "./goal-continuation.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
-import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { isFollowupRunAborted, type FollowupRun, type QueueSettings } from "./queue/types.js";
 import { buildTranscriptFollowupRun } from "./transcript-followup-run.js";
 
@@ -78,8 +85,6 @@ export function isGoalContinuationCurrent(
   const goal = entry && accountSessionGoalUsage(entry, Date.now());
   return Boolean(
     entry &&
-    entry.sessionId === continuation.sessionId &&
-    entry.lifecycleRevision === continuation.lifecycleRevision &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
     !entry.abortedLastRun &&
@@ -102,7 +107,9 @@ export async function isGoalContinuationPlacementCurrent(params: {
   if (!continuation.workerGoal && !continuation.localCodexGoal) {
     return true;
   }
-  if (!params.hasOperatorAuthority) {
+  // Local continuations reuse the admitted source, just like built-in turns.
+  // Only remote execution needs a Gateway operator capability for placement.
+  if (continuation.workerGoal && !params.hasOperatorAuthority) {
     return false;
   }
   if (continuation.localCodexGoal && params.requiresWorker) {
@@ -127,7 +134,7 @@ function isGoalContinuationOutcome(result: EmbeddedAgentRunResult): boolean {
     !meta.yielded &&
     !meta.continuationPending &&
     !meta.pendingToolCalls?.length &&
-    !result.acceptedSessionSpawns?.length &&
+    !hasCompletionMessageSessionSpawn(result.acceptedSessionSpawns) &&
     !result.didSendDeterministicApprovalPrompt &&
     !result.payloads?.some((payload) => payload.isError)
   );
@@ -159,7 +166,12 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
     !isFollowupRunAborted(params.base) &&
-    getFollowupQueueDepth(params.queueKey) === 0;
+    // A queued reply turn continues the Goal at its own end; post-turn upkeep does not.
+    !hasSessionControllerQueuedTurn(
+      params.storePath,
+      [params.sessionKey, params.expectedSession.sessionId],
+      params.base.run.agentId,
+    );
   if (!isGoalContinuationOutcome(params.result) || !eligible()) {
     return false;
   }
@@ -172,17 +184,25 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (children.length > 0 || !eligible()) {
     return false;
   }
+  // An owed result (for example an exec completion) wakes its own turn, which continues the Goal.
+  const chat = chatRef({
+    agentId: params.base.run.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+  });
+  if ((await shouldWake(chat)) || !eligible()) {
+    return false;
+  }
   const entry = await readSessionEntryReadOnlyInWorker(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     undefined,
     params.reader,
   );
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible() || !entry?.goal) {
     return false;
   }
   const codexPlacement =
-    entry.agentHarnessId === "codex" && params.base.operatorAuthority
+    entry.agentHarnessId === "codex"
       ? await resolveCodexGoalPlacement({
           agentId: params.base.run.agentId,
           sessionKey: params.sessionKey,
@@ -190,10 +210,12 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
           requiresWorker: Boolean(params.base.run.config?.cloudWorkers?.requiredProfile),
         })
       : undefined;
-  if (entry.agentHarnessId === "codex" && !codexPlacement) {
+  if (
+    entry.agentHarnessId === "codex" &&
+    (!codexPlacement || (codexPlacement === "worker" && !params.base.operatorAuthority))
+  ) {
     return false;
   }
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
   }
@@ -281,24 +303,24 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
 export function createGoalContinuationReturn(
   params: Omit<GoalContinuationParams, "result" | "sourceRunId"> | undefined,
 ): <T>(run: () => T) => T {
-  if (!params?.initialGoalId) {
+  if (!params) {
     return (run) => run();
   }
-  const continuation: GoalContinuation = {
-    sessionId: params.expectedSession.sessionId,
-    lifecycleRevision: params.expectedSession.lifecycleRevision,
-    goalId: params.initialGoalId,
-  };
   return createGoalContinuationReturnScope({
     base: params.base,
     sessionKey: params.sessionKey,
-    continuation,
+    storePath: params.storePath,
+    expectedSession: {
+      sessionId: params.expectedSession.sessionId,
+      lifecycleRevision: params.expectedSession.lifecycleRevision,
+    },
+    initialGoalId: params.initialGoalId,
     operation: params.operation,
-    context: (entry, existing) =>
+    context: (continuation, entry, existing) =>
       isGoalContinuationCurrent(continuation, entry)
         ? refreshActiveGoalContext(existing, entry)
         : undefined,
-    async resume({ base, runId, result, isCurrent }) {
+    async resume({ continuation, base, runId, result, isCurrent }) {
       // The controller sees this pending input before admission reads yield to Stop.
       const input = reserveSessionControllerSource(params.queueKey, {
         policy: params.settings,
@@ -316,17 +338,19 @@ export function createGoalContinuationReturn(
       });
       let enqueued = false;
       try {
-        enqueued = await enqueueGoalContinuation({
-          ...params,
-          base,
-          result,
-          sourceRunId: runId,
-          expectedSession: continuation,
-          initialGoalId: continuation.goalId,
-          reader: undefined,
-          controllerInput: input,
-          isCurrent,
-        });
+        enqueued = await withSessionControllerSource(input, () =>
+          enqueueGoalContinuation({
+            ...params,
+            base,
+            result,
+            sourceRunId: runId,
+            expectedSession: continuation,
+            initialGoalId: continuation.goalId,
+            reader: undefined,
+            controllerInput: input,
+            isCurrent,
+          }),
+        );
         if (enqueued) {
           scheduleFollowupDrain(params.queueKey, params.runFollowup);
         }

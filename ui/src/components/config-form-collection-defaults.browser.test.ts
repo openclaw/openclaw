@@ -1,14 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  expectElement,
   renderNodeFixture,
   renderArrayFixture,
   renderObjectFixture,
+  expandConfigObjects,
 } from "../test-helpers/config-form-fixtures.tsx";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element, label).toBeInstanceOf(Element);
-  return element!;
-}
+import { flush } from "../test-helpers/solid-settle.ts";
 
 type Options = Parameters<typeof renderNodeFixture>[1];
 function fixture(
@@ -64,7 +62,6 @@ describe("config form collection defaults", () => {
       { mode: "custom" },
     );
 
-    expect(container.textContent).toContain('Default: {"mode":"balanced"}');
     const json = textarea(container);
     expect(json.value).toBe('{\n  "mode": "custom"\n}');
     json.value = "";
@@ -85,8 +82,7 @@ describe("config form collection defaults", () => {
       reject: true,
     });
 
-    expect(container.textContent).toContain('Default: ["a","b"]');
-    expect(container.textContent).toContain("1 item");
+    expect(container.querySelectorAll(".cfg-array__item")).toHaveLength(1);
     expect(input(container).value).toBe("custom");
 
     onPatch.mockClear();
@@ -94,7 +90,7 @@ describe("config form collection defaults", () => {
 
     expect(container.textContent).not.toContain("Using default:");
     expect(container.querySelector(".settings-row__desc")).toBeNull();
-    expect(container.textContent).toContain("2 items");
+    expect(container.querySelectorAll(".cfg-array__item")).toHaveLength(2);
     const inheritedInputs = Array.from(container.querySelectorAll<HTMLInputElement>("input"));
     expect(inheritedInputs.map((field) => field.value)).toEqual(["", ""]);
     expect(inheritedInputs.map((field) => field.placeholder)).toEqual(["Default: a", "Default: b"]);
@@ -104,7 +100,7 @@ describe("config form collection defaults", () => {
     expect(onPatch).toHaveBeenCalledWith(["settings"], ["a", "custom"]);
   });
 
-  it("authors a nested inherited array item without dropping sibling defaults", () => {
+  it("authors a nested inherited array item without dropping sibling defaults", async () => {
     const untouched = entry("beta", "two", "keep-two");
     const itemSchema = object({
       name: string,
@@ -114,6 +110,7 @@ describe("config form collection defaults", () => {
       array(itemSchema, [entry("alpha", "one", "keep-one"), untouched]),
       undefined,
     );
+    await expandConfigObjects(container);
 
     const labels = Array.from(
       container.querySelectorAll<HTMLInputElement>("input[aria-label='Label']"),
@@ -169,6 +166,9 @@ describe("config form collection defaults", () => {
 
     const inheritedProfile = findText(container, "details", "Profile");
     expect(inheritedProfile.textContent).not.toContain('{"enabled":true,"mode":"balanced"}');
+    (inheritedProfile as HTMLDetailsElement).open = true;
+    inheritedProfile.dispatchEvent(new Event("toggle"));
+    flush();
     const modeRow = findText(inheritedProfile, ".settings-row", "Mode");
     expect(inheritedProfile.textContent).not.toContain("Using default:");
     expect(input(modeRow).placeholder).toBe("Default: balanced");

@@ -5,6 +5,7 @@ import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import {
   compactApprovalCommand,
+  formatApprovalDecisionShortcut,
   summarizeApprovalScopeLabel,
 } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
@@ -31,6 +32,7 @@ import {
   MobileExecApprovalBody,
   renderPluginBody,
 } from "./exec-approval-content.tsx";
+import { inboxDecisionLabel, inboxDecisionOrder } from "./sidebar-approval-decisions.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -165,14 +167,6 @@ function decisionClass(decision: ExecApprovalDecision) {
   return decision === "allow-once" ? "btn primary" : decision === "deny" ? "btn danger" : "btn";
 }
 
-function decisionShortcut(decision: ExecApprovalDecision) {
-  return decision === "allow-once"
-    ? "Ctrl/Cmd+Enter"
-    : decision === "allow-always"
-      ? "Ctrl/Cmd+Shift+Enter"
-      : "Ctrl/Cmd+D";
-}
-
 export function resolveApprovalDecisions(
   active: ExecApprovalRequest,
 ): readonly ExecApprovalDecision[] {
@@ -263,7 +257,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
             role="group"
             aria-label={t("approvalPage.actionsLabel")}
           >
-            <For each={resolveApprovalDecisions(approval())}>
+            <For each={inboxDecisionOrder(resolveApprovalDecisions(approval()))}>
               {(decision) => {
                 const label = createMemo(() => approvalDecisionLabel(decision, approval()));
                 return (
@@ -273,16 +267,16 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                     class={[
                       "btn btn--xs sidebar-approval-row__action",
                       `sidebar-approval-row__action--${decision}`,
-                      { "btn--ghost": decision === "deny" },
+                      { primary: decision === "allow-once", "btn--ghost": decision === "deny" },
                     ]}
                     aria-label={t("execApproval.decisionRequest", {
-                      decision: label(),
+                      decision: inboxDecisionLabel(label()),
                       command: command(),
                     })}
                     disabled={!props.connected || props.busy || !props.canGrant || expired()}
                     onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                   >
-                    {label()}
+                    {inboxDecisionLabel(label())}
                   </button>
                 );
               }}
@@ -570,7 +564,7 @@ function ExecApprovalCardContent(
             disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
             title={
               shortcuts() && props.connected && props.canGrant
-                ? `${label()} (${decisionShortcut(decision)})`
+                ? `${label()} (${formatApprovalDecisionShortcut(decision)})`
                 : label()
             }
             onClick={() => void props.decide(active().id, decision)}

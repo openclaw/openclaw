@@ -9,6 +9,7 @@ import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
 import * as modelSelection from "./model-selection-shared.js";
 import {
   captureOperatorModelPolicySnapshot,
+  intersectOperatorModelPolicy,
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
@@ -35,6 +36,20 @@ const cfg: OpenClawConfig = {
   },
 };
 
+it("keeps both model ceilings when intersecting already-composed child authorities", () => {
+  const policy = (allow: string[]) =>
+    prepareOperatorModelPolicy({ cfg, policy: { allow }, manifestPlugins: [] });
+  const narrow = policy(["vendor/primary"]);
+  const broad = policy(["vendor/primary", "vendor/fallback"]);
+  const wildcard = policy(["vendor/*"]);
+  const composed = intersectOperatorModelPolicy(
+    intersectOperatorModelPolicy(narrow, wildcard),
+    intersectOperatorModelPolicy(broad, wildcard),
+  )!;
+  expect(composed.allows({ provider: "vendor", model: "primary" })).toBe(true);
+  expect(composed.allows({ provider: "vendor", model: "fallback" })).toBe(false);
+});
+
 it("derives membership from source models, aliases, wildcards, and explicit empty policies", () => {
   const cases: Array<{
     policy: Parameters<typeof prepareOperatorModelPolicy>[0]["policy"];
@@ -57,6 +72,14 @@ it("derives membership from source models, aliases, wildcards, and explicit empt
         ["vendor", ["restricted-new"], false],
         ["second", ["manual"], true],
         ["second", ["other"], false],
+      ],
+    },
+    {
+      // A role ceiling must also exclude the model named by the wildcard's literal prefix.
+      policy: { allow: ["vendor/*"], deny: ["vendor/restricted-v1*"] },
+      checks: [
+        ["vendor", ["restricted-v1", "restricted-v1-mini"], false],
+        ["vendor", ["primary", "restricted-v2"], true],
       ],
     },
     { policy: undefined, checks: [] },

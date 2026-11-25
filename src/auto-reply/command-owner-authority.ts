@@ -1,19 +1,21 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
+  /** Exact native identity accepted by the host ingress, never a delivery projection. */
+  channelPrincipal?: Readonly<UserChannelIdentity>;
   recoveryReference?: CommandOwnerReference;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** The requester's own live check for work that outlives this source occurrence. */
   successor?: CommandOwnerAuthority;
 }>;
-export type CommandOwnerAssertion = (() => void) & {
+export type CommandOwnerAssertion = SessionSourceAssertion & {
   readonly recoveryReference?: CommandOwnerReference | null;
 };
-
-export class CommandOwnerRevokedError extends Error {}
 
 const capabilities = new WeakMap<object, CommandOwnerAuthority>();
 
@@ -25,6 +27,8 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
     authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
   const capability = {
     recoveryReference,
+    channelPrincipal:
+      authority.channelPrincipal && Object.freeze({ ...authority.channelPrincipal }),
     operatorAuthority,
     successor: authority.successor,
     isCurrent: checkCurrent,
@@ -57,22 +61,4 @@ export function transferCommandOwnerAuthorityToSuccessor(
   }
   bindCommandOwnerAuthority(context, authority.successor);
   return "transferred";
-}
-
-/** Fence a turn that admitted owner tools against later identity or role revocation. */
-export function captureCommandOwnerAssertion(context: object): CommandOwnerAssertion | undefined {
-  const authority = getCommandOwnerAuthority(context);
-  if (!authority) {
-    return undefined;
-  }
-  return Object.assign(
-    () => {
-      if (!authority.isCurrent()) {
-        throw new CommandOwnerRevokedError(
-          "Channel operator authority changed; send a new request.",
-        );
-      }
-    },
-    { recoveryReference: authority.recoveryReference ?? null },
-  );
 }

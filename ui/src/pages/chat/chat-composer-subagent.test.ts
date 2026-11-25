@@ -158,12 +158,15 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
 
 it("explains an unresolved initial turn while offline without blocking the outbox", () => {
   const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  // An established account keeps its offline outbox owner while disconnected.
+  assert(state.client);
+  Object.defineProperty(state.client, "offlineRecoveryScope", { get: () => "account:offline" });
   state.hasPendingInitialTurn = () => true;
   state.connected = false;
   try {
     const { input, send } = draw();
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
-      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+      "The first message is unresolved. Reconnect if needed, then review it before sending another.",
     );
     expect(input.disabled).toBe(false);
     expect(send.disabled).toBe(false);
@@ -180,9 +183,9 @@ it.each(["Keep this suggestion", "/stop"])(
     state.sessionKey = "agent:main:suggestion-recovery";
     const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
-    const methods = context.gateway.snapshot.hello?.features?.methods;
-    assert(methods);
-    methods.push("session.suggestions.add", "session.suggestions.list");
+    const features = context.gateway.snapshot.hello?.features;
+    assert(features?.methods);
+    features.methods = [...features.methods, "session.suggestions.add", "session.suggestions.list"];
     state.sessionsResult = {
       ts: 1,
       path: "",
@@ -286,7 +289,7 @@ it.each([
   { draft: "/models", allowed: true, restricted: true },
 ])(
   "admits $draft with no default (restricted: $restricted): $allowed",
-  ({ draft, allowed, restricted }) => {
+  async ({ draft, allowed, restricted }) => {
     const { pane, state, context } = createRefreshChatPane(
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
@@ -301,20 +304,22 @@ it.each([
     }
     pane.render();
 
-    expect(pane.chatProps?.modelSetupRequired).toBe(!restricted);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBe(
+      restricted ? undefined : "Set up a model",
+    );
     expect(pane.chatProps?.disabledReason).toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
     void pane.chatProps?.onSend();
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
     if (restricted) {
       assert(pane.chatProps);
-      expect(pane.chatProps.modelRequiredReason).toBe(
-        "No models are permitted by your administrator.",
-      );
+      expect(pane.chatProps.modelRequiredReason).toBe("No models are permitted by your admin.");
       const container = createComposerContainer();
       renderComposerInto(container, pane.chatProps);
-      expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
-        "No models are permitted by your administrator.",
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner-detail")?.textContent).toBe(
+          "No models are permitted by your admin.",
+        ),
       );
       expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
       disposeComposer(container);
@@ -349,7 +354,7 @@ it.each([
     state.chatMessage = "Hello";
     state.handleSendChat = vi.fn();
     pane.render();
-    expect(pane.chatProps?.modelSetupRequired).toBe(false);
+    expect(pane.chatProps?.disabledBanner?.actionLabel).toBeUndefined();
     expect(pane.chatProps?.modelRequiredReason).toBe(allowed ? undefined : "Choose a model");
     void pane.chatProps?.onSend();
     expect(state.handleSendChat).toHaveBeenCalledTimes(allowed ? 1 : 0);
@@ -411,15 +416,15 @@ it.each([
         expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
       );
       expect(state.chatModelCatalogInitialized).toBe(false);
-      expect(initial.modelSetupRequired).toBe(false);
+      expect(initial.disabledBanner).toBeUndefined();
       expect(initial.modelRequiredReason).toBeUndefined();
       expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
       expect(container.querySelector("[data-chat-model-select]")?.getAttribute("aria-busy")).toBe(
-        "true",
+        "false",
       );
       expect(
         container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label"),
-      ).toContain("Loading models…");
+      ).not.toContain("Loading models…");
       expect(container.textContent).not.toContain("primary-model");
       expect(container.textContent).not.toContain("cached-default");
       expect(container.querySelector("[data-chat-model-option]")).toBeNull();
@@ -438,9 +443,11 @@ it.each([
       await pending;
       const settled = draw();
       expect(state.chatModelCatalogInitialized).toBe(true);
-      expect(settled.modelSetupRequired).toBe(!restricted && !cachedDefault);
+      expect(settled.disabledBanner?.actionLabel).toBe(
+        !restricted && !cachedDefault ? "Set up a model" : undefined,
+      );
       if (restricted) {
-        expect(settled.modelRequiredReason).toBe("No models are permitted by your administrator.");
+        expect(settled.modelRequiredReason).toBe("No models are permitted by your admin.");
         expect(container.querySelector(".agent-chat__disabled-banner button")).toBeNull();
         expect(container.textContent).not.toContain("primary-model");
         expect(container.textContent).not.toContain("cached-default");
@@ -516,7 +523,7 @@ describe("subagent composer", () => {
     { name: "archive", key: "agent:main:reply-owner", row: { archived: true } },
   ] satisfies { name: string; key: string; row?: Partial<GatewaySessionRow> }[])(
     "keeps copy but not Reply when $name replaces the composer",
-    ({ key, ...scenario }) => {
+    async ({ key, ...scenario }) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane();
       state.sessionKey = key;
@@ -540,7 +547,9 @@ describe("subagent composer", () => {
       try {
         pane.render();
         renderChatPropsInto(container, pane.chatProps!, context);
-        expect(container.textContent).toContain("The workspace review is complete.");
+        await waitForSolid(() =>
+          expect(container.textContent).toContain("The workspace review is complete."),
+        );
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();
         expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
@@ -570,7 +579,7 @@ describe("subagent composer", () => {
     { lineage: null, parentLoaded: false },
   ] satisfies { lineage: Partial<GatewaySessionRow> | null; parentLoaded: boolean }[])(
     "replaces subagent input with parent navigation for %j",
-    ({ lineage, parentLoaded }) => {
+    async ({ lineage, parentLoaded }) => {
       const { pane, state } = createRefreshChatPane();
       const parent: GatewaySessionRow = {
         key: "agent:main:parent",
@@ -600,9 +609,15 @@ describe("subagent composer", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(container.querySelector("textarea, input[type=file]")).toBeNull();
       expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector('[aria-label="Stop generating"]')).toBeNull();
+      expect(
+        container.querySelector('[aria-label="Stop"], [aria-label="Stop generating"]'),
+      ).toBeNull();
+      await waitForSolid(() =>
+        expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
+          "View-only subagent",
+        ),
+      );
       const banner = container.querySelector(".agent-chat__disabled-banner");
-      expect(banner?.textContent).toContain("View-only subagent");
       const navigate = banner?.querySelector<HTMLButtonElement>("button");
       expect(navigate?.disabled).toBe(lineage === null);
       if (parentLoaded) {
@@ -615,7 +630,7 @@ describe("subagent composer", () => {
 
   it.each([true, false])(
     "keeps an ordinary nested session reply editable while connected=%s",
-    (connected) => {
+    async (connected) => {
       installTranscriptDomMocks();
       const { pane, state, context } = createRefreshChatPane(
         connected ? createGatewayBrowserClientFixture() : undefined,
@@ -648,12 +663,17 @@ describe("subagent composer", () => {
         draw();
         expect(pane.chatProps?.canSend).toBe(true);
         expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
-        const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
-        expect(reply).not.toBeNull();
+        const reply = await waitForSolid(() => {
+          const button = container.querySelector<HTMLButtonElement>(".chat-reply-btn");
+          expect(button).not.toBeNull();
+          return button;
+        });
         reply!.click();
         draw();
-        expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
-          "Review complete.",
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
+            "Review complete.",
+          ),
         );
         expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
           "Keep this draft",

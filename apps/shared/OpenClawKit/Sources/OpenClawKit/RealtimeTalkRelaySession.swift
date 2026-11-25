@@ -20,6 +20,7 @@ public enum RealtimeTalkRecovery {
 
 public struct RealtimeTalkAudioFrame: Sendable {
     public let data: Data
+    /// Monotonic system uptime at the end of this PCM16 buffer, in milliseconds.
     public let timestampMs: Double
     public let rms: Float
 
@@ -297,6 +298,8 @@ public final class RealtimeTalkRelaySession {
     private var pendingInputAudioBytes = 0
     private var isInputAudioBehind = false
     private var isInputPaused = false
+    private var isMicrophoneMuted = false
+    private var microphoneChangedAtMs: Double?
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
     private var lifecycleGeneration: UInt64 = 0
@@ -539,6 +542,18 @@ public final class RealtimeTalkRelaySession {
         }
         self.serverClose = (relaySessionId, task)
         return task
+    }
+
+    /// Input-only mute keeps the capture engine running: it may also render reply audio.
+    public func setMicrophoneMuted(_ muted: Bool) {
+        guard self.isMicrophoneMuted != muted else { return }
+        self.isMicrophoneMuted = muted
+        self.microphoneChangedAtMs = ProcessInfo.processInfo.systemUptime * 1000
+        // Cancel appends still queued for the sender/socket; already-sent audio belongs to the call.
+        for task in self.audioSendTasks.values {
+            task.cancel()
+        }
+        self.onInputLevel(0)
     }
 
     public func setInputPaused(_ paused: Bool) throws {
@@ -1269,7 +1284,7 @@ extension RealtimeTalkRelaySession {
 
     @discardableResult
     private func enqueueMicrophoneFrame(
-        _ encoded: Data,
+        _ data: Data,
         timestampMs: Double,
         rms: Float,
         lifecycleGeneration: UInt64,
@@ -1280,13 +1295,21 @@ extension RealtimeTalkRelaySession {
               !self.isInputPaused, self.output.withLock({ $0.suppressedOutputIdentity }) == nil,
               let audioSender
         else { return nil }
-        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
-        // Continuous providers own interruptions and need input throughout playback.
-        if self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
+        // Capture callbacks can wait for MainActor across both toggles. Also silence the buffer
+        // spanning a toggle, so unmute never replays samples recorded while muted. Capture stamps
+        // the end of each PCM16 buffer with monotonic system uptime on iOS and macOS.
+        let frameStartMs = timestampMs - Double(data.count) / (self.inputSampleRateHz * 2) * 1000
+        let silence = self.isMicrophoneMuted ||
+            self.microphoneChangedAtMs.map { frameStartMs <= $0 } == true
+        let encoded = silence ? Data(count: data.count) : data
+        let inputRms: Float = silence ? 0 : rms
+        self.onInputLevel(TalkAudioLevel.normalized(rms: Double(inputRms)))
+        // Silence lets provider VAD finish pre-mute words, without triggering local barge-in.
+        if !silence, self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
             if self.audioCapture.suppressesInputDuringOutput {
                 return nil
             }
-            self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
+            self.handleInputLevelDuringOutput(inputRms, timestampMs: timestampMs)
         }
 
         // Drop frames past the budget without ending the call, but tell the user once to repeat

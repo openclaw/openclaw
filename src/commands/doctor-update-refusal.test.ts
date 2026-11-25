@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
@@ -307,7 +308,7 @@ it.each([
       expect(message.indexOf(reason)).toBeLessThan(
         message.indexOf("The previous source is intact in Git."),
       );
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, "schema refusal database");
     } else {
       expect(
         message.startsWith(`Doctor could not enter maintenance. Error: ${activationReason}`),

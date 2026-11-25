@@ -1,12 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
-import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { resolveLabFeatureState } from "../labs/labs-feature-state.ts";
-import { TEMPLATES_LAB_FEATURE } from "../labs/templates-lab-feature.ts";
-
-registerEnglishCatalog(registerAgentsHomeEnglish);
+import { isTemplatesAvailable } from "./availability.ts";
 
 export type TemplateDraftTarget = {
   agentId: string;
@@ -14,12 +8,25 @@ export type TemplateDraftTarget = {
 };
 
 export function canCreateTemplateDraft(context: ApplicationContext): boolean {
-  return (
-    canCallGatewayMethod(context.gateway.snapshot, "templates.drafts.create", "operator.admin") &&
-    canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write") &&
-    resolveLabFeatureState(currentConfigObject(context.runtimeConfig.state), TEMPLATES_LAB_FEATURE)
-      .enabled
-  );
+  return templateDraftUnavailableReason(context) === null;
+}
+
+export function templateDraftUnavailableReason(context: ApplicationContext) {
+  const state = context.runtimeConfig.state;
+  const available = isTemplatesAvailable(state);
+  if (available === null) {
+    return state.lastError ? "unavailable" : "loading";
+  }
+  if (!available) {
+    return "disabled";
+  }
+  return canCallGatewayMethod(
+    context.gateway.snapshot,
+    "templates.drafts.create",
+    "operator.admin",
+  ) && canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write")
+    ? null
+    : "unavailable";
 }
 
 export function templateDraftTargetFromSearch(search: string): TemplateDraftTarget | null {

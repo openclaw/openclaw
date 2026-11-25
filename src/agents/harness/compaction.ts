@@ -23,6 +23,7 @@ import {
 } from "../model-auth.js";
 import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import { assertParticipationRuntime } from "../participation-ceiling.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import {
   unwrapModelHeaderSentinelsForProviderEgress,
@@ -32,16 +33,17 @@ import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-mod
 import {
   agentRuntimeAuthPlanMatchesTarget,
   prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuth,
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "../runtime-plan/types.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   assertCompactionSource,
   type AgentHarnessCompactionSourceAuthority,
@@ -526,6 +528,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     });
     assertSourceCurrent();
     harness = resolved.harness;
+    assertParticipationRuntime(sourceAuthority.operatorAuthority?.participationCeiling, harness.id);
     const nativeToolPolicyRestricted = await prepareAgentHarnessNativeToolPolicyRestricted(
       {
         ...params,
@@ -603,6 +606,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
               : {}),
           }
         : handoffCompactParams;
+    const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
     const admittedRunContext = await admission.admit("plugin-harness", harness.id);
     assertSourceCurrent();
     // Compaction reasons are not agent-run triggers.

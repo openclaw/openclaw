@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsAsync from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   isSessionEntryDataSql,
@@ -57,6 +57,7 @@ import {
   type ManagedImageRecord,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import * as managedSessionRead from "./managed-image-session-read.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
@@ -169,9 +170,7 @@ describe("managed attachment SQLite visibility", () => {
     savedEnv.restore();
   });
 
-  it("loads original IDs only when a regular file is old enough for orphan cleanup", async ({
-    onTestFinished,
-  }) => {
+  it("loads original IDs only when a regular file is old enough for orphan cleanup", async () => {
     const nowMs = 2_000_000;
     const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
     const { originalPath: kept } = await createFixture(stateDir, {
@@ -225,6 +224,12 @@ describe("managed attachment SQLite visibility", () => {
     "refuses a %s ownership source",
     async (source) => {
       const f = await fixture();
+      const orphan = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "missing",
+      });
       await seed(f, [message(f.messageId, null, [f.block])]);
       if (source === "missing") {
         setRuntimeConfigSnapshot({ session: { store: path.join(stateDir, "missing.sqlite") } });
@@ -247,8 +252,23 @@ describe("managed attachment SQLite visibility", () => {
         });
       }
       expect(await f.download()).toBeNull();
+      const reads = vi.spyOn(managedSessionRead, "withManagedImageSessionRead");
+      onTestFinished(() => reads.mockRestore());
       await cleanup({ sessionKey: f.scope.sessionKey });
       await expectRetained(f);
+      await expectRetained(orphan);
+      expect(reads).toHaveBeenCalledTimes(1);
+      // The unavailable result belongs only to this pass; recovery must be retried.
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+      await cleanup({ sessionKey: f.scope.sessionKey });
+      await expectRetained(f);
+      if (source === "invalid-row") {
+        await expectRetained(orphan);
+      } else {
+        expect(await readManagedImageRecord(orphan.attachmentId, stateDir)).toBeNull();
+        expect(fs.existsSync(orphan.originalPath)).toBe(false);
+      }
+      expect(reads).toHaveBeenCalledTimes(2);
     },
   );
 

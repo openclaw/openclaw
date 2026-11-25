@@ -1,12 +1,13 @@
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
-import type {
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-} from "../media-understanding/types.js";
 import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -56,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
+  /** Restore only transcript-only delivery mirrors excluded from normal replay. */
+  deliveryOnly?: boolean;
   historyLimit: number;
   /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
   historyKind?: "pending" | "recent";
@@ -380,6 +383,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  TurnGrant?: TurnGrant;
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
   /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */

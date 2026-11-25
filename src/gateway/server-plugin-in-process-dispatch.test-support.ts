@@ -1,9 +1,9 @@
-import { vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
@@ -27,7 +27,7 @@ export function createContext(
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
     getRuntimeConfig,
-    logGateway: { error: vi.fn(), warn: vi.fn() },
+    logGateway: createMockSubsystemLogger("gateway"),
   } as unknown as GatewayRequestContext;
   if (methods.length) {
     const registry = createGatewayMethodRegistry(

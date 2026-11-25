@@ -1,9 +1,12 @@
 import type { ChildProcess } from "node:child_process";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { ForegroundUpdateStop } from "../../infra/update-managed-service-handoff.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../daemon-cli/restart-health.constants.js";
 import { sameManagedUpdateOwner, type GatewayRunSignalRequest } from "./run-loop-request.js";
 
 export class GatewayUpdateSuccessor {
@@ -25,9 +28,7 @@ export class GatewayUpdateSuccessor {
       | "captureForegroundUpdateHandoffStop"
       | "completeForegroundUpdateHandoffAfterClose"
       | "markUpdateRestartSentinelFailure"
-      | "readRestartSentinelReadOnly"
-      | "writeRestartSentinelIfUnchanged"
-      | "waitForGatewayHealthyRestart"
+      | "waitForGatewayHttpReadiness"
     >,
   ) {}
 
@@ -56,9 +57,13 @@ export class GatewayUpdateSuccessor {
     }
     this.child = child;
     if (child !== true) {
-      this.closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
+      if (child.exitCode !== null || child.signalCode !== null) {
+        this.closed = Promise.resolve();
+      } else {
+        const { promise, resolve } = Promise.withResolvers<void>();
+        child.once("close", resolve);
+        this.closed = promise;
+      }
     }
   }
 
@@ -67,58 +72,49 @@ export class GatewayUpdateSuccessor {
     params: {
       port?: number;
       host?: string;
-      foreground: boolean;
+      config?: OpenClawConfig;
       beforeWait: () => void;
-      isCurrent: () => boolean;
     },
   ): Promise<boolean> {
-    const updateSentinel = params.foreground
-      ? null
-      : await this.lifecycle.readRestartSentinelReadOnly();
-    params.beforeWait();
-    const health =
-      typeof params.port === "number"
-        ? await this.lifecycle.waitForGatewayHealthyRestart({
-            port: params.port,
-            child,
-            probeHosts: [params.host ?? "127.0.0.1"],
-            requireRunningService: true,
-            requirePluginHealth: false,
-          })
-        : undefined;
-    if (
-      this.stopRequested ||
-      (health?.waitOutcome !== "healthy" && health?.waitOutcome !== "still-starting")
-    ) {
+    // Once spawned, only the launcher may recover or restore its trial. This
+    // retiring process must not open any database, even to observe readiness.
+    this.commit(child);
+    if (child.exitCode !== null || child.signalCode !== null || params.port === undefined) {
       return false;
     }
-    this.commit(child);
-    if (health.waitOutcome === "still-starting") {
-      this.logger.warn("update respawn is still starting; leaving the replacement process running");
-      if (
-        params.isCurrent() &&
-        updateSentinel?.payload.kind === "update" &&
-        updateSentinel.payload.status !== "error"
-      ) {
-        await this.lifecycle
-          .writeRestartSentinelIfUnchanged({
-            payload: {
-              ...updateSentinel.payload,
-              status: "skipped",
-              continuation: null,
-              stats: { ...updateSentinel.payload.stats, reason: "still-starting" },
-            },
-            expectedRevision: updateSentinel.revision,
-            isCurrent: params.isCurrent,
-          })
-          .catch((error: unknown) =>
-            this.logger.warn(
-              `failed to record pending update readiness: ${formatErrorMessage(error)}`,
-            ),
-          );
+    const controller = new AbortController();
+    const onClose = () => controller.abort(new Error("Gateway launcher exited before readiness"));
+    child.once("close", onClose);
+    params.beforeWait();
+    const { deadlineMs } = resolveGatewayStartupTiming();
+    try {
+      const readiness = await this.lifecycle.waitForGatewayHttpReadiness({
+        port: params.port,
+        host: params.host,
+        config: params.config,
+        attempts: Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS),
+        deadlineAt: performance.now() + deadlineMs,
+        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+        signal: controller.signal,
+      });
+      if (this.stopRequested || controller.signal.aborted) {
+        return false;
       }
+      if (readiness.healthz !== 200 || readiness.readyz !== 200) {
+        this.logger.warn("update respawn is still starting; the launcher owns trial recovery");
+      }
+      this.logger.info(
+        `restart mode: update process respawn (spawned pid ${child.pid ?? "unknown"})`,
+      );
+      return true;
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        throw error;
+      }
+      return false;
+    } finally {
+      child.off("close", onClose);
     }
-    return true;
   }
 
   stop(signal: "SIGINT" | "SIGTERM"): void {
@@ -186,8 +182,9 @@ export class GatewayUpdateSuccessor {
     if (!pending) {
       throw new Error("foreground update settlement owner is unavailable; remaining draining");
     }
-    await this.cancelHandoff(() => identity);
+    // Retain settlement's lease worker before cancellation can finish and close it.
     this.joinForegroundStop();
+    await this.cancelHandoff(() => identity);
     await pending.confirmed.promise;
     return { respawn: false };
   }

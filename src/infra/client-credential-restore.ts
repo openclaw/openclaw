@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import type { BackupManifest } from "../commands/backup-verify-manifest.js";
 import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
@@ -188,6 +188,7 @@ function prepareMatchedReceipt(options: {
   originalSharedFile?: ClientCredentialFileIdentity;
   postgresStoreId?: string;
   postgresExportDirectory?: string;
+  postgresCompanion?: { storeId: string; namespace: string };
   projectPostgresToSqlite?: boolean;
   preserveCopiedPhase?: boolean;
 }) {
@@ -213,40 +214,51 @@ function prepareMatchedReceipt(options: {
     using database = openNodeSqliteDatabase(options.sharedPath, { readOnly: true });
     const anchor = readEngineAnchor(database)?.[0];
     if (anchor) {
-      if (!options.postgresExportDirectory) {
-        throw new Error("Restored client credentials are missing their PostgreSQL capture.");
-      }
-      using capturedAnchor = openNodeSqliteDatabase(
-        path.join(options.postgresExportDirectory, "anchor.sqlite"),
-        { readOnly: true },
-      );
-      const captured = readEngineAnchor(capturedAnchor)?.[0];
-      if (
-        (options.postgresStoreId && options.postgresStoreId !== anchor.store_id) ||
-        captured?.store_id !== anchor.store_id ||
-        captured?.schema !== anchor.schema ||
-        (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
-      ) {
-        throw new Error("Restored client credentials have a different PostgreSQL identity.");
-      }
-      using image = openNodeSqliteDatabase(
-        path.join(options.postgresExportDirectory, "database.sqlite"),
-        { readOnly: true },
-      );
-      if (readStateSchemaContentVersion(image) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
-        return null;
-      }
-      if (options.projectPostgresToSqlite && source) {
-        const createdAt = image // sqlite-allow-raw -- Private rehearsal projects the verified export's immutable store identity.
-          .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
-          .get()?.created_at;
-        source.engine = "sqlite";
-        source.identity = `${options.restoredSharedPath}:${String(createdAt)}`;
+      if (options.postgresCompanion) {
+        if (
+          anchor.engine !== "postgres" ||
+          anchor.store_id !== options.postgresCompanion.storeId ||
+          anchor.schema !== options.postgresCompanion.namespace ||
+          (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
+        ) {
+          throw new Error("Restored client credentials have a different PostgreSQL identity.");
+        }
+      } else {
+        if (!options.postgresExportDirectory) {
+          throw new Error("Restored client credentials are missing their PostgreSQL capture.");
+        }
+        using capturedAnchor = openNodeSqliteDatabase(
+          path.join(options.postgresExportDirectory, "anchor.sqlite"),
+          { readOnly: true },
+        );
+        const captured = readEngineAnchor(capturedAnchor)?.[0];
+        if (
+          (options.postgresStoreId && options.postgresStoreId !== anchor.store_id) ||
+          captured?.store_id !== anchor.store_id ||
+          captured?.schema !== anchor.schema ||
+          (source && (source.engine !== "postgres" || source.identity !== anchor.store_id))
+        ) {
+          throw new Error("Restored client credentials have a different PostgreSQL identity.");
+        }
+        using image = openNodeSqliteDatabase(
+          path.join(options.postgresExportDirectory, "database.sqlite"),
+          { readOnly: true },
+        );
+        if (readStateSchemaContentVersion(image) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
+          return null;
+        }
+        if (options.projectPostgresToSqlite && source) {
+          const createdAt = image // sqlite-allow-raw -- Private rehearsal projects the verified export's immutable store identity.
+            .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
+            .get()?.created_at;
+          source.engine = "sqlite";
+          source.identity = `${options.restoredSharedPath}:${String(createdAt)}`;
+        }
       }
       // A fresh binding has no migration source. Its verified shared/local capture
       // still belongs together; the restore owner alone may replace the inode witness.
     } else {
-      if (options.postgresStoreId) {
+      if (options.postgresStoreId || options.postgresCompanion) {
         throw new Error("Restored client credentials are missing their PostgreSQL anchor.");
       }
       // A restored predecessor owns its rows; its ignored local orphan remains fenced.
@@ -350,8 +362,14 @@ export function prepareRestoredClientCredentials(options: {
     originalSharedPath: manifest.paths?.sharedDatabaseSourcePath ?? shared.sourcePath,
     originalStateRoot: manifest.paths?.stateDir ?? state.sourcePath,
     restoredSharedPath: sharedPath,
-    // The export is nested beneath this manifest-declared global snapshot.
-    postgresExportDirectory: `${sharedPath}.postgres`,
+    // A companion preserves its exact live namespace; ordinary backups carry an export.
+    ...(manifest.profile === "local-companion"
+      ? {
+          postgresCompanion: manifest.postgresAnchors?.find(
+            (anchor) => anchor.sourcePath === shared.sourcePath,
+          ),
+        }
+      : { postgresExportDirectory: `${sharedPath}.postgres` }),
   });
   if (receipt) {
     return () => publishRestoredReceipt(receipt, sharedPath, env);

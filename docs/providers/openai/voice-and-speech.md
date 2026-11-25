@@ -72,7 +72,8 @@ sidebarTitle: "Voice and speech"
     See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgpt%2Fcodex-oauth)
     for selecting a separate audio API-key profile when desired.
 
-    - Default model: `gpt-4o-transcribe`
+    - Default model: `gpt-transcribe`. Earlier models such as `gpt-4o-transcribe`
+      still work when configured explicitly.
     - Endpoint: OpenAI REST `/v1/audio/transcriptions`
     - Input path: multipart audio file upload
     - Used wherever inbound audio transcription reads `tools.media.audio`,
@@ -88,7 +89,7 @@ sidebarTitle: "Voice and speech"
             {
               type: "provider",
               provider: "openai",
-              model: "gpt-4o-transcribe",
+              model: "gpt-transcribe",
               capabilities: ["audio"],
             },
           ],
@@ -101,7 +102,9 @@ sidebarTitle: "Voice and speech"
     ```
 
     Language and prompt hints are forwarded to OpenAI when supplied by the
-    shared audio media config or per-call transcription request.
+    shared audio media config or per-call transcription request. For
+    `gpt-transcribe`, the language hint is sent as the `languages` list the model
+    expects; other models receive the single `language` field.
 
   </Accordion>
 
@@ -348,8 +351,11 @@ sidebarTitle: "Voice and speech"
     greetings and `voicecall.speak` requests use native session context.
 
     Both GPT-Live routes produce continuous audio and own interruption.
-    Gateway WebSocket and WebRTC use the same sample clock to send microphone
-    input at its recorded rate and supply silence between captures.
+    Gateway WebSocket PCM and WebRTC use the same sample clock to send microphone
+    input at its recorded rate and supply silence between captures. Public
+    GPT-Live phone input uses the carrier's existing cadence instead: retained
+    mono G.711 capture at 8 kHz drains when the session is ready, and subsequent
+    frames are forwarded without a second clock or injected silence.
     Discord does not add speaker-start cancellation or wait for a response-done
     event to play short replies. Explicit Discord `requireWakeName: true` or
     `consultPolicy: "always"` is rejected because GPT-Live cannot enforce those

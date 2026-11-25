@@ -162,7 +162,7 @@ const providerConfig = {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
-    model: "minimax/MiniMax-M2.7",
+    model: "minimax/MiniMax-M3",
     requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
@@ -368,13 +368,13 @@ export function resolveRunnerMatrix(params: {
     {
       os_id: "ubuntu",
       display_name: "Linux",
-      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-8vcpu-ubuntu-2404"),
+      runner: pick(params.ubuntuRunner, params.varUbuntuRunner, "blacksmith-2vcpu-ubuntu-2404"),
       artifact_name: "linux",
     },
     {
       os_id: "windows",
       display_name: "Windows",
-      runner: pick(params.windowsRunner, params.varWindowsRunner, "blacksmith-32vcpu-windows-2025"),
+      runner: pick(params.windowsRunner, params.varWindowsRunner, "windows-2025"),
       artifact_name: "windows",
     },
     {
@@ -588,13 +588,17 @@ export function resolvePackagedUpgradeTimeouts(
   if (platform !== "win32") {
     return { stepTimeoutSeconds: 1200, wrapperTimeoutMs: 20 * 60_000 };
   }
-  // Allow 50% registry/runner variance per install, bounded to 10–20 minutes.
-  // The updater installs and rehearses; give both steps their full budget plus
-  // two minutes for shutdown/reporting (wrapper floor 22m, ceiling 42m).
+  // The baseline updater treats --timeout as its whole activation budget, and
+  // hosted Windows candidate updates take ~17–19 minutes even after a fast
+  // baseline install. Floor at the 20-minute non-Windows budget and scale 1.5x
+  // the measured install up to the updater's 30-minute default
+  // (DEFAULT_UPDATE_STEP_TIMEOUT_MS). The updater installs and rehearses; give
+  // both steps their full budget plus two minutes for shutdown/reporting
+  // (wrapper floor 42m, ceiling 62m).
   const measuredSeconds = Number.isFinite(baselineInstallDurationMs)
     ? Math.ceil((baselineInstallDurationMs * 1.5) / 1000)
     : 0;
-  const stepTimeoutSeconds = Math.min(20 * 60, Math.max(10 * 60, measuredSeconds));
+  const stepTimeoutSeconds = Math.min(30 * 60, Math.max(20 * 60, measuredSeconds));
   return { stepTimeoutSeconds, wrapperTimeoutMs: (2 * stepTimeoutSeconds + 120) * 1000 };
 }
 
@@ -659,7 +663,8 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
   if (platform !== "win32") {
     return false;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  // Child diagnostics can mention another command; only the runner's headline identifies this one.
+  const message = (error instanceof Error ? error.message : String(error)).split("\n", 1)[0] ?? "";
   return (
     /\bCommand timed out:/u.test(message) &&
     /[/\\]openclaw\.mjs update(?: --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz)? --yes --json(?: --no-restart)? --timeout \d+/u.test(

@@ -43,6 +43,8 @@ export type DiscordMessagingActionOptions = {
   mediaAccess?: ChannelMessageActionContext["mediaAccess"];
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /** Originating invocation cancellation for REST work that has not been issued yet. */
+  callerSignal?: AbortSignal;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   readContext?: {
     requesterAccountId?: string | null;
@@ -296,7 +298,15 @@ export function createDiscordMessagingActionContext(params: {
   const directDmEnabled =
     accountConfig.dm?.enabled !== false && (accountConfig.dmPolicy ?? "pairing") !== "disabled";
   const withOpts = (extra?: Record<string, unknown>) =>
-    createDiscordActionOptions({ cfg: params.cfg, accountId, extra });
+    createDiscordActionOptions({
+      cfg: params.cfg,
+      accountId,
+      extra: {
+        // Every messaging action keeps the caller's cancellation for its REST calls.
+        ...(params.options?.callerSignal ? { callerSignal: params.options.callerSignal } : {}),
+        ...extra,
+      },
+    });
   const resolvedReactionAccountId = accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const isCurrentReadTarget = (channelId: string): boolean => {
     const requesterAccountId = currentReadContext?.requesterAccountId?.trim();
@@ -592,6 +602,7 @@ export function createDiscordMessagingActionContext(params: {
           await resolveDiscordTargetChannelId(target, {
             cfg: params.cfg,
             accountId: resolvedReactionAccountId,
+            ...(params.options?.callerSignal ? { callerSignal: params.options.callerSignal } : {}),
           })
         ).channelId;
       }
@@ -600,6 +611,7 @@ export function createDiscordMessagingActionContext(params: {
     withReactionRuntimeOptions: (extra) =>
       ({
         ...reactionRuntimeOptions,
+        ...(params.options?.callerSignal ? { callerSignal: params.options.callerSignal } : {}),
         ...extra,
       }) as DiscordReactOpts & NonNullable<typeof extra>,
     normalizeMessage: (message: unknown) => {

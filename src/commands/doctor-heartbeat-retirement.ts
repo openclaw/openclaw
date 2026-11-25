@@ -13,6 +13,7 @@ import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
@@ -53,6 +54,7 @@ export async function retireHeartbeatWithDoctor(
   const cfg = inheritLegacyDefaultAgentId(sourceConfig, structuredClone(sourceConfig));
   migrateHeartbeatVisibility(cfg, []);
   validateLegacyHeartbeatConfig(cfg);
+  await prepareProviderModelPolicySurfaces();
   const heartbeatSources = new Map(
     listAgentIds(cfg).map((agentId) => [agentId, resolveLegacyHeartbeatConfig(cfg, agentId)]),
   );
@@ -150,6 +152,15 @@ export async function retireHeartbeatWithDoctor(
             schedulingInputsRequested: true,
             scheduleChanged: false,
           });
+          if (job.state.runningAtMs !== undefined) {
+            // A resumed cutover can disable an already converted job whose
+            // interrupted run still belongs to Gateway startup recovery.
+            Object.assign(nextJob.state, {
+              runningAtMs: job.state.runningAtMs,
+              runningReceiptId: job.state.runningReceiptId,
+              runningScheduleChangeId: job.state.runningScheduleChangeId,
+            });
+          }
           upsertCronJobRow(
             db,
             storeKey,

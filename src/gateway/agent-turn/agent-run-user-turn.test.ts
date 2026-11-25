@@ -1,5 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import * as execHandoff from "../../agents/bash-tools.exec-approval-followup-state.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
@@ -160,23 +164,27 @@ it.each([
 );
 
 it.each([
-  ["committed", undefined],
-  ["unknown", undefined],
-  ["unretained", undefined],
-  ["settlement-failed", undefined],
-  ["committed", "restart"],
-  ["committed", "rpc"],
-  ["committed", "timeout"],
+  ["committed", undefined, "failed"],
+  ["unknown", undefined, "failed"],
+  ["unretained", undefined, "failed"],
+  ["settlement-failed", undefined, "failed"],
+  ["committed", "restart", "failed"],
+  ["committed", "rpc", "failed"],
+  ["committed", "timeout", "failed"],
+  ["committed", undefined, "restart-unrecoverable"],
+  ["committed", "user-stop", "user-stop"],
 ] as const)(
-  "transfers failed preparation cleanup exactly once for %s input custody (stop=%s)",
-  async (custody, stopReason) => {
+  "transfers failed preparation cleanup exactly once for %s input custody (stop=%s, cause=%s)",
+  async (custody, stopReason, endCause) => {
     mocks.persistInboundImagesForTranscript.mockResolvedValue({
       entries: [{ id: "retained-media", imageKind: "inline", fact: {} }],
     });
     const failure =
       custody === "unknown"
         ? new SqliteWorkerError("input settlement unavailable", "outcome-unknown")
-        : new Error("input preparation failed");
+        : endCause === "restart-unrecoverable"
+          ? createAgentRunRestartAbortError()
+          : new Error("input preparation failed");
     const settlementFailure = new Error("input settlement failed");
     const finish = vi.fn();
     const abort = new AbortController();
@@ -192,6 +200,8 @@ it.each([
             message: options.message,
             run: (operation) => operation(),
             finish,
+            release: vi.fn(),
+            relinquish: vi.fn(),
             settled: async () => {
               if (custody === "settlement-failed") {
                 throw settlementFailure;
@@ -200,7 +210,9 @@ it.each([
           });
         }
         if (stopReason) {
-          abort.abort();
+          abort.abort(
+            stopReason === "user-stop" ? createAgentRunDirectAbortError(true) : undefined,
+          );
         }
         throw failure;
       },
@@ -225,7 +237,7 @@ it.each([
         await expect(preparation).rejects.toBe(failure);
       }
       if (custody === "committed" || custody === "settlement-failed") {
-        expect(finish).toHaveBeenCalledExactlyOnceWith("cancelled");
+        expect(finish).toHaveBeenCalledExactlyOnceWith("cancelled", endCause);
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
       expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);

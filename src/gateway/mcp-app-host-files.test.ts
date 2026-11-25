@@ -37,26 +37,28 @@ function sessionEntry() {
   };
 }
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
     stat: statRead.mockImplementation(actual.stat),
     watchFile: vi.fn(actual.watchFile),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 vi.mock("./operator-role-policy.js", () => ({ resolveGatewayOperatorRoleActor: () => undefined }));
 vi.mock("./server-methods/session-scoped-read.js", () => ({
   retainSessionScopedRead: () => undefined,
 }));
 // mock-isolation: File handles use a fixture workspace without opening real session storage.
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/session-files-root.js", () => ({
   prepareLocalSessionWorkspaceRoot: async () => {
     const root = state.root;
     return {
       root,
       assertCurrent: () => {
         if (root !== state.root) {
-          throw new Error("App file workspace authority changed");
+          throw new Error("App file workspace changed. Open the file again.");
         }
       },
     };
@@ -292,14 +294,8 @@ describe("registered MCP App host-file routes", () => {
     expect(await fileContents()).toEqual(bytes);
   });
 
-  it("rechecks workspace session identity and synchronously revoked grant before file commit", async () => {
+  it("rechecks workspace session identity before file access", async () => {
     await read();
-    const view = getMcpAppViewLease(viewId, runtime)!;
-    let assertions = 0;
-    view.authorizeAppInteraction = () => ++assertions < 4;
-    expect((await write({ text: "not committed" }))[0]).toBe(false);
-    expect(await fileContents("utf8")).toBe("solid original");
-    view.authorizeAppInteraction = () => true;
     state.sessionId = "replacement";
     expect((await read())[0]).toBe(false);
   });

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -21,6 +22,8 @@ import {
   type DedupeEntry,
 } from "../server-shared.js";
 import type { ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./gateway-personal-caller.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -31,6 +34,12 @@ export type ChatAbortRequester = {
   connId?: string;
   deviceId?: string;
   isAdmin: boolean;
+  /** Current personal requester, independently authorized for this exact session. */
+  personalAuthority?: {
+    profileId: string;
+    target: NonNullable<SessionMutationAuthorization["admittedTarget"]>;
+    assertCurrent: () => void;
+  };
   /** Host-only tool authority for the exact session admitted by the router. */
   sessionAuthority?: {
     target: NonNullable<SessionMutationAuthorization["admittedTarget"]>;
@@ -105,6 +114,7 @@ export function buildAbortedChatSendPayload(params: {
 export function resolveChatAbortRequester(
   client: GatewayRequestHandlerOptions["client"],
   authorization?: SessionMutationAuthorization,
+  assertRequesterCurrent?: () => void,
 ): ChatAbortRequester {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const caller = client?.internal?.syntheticClient ? client.internal.agentToolCaller : undefined;
@@ -115,19 +125,66 @@ export function resolveChatAbortRequester(
       ? composeSessionSourceAssertion([assertCallerCurrent, authorization.assertCurrent])
       : undefined;
   assertCurrent?.();
+  const profileId = resolveAuthenticatedPersonalGatewayProfileId(client);
+  const personalAuthority =
+    profileId && sessionTarget && authorization && assertRequesterCurrent
+      ? {
+          profileId,
+          target: sessionTarget,
+          assertCurrent: composeSessionSourceAssertion(
+            [assertRequesterCurrent, authorization.assertCurrent],
+            (assertSource) => {
+              assertSource();
+              if (resolveAuthenticatedPersonalGatewayProfileId(client) !== profileId) {
+                throw new Error("Gateway requester identity changed");
+              }
+            },
+          ),
+        }
+      : undefined;
+  personalAuthority?.assertCurrent();
   return {
     connId: normalizeOptionalString(client?.connId),
     deviceId: normalizeOptionalString(client?.connect?.device?.id),
     isAdmin: scopes.includes(ADMIN_SCOPE),
+    ...(personalAuthority ? { personalAuthority } : {}),
     ...(assertCurrent && sessionTarget
       ? { sessionAuthority: { target: sessionTarget, assertCurrent } }
       : {}),
   };
 }
 
+/** Both Stop RPCs capture the same requester identity, current guard and session scope. */
+export function captureChatAbortAuthority(options: GatewayRequestHandlerOptions) {
+  const { client, sessionMutationAuthorization } = options;
+  const authority = readGatewayRequestMutationAuthority(options);
+  const requester = resolveChatAbortRequester(
+    client,
+    sessionMutationAuthorization,
+    authority.assertCurrent,
+  );
+  return {
+    requester,
+    narrow:
+      authority.sessionScope === "operator.sessions.write" ||
+      requester.sessionAuthority !== undefined,
+    assertRequesterCurrent: authority.assertCurrent,
+  };
+}
+
 type ChatRunAbortAuthority = Partial<RpcSourceIdentity> & {
   requester?: RpcSourceAdapter["requester"];
+  initiatingPersonalOperator?: RpcSourceAdapter["initiatingPersonalOperator"];
 };
+
+/** Keep cancellation identity and initiating-person evidence on the same captured source. */
+export function getChatRunAbortAuthority(source: RpcSourceRef): ChatRunAbortAuthority {
+  return {
+    ...getRpcSourceIdentity(source),
+    requester: source.adapter.requester,
+    initiatingPersonalOperator: source.adapter.initiatingPersonalOperator,
+  };
+}
 
 export function canRequesterAbortChatRun(
   entry: ChatRunAbortAuthority,
@@ -145,6 +202,22 @@ export function canRequesterAbortChatRun(
   }
   if (requester.isAdmin) {
     return true;
+  }
+  const personal = requester.personalAuthority;
+  const initiator = entry.initiatingPersonalOperator;
+  if (personal && initiator) {
+    assertAdmittedRunOperatorAuthority(initiator);
+    personal.assertCurrent();
+    // The initiating socket may have closed. Its captured identity is a fact;
+    // the new request's current access and exact target authorize the effect.
+    if (
+      initiator.profileId === personal.profileId &&
+      entry.sessionKey === personal.target.sessionKey &&
+      entry.sessionId === personal.target.sessionId &&
+      resolveChatRunOwnerAgentId(entry) === personal.target.agentId
+    ) {
+      return true;
+    }
   }
   const ownerDeviceId = normalizeOptionalString(entry.requester?.deviceId);
   const ownerConnId = normalizeOptionalString(entry.requester?.connectionId);
@@ -325,7 +398,7 @@ function selectAuthorizedRpcSourceRuns(
     const { adapter } = entry;
     const identity = getRpcSourceIdentity(entry);
     const requesterCanAbort = canRequesterAbortChatRun(
-      { ...identity, requester: adapter.requester },
+      getChatRunAbortAuthority(entry),
       params.requester,
     );
     matchedRunIds.add(runId);

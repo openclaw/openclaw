@@ -11,6 +11,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { requestCheckoutSnapshot } from "../../lib/checkout-snapshot.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
@@ -23,6 +24,7 @@ registerSessionOrganizationEnglish();
 export class WorktreesModel {
   records: WorktreeRecord[] = [];
   listLoaded = false;
+  listFailed = false;
   listRead: { result: Promise<void> } = { result: Promise.resolve() };
   private presentationLifetime = Promise.withResolvers<void>();
   error: string | null = null;
@@ -32,6 +34,9 @@ export class WorktreesModel {
   createName = "";
   createBaseRef = "";
   createBranches: string[] = [];
+  get createBranchesRefreshing() {
+    return this.branchesRequest.pending;
+  }
   gateway!: ReturnType<typeof useGatewayPage>;
   private readonly listRequest = createPageRequest(() => this.update({}), {
     task: (scope: GatewayConnectionScope, { signal }) =>
@@ -41,18 +46,26 @@ export class WorktreesModel {
       this.listLoaded = true;
     },
     onError: (error) => {
+      this.listFailed = true;
       this.error = formatUiError(error);
     },
   });
   private readonly branchesRequest = createPageRequest(() => this.update({}), {
-    task: ({ scope, repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
-      scope.client.request<WorktreesBranchesResult>("worktrees.branches", { repoRoot }, { signal }),
-    onComplete: (result) => {
-      this.createBranches = result.branches.map((branch) => branch.name);
-    },
-    onError: () => {
-      this.createBranches = [];
-    },
+    task: ({ repoRoot }: { scope: GatewayConnectionScope; repoRoot: string }, { signal }) =>
+      requestCheckoutSnapshot<WorktreesBranchesResult>(
+        this.context.gateway,
+        "worktrees.branches",
+        { repoRoot },
+        {
+          signal,
+          onSnapshot: (result) => {
+            this.createBranches = result.branches.map((branch) => branch.name);
+            this.publish();
+          },
+        },
+      ),
+    onComplete: () => {},
+    onError: () => {},
   });
 
   constructor(
@@ -80,6 +93,10 @@ export class WorktreesModel {
       >
     >,
   ) {
+    // Replacing the error also replaces its failed-read provenance.
+    if ("error" in values) {
+      this.listFailed = false;
+    }
     Object.assign(this, values);
     this.publish();
   }
@@ -90,6 +107,7 @@ export class WorktreesModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.branchesRequest.cancel();
+    this.listFailed = false;
     this.update({ operation: null });
   }
 
@@ -114,6 +132,7 @@ export class WorktreesModel {
     if (!scope || this.operation !== null || this.listRequest.pending) {
       return;
     }
+    this.listFailed = false;
     if (!options.preserveError) {
       this.error = null;
     }
@@ -146,7 +165,8 @@ export class WorktreesModel {
     }
     if (
       !(await showConfirmDialog({
-        message: t("worktrees.confirmDelete", { name: record.name }),
+        title: t("worktrees.confirmDelete", { name: record.name }),
+        message: t("worktrees.confirmDeleteBody"),
         confirmLabel: t("common.delete"),
         danger: true,
       })) ||
@@ -156,7 +176,7 @@ export class WorktreesModel {
     ) {
       return;
     }
-    // The force retry belongs to the same Gateway epoch as the initial removal.
+    // Any retry belongs to the same Gateway epoch as the initial removal.
     this.update({ operation: "row" });
     await this.runOperation(scope, async () => {
       const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
@@ -165,25 +185,27 @@ export class WorktreesModel {
       if (!this.gateway.isCurrent(scope) || result.removed) {
         return;
       }
-      const reason = result.snapshotError ?? "";
-      const force = await showConfirmDialog({
-        message: t("worktrees.confirmForceDelete", { error: reason }),
-        confirmLabel: t("common.delete"),
+      const retryPreserved = Boolean(result.preserved);
+      const reason = result.preserved?.reason ?? result.snapshotError ?? "";
+      const retry = await showConfirmDialog({
+        title: retryPreserved ? t("common.retry") : t("worktrees.confirmForceDeleteTitle"),
+        message: retryPreserved ? reason : t("worktrees.confirmForceDelete", { error: reason }),
+        confirmLabel: retryPreserved ? t("common.retry") : t("common.delete"),
         danger: true,
       });
       if (!this.gateway.isCurrent(scope) || !this.operatorAccess.canAdmin) {
         return;
       }
-      if (!force) {
+      if (!retry) {
         this.update({ error: reason || null });
         return;
       }
-      const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+      const retried = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
         id: record.id,
-        force: true,
+        ...(retryPreserved ? { retryPreserved: true } : { force: true }),
       });
       if (this.gateway.isCurrent(scope)) {
-        this.update({ error: forced.snapshotError ?? null });
+        this.update({ error: retried.preserved?.reason ?? retried.snapshotError ?? null });
       }
     });
   }
@@ -247,6 +269,15 @@ export class WorktreesModel {
       const defaultAgent = agents?.agents.find((agent) => agent.id === agents.defaultId);
       this.update({ createRepoRoot: defaultAgent?.workspace ?? "" });
       void this.loadCreateBranches();
+    }
+  }
+
+  setCreateRepository(repoRoot: string) {
+    if (repoRoot.trim() !== this.createRepoRoot.trim()) {
+      this.branchesRequest.cancel();
+      this.update({ createRepoRoot: repoRoot, createBaseRef: "", createBranches: [] });
+    } else {
+      this.update({ createRepoRoot: repoRoot });
     }
   }
 

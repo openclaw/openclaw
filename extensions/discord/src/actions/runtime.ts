@@ -122,7 +122,12 @@ export async function handleDiscordAction(
     }
     const command = readDiscordModerationCommand(action, params);
     const senderUserId = readStringParam(params, "senderUserId");
-    const withOpts = () => createDiscordActionOptions({ cfg, accountId });
+    const withOpts = () =>
+      createDiscordActionOptions({
+        cfg,
+        accountId,
+        ...(options?.callerSignal ? { extra: { callerSignal: options.callerSignal } } : {}),
+      });
     // CLI/manual flows may not have sender context; enforce only when present.
     const hasPermission = await (senderUserId
       ? discordModerationActionRuntime.hasAnyGuildPermissionDiscord(

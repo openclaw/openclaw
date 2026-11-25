@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import * as backupShared from "../commands/backup-shared.js";
-import { buildBackupArchivePath as archivePath } from "../commands/backup-shared.js";
 import {
   prepareBackupArchive as prepare,
   verifyBackupArchive as verify,
@@ -15,6 +14,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { buildBackupArchivePath as archivePath } from "./backup-archive-path-policy.js";
 import { createBackupArchive as backup } from "./backup-create.js";
 import {
   listArchiveEntries,

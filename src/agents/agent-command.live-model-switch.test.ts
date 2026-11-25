@@ -363,15 +363,18 @@ vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
 
 // mock-isolation: mutable fixtures must stay independent of the process config publication owner.
 vi.mock("../config/runtime-snapshot.js", async () => {
-  const { hashRuntimeConfigValue } = await vi.importActual<
-    typeof import("../config/runtime-snapshot.js")
-  >("../config/runtime-snapshot.js");
+  const actual = await vi.importActual<typeof import("../config/runtime-snapshot.js")>(
+    "../config/runtime-snapshot.js",
+  );
   const { createMutableRuntimeSnapshotMock } =
     await import("./agent-command.runtime-snapshot.test-support.js");
-  return createMutableRuntimeSnapshotMock({
-    hashRuntimeConfigValue,
-    getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
-  });
+  return {
+    ...actual,
+    ...createMutableRuntimeSnapshotMock({
+      hashRuntimeConfigValue: actual.hashRuntimeConfigValue,
+      getRuntimeConfigSnapshot: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+    }),
+  };
 });
 
 vi.mock("../config/sessions.js", () => ({
@@ -1785,6 +1788,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     // Freeze preflight elapsed time to keep the forwarding assertions exact.
     const now = Date.now();
     vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.spyOn(performance, "now").mockReturnValue(0);
     setupSuccessfulAttempt();
 
     await runBasicAgentCommand({
@@ -2755,13 +2759,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect([thinkingArgs.provider, thinkingArgs.model]).toEqual(["gmn", "gpt-5.4"]);
     expect(thinkingArgs.level).toBe("xhigh");
     const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    const supportedReasoningEfforts = ["low", "medium", "high", "xhigh"];
     expectRecordFields(catalog[0], {
       provider: "gmn",
       id: "gpt-5.4",
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-      },
+      compat: expect.objectContaining({ supportedReasoningEfforts }),
     });
   });
 

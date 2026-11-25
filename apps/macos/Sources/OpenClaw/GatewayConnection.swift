@@ -57,6 +57,8 @@ actor GatewayConnection: Observable {
         let deviceAuthGatewayID: String?
         let revision: UInt64?
         let browserSession: GatewayBrowserSession?
+        /// The OpenClaw ID operator tunnel serving this route; its generation is `routeAuthority`.
+        let openClawIDSession: WebSocketSessionBox?
 
         init(
             config: Config,
@@ -64,7 +66,8 @@ actor GatewayConnection: Observable {
             routeAuthority: UInt64?,
             deviceAuthGatewayID: String? = nil,
             revision: UInt64? = nil,
-            browserSession: GatewayBrowserSession? = nil)
+            browserSession: GatewayBrowserSession? = nil,
+            openClawIDSession: WebSocketSessionBox? = nil)
         {
             self.config = config
             self.tls = tls
@@ -72,6 +75,7 @@ actor GatewayConnection: Observable {
             self.deviceAuthGatewayID = deviceAuthGatewayID
             self.revision = revision
             self.browserSession = browserSession
+            self.openClawIDSession = openClawIDSession
         }
     }
 
@@ -253,13 +257,26 @@ actor GatewayConnection: Observable {
     /// that epoch prevents delayed pushes from entering a replacement socket.
     private(set) var socketGenerationState = GatewaySocketGenerationState()
 
-    private var subscribers: [UUID: AsyncStream<PushDelivery>.Continuation] = [:]
+    private struct Subscriber {
+        let continuation: AsyncStream<PushDelivery>.Continuation
+        let matches: @Sendable (EventFrame) -> Bool
+        var droppedCount = 0
+    }
+
+    private var subscribers: [UUID: Subscriber] = [:]
     #if DEBUG
     private var subscriberWaitersForTesting: [CheckedContinuation<Void, Never>] = []
     #endif
     var realtimeTalkSubscribers: [UInt64: [UUID: AsyncStream<PushDelivery>.Continuation]] = [:]
     var lastSnapshot: HelloOk? {
         didSet { self.publishConnectedServerLease() }
+    }
+
+    /// Whether the connected Gateway granted `scope` (admin grants all). A hello without a scope
+    /// list predates scope reporting and is treated as granting it, as before.
+    func grantsScope(_ scope: String) -> Bool {
+        guard let scopes = self.lastSnapshot?.advertisedOperatorScopes() else { return true }
+        return scopes.contains(scope) || scopes.contains("operator.admin")
     }
 
     nonisolated var connectedEndpointRevision: UInt64? {
@@ -1022,13 +1039,14 @@ extension GatewayConnection {
             throw CancellationError()
         }
         let activationBindingKey = self.activationBindingKeyProvider()
-        let sessionBox = self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
-            WebSocketSessionBox(session: GatewayTLSPinningSession(
-                params: GatewayTLSParams(
-                    required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
-                allowsRedirects: false,
-                allowsStoredCredentials: false))
-        }
+        let sessionBox = endpoint.openClawIDSession ??
+            self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
+                WebSocketSessionBox(session: GatewayTLSPinningSession(
+                    params: GatewayTLSParams(
+                        required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                    allowsRedirects: false,
+                    allowsStoredCredentials: false))
+            }
         let client = GatewayChannelActor(
             url: config.url,
             token: browserSession == nil ? config.token : nil,
@@ -1198,15 +1216,17 @@ extension GatewayConnection {
         }
     }
 
+    @discardableResult
     func _test_handlePush(
         _ push: GatewayPush,
         routeGeneration: UInt64? = nil,
-        socketGeneration: UInt64)
+        socketGeneration: UInt64) -> [Int]
     {
         self.handle(
             push: push,
             routeGeneration: routeGeneration ?? self.routeGeneration,
             socketGeneration: socketGeneration)
+        return self.subscribers.values.map(\.droppedCount).sorted()
     }
 
     func _test_handleDisconnect(
@@ -1378,15 +1398,19 @@ extension GatewayConnection {
         return self.cachedGatewayVersion()
     }
 
-    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<PushDelivery> {
+    func subscribe(
+        bufferingNewest: Int = 100,
+        matching: @escaping @Sendable (EventFrame) -> Bool = { _ in true }) -> AsyncStream<PushDelivery>
+    {
         let id = UUID()
         let snapshot = self.lastSnapshot
         let connection = self
         return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
+            let subscriber = Subscriber(continuation: continuation, matches: matching)
+            self.subscribers[id] = subscriber
             if let snapshot, let delivery = self.makePushDelivery(.snapshot(snapshot)) {
-                continuation.yield(delivery)
+                self.yield(delivery, to: id, subscriber: subscriber)
             }
-            self.subscribers[id] = continuation
             #if DEBUG
             let waiters = self.subscriberWaitersForTesting
             self.subscriberWaitersForTesting.removeAll()
@@ -1401,7 +1425,29 @@ extension GatewayConnection {
     }
 
     private func removeSubscriber(_ id: UUID) {
-        self.subscribers[id] = nil
+        guard let subscriber = self.subscribers.removeValue(forKey: id),
+              subscriber.droppedCount > 0 else { return }
+        // At most two content-free records per subscriber: first drop and lifetime total.
+        gatewayConnectionLogger.warning("push subscriber ended; dropped=\(subscriber.droppedCount, privacy: .public)")
+    }
+
+    private func yield(_ delivery: PushDelivery, to id: UUID, subscriber: Subscriber) {
+        switch subscriber.continuation.yield(delivery) {
+        case .dropped:
+            break
+        case .terminated:
+            self.removeSubscriber(id)
+            return
+        case .enqueued:
+            return
+        @unknown default:
+            return
+        }
+        // Only overflow mutates diagnostics; ordinary delivery does no logging work.
+        if subscriber.droppedCount < Int.max { self.subscribers[id]?.droppedCount += 1 }
+        if subscriber.droppedCount == 0 {
+            gatewayConnectionLogger.warning("push subscriber buffer overflow; further drops counted until termination")
+        }
     }
 
     func makePushDelivery(_ push: GatewayPush) -> PushDelivery? {
@@ -1451,8 +1497,8 @@ extension GatewayConnection {
             currentOwner: { [weak self] in
                 self?.publicationIsCurrent(lease, connected: false) == true
             })
-        for continuation in self.subscribers.values {
-            continuation.yield(delivery)
+        for (id, subscriber) in self.subscribers {
+            self.yield(delivery, to: id, subscriber: subscriber)
         }
     }
 
@@ -1476,8 +1522,11 @@ extension GatewayConnection {
             }
         }
         guard let delivery = self.makePushDelivery(push) else { return }
-        for (_, continuation) in self.subscribers {
-            continuation.yield(delivery)
+        for (id, subscriber) in self.subscribers {
+            // Filter only server events, before buffering. Snapshots, sequence gaps,
+            // and route/disconnect publications retain their delivery contracts.
+            if case let .event(event) = push, !subscriber.matches(event) { continue }
+            self.yield(delivery, to: id, subscriber: subscriber)
         }
         if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
@@ -1510,60 +1559,6 @@ extension GatewayConnection {
 // MARK: - Typed gateway API
 
 extension GatewayConnection {
-    struct ConfigGetSnapshot: Decodable {
-        struct SnapshotConfig: Decodable {
-            struct Session: Decodable {
-                let mainKey: String?
-                let scope: String?
-            }
-
-            let session: Session?
-        }
-
-        let config: SnapshotConfig?
-    }
-
-    static func mainSessionKey(fromConfigGetData data: Data) throws -> String {
-        let snapshot = try JSONDecoder().decode(ConfigGetSnapshot.self, from: data)
-        let scope = snapshot.config?.session?.scope?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if scope == "global" {
-            return "global"
-        }
-        return "main"
-    }
-
-    func mainSessionKey(timeoutMs: Double = 15000) async -> String {
-        if let cached = cachedMainSessionKey() {
-            return cached
-        }
-        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
-    }
-
-    /// The resolved key belongs to this hello's physical socket. Callers must
-    /// recheck the lease synchronously when presenting it outside this actor.
-    func mainSessionKey(ifCurrentServerLease lease: ServerLease, timeoutMs: Double = 15000) async throws -> String {
-        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
-        if let cached = self.cachedMainSessionKey() { return cached }
-        do {
-            let data = try await self.request(
-                method: "config.get", params: nil, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
-            return try Self.mainSessionKey(fromConfigGetData: data)
-        } catch {
-            try Task.checkCancellation()
-            guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
-            return "main"
-        }
-    }
-
-    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
-        do {
-            let data = try await request(method: "config.get", params: nil, timeoutMs: timeoutMs)
-            return try Self.mainSessionKey(fromConfigGetData: data)
-        } catch {
-            return "main"
-        }
-    }
-
     func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
         do {
             try await self.requestVoid(method: .setHeartbeats, params: ["enabled": AnyCodable(enabled)])
@@ -1664,6 +1659,8 @@ extension GatewayConnection {
         agentID: String? = nil,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        cursor: String? = nil,
+        maxBytes: Int? = nil,
         timeoutMs: Int? = nil,
         inputRunIDs: [String]? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
@@ -1674,6 +1671,8 @@ extension GatewayConnection {
             limit: limit,
             maxChars: maxChars,
             inputRunIDs: inputRunIDs,
+            cursor: cursor,
+            maxBytes: maxBytes,
             timeoutMs: timeoutMs)
         let data = try await self.requestHistory(request, ifCurrentRoute: route)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)

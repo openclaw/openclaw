@@ -151,9 +151,9 @@ onboarding.
                 thinkingLevelMap: {
                   off: null,
                   minimal: null,
-                  low: "low",
+                  low: null,
                   medium: null,
-                  high: "high",
+                  high: null,
                   xhigh: "max",
                   max: "max",
                 },

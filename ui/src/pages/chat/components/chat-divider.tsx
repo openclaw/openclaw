@@ -1,38 +1,52 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, lazy, Match, Show, Switch } from "solid-js";
+import { createMemo, Errored, For, lazy, Loading, Match, Show, Switch } from "solid-js";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
+import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
 } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { ChatPermissionCard } from "./chat-message-deferred.tsx";
 import { formatModelLabel } from "./chat-model-picker-options.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 export type ChatNoticeProps = {
   item: Extract<ChatItem, { kind: "notice" }>;
   onPermissionRetry?: (message: string) => void;
   modelCatalog?: ModelCatalogEntry[];
-  recovery?: Pick<
-    ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
-  >;
+  recovery?: Partial<Pick<ChatThreadProps, "sessionKey">> &
+    Pick<
+      ChatThreadProps,
+      | "currentAgentId"
+      | "fullMessageAgentId"
+      | "failureActionsRunId"
+      | "runActive"
+      | "runWorking"
+      | "onRetryRun"
+      | "onStartNewSession"
+      | "onDismissPendingInput"
+    >;
 };
 
 // Text-only notices paint with their transcript row; only interactive cards load later.
-const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
-  export: "ChatPermissionCard",
-});
 const ChatSkillLearnedNotice = lazy(() => import("./chat-skill-learned-notice.tsx"), {
   export: "ChatSkillLearnedNotice",
+});
+const ModelProviderIcon = lazy(() => import("../../../lib/reactive/provider-presentation.tsx"), {
+  export: "ModelProviderIcon",
 });
 
 function SystemLine(props: {
@@ -40,37 +54,21 @@ function SystemLine(props: {
   label: string;
   children?: JSX.Element;
   metric?: string;
-  compaction?: "active" | "complete";
 }) {
   return (
     <div
       class="chat-divider__rule"
-      role={props.compaction ? "status" : "separator"}
-      aria-live={props.compaction ? "polite" : undefined}
+      role="separator"
       aria-label={props.metric ? `${props.label}, ${props.metric}` : props.label}
     >
       <span class="chat-divider__line" />
       <span class="chat-divider__label">
-        <Show
-          when={props.compaction}
-          fallback={
-            <Show when={props.icon}>
-              {(icon) => (
-                <span class="chat-divider__icon" aria-hidden="true">
-                  <Icon name={icon()} />
-                </span>
-              )}
-            </Show>
-          }
-        >
-          <span class="chat-compaction__glyph" aria-hidden="true">
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <span class="chat-compaction__line" />
-            <Icon name="check" />
-          </span>
+        <Show when={props.icon}>
+          {(icon) => (
+            <span class="chat-divider__icon" aria-hidden="true">
+              <Icon name={icon()} />
+            </span>
+          )}
         </Show>
         <span class="chat-divider__title">{props.children ?? props.label}</span>
         <Show when={props.metric}>
@@ -88,19 +86,11 @@ function SystemLine(props: {
 export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }> }) {
   return (
     <div
-      class={[
-        "chat-divider",
-        props.item.compaction ? `chat-compaction chat-compaction--${props.item.compaction}` : "",
-      ]}
+      class="chat-divider"
       data-chat-row-key={props.item.key}
       data-ts={String(props.item.timestamp)}
     >
-      <SystemLine
-        icon={props.item.icon}
-        label={props.item.label}
-        metric={props.item.metric}
-        compaction={props.item.compaction}
-      />
+      <SystemLine icon={props.item.icon} label={props.item.label} metric={props.item.metric} />
       <Show when={props.item.description}>
         <div class="chat-divider__details">
           <span class="chat-divider__description">{props.item.description}</span>
@@ -113,6 +103,7 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
 function NoticeBody(props: { text: string }) {
   return (
     <MarkdownHtml
+      ref={elementRef(registerChatSearchTextBlock)}
       class="chat-text chat-notice__body"
       dir={detectTextDirection(props.text)}
       markdown={props.text}
@@ -133,7 +124,7 @@ function InlineNotice(props: ChatNoticeProps) {
         <span class="chat-notice-inline__icon" aria-hidden="true">
           <Icon name={props.item.icon ?? "cpu"} />
         </span>
-        <strong class="chat-notice-inline__label">{props.item.label}</strong>
+        <span class="chat-notice-inline__label">{props.item.label}</span>
         <Show when={props.item.showTimestamp}>
           <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
         </Show>
@@ -154,8 +145,8 @@ function NoticeModel(props: {
 }) {
   const reference = createMemo(() => parseProviderModelRef(props.value));
   const provider = () => normalizeChatModelProviderId(reference()?.provider ?? "");
-  const name = createMemo(() => {
-    const entry = props.catalog?.find((candidate) => {
+  const catalogEntry = createMemo(() =>
+    props.catalog?.find((candidate) => {
       const ref = parseProviderModelRef(
         buildQualifiedChatModelValue(candidate.id, candidate.provider),
       );
@@ -163,19 +154,37 @@ function NoticeModel(props: {
         ref?.model === reference()?.model &&
         normalizeChatModelProviderId(ref?.provider ?? "") === provider()
       );
-    });
+    }),
+  );
+  const name = createMemo(() => {
+    const entry = catalogEntry();
     return formatModelLabel({
       provider: provider(),
       label: entry?.name.trim() || entry?.alias?.trim() || reference()?.model || props.value,
     });
   });
+  const icon = () => (
+    <ProviderBrandIcon
+      provider={provider()}
+      presentation={catalogEntry()}
+      class="chat-divider__icon"
+    />
+  );
   return (
     <span class="chat-divider__model" title={props.value}>
       <Show when={props.prefix}>
         <span class="chat-divider__model-affix">{props.prefix}</span>
       </Show>
       <Show when={provider()}>
-        <ProviderBrandIcon provider={provider()} class="chat-divider__icon" />
+        <Errored fallback={icon}>
+          <Loading fallback={icon()}>
+            <ModelProviderIcon
+              provider={provider()}
+              presentation={catalogEntry()}
+              class="chat-divider__icon"
+            />
+          </Loading>
+        </Errored>
       </Show>
       <bdi>{name()}</bdi>
       <Show when={props.suffix}>
@@ -272,12 +281,10 @@ export function ChatNoticeDetails(props: ChatNoticeProps) {
     >
       <Match when={props.item.permissionMissing}>
         <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
-          <ChatLazyBoundary>
-            <ChatPermissionCard
-              request={props.item.permissionMissing!}
-              onRetry={props.onPermissionRetry}
-            />
-          </ChatLazyBoundary>
+          <ChatPermissionCard
+            request={props.item.permissionMissing!}
+            onRetry={props.onPermissionRetry}
+          />
         </div>
       </Match>
       <Match when={props.item.collapsedBody && props.item.text}>

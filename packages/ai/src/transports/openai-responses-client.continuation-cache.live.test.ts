@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { writerState } from "../provider-state.test-support.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
@@ -50,16 +51,11 @@ async function run(context: Context, sessionId: string): Promise<AssistantMessag
   const stream = await createOpenAIResponsesTransportStreamFn()(model(), context, {
     apiKey: OPENAI_KEY,
     sessionId,
+    ...writerState(sessionId),
     transport: "sse",
     reasoningEffort: "low",
     maxTokens: 256,
-    // buildOpenAIResponsesParams resolves the shared payload policy with
-    // storeMode:"disable" -- store:true (and therefore HTTP continuation
-    // eligibility) only ever comes from a caller-supplied onPayload, the
-    // same hook the real per-session/model continuation decision threads
-    // through above this package. Forcing it here isn't a test-only
-    // shortcut; it's the one real way any caller (test or production) gets
-    // store:true on this branch.
+    // Native transport defaults are stateless; this fixture opts into stored replies.
     onPayload: (payload: Record<string, unknown>) => ({ ...payload, store: true }),
   } as never);
   return stream.result();

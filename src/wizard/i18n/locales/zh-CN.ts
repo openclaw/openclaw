@@ -229,8 +229,11 @@ export const zh_CN = {
       currentNotInCatalog: "当前值（不在目录中）",
       allowed: "已允许",
       allowedNotInCatalog: "已允许（不在目录中）",
+      fallbackText: "备用模型（逗号分隔 provider/model；留空则保留当前值）",
+      fallbackPicker: "备用模型（多选）",
       allowlistPicker: "/model 选择器中的模型（多选）",
       allowlistText: "允许的模型（逗号分隔 provider/model；留空则保留当前值）",
+      clearFallbacks: "从备用模型中移除这些模型？",
       clearAllowlist: "清空模型允许列表？（将显示所有模型）",
       configured: "已配置",
       configuredNotInCatalog: "已配置（不在目录中）",
@@ -326,13 +329,15 @@ export const zh_CN = {
       laneQuickHint: "查找 AI 访问方式，由你选择要验证的连接，然后打开网页仪表板。",
       laneCustomLabel: "自定义设置",
       laneCustomHint: "逐项选择所有设置选项。",
+      quickstartKeepRunningQuestion: "让 OpenClaw 在后台持续运行？",
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
-      quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",
-      quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
+      quickstartBackground: "如需以后让网关在后台持续运行，请运行：{command}",
+      quickstartReopen:
+        "运行 {tuiCommand} 打开 TUI，或运行 {dashboardCommand} 重新打开网页仪表板。",
       quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
       quickstartGatewayPending:
-        "网关尚不可达。请保持此终端打开，并运行 openclaw gateway status 检查启动状态。",
+        "网关尚不可达。请保持此终端打开，并运行 {statusCommand} 检查启动状态。",
       accessFullHint: "我会查找这台机器上的 AI 应用和密钥；由你选择要测试的连接。",
       accessFullLabel: "完全访问 — 自动发现一切",
       accessGuardedHint: "查找前我会先征求你的同意，你也可以手动配置。",
@@ -392,7 +397,7 @@ export const zh_CN = {
       nextSteps:
         "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
-        "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
+        "工作区：{workspace}\n稍后添加 AI：重新运行 `{onboardCommand}`\n连接 AI 后添加频道：`{channelsCommand}`\n打开 dashboard：`{dashboardCommand}`",
       nextStepsTitle: "下一步",
       noInferenceOptions:
         "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",
@@ -472,6 +477,8 @@ export const zh_CN = {
       testAiProgress: "正在用真实 completion 测试 AI 访问…",
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
+      utilityOnlyNote: "请为 agent 对话选择提供商，或选择暂时跳过。",
+      utilityOnlyTitle: "选择 agent 的模型",
       whatSetup: "你想设置什么？",
       workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
       workspaceConflictNotice:
@@ -1089,6 +1096,8 @@ export const zh_CN = {
     channelsPrimer: {
       approveWith: "批准配对：{command}",
       docs: "文档：{link}",
+      credentialStorage:
+        "直接输入受支持的凭据会将其保存到共享密钥库。Gateway 运行时，从 CLI 执行此操作需要本地 Gateway 管理员权限。如果没有该权限，请在频道支持的情况下使用现有的密钥引用，或先停止 Gateway 再输入凭据。",
       inboundSafety: "入站 DM 安全默认使用配对：未知发送者会先获得配对码。",
       multiUserDm:
         '多用户 DM 请隔离会话：{command}（多账号频道也可用 "per-account-channel-peer"）。',

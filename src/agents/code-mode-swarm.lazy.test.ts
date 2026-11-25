@@ -58,7 +58,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   try {
     const { applyCodeModeCatalog, createCodeModeTools, resolveCodeModeConfig } =
       await import("./code-mode.js");
-    const { clearToolSearchCatalog, createToolSearchCatalogRef } =
+    const { clearToolSearchCatalog, createToolSearchCatalogRef, resolveCatalog } =
       await import("./tool-search-catalog.js");
     const { ToolSearchRuntime } = await import("./tool-search-runtime.js");
     const { toToolSearchConfig } = await import("./code-mode-runtime.js");
@@ -118,7 +118,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
             runtime,
             ctx,
             catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false })),
-            namespaceRuntime: createCodeModeNamespaceRuntime(runtime.namespaceEntries()),
+            namespaceRuntime: createCodeModeNamespaceRuntime(resolveCatalog(ctx).entries),
             parentToolCallId: "swarm-call",
             codeModeRunId: "replay",
             remainingMs: 10_000,

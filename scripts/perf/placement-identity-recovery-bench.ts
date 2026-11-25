@@ -5,6 +5,9 @@
  *   --state-dir "$PWD/.local/recovery-base" \
  *   --retained 10000 --active 16 --iterations 3200 --warmup 128
  * Repeat separately with --allocations; sampled timings are not CPU evidence.
+ * --trigger sweep --active 200 --retained 5000 --iterations 30 --warmup 5 measures
+ * minute sweeps through the real scheduler. --environment-changes commits one
+ * synthetic provider diagnostic per sweep to exercise identity invalidation.
  * --owner may select a historical startup module copied beside the original so
  * its relative imports keep resolving against the same dependency revision.
  * Each iteration emits one unrelated deletion, waits for retirement and any recovery,
@@ -35,10 +38,13 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "128" },
     allocations: { type: "boolean", default: false },
     owner: { type: "string" },
+    trigger: { type: "string", default: "identity" },
+    "environment-changes": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a fresh synthetic state directory");
 assert(global.gc, "Run with --expose-gc");
+assert(values.trigger === "identity" || values.trigger === "sweep");
 const integer = (key: "retained" | "active" | "iterations" | "warmup", min: number) =>
   parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
 const retained = integer("retained", 1);
@@ -131,6 +137,8 @@ try {
       profileSnapshot: { settings: {}, executionMode: "remote-exec" },
       preparation: null,
       provisionOperationId: `synthetic-provision-${index}`,
+      resourceReceipt: null,
+      retention: null,
       nodeSetupId: null,
       nodeDeviceId: `synthetic-device-${index}`,
       sharedHost: false,
@@ -166,6 +174,21 @@ try {
     throw new Error("Healthy recovery benchmark attempted an effect");
   };
   let projectionReads = 0;
+  let evidenceSubjects = 0;
+  let identityInventories = 0;
+  const listIdentities = placements.listSessionIdentitiesAsync.bind(placements);
+  placements.listSessionIdentitiesAsync = async () => {
+    identityInventories++;
+    const identities = await listIdentities();
+    evidenceSubjects += identities.length;
+    return identities;
+  };
+  const getMany = placements.getManyAsync;
+  placements.getManyAsync = async (...args) => {
+    const found = await getMany(...args);
+    evidenceSubjects += found.size;
+    return found;
+  };
   const readProjection = placements.readProjection.bind(placements);
   placements.readProjection = (...args) => {
     projectionReads++;
@@ -274,12 +297,23 @@ try {
   const run = async (count: number) => {
     for (let index = 0; index < count; index++) {
       publicationSettled = Promise.withResolvers<void>();
-      emitSessionIdentityMutation({
-        kind: "delete",
-        agentId: "main",
-        databaseIdentity,
-        previous: { sessionId: `deleted-${event++}`, sessionKeys: ["agent:main:deleted"] },
-      });
+      if (values.trigger === "sweep") {
+        if (values["environment-changes"]) {
+          await environmentStore.recordError({
+            environmentId: "synthetic-environment-0",
+            state: "attached",
+            error: `synthetic provider observation ${event++}`,
+          });
+        }
+        await time.advanceBy(60_000);
+      } else {
+        emitSessionIdentityMutation({
+          kind: "delete",
+          agentId: "main",
+          databaseIdentity,
+          previous: { sessionId: `deleted-${event++}`, sessionKeys: ["agent:main:deleted"] },
+        });
+      }
       await publicationSettled.promise;
       // Release the runtime's tracked operation before publishing the next event.
       await nextTurn();
@@ -290,6 +324,7 @@ try {
   await nextTurn();
   projectionReads = 0;
   sweeps = 0;
+  evidenceSubjects = identityInventories = 0;
   const memoryBefore = process.memoryUsage();
   const loadBefore = loadavg();
   if (values.allocations) {
@@ -320,12 +355,12 @@ try {
   assert.deepEqual(await readProjection(activeIds, { current: true }), projectionBefore);
   console.log(
     JSON.stringify({
-      workload:
-        "unrelated session identity deletions; real runtime subscription and persisted reads; no Gateway RPC",
+      workload: `${values.trigger}; real Gateway placement startup and scheduled sweep; synthetic provider; persisted reads; no Gateway RPC`,
       ownerSourceSha256,
       host: hostname(),
       node: process.version,
       allocationSampling: values.allocations,
+      environmentChanges: values["environment-changes"],
       retained,
       active,
       iterations,
@@ -335,6 +370,8 @@ try {
       outputSha256: createHash("sha256").update(JSON.stringify(before)).digest("hex"),
       projectionReads: measuredReads,
       recoverySweeps: sweeps,
+      evidenceSubjects,
+      identityInventories,
       modeledRecoveriesPerMinuteAtSixEvents: (measuredReads / iterations) * 6 + active,
       readsPerNotification: measuredReads / iterations,
       readsPerMinute: (measuredReads * 60_000) / elapsedMs,

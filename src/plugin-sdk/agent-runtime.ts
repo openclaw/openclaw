@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER as CORE_DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveThinkingDefaultWithRuntimeCatalogCore } from "../agents/model-thinking-default.js";
 import {
   readPreparedModelCatalog,
@@ -18,7 +19,12 @@ export {
 } from "../agents/agent-scope.js";
 export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 
-export { DEFAULT_PROVIDER } from "../agents/defaults.js";
+/**
+ * @deprecated No model is configured by default anymore. Read the agent's model with
+ * `resolveDefaultModelForAgent`, which returns undefined when none is configured. This
+ * export remains only the provider assumed for a bare model id during the SDK deprecation window.
+ */
+export const DEFAULT_PROVIDER = CORE_DEFAULT_PROVIDER;
 // Consumed by the codex plugin's app-server usage surface.
 export { CODEX_APP_SERVER_AUTH_MARKER } from "../agents/model-auth-markers.js";
 export { resolveAgentAvatar } from "../agents/identity-avatar.js";
@@ -31,8 +37,8 @@ export {
 } from "../agents/identity.js";
 
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
-export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
-export type { ModelCatalogEntry } from "../agents/model-catalog.js";
+export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog-lookup.js";
+export type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 /** Preserve the shipped SDK getter's background renewal; internal observations stay passive. */
 export { refreshExpiredPreparedModelCatalog as getPreparedModelCatalogSnapshot };
 

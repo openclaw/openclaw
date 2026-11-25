@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, useContext } from "solid-js";
+import { For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -60,6 +60,10 @@ export function CommentPreviewChip(props: {
   triggerRef?: (element: HTMLButtonElement) => void;
 }) {
   const ref = scrollRef();
+  const label = () =>
+    t(props.count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
+      count: String(props.count),
+    });
   let trigger: HTMLButtonElement | undefined;
   // Wide previews need the full inline area to flip without covering their trigger.
   return (
@@ -74,10 +78,13 @@ export function CommentPreviewChip(props: {
       prop:hoverDismissDelay={props.removal ? 200 : undefined}
     >
       <AttachmentPreviewChip
-        label={t(
-          props.count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount",
-          { count: String(props.count) },
-        )}
+        label={
+          <For each={label().split(/(\s+)/u)}>
+            {(part) =>
+              /^\s+$/u.test(part) ? <span class="chat-comment-count-gap">{part}</span> : part
+            }
+          </For>
+        }
         icon={<Icon name="messageSquare" />}
         onReveal={props.onReveal}
         onClick={props.onReveal}

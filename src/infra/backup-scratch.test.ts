@@ -299,7 +299,7 @@ it("preserves a symlink target when scratch is replaced after transaction retire
   await expectContents(protectedFile, "unrelated data");
 });
 
-it("preserves retired scratch for maintenance instead of admitting it", async () => {
+it("preserves retired scratch for maintenance and admits only fresh scratch", async () => {
   const root = dirs.make("backup-scratch-admission-");
   const acquire = tokens.acquireSqliteStagingToken;
   let retired: string | undefined;
@@ -310,9 +310,14 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
     }
     return acquire(directory, mode, options);
   });
-  await expect(createScratch(root)).rejects.toBeInstanceOf(tokens.SqliteStagingRetiredError);
-  const report = await inspect(root);
-  expect(report).toMatchObject({ reclaimed: [retired], active: [] });
+  const fresh = await createScratch(root);
+  try {
+    expect(fresh.directory).not.toBe(retired);
+    const report = await inspect(root);
+    expect(report).toMatchObject({ reclaimed: [retired], active: [fresh.directory] });
+  } finally {
+    await finishScratch(fresh);
+  }
 });
 
 it("preserves unknown contents, legacy scratch, rollback directories and symbolic links", async () => {
@@ -342,6 +347,24 @@ it("preserves unknown contents, legacy scratch, rollback directories and symboli
   for (const directory of [legacy, rollback]) {
     await expectContents(path.join(directory, "archive.tar.gz"), "preserved archive");
   }
+});
+
+it("preserves a verifier payload containing a symbolic link", async () => {
+  const root = dirs.make("backup-scratch-verifier-link-");
+  const scratch = await createScratch(root);
+  const input = path.join(root, "input");
+  await fs.mkdir(input);
+  await fs.writeFile(path.join(input, "archive.tar.gz"), "preserved archive");
+  const payload = path.join(scratch.directory, "payload");
+  await fs.mkdir(payload);
+  const link = path.join(payload, "redirected");
+  await fs.symlink(input, link, linkType);
+  scratch.release();
+  const report = await inspect(root);
+  expect(report.reclaimed).toEqual([]);
+  expect(report.warnings).toEqual([expect.stringContaining(link)]);
+  await expectContents(path.join(input, "archive.tar.gz"), "preserved archive");
+  await expect(fs.lstat(link)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
 });
 
 it.each(["admitted", "creating"] as const)(

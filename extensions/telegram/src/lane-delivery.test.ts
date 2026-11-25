@@ -197,20 +197,20 @@ describe("createLaneTextDeliverer", () => {
     }
   });
 
-  it("retains the streamed message when stop may have landed without a message id", async () => {
-    const answer = createTestDraftStream();
-    answer.sendMayHaveLanded.mockReturnValue(true);
+  // A lost first send retains the final only when that send carried the final itself.
+  it.each([
+    [HELLO_FINAL, "preview-retained", 0],
+    ["Hello", "sent", 1],
+  ] as const)("after a lost first send of %j the final is %s", async (preview, kind, sends) => {
+    const api = { sendMessage: vi.fn().mockRejectedValue(new Error("socket hang up")) };
+    const answer = createTelegramDraftStream({ api: api as never, chatId: "123", throttleMs: 250 });
+    answer.update(preview);
+    await answer.flush();
     const harness = createHarness({ answerStream: answer });
 
-    expect(await deliver(harness, HELLO_FINAL)).toMatchObject({
-      kind: "preview-retained",
-      deliveryResult: {
-        visibleReplySent: false,
-        suppression: { reason: "adapter_returned_no_identity" },
-      },
-    });
-    expect(answer.update).toHaveBeenCalledWith(HELLO_FINAL);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect((await deliver(harness, HELLO_FINAL)).kind).toBe(kind);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(sends);
+    expect(api.sendMessage).toHaveBeenCalledOnce();
   });
 
   it("waits for a concrete streamed tool message before attaching buttons", async () => {

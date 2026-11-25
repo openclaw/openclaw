@@ -36,15 +36,12 @@ import {
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { resolveUpdateRunVerifiedServingVersion } from "../../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import {
-  resolveUpdateRunVerifiedServingVersion,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
-import { GitCleanupReportingError } from "../../infra/update-runner-git-cleanup.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
@@ -60,6 +57,7 @@ import {
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -234,6 +232,8 @@ export function formatUpdateFinalizationError(error: unknown): string {
 
 export type MutableUpdateExecutionResult = {
   mutationStarted: boolean;
+  /** A candidate Doctor or boot check may have written live state; only then can its schema have moved. */
+  candidateOpenedState: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
@@ -249,31 +249,15 @@ export type MutableUpdateExecutionResult = {
   activationConfig?: UpdateConfigSnapshot;
 };
 
-function primaryUpdateFailure(error: unknown): unknown {
-  // Cleanup aggregation retains the initiating failure as cause. Secondary
-  // diagnostics must not change its admission/revocation classification.
-  const seen = new Set<unknown>();
-  let current = error;
-  while (
-    current instanceof GitCleanupReportingError &&
-    current.cause !== undefined &&
-    !seen.has(current)
-  ) {
-    seen.add(current);
-    current = current.cause;
-  }
-  return current;
-}
-
 export function createUpdateCommandFailureResult(
-  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
+  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs" | "runId"> & {
     failure: { cause: unknown; detail?: string };
     admission?: true;
     phase?: string;
   },
 ): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
-  const cause = primaryUpdateFailure(failure.cause);
+  const cause = failure.cause;
   const ownershipFailure = resolveUpdateOwnershipFailure(failure.cause);
   const refusal = classifyDoctorMaintenanceRefusal(failure.cause);
   const preMutationFailure = cause instanceof UpdatePreMutationError;
@@ -288,18 +272,22 @@ export function createUpdateCommandFailureResult(
     (admissionFailure
       ? `The installation and Gateway were left unchanged. ${failure.detail ?? cause.message}`
       : failure.detail);
-  const reason =
-    cause instanceof UpdateRequesterRevokedError
-      ? cause.code
-      : ownershipFailure && admission
-        ? "config-read-failed"
-        : preMutationFailure || pkgOwnershipFailure
-          ? cause.reason
-          : admissionFailure
-            ? "managed-service-preflight"
-            : lockFailure
-              ? "file_lock_timeout"
-              : "update-failed";
+  // Progress receipts wrap the guard's refusal in their recording failure.
+  const revocation = collectNestedErrorCandidates(cause).find(
+    (candidate): candidate is UpdateRequesterRevokedError =>
+      candidate instanceof UpdateRequesterRevokedError,
+  );
+  const reason = revocation
+    ? revocation.code
+    : ownershipFailure && admission
+      ? "config-read-failed"
+      : preMutationFailure || pkgOwnershipFailure
+        ? cause.reason
+        : admissionFailure
+          ? "managed-service-preflight"
+          : lockFailure
+            ? "file_lock_timeout"
+            : "update-failed";
   const stepResult = preMutationFailure ? cause.stepResult : undefined;
   const doctorFailureFacts = collectUpdateDoctorFailureFacts(failure.cause);
   const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
@@ -336,7 +324,7 @@ export function createUpdateCommandFailureResult(
   return {
     ...result,
     status: "error",
-    reason,
+    reason: cause instanceof UpdateActivationTimeoutError ? cause.reason : reason,
     failedStep,
     steps: stepResult?.failedStep ? stepResult.steps : [...(stepResult?.steps ?? []), failedStep],
   };
@@ -369,13 +357,8 @@ export async function resolveMutableUpdateFailure(params: {
   if (hasCommandProcessCleanupError(params.cause)) {
     throw params.cause;
   }
-  const primary = primaryUpdateFailure(params.cause);
-  if (primary instanceof UpdateCommandPendingRecoveryFailure) {
-    throw primary === params.cause
-      ? primary
-      : new UpdateCommandPendingRecoveryFailure(primary.result, formatErrorMessage(params.cause), {
-          cause: params.cause,
-        });
+  if (params.cause instanceof UpdateCommandPendingRecoveryFailure) {
+    throw params.cause;
   }
   const failure = {
     cause: params.cause,
@@ -402,7 +385,7 @@ export async function resolveMutableUpdateFailure(params: {
       mode: params.mode,
       root: params.root,
       recovery:
-        primary instanceof UpdatePreMutationError || isUpdateStateReadContention(params.cause)
+        params.cause instanceof UpdatePreMutationError || isUpdateStateReadContention(params.cause)
           ? await params.originalRecovery()
           : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       failure,
@@ -520,7 +503,7 @@ export type UpdateAdmissionReportParams = {
 
 export function createPreMutationUpdateResult(
   params: UpdateAdmissionReportParams,
-  outcome: Pick<UpdateRunResult, "status" | "recovery">,
+  outcome: Pick<UpdateRunResult, "status" | "recovery" | "runId">,
   phase = "requested",
 ): UpdateRunResult {
   const run = params.opts.run;

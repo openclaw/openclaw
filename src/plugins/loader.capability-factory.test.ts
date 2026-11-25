@@ -19,7 +19,7 @@ import type {
 } from "./capability-catalog-context.types.js";
 import { createCatalogContextFixture } from "./capability-catalog.test-support.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
-import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
@@ -81,14 +81,11 @@ async function withFactoryPlugin(
     };`,
   });
   if (manifest) {
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        configSchema: { type: "object", additionalProperties: false },
-        ...manifest,
-      }),
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: plugin.id,
+      configSchema: { type: "object", additionalProperties: false },
+      ...manifest,
+    });
   }
   await withEnvAsync(
     {
@@ -165,6 +162,29 @@ it("retains the creating cache generation when broad services initialize later",
   });
   expect(loadRuntimeModule).toHaveBeenCalledTimes(1);
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
+});
+
+it("keeps system reads cold and resolves synchronous event admission in its creating cache", () => {
+  const owner = createPluginCache();
+  const replacement = createPluginCache();
+  const receipt = { id: "event", cancel: () => false, accepted: Promise.resolve({ ok: true }) };
+  const enqueueSessionEventForHost = vi.fn(() => receipt);
+  const load = vi.spyOn(nativeModuleRequire, "tryNativeRequireModule").mockImplementation(() => {
+    expect(getPluginCache()).toBe(owner);
+    return { ok: true, moduleExport: { enqueueSessionEventForHost } };
+  });
+  const runtime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  const system = { ...runtime.system };
+  expect(load).not.toHaveBeenCalled();
+  withPluginCache(replacement, () => {
+    for (let i = 0; i < 2; i++) {
+      expect(system.enqueueSessionEvent("done", { agentId: "main", sessionKey: "main" })).toBe(
+        receipt,
+      );
+    }
+  });
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(enqueueSessionEventForHost).toHaveBeenCalledTimes(2);
 });
 
 describe("capability factory registration", () => {

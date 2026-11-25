@@ -121,6 +121,11 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         const recordsWarning = command !== "resume-unowned" && command !== "resume-write-failure";
         if (command.startsWith("resume")) {
           const parent = createUpdateRun({ trigger: "cli" });
+          recordUpdateRunStep(parent.runId, { step: "openclaw doctor", status: "completed" });
+          recordUpdateRunStep(parent.runId, {
+            step: "post-update verification",
+            status: "in_progress",
+          });
           if (command !== "resume-unowned") {
             adoptUpdateRun(parent.runId);
           }

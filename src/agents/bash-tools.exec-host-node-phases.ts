@@ -4,7 +4,6 @@ import {
   SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
   type SystemRunExecutionContext,
 } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -42,7 +41,6 @@ import {
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
-import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
@@ -50,7 +48,7 @@ import {
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -241,7 +239,6 @@ export function buildNodeSystemRunInvoke(params: {
 }
 
 export async function dispatchNodeSystemRun(params: {
-  source?: SessionSourceAssertion;
   request: ExecuteNodeHostCommandParams;
   target: NodeExecutionTarget;
   invoke: Record<string, unknown>;
@@ -249,15 +246,13 @@ export async function dispatchNodeSystemRun(params: {
 }): Promise<AgentToolResult<ExecToolDetails>> {
   const startedAt = Date.now();
   params.request.signal?.throwIfAborted();
-  const result = await runWithAgentToolSourceExecutionScope(params.source, () =>
-    invokeNodeSystemRun({
-      source: params.source,
-      invokeWaitMs: params.target.invokeWaitMs,
-      invoke: params.invoke,
-      scopes: params.scopes,
-      signal: params.request.signal,
-    }),
-  );
+  const result = await invokeNodeSystemRun({
+    invokeWaitMs: params.target.invokeWaitMs,
+    invoke: params.invoke,
+    scopes: params.scopes,
+    signal: params.request.signal,
+  });
+  const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
   if (!result.ok) {
     return formatNodeInvokeFailureToolResult({
       failure: result.failure,
@@ -265,10 +260,9 @@ export async function dispatchNodeSystemRun(params: {
       command: params.request.command,
       startedAt,
       cwd: params.request.workdir,
-      warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+      warnings,
     });
   }
-  const warnings = [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])];
   const payloadObj = asNullableRecord(asNullableRecord(result.raw)?.payload) ?? {};
   const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
   const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
@@ -303,6 +297,7 @@ export async function dispatchNodeSystemRun(params: {
       nodeId: params.target.nodeId,
       ...(timedOut ? { timedOut: true } : {}),
       cwd: params.request.workdir,
+      ...(warnings.length ? { warningText: warnings.join("\n") } : {}),
     } satisfies ExecToolDetails,
   };
 }
@@ -492,13 +487,13 @@ export async function analyzeNodeApprovalRequirement(params: {
               }
               const coverage =
                 params.prepared.allowAlwaysCoverage ??
-                resolveAllowAlwaysPatternCoverage({
+                (await resolveAllowAlwaysPatternCoverage({
                   segments: [...entry.allowlistEval.segments],
                   cwd: entry.cwd,
                   env: analysisEnv,
                   platform: params.target.platform,
                   strictInlineEval: params.request.strictInlineEval,
-                });
+                }));
               const expectedPatterns = coverage.patterns.map(
                 (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
               );
@@ -581,7 +576,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       params.request.autoReview === true &&
       (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
         ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
-        : resolveAllowAlwaysPersistenceDecision({
+        : await resolveAllowAlwaysPersistenceDecision({
             segments: baseAllowlistEval.segments,
             commandText: approvalCommand,
             cwd: approvalCwd,

@@ -1,6 +1,7 @@
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { selectableRuntimeId } from "../../lib/model-runtime-choice.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
 
@@ -55,11 +56,12 @@ export function createModelProviderStartChat(options: {
       selectedAgentId: string,
     ): Promise<void> {
       try {
+        const agentRuntime = selectableRuntimeId(selectedModel.agentRuntime);
         const key = await context.sessions.create(
           {
             agentId: selectedAgentId,
             model: `${selectedModel.provider}/${selectedModel.id}`,
-            ...(selectedModel.agentRuntime ? { agentRuntime: selectedModel.agentRuntime.id } : {}),
+            ...(agentRuntime ? { agentRuntime } : {}),
           },
           { signal: request.signal },
         );

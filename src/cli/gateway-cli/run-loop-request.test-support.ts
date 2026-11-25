@@ -4,18 +4,17 @@ import { expect, it, vi } from "vitest";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
+import * as loopExit from "./run-loop-exit.js";
 import { gatewayWorkAdmissionActual as admission } from "./run-loop-mocks.test-support.js";
 import {
   createCloseMock,
   createLifecycleGate,
   createRuntimeWithExitSignal,
   createSignaledStart,
-  advanceWithoutCalls,
   systemdReply,
   waitForStart,
   waitForLoopCondition,
   withIsolatedSignals,
-  withLifecycleClock,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -33,14 +32,6 @@ function deferredCall<T = void>() {
 }
 
 const nativeReply = systemdReply("90s");
-
-function shutdownBudget(start: ReturnType<typeof createSignaledStart>["start"]) {
-  const budget = start.mock.calls[0]?.[0]?.hostLifecycle?.getShutdownBudget?.();
-  if (!budget) {
-    throw new Error("Gateway fixture did not publish its shutdown budget");
-  }
-  return budget;
-}
 
 async function loadInstallationReplacement() {
   const { classifyGatewayStaleInstall } = await import("../../gateway/stale-install.js");
@@ -192,62 +183,33 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("bounds signal storage settlement and refuses its result after forced exit", async () => {
-    const consumed = createDeferredCore<{ reason: string } | null>();
-    consumeIntent.mockReturnValueOnce(consumed.promise);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
-      const budget = shutdownBudget(start);
-      vi.useFakeTimers();
-      try {
-        captureSignal("SIGTERM")();
-        await vi.advanceTimersByTimeAsync(budget.timeoutMs);
-        expect(runtime.exit).not.toHaveBeenCalled();
-        consumed.resolve({ reason: "gateway.restart" });
-        await vi.advanceTimersByTimeAsync(0);
-        await expect(exited).resolves.toBe(1);
-        expect(close).toHaveBeenCalledExactlyOnceWith({
-          retainSharedState: true,
-          reason: "gateway stopping",
-        });
-        expect(start).toHaveBeenCalledOnce();
-      } finally {
-        consumed.resolve(null);
-        await vi.advanceTimersByTimeAsync(0);
-        vi.useRealTimers();
-      }
-    });
-  });
-
-  it("keeps the original SIGTERM deadline after delayed intent consumption fails", async () => {
-    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
-    systemctl.mockResolvedValue(nativeReply);
-    const consumed = createDeferredCore<null>();
-    const closing = createDeferredCore();
-    consumeIntent.mockReturnValueOnce(consumed.promise);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
-      close.mockImplementationOnce(() => closing.promise);
-      const budget = shutdownBudget(start);
-      const consumedMs = 10_000;
-      await withLifecycleClock(async () => {
+  it.each(["SIGTERM", "SIGUSR2"] as const)(
+    "continues graceful shutdown after blocked %s intent consumption and ignores its late result",
+    async (signal) => {
+      const consumed = createDeferredCore<{ reason: string } | null>();
+      consumeIntent.mockReturnValueOnce(consumed.promise);
+      await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
+        vi.useFakeTimers();
         try {
-          captureSignal("SIGTERM")();
-          await vi.advanceTimersByTimeAsync(consumedMs);
-          consumed.reject(new Error("restart intent worker unavailable"));
-          await vi.advanceTimersByTimeAsync(0);
+          captureSignal(signal)();
+          if (signal === "SIGUSR2") {
+            captureSignal("SIGTERM")();
+          }
+          await vi.advanceTimersByTimeAsync(1_000);
           expect(close).toHaveBeenCalledOnce();
-          await advanceWithoutCalls(budget.timeoutMs - consumedMs - 1, runtime.exit);
-          await advanceWithoutCalls(1, runtime.exit);
-          closing.resolve();
-          await vi.advanceTimersByTimeAsync(0);
           await expect(exited).resolves.toBe(0);
+          consumed.resolve({ reason: "gateway.restart" });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledOnce();
         } finally {
           consumed.resolve(null);
-          closing.resolve();
           await vi.advanceTimersByTimeAsync(0);
+          vi.useRealTimers();
         }
       });
-    });
-  });
+    },
+  );
 
   it("settles a queued Stop when restart preparation fails before reopening storage", async () => {
     const preparation = deferredCall<{ drained: boolean; active: number }>();
@@ -299,6 +261,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         await refreshed.entered;
         expect(armWatchdog).toHaveBeenCalledOnce();
         captureSignal("SIGINT")();
+        await vi.advanceTimersByTimeAsync(0);
         expectCallCount(1, settle, cancelWatchdog);
         expect(admissionClosed()).toBe(true);
         expect(close).not.toHaveBeenCalled();
@@ -482,6 +445,40 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           "Replacement Stop assertion and cleanup failed",
         );
       });
+    },
+  );
+  it.each([false, true])(
+    "leaves restart ownership with the launcher after installation replacement=%s",
+    async (replaced) => {
+      fixtures.setPlatform("darwin");
+      process.env.OPENCLAW_LAUNCHER_IPC = "1";
+      process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+      restartProcess.mockReturnValue({ mode: "supervised", exitCode: 0 });
+      const nativeHandoff = vi.spyOn(loopExit, "waitForLaunchdRestartHandoff");
+      try {
+        await withReplacement(
+          () => {},
+          async ({ signal, start, exited, replace, close }) => {
+            if (replaced) {
+              replace("Cannot find module", "ERR_MODULE_NOT_FOUND");
+            } else {
+              signal("SIGUSR2")();
+            }
+            await expect(exited).resolves.toBe(0);
+            expectCallCount(1, close, start, acquireGatewayLock);
+            expect(restartProcess).toHaveBeenCalledWith(
+              expect.objectContaining({
+                decision: { mode: "supervised", supervisor: "launcher" },
+              }),
+            );
+            expect(respawnUpdate).not.toHaveBeenCalled();
+            expect(writeHandoff).not.toHaveBeenCalled();
+            expect(nativeHandoff).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        nativeHandoff.mockRestore();
+      }
     },
   );
   it.each([

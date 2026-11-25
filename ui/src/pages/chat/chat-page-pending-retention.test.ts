@@ -82,7 +82,7 @@ it.each(["admission", "rollback"] as const)(
       // History can wait two seconds for its initial stored snapshot before requesting startup.
       await vi.waitFor(() => expect(previousPane.transcriptReady).toBe(true), { timeout: 5_000 });
       await settleChatPage(page);
-      expect(page.textContent).toContain("Previous transcript");
+      await waitForSolid(() => expect(page.textContent).toContain("Previous transcript"));
       expect(startupKeys).toEqual([previousKey]);
       const creation = { sessionKey, admitted: false };
       context.agents.state.pendingAgent = { id: agentId, name: "New agent" };

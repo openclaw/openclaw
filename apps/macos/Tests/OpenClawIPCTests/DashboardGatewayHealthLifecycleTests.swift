@@ -161,7 +161,7 @@ extension DashboardGatewayHealthTests {
             try await TestWait.state("terminated dashboard failure page") {
                 guard controller.isShowingFailurePage, !controller.webView.isLoading else { return false }
                 let text = try? await controller.webView.evaluateJavaScript("document.body.innerText") as? String
-                return text?.contains("Dashboard unavailable") == true
+                return text?.contains("OpenClaw unavailable") == true
             }
             manager.recoverDashboard(controller)
             try await TestWait.state("replacement dashboard controller") {

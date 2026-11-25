@@ -3,12 +3,14 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type { MarkdownIt, Token } from "markdown-it";
 import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-origin.js";
+import { templateCatalogPackageNameFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { releasedSessionQuery } from "../app/released-session-query.ts";
 import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import {
   markdownInlineChildren,
@@ -31,6 +33,10 @@ type SessionPathTarget = {
 
 export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
 
+function markdownLinkUrl(raw: string) {
+  return globalThis.location ? URL.parse(raw, globalThis.location.href) : null;
+}
+
 function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();
   const parsed = parseAgentSessionKey(sessionKey);
@@ -40,23 +46,32 @@ function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   return { sessionKey, agentId: parsed.agentId };
 }
 
-function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?: string) {
-  if (!/^(?:https?:\/\/|\/)/i.test(raw.trim())) {
+function parseMarkdownSessionUrl(
+  raw: string,
+  basePath?: string,
+  mainKey?: string,
+  url = markdownLinkUrl(raw),
+) {
+  if (
+    !url ||
+    !/^(?:https?:\/\/|\/)/i.test(raw.trim()) ||
+    (url.protocol !== "http:" && url.protocol !== "https:")
+  ) {
     return null;
   }
-  try {
-    const url = new URL(raw, globalThis.location.href);
-    const target = sessionRefFromPath(
-      url.pathname,
-      basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0],
-      mainKey,
-    );
-    return target && (url.protocol === "http:" || url.protocol === "https:")
-      ? { url, target }
-      : null;
-  } catch {
-    return null;
+  const mount = basePath ?? resolveControlUiPaths(globalThis.location.pathname)[0];
+  const released = releasedSessionQuery(url, mount);
+  if (released) {
+    // Unqualified keys belong to startup, which can resolve their agent.
+    const pathname = released.path("", mainKey);
+    if (!pathname) {
+      return null;
+    }
+    url.pathname = pathname;
+    url.search = released.search;
   }
+  const target = sessionRefFromPath(url.pathname, mount, mainKey);
+  return target && { url, target };
 }
 
 export function parseLocalMarkdownSessionUrl(
@@ -76,9 +91,9 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
     if (state.env?.sessionLinks !== true) {
       return;
     }
-    const decorate = (token: Token, raw: string): boolean => {
+    const decorate = (token: Token, raw: string, url?: URL | null): boolean => {
       const key = parseSessionLinkKey(raw);
-      const path = key ? null : parseMarkdownSessionUrl(raw);
+      const path = key ? null : parseMarkdownSessionUrl(raw, undefined, undefined, url);
       if (!key && !path) {
         return false;
       }
@@ -105,7 +120,24 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
           continue;
         }
         if (token.type === "link_open") {
-          decorate(token, String(token.attrGet("href") ?? ""));
+          const href = String(token.attrGet("href") ?? "");
+          const url = markdownLinkUrl(href);
+          const template =
+            url &&
+            url.origin === globalThis.location.origin &&
+            !url.search &&
+            !url.hash &&
+            templateCatalogPackageNameFromPath(
+              url.pathname,
+              resolveControlUiPaths(globalThis.location.pathname)[0],
+            );
+          if (template) {
+            token.attrJoin("class", "markdown-template-link");
+            token.attrSet("data-template-package", template);
+            token.attrSet("aria-haspopup", "dialog");
+          } else {
+            decorate(token, href, url);
+          }
           linkDepth++;
         } else if (token.type === "link_close") {
           linkDepth--;
@@ -162,21 +194,28 @@ export function markdownSessionLinkFromEvent(
     event.target instanceof Element
       ? event.target.closest<HTMLElement>("a, [data-session-href]")
       : null;
-  const sessionKey = anchor?.dataset.sessionKey;
+  if (!anchor) {
+    return null;
+  }
+  const sessionKey = anchor.dataset.sessionKey;
   if (sessionKey && !anchor.dataset.sessionHref) {
     return parseSessionLinkKey(sessionKey);
   }
-  // Lit assigns context before the lazy provider upgrades; routing must not wait for its card.
-  const context = anchor?.closest<HTMLElement & { context?: ApplicationContext | null }>(
+  // Routing must not wait for the lazy hovercard provider to upgrade.
+  const context = anchor.closest<HTMLElement & { context?: ApplicationContext | null }>(
     "openclaw-session-progress-hovercard-provider",
   )?.context;
-  const href = anchor?.getAttribute("href") ?? anchor?.dataset.sessionHref;
-  const path = href
-    ? parseLocalMarkdownSessionUrl(href, {
-        basePath: basePath ?? context?.basePath,
-        publicOrigin: markdownSessionPublicOrigin(context),
-      })
-    : null;
+  const path = parseLocalMarkdownSessionUrl(
+    anchor.getAttribute("href") ?? anchor.dataset.sessionHref ?? "",
+    {
+      basePath: basePath ?? context?.basePath,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: context?.agents.state.agentsList,
+        hello: context?.gateway.snapshot.hello,
+      }),
+      publicOrigin: markdownSessionPublicOrigin(context),
+    },
+  );
   if (!path) {
     return null;
   }

@@ -8,6 +8,8 @@ import {
   withDeferredPluginConfigCompletion,
 } from "../../../infra/deferred-plugin-migrations.js";
 import { withPluginMetadataSnapshotScope } from "../../../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-contract-artifact.js";
+import { preparePluginDoctorContractModules } from "../../../plugins/doctor-contract-preparation.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -50,7 +52,7 @@ export async function preparePluginUpdateConfigMigration(params: {
       return withPluginMetadataSnapshotScope(metadata, () => run(metadata), { config });
     });
   try {
-    const prepared = inspect(params.config, (metadata) => {
+    const prepared = await inspect(params.config, async (metadata) => {
       const selectedIds = new Set(params.installOwners);
       for (const plugin of metadata.plugins) {
         const installOwner = resolvePluginManifestInstallOwner(plugin);
@@ -59,7 +61,26 @@ export async function preparePluginUpdateConfigMigration(params: {
         }
       }
       const selectedPending = pending.filter((entry) => selectedIds.has(entry.pluginId));
-      const inspected = new Map<string, boolean>();
+      await preparePluginDoctorContractModules({
+        config: params.config,
+        pluginIds: [...selectedIds],
+        manifestRegistry: metadata.manifestRegistry,
+        surfaces: ["configRepair"],
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent();
+      // A package with no Doctor contract or artifact has no config repair to inspect.
+      // A failed artifact load never reports, so it still refuses below.
+      const inspected = new Map(
+        metadata.plugins
+          .filter(
+            (plugin) =>
+              selectedIds.has(plugin.id) &&
+              !plugin.doctorContract &&
+              !resolvePluginDoctorContractArtifact(plugin),
+          )
+          .map((plugin) => [plugin.id, false]),
+      );
       const migrated = applyPluginDoctorCompatibilityMigrations(params.config, {
         historicalWebhookListeners: HISTORICAL_WEBHOOK_CHANNELS.some((id) => selectedIds.has(id)),
         config: params.config,
@@ -91,6 +112,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         restoreDoctorConfigEnvRefs(
           migrated.config,
           prepareDoctorConfigReferenceSource(params.snapshot),
+          undefined,
+          {
+            // Policy migration must not send reference replay to the prior package generation.
+            pluginCompatibility: {
+              pluginIds: [...selectedIds],
+              manifestRegistry: metadata.manifestRegistry,
+            },
+          },
         ),
       );
       return { config, selectedIds, selectedPending, inspected };
@@ -123,7 +152,15 @@ export async function preparePluginUpdateConfigMigration(params: {
         params.assertCurrent();
         // Install owns enablement after normalization. Inspect state obligations against
         // that final policy; inactive owners retain their inputs without running state work.
-        const resolvedPluginIds = inspect(activationConfig, (metadata) => {
+        const resolvedPluginIds = await inspect(activationConfig, async (metadata) => {
+          await preparePluginDoctorContractModules({
+            config: activationConfig,
+            pluginIds: [...selectedIds],
+            manifestRegistry: metadata.manifestRegistry,
+            surfaces: ["configRepair", "stateMigrations"],
+            assertCurrent: params.assertCurrent,
+          });
+          params.assertCurrent();
           const rules = listPluginDoctorLegacyConfigRules({
             config: activationConfig,
             pluginIds: [...selectedIds],

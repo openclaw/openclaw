@@ -867,11 +867,7 @@ function shouldRedactStructuredStringField(
   objectPath: boolean,
 ): boolean {
   return (
-    shouldRedactStructuredAuthorizationCode(
-      key.toLowerCase(),
-      path,
-      objectPath ? value : undefined,
-    ) ||
+    shouldRedactStructuredAuthorizationCode(key.toLowerCase(), path, value, objectPath) ||
     (isSensitiveFieldKey(key) && !preservesStructuredReference(key, value))
   );
 }
@@ -977,8 +973,8 @@ function getLegacyFieldRecordEdits(field: RedactionField, value: string): Redact
     : [];
 }
 
-export function resolveLogTailRedactOptions(): ResolvedRedactOptions {
-  return resolveRedactOptions(resolveToolPayloadRedaction());
+export function resolveLogTailRedactOptions(loggingConfig?: LoggingConfig): ResolvedRedactOptions {
+  return resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
 }
 
 function* redactionEditMatches(input: string, edits: RedactionEdit[]): Iterable<RedactMatch> {

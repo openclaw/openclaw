@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -17,8 +18,8 @@ import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -257,7 +258,7 @@ describe("requester-settle processing survives later user turns", () => {
 
   it("reconciles one completed yielded input after two newer finished turns without reopening it", async () => {
     const original = await prepare();
-    await original.recorder!.persistApproved();
+    const persisted = await original.recorder!.persistApproved();
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
@@ -274,9 +275,11 @@ describe("requester-settle processing survives later user turns", () => {
       await appendNewerTurn(manager, key, "New user request");
     }
     const before = await loadTranscriptEvents(scope());
-    await expect(
-      manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
-    ).rejects.toThrow("outside the current turn");
+    expect(
+      await manager.appendMessageWithTranscriptAnchorAsync(
+        original.recorder!.getPendingInputMessage!()!,
+      ),
+    ).toMatchObject({ entryId: persisted?.messageId, appended: false });
     expect(completed).toMatchObject({ reason: "completed", status: "ok" });
     await expectCompletedReplay(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
@@ -315,6 +318,24 @@ describe("requester-settle processing survives later user turns", () => {
       await release(replay, "cancelled");
     },
   );
+
+  it("reopens the same consumed settle input after the shutdown owner interrupts it", async () => {
+    const controller = new AbortController();
+    const original = await prepare({ abortSignal: controller.signal });
+    await original.recorder!.persistApproved();
+    controller.abort(createAgentRunRestartAbortError());
+    await original.recorder!.waitForPendingInputSettlement!();
+    expect(completion(original)).toMatchObject({ reason: "cancelled", stopReason: "restart" });
+    await release(original, "interrupted");
+    rotateAgentEventLifecycleGeneration();
+    const replay = await prepare();
+    expectNoReconciliation(replay);
+    await replay.recorder!.persistApproved();
+    await expectUserInputs(scope(), 1);
+    await complete(replay);
+    await release(replay);
+    await expectCompletedReplay(await loadTranscriptEvents(scope()));
+  });
 
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
@@ -508,9 +529,13 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
   ]);
 });
 
-it.each(["Original requester", null])(
-  "retains accepted sender presentation after a profile rename (%s)",
-  async (originalName) => {
+it.each([
+  { originalName: "Original requester", restored: false },
+  { originalName: null, restored: false },
+  { originalName: "Original requester", restored: true },
+])(
+  "retains accepted sender presentation (name=$originalName, restored=$restored)",
+  async ({ originalName, restored }) => {
     const sessionKey = "agent:main:private-sender";
     const sessionId = "private-sender-session";
     const runId = "announce:private-sender";
@@ -526,15 +551,22 @@ it.each(["Original requester", null])(
     const rename = (name: string | null) =>
       setCanonicalUserProfileDisplayName(profile.id, name, profileOptions);
     const { profile: original } = await rename(originalName);
-    const clientFor = (displayName: string | null, profileId = profile.id) =>
+    const clientFor = (displayName: string | null, profileId = profile.id, resumed = false) =>
       createSyntheticPluginRuntimeClient({
-        authenticatedUserProfile: {
-          profileId,
-          displayName,
-          avatarRevision: "0",
-          hasAvatar: false,
-          updatedAt: original.updatedAt,
+        agentToolCaller: {
+          agentId: "main",
+          sessionKey,
+          requesterOrigin: { sessionKey, operatorProfileId: profileId },
         },
+        authenticatedUserProfile: resumed
+          ? undefined
+          : {
+              profileId,
+              displayName,
+              avatarRevision: "0",
+              hasAvatar: false,
+              updatedAt: original.updatedAt,
+            },
       });
     const params = makeTurnParams(target, "Retained private result", runId, {
       privateCompletion: true,
@@ -558,7 +590,10 @@ it.each(["Original requester", null])(
         expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
       }
       const { profile: renamed } = await rename("Renamed requester");
-      const retryParams = { ...params, client: clientFor(renamed.displayName) };
+      const retryParams = {
+        ...params,
+        client: clientFor(renamed.displayName, profile.id, restored),
+      };
       expect(recorder.getPendingInputMessage?.()).toEqual(input);
       const retained = await pendingInputs.listSessionPendingInputs(target);
       expect(retained.items).toMatchObject([{ state: "queued", message: input }]);

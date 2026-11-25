@@ -38,6 +38,7 @@ import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
@@ -104,6 +105,11 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
     "local_workspace_source_path_sets",
   ],
   "template-names-v36": [...TEMPLATE_STATE_TABLE_RENAMES.flat(), "agent_provenance"],
+  "worker-resource-receipts-v37": ["worker_environments"],
+  "repository-disk-authority-v38": [
+    "session_repository_workspaces",
+    "worker_workspace_pending_results",
+  ],
   "operator-approvals-system-agent": ["operator_approvals"],
   "session-watch-cursor-provenance-v4": ["session_watch_cursors"],
   // STRICT migration can rebuild every ordinary table in the canonical schema.
@@ -136,7 +142,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
-    OPENCLAW_STATE_SCHEMA_SQL,
+    getOpenClawStatePredecessorSchema(8),
     "worker_session_placements",
     { errorMessage: "Canonical worker placement schema block is missing" },
   );
@@ -179,7 +185,8 @@ export function migrateWorkerPlacementExecutionModeSchema(
           AND sql IS NOT NULL
           AND name NOT IN (
             'idx_worker_session_placements_session_key',
-            'idx_worker_session_placements_reconcile'
+            'idx_worker_session_placements_reconcile',
+            'idx_worker_session_placements_environment'
           )`,
     )
     .all();
@@ -497,6 +504,12 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 36) {
     migrations.push({ kind: "template-names-v36", path: pathname });
+  }
+  if (userVersion < 37) {
+    migrations.push({ kind: "worker-resource-receipts-v37", path: pathname });
+  }
+  if (userVersion < 38) {
+    migrations.push({ kind: "repository-disk-authority-v38", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

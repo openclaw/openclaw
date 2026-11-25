@@ -238,21 +238,33 @@ it("offers inline, external, and copy actions for an external link", async () =>
 
   const firstMenu = await openMenu(anchor);
   expect([...firstMenu.querySelectorAll('[role="menuitem"]')].map(itemLabel)).toEqual([
-    "Open in Browser Panel",
-    "Open in Default Browser",
-    "Copy Link",
+    "Open in browser panel",
+    "Open in default browser",
+    "Copy link",
   ]);
-  await selectMenuItem("Open in Default Browser");
+  await selectMenuItem("Open in default browser");
   expect(bridge.messages.at(-1)).toEqual(externalRequest(url));
 
   await openMenu(anchor);
-  await selectMenuItem("Open in Browser Panel");
+  await selectMenuItem("Open in browser panel");
   expect(bridge.browserRequests).toEqual([panelRequest(url)]);
   expect(bridge.messages).toHaveLength(1);
 
   await openMenu(anchor);
-  await selectMenuItem("Copy Link");
+  await selectMenuItem("Copy link");
   await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
+});
+
+it("opens a new tab for the native command only when the panel can be shown", () => {
+  let available = false;
+  const bridge = installBridge({ canPresentBrowserPanel: () => available });
+  const open = () => window.dispatchEvent(new Event("openclaw:native-new-browser-tab"));
+  open();
+  expect(bridge.browserRequests).toEqual([]);
+  available = true;
+  open();
+  expect(bridge.browserRequests).toEqual([{ open: true, newTab: true }]);
+  expect(bridge.messages).toEqual([]);
 });
 
 it("opens the panel menu action externally during Settings takeover and restores it afterward", async () => {
@@ -263,7 +275,7 @@ it("opens the panel menu action externally during Settings takeover and restores
   for (const available of [false, true]) {
     canPresentBrowserPanel = available;
     await openMenu(anchor);
-    await selectMenuItem("Open in Browser Panel");
+    await selectMenuItem("Open in browser panel");
     expect(bridge.messages).toEqual([externalRequest(reportUrl)]);
     expect(bridge.browserRequests).toEqual(available ? [panelRequest(reportUrl)] : []);
   }
@@ -298,5 +310,5 @@ it.each(["dialog", "modal"] as const)("mounts the menu in the active %s overlay"
     expect(container?.closest("dialog")?.open).toBe(true);
     expect(menu.getRootNode()).toBe(document);
   }
-  expect(menuItem("Open in Browser Panel")).not.toBeNull();
+  expect(menuItem("Open in browser panel")).not.toBeNull();
 });

@@ -7,6 +7,7 @@ import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
 const homeKey = "agent:main:main";
 const conversationKey = "agent:main:dashboard:conversation";
@@ -18,6 +19,8 @@ function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession 
     label: row.label ?? row.key,
     isChild,
     hasActiveRun: row.hasActiveRun === true,
+    backgroundProcessCount: row.backgroundProcessCount,
+    subagentRunState: row.subagentRunState,
     active: row.key === conversationKey,
     unread: row.unread === true,
     status: row.status,
@@ -107,6 +110,79 @@ it("reattaches a persistent session through hidden runs and reveals its visible 
   expect(project([run, child]).map((row) => row.key)).toEqual([conversationKey]);
 });
 
+it.each([
+  { state: "historical", active: false, folds: 0 },
+  { state: "paused", active: false, folds: 1 },
+  { state: "active", active: true, folds: 1 },
+] as const)(
+  "a $state child with leftover processes shows its parent working: $folds",
+  ({ state, active, folds }) => {
+    const rows = [
+      makeRow(homeKey),
+      makeRow(workerKey, {
+        spawnedBy: homeKey,
+        hasActiveRun: active,
+        subagentRunState: state,
+        backgroundProcessCount: 2,
+      }),
+    ];
+    expect(project(rows)[0]).toMatchObject({ runningChildCount: folds });
+    expect(summarizeTeamSessionSlots([present(rows[1]!)], true).active).toBe(folds);
+  },
+);
+
+it("counts background work once per descendant without marking its parent active", () => {
+  const rows = [
+    makeRow(homeKey),
+    makeRow(workerKey, {
+      spawnedBy: homeKey,
+      subagentRunState: "paused",
+      backgroundProcessCount: 2,
+    }),
+    makeRow(conversationKey, {
+      spawnedBy: workerKey,
+      hasActiveRun: true,
+      backgroundProcessCount: 1,
+    }),
+  ];
+  expect(project(rows)[0]).toMatchObject({
+    hasActiveRun: false,
+    runningChildCount: 2,
+    subagentSummary: { runningChildCount: 1 },
+  });
+});
+
+it.each([false, true])(
+  "folds hidden grandchild work through a persistent child (loaded: %s)",
+  (loaded) => {
+    const parent = makeRow(homeKey, {
+      hasActiveRun: true,
+      status: "queued",
+      childSessions: [conversationKey],
+    });
+    const child = makeRow(conversationKey, {
+      spawnedBy: homeKey,
+      backgroundProcessCount: 2,
+      hasActiveSubagentRun: true,
+      childSessions: [workerKey],
+    });
+    const worker = makeRow(workerKey, { spawnedBy: conversationKey, hasActiveRun: true });
+    const [tree] = project([parent], [parent, child, ...(loaded ? [worker] : [])]);
+    // The idle child's own processes stay on its row; only the hidden worker folds up.
+    expect(tree).toMatchObject({
+      hasActiveRun: true,
+      runningChildCount: 1,
+      subagentSummary: { runningChildCount: 1 },
+      children: [{ subagentSummary: { runningChildCount: 1 } }],
+    });
+    expect(project([parent], [parent, { ...child, hasActiveSubagentRun: false }])[0]).toMatchObject(
+      {
+        subagentSummary: { runningChildCount: 0 },
+      },
+    );
+  },
+);
+
 it("keeps independent conversations outside Home while a worker runs", () => {
   const home = makeRow(homeKey, { childSessions: [conversationKey, workerKey] });
   const conversation = makeRow(conversationKey, {
@@ -157,4 +233,17 @@ it("sorts each parent's children, including run-folded ones, with the root compa
     "folded",
     conversationKey,
   ]);
+});
+
+it("does not let failed hidden runs hold their parent's unread count", () => {
+  const parent = makeRow(conversationKey, { childSessions: [workerKey] });
+  const unreadChildren = (status: GatewaySessionRow["status"]) =>
+    project(
+      [parent],
+      [parent, makeRow(workerKey, { spawnedBy: conversationKey, status, unread: true })],
+    )[0]?.subagentSummary?.unreadChildCount;
+
+  expect(unreadChildren("done")).toBe(1);
+  expect(unreadChildren("failed")).toBe(0);
+  expect(unreadChildren("timeout")).toBe(0);
 });

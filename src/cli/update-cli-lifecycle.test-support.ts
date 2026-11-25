@@ -4,12 +4,12 @@ import path from "node:path";
 import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
-import * as sourceArtifactPreflight from "../../scripts/lib/source-update-artifact-preflight.mts";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
 } from "../daemon/constants.js";
+import type * as GatewayEntrypoints from "../daemon/gateway-entrypoint.js";
 import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -19,9 +19,9 @@ import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
 import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import * as resourceAuthority from "../process/spawn-broker/resource-authority.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -30,6 +30,7 @@ import { createCommandResult as commandResult } from "../test-utils/npm-spec-ins
 import { getFreePort } from "../test-utils/ports.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { setupConfigMutationWithRetryMock } from "./update-cli-assertions.test-support.js";
+import { createGitUpdateAfterMutationFixture } from "./update-cli-invocation.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import {
@@ -42,13 +43,13 @@ import { getNodeRuntimeFixture } from "./update-cli/update-command-runtime-recov
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export const candidateStartupStep = (cwd: string, valid = true) => ({
-  name: "candidate-gateway-startup",
-  command: "openclaw gateway",
+const candidateCheckStep = (cwd: string, valid = true) => ({
+  name: "candidate-recovery",
+  command: "--check",
   cwd,
   durationMs: 1,
   exitCode: valid ? 0 : 1,
-  ...(!valid ? { stderrTail: "candidate readiness failed" } : {}),
+  ...(!valid ? { stderrTail: "candidate runtime failed" } : {}),
 });
 
 function selectHostPlatform() {
@@ -74,13 +75,8 @@ type UpdateCliLifecycleFixture = {
   baseSnapshot: ConfigFileSnapshot;
   fixtureRoot: string;
   globalNpmConfig: string;
-  initializeExistingUpdateProfile: () => void;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
-  reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
-    options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
-    result: T,
-  ) => Promise<T>;
   setStdoutTty: (value: boolean | undefined) => void;
   setTty: (value: boolean | undefined) => void;
   tempDirs: { make: (prefix: string) => string };
@@ -124,27 +120,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation(
       (files, { signal }) => stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
     );
-    // Service control is simulated; native artifact and database owners still run on the host OS.
-    const inspectArtifacts = sourceArtifactPreflight.inspectSourceUpdateArtifacts;
-    vi.spyOn(sourceArtifactPreflight, "inspectSourceUpdateArtifacts").mockImplementation(
-      async (...args) => {
-        const inspected = await onHostPlatform(() => inspectArtifacts(...args));
-        const { lock } = inspected;
-        if (!lock) {
-          return inspected;
-        }
-        const release = () => onHostPlatform(() => lock.release());
-        return {
-          ...inspected,
-          lock: {
-            ...lock,
-            release,
-            verifyStillHeld: () => onHostPlatform(() => lock.verifyStillHeld()),
-            [Symbol.asyncDispose]: release,
-          },
-        };
-      },
-    );
+    // Service control is simulated; native database owners still run on the host OS.
     const captureBaseline = updateRecoveryBaseline.captureUpdateRecoveryBaseline;
     vi.spyOn(updateRecoveryBaseline, "captureUpdateRecoveryBaseline").mockImplementation(
       (...args) => onHostPlatform(() => captureBaseline(...args)),
@@ -166,6 +142,12 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         createFileSync(file, { mode: 0o600 }),
       );
     }
+    // Native broker transport follows the host, not the simulated service platform.
+    const createAuthority = resourceAuthority.createNativeResourceAuthority;
+    vi.spyOn(resourceAuthority, "createNativeResourceAuthority").mockImplementation(() => {
+      using _ = selectHostPlatform();
+      return createAuthority();
+    });
     // Service-platform doubles do not change host SQLite helpers or their Node resolution.
     const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
     vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
@@ -196,16 +178,14 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       attempts: [],
       finalValidation: { ok: false, score: 0, summary: "No fixture repair route." },
     });
-    mocks.candidateValidation.mockImplementation(async (options) =>
-      fixture.reportCandidateSteps(options, {
-        status: "ok",
-        candidateSchemaVersions: {
-          state: OPENCLAW_STATE_SCHEMA_VERSION,
-          agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-        steps: [candidateStartupStep("/candidate")],
-      }),
-    );
+    mocks.candidateCheck.mockResolvedValue({
+      status: "ok",
+      candidateSchemaVersions: {
+        state: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+      steps: [candidateCheckStep("/candidate")],
+    });
     mocks.httpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
 
     mocks.stateSchemaVersions.mockImplementation(
@@ -326,8 +306,20 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     fixture.mockGatewayHealth("1.0.0", "conn-test");
     const installedEntrypoint = path.join(process.cwd(), "dist", "index.js");
-    mocks.pathExists.mockImplementation(
-      async (candidate: string) => candidate === installedEntrypoint,
+    mocks.pathExists.mockImplementation(async (candidate: string) => {
+      if (candidate === installedEntrypoint) {
+        return true;
+      }
+      return await fs.access(candidate).then(
+        () => true,
+        () => false,
+      );
+    });
+    const entrypoints = await vi.importActual<typeof GatewayEntrypoints>(
+      "../daemon/gateway-entrypoint.js",
+    );
+    vi.mocked(update.resolveGatewayInstallEntrypoint).mockImplementation(
+      entrypoints.resolveGatewayInstallEntrypoint,
     );
     mocks.syncPluginsForUpdateChannel.mockResolvedValue(pluginSyncResult(fixture.baseConfig));
     mocks.updateNpmInstalledPlugins.mockResolvedValue(npmPluginUpdateResult(fixture.baseConfig));
@@ -352,10 +344,11 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
     mocks.confirm.mockResolvedValue(false);
     mocks.select.mockResolvedValue("stable");
-    vi.mocked(update.updateGitCheckout).mockResolvedValue(update.makeOkUpdateResult());
+    vi.mocked(update.updateGitRelease).mockImplementation(
+      createGitUpdateAfterMutationFixture().run,
+    );
     fixture.setTty(false);
     fixture.setStdoutTty(false);
-    fixture.initializeExistingUpdateProfile();
     // Keep guard reads on the fixture connection instead of booting snapshots per read.
     openOpenClawStateDatabase();
   });

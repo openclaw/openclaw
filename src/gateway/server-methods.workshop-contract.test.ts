@@ -3,7 +3,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import {
+  disposePluginRegistryInstances,
+  resetPluginRuntimeStateForTest,
+} from "../plugins/runtime.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
+import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -19,13 +27,13 @@ const reviewId = "11111111-1111-4111-8111-111111111111";
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 let root: string;
+let registry: ReturnType<typeof loadOpenClawPlugins> | undefined;
 
 type RequestOptions = GatewayRequestOptions;
 async function dispatch(
   method: string,
   params: Record<string, unknown> = {},
   scopes = ["operator.admin"],
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   const respond = vi.fn<RequestOptions["respond"]>();
   await handleGatewayRequest({
@@ -45,7 +53,6 @@ async function dispatch(
       getRuntimeConfig: () => config,
       logGateway: { warn: vi.fn() },
     } as unknown as RequestOptions["context"],
-    hasCurrentClientAuthority,
     respond,
   });
   expect(respond).toHaveBeenCalledOnce();
@@ -59,15 +66,27 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ prefix: "workshop-rpc-contract-" });
   config = {
     agents: { ownership: "explicit", entries: { ops: { workspace: state.workspaceDir } } },
-    skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+    skills: { load: { watch: false } },
+    ...workshopPluginConfig(
+      { autonomous: { mode: "off" } },
+      { plugins: { enabled: true, allow: ["skill-workshop"] } },
+    ),
   };
   await state.writeConfig(config);
+  // The skills.workshop.* methods belong to the bundled skill-workshop plugin.
+  await shareCoreWithWorkshopPluginForTest();
+  registry = loadOpenClawPlugins({ config, cache: false, activate: true });
   root = path.join(state.agentDir("ops"), "workshop-skills");
   await fs.mkdir(path.join(root, "deploy-notes"), { recursive: true });
   await fs.writeFile(path.join(root, "deploy-notes", "SKILL.md"), skill);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  if (registry) {
+    await disposePluginRegistryInstances(registry);
+    registry = undefined;
+  }
+  resetPluginRuntimeStateForTest();
   await closeSkillsWatchers(true);
   await state?.cleanup();
 });
@@ -261,23 +280,7 @@ describe("Workshop through Gateway authorization and dispatch", () => {
     const db = new DatabaseSync(state.statePath("state", "openclaw.sqlite"));
     try {
       db.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
-      db.exec(`CREATE TABLE IF NOT EXISTS skill_workshop_changes (
-        cursor_id INTEGER NOT NULL,
-        change_id TEXT NOT NULL PRIMARY KEY,
-        agent_id TEXT NOT NULL,
-        skill_name TEXT NOT NULL,
-        action TEXT NOT NULL CHECK (action IN ('create', 'patch', 'write_file', 'remove_file', 'archive', 'restore')),
-        actor TEXT NOT NULL CHECK (actor IN ('agent', 'review', 'curator', 'user')),
-        summary TEXT NOT NULL,
-        version_id TEXT,
-        session_key TEXT,
-        run_id TEXT,
-        created_at_ms INTEGER NOT NULL
-      ) STRICT;
-      CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
-        ON skill_workshop_changes(cursor_id);
-      CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
-        ON skill_workshop_changes(agent_id, created_at_ms);`);
+      db.exec(historicalWorkshopChangesSchema);
       db.prepare(
         "INSERT INTO skill_workshop_changes (cursor_id, change_id, agent_id, skill_name, action, actor, summary, run_id, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       ).run(
@@ -354,29 +357,6 @@ describe("Workshop through Gateway authorization and dispatch", () => {
         code: "INVALID_REQUEST",
         message: `No skill changes recorded for review skill-workshop-review:${reviewId}.`,
       },
-    });
-  });
-
-  it("refuses file effects when requester authority changes during the snapshot", async () => {
-    let current = true;
-    const copy = fs.cp.bind(fs);
-    vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
-      await copy(...args);
-      current = false;
-    });
-    await expect(
-      dispatch(
-        "skills.workshop.archive",
-        { agentId: "ops", name: "deploy-notes" },
-        ["operator.admin"],
-        () => current,
-      ),
-    ).rejects.toThrow("Gateway requester authority changed");
-    expect(await fs.readFile(path.join(root, "deploy-notes", "SKILL.md"), "utf8")).toBe(skill);
-    expect(await fs.readdir(path.join(root, ".archive", "deploy-notes"))).toEqual([]);
-    expect(await dispatch("skills.workshop.changes", { agentId: "ops" })).toMatchObject({
-      ok: true,
-      payload: { changes: [] },
     });
   });
 

@@ -18,7 +18,7 @@ type ClaudeCliSpawnOptions = Pick<
 export type ClaudeCliProcessContext = Pick<
   CliBackendExecuteContext,
   "command" | "argv0" | "args" | "cwd" | "env" | "abortSignal" | "assertCurrent"
->;
+> & { prepareCredentialUse?: () => Promise<void> };
 
 export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
 
@@ -93,6 +93,7 @@ export function createClaudeCliProcessOwner(
         exactEnv: true,
         abortSignal: options.signal,
         assertCurrent,
+        prepareTargetSpawn: () => currentContext()?.prepareCredentialUse?.(),
         secretInput,
         terminateOnHostLoss: true,
         stdoutConsumption: "awaited",

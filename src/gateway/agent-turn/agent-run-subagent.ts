@@ -63,6 +63,8 @@ export async function prepareGatewaySubagentRun(params: {
   client: AgentTurnPrincipal | null;
   resolvedSessionKey?: string;
   activeSessionAgentId: string;
+  agentDir: string;
+  workspaceDir: string;
   inputProvenance?: InputProvenance;
   request: Pick<AgentRunRequest, "message">;
   isOneShotModelRun: boolean;
@@ -155,6 +157,8 @@ export async function prepareGatewaySubagentRun(params: {
               runId: params.runId,
               childSessionKey: sessionKey,
               childAgentId: params.activeSessionAgentId,
+              agentDir: params.agentDir,
+              workspaceDir: params.workspaceDir,
               task: params.request.message.trim(),
               requester: params.client?.internal?.pluginSubagentRequester,
               pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
@@ -321,7 +325,6 @@ export function consumeGatewaySubagentCompletionToolHandoff(
     | "client"
     | "providerOverride"
     | "modelOverride"
-    | "restoredCronContinuation"
     | "resolvedSessionKey"
     | "getAdmittedSessionId"
   >,
@@ -334,9 +337,7 @@ export function consumeGatewaySubagentCompletionToolHandoff(
     inputProvenance,
     internalEvents: params.request.internalEvents,
   });
-  return params.providerOverride === undefined &&
-    params.modelOverride === undefined &&
-    params.restoredCronContinuation === undefined
+  return params.providerOverride === undefined && params.modelOverride === undefined
     ? consumeSubagentCompletionToolHandoff({
         handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
         sourceTool: inputProvenance?.sourceTool,

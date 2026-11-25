@@ -22,59 +22,36 @@ export function oversizedJsonResponse(params?: {
   chunkCount: number;
   chunkSize: number;
 }): FixedOversizedJsonResponse | TrackedOversizedJsonResponse {
-  if (params) {
-    const chunk = new Uint8Array(params.chunkSize);
-    let readCount = 0;
-    let canceled = false;
-    return {
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (readCount >= params.chunkCount) {
-              controller.close();
-              return;
-            }
-            readCount += 1;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-      getReadCount: () => readCount,
-      wasCanceled: () => canceled,
-    };
-  }
-
-  // Cap the advertised stream at 64 MiB so a broken bounded reader fails
+  // Cap the default stream at 64 MiB so a broken bounded reader fails
   // instead of hanging, while still forcing cancellation past the 16 MiB limit.
   const state = { canceled: false, enqueuedBytes: 0 };
-  const chunk = 1024 * 1024;
-  const maxChunks = 64;
-  let emitted = 0;
+  // Consumers only read these zero bytes; share the same immutable fixture chunk.
+  const chunk = new Uint8Array(params ? params.chunkSize : 1024 * 1024);
+  let readCount = 0;
   const response = new Response(
-    new ReadableStream({
+    new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (emitted >= maxChunks) {
+        if (readCount >= (params ? params.chunkCount : 64)) {
           controller.close();
           return;
         }
-        emitted += 1;
-        state.enqueuedBytes += chunk;
-        controller.enqueue(new Uint8Array(chunk));
+        readCount += 1;
+        state.enqueuedBytes += chunk.byteLength;
+        controller.enqueue(chunk);
       },
       cancel() {
         state.canceled = true;
       },
     }),
-    { headers: { "content-type": "application/json" } },
+    { status: 200, headers: { "Content-Type": "application/json" } },
   );
-  return { response, state };
+  return params
+    ? {
+        response,
+        getReadCount: () => readCount,
+        wasCanceled: () => state.canceled,
+      }
+    : { response, state };
 }
 
 export function cancelTrackedResponse(init?: ResponseInit) {

@@ -13,7 +13,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -21,6 +20,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -103,9 +103,6 @@ async function run(list: typeof listSessionWorkspaceFiles, count: number) {
     result = await list(request);
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 for (const { list } of arms) {
   await run(list, 10);
   assert.equal(digest(), responseHash, "arm response differs during warmup");
@@ -163,7 +160,7 @@ for (let sample = 0; sample < samples; sample++) {
         rssBytes: process.memoryUsage().rss,
         heapUsedBytes: process.memoryUsage().heapUsed,
         ...(allocation
-          ? { sampledBytesPerOperation: allocated(allocation.profile.head) / iterations }
+          ? { sampledBytesPerOperation: sumSampledHeapBytes(allocation.profile.head) / iterations }
           : {}),
       }),
     );

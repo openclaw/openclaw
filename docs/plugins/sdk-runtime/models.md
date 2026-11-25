@@ -288,6 +288,11 @@ Backend adapters retain protocol validation and special-mode handling.
     command, arguments, environment, or lifecycle policy. Process spawning,
     readiness, diagnostics, and idle-stop policy remain internal to the host.
 
+    The optional target callback `onReadinessWait(waiting)` reports `true` when
+    host readiness starts and `false` when it ends, including readiness failures.
+    Reconciliation and provider requests stay outside that phase. Caller
+    cancellation remains on `signal`; consume the request before releasing its lease.
+
     Pass the exact configured provider id and resolved request base URL. Do not
     replace aliases with an adapter id: separate aliases can point at separate
     local GPU hosts. The host rejects endpoints that do not match the configured
@@ -300,7 +305,11 @@ Backend adapters retain protocol validation and special-mode handling.
     receive a session-bound `llm.complete` capability, so model calls use the
     active session's agent and do not silently fall back to the default agent. The
     result includes provider/model/agent attribution plus normalized token,
-    cache, and estimated cost usage when available.
+    cache, and estimated cost usage when available. A foreground plugin tool
+    defaults to its current invocation's agent; explicit cross-agent overrides
+    still require the existing operator opt-in. A recovered service session-work
+    borrow is restricted to its accepted agent and session, even when a plugin
+    has cross-agent override permission.
 
     `usage.costUsd` is omitted when no recorded cost or configured/eligible catalog
     pricing is available. Default-filled zero rates do not establish free usage.
