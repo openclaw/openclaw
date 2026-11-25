@@ -490,8 +490,8 @@ suite.define(() => {
           context.font = style.font;
           return (
             el.clientWidth -
-            parseFloat(style.paddingLeft) -
-            parseFloat(style.paddingRight) -
+            Number.parseFloat(style.paddingLeft) -
+            Number.parseFloat(style.paddingRight) -
             context.measureText(el.selectedOptions[0]!.label).width
           );
         });
