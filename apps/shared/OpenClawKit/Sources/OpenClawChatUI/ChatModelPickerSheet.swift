@@ -11,7 +11,12 @@ struct ChatModelPickerSheet: View {
     let onClose: () -> Void
     let onSignIn: () -> Void
 
-    @State private var detent: PresentationDetent = .medium
+    @State private var detent: PresentationDetent?
+    /// Tall enough for the usual root (the agent's row, up to four providers and Model sign-in) to rest above
+    /// the search field; it follows the text size and stays one height through a push.
+    @ScaledMetric(relativeTo: .body) private var restingHeight: CGFloat = 560
+    /// The floating search field at the bottom does not inset the list; this lets the last row scroll clear.
+    @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
     @State private var query = ""
     @State private var isSearching = false
 
@@ -22,6 +27,7 @@ struct ChatModelPickerSheet: View {
                 self.rootContent(catalog)
             }
             .listStyle(.insetGrouped)
+            .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
             .navigationTitle(Text("Model"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -45,7 +51,9 @@ struct ChatModelPickerSheet: View {
         }
         .tint(.primary)
         .accessibilityIdentifier("chat-model-picker")
-        .presentationDetents([.medium, .large], selection: self.$detent)
+        .presentationDetents([.height(self.restingHeight), .large], selection: Binding(
+            get: { self.detent ?? .height(self.restingHeight) },
+            set: { self.detent = $0 }))
         .presentationDragIndicator(.visible)
         // Below full height iOS draws the sheet as glass, which lets the composer's red button tint it
         // and turns the grouped rows gray. One opaque grouped background, as on the Pages sheet, keeps the
@@ -220,6 +228,7 @@ private struct ChatModelPickerProviderPage: View {
     let catalog: ChatModelPickerCatalog
     let providerID: String
     let onPick: () -> Void
+    @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
 
     var body: some View {
         let provider = self.catalog.providers.first { $0.id == self.providerID }
@@ -236,6 +245,7 @@ private struct ChatModelPickerProviderPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
         .navigationTitle(Text(verbatim: provider?.displayName ?? self.providerID))
         .navigationBarTitleDisplayMode(.inline)
     }
