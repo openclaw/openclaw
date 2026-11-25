@@ -168,11 +168,28 @@ extension OpenClawChatComposer {
 
     #endif
 
+    @ViewBuilder
     var cleanTrailingControls: some View {
+        #if os(iOS)
+        // The model chip always shows its name and truncates when the row runs out of room. At accessibility
+        // sizes the model and effort chips take a row of their own above the voice and send controls.
+        if self.dynamicTypeSize.isAccessibilitySize, !self.cleanShowsCameraFlip {
+            VStack(alignment: .trailing, spacing: 0) {
+                HStack(spacing: 0) {
+                    self.cleanInlineModelPicker(compact: false)
+                    self.cleanInlineEffortMenu
+                }
+                self.cleanCaptureAndPrimaryControls
+            }
+        } else {
+            self.cleanInlineControls(compactModel: false)
+        }
+        #else
         ViewThatFits(in: .horizontal) {
             self.cleanInlineControls(compactModel: false)
             self.cleanInlineControls(compactModel: true)
         }
+        #endif
     }
 
     private func cleanInlineControls(compactModel: Bool) -> some View {
@@ -302,29 +319,13 @@ extension OpenClawChatComposer {
         .frame(width: compact ? 104 : 160, height: self.cleanControlHeight)
         .contentShape(Rectangle())
         #elseif os(iOS)
-        let iconOnly = compact || self.dynamicTypeSize.isAccessibilitySize
-        HStack(spacing: 3) {
-            if iconOnly {
-                Image(systemName: "cpu")
-                    .font(OpenClawChatTypography.composerGlyph)
-            } else {
-                Text(self.viewModel.composerInlineModelLabel)
-                    .font(OpenClawChatTypography.composerControlLabel)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+        // Always the name, never an icon: it hugs short names and truncates long ones.
+        CleanComposerModelChipLabel(
+            name: self.viewModel.composerInlineModelLabel,
+            capped: !self.dynamicTypeSize.isAccessibilitySize)
+        {
             self.cleanPhoneMenuChevron
         }
-        .foregroundStyle(CleanChatComposerMetrics.footerInk)
-        .padding(.leading, 8)
-        .padding(.trailing, 7)
-        .frame(
-            minWidth: CleanChatComposerMetrics.controlTouchSize,
-            maxWidth: iconOnly ? CleanChatComposerMetrics.compactModelWidth :
-                CleanChatComposerMetrics.regularModelMaxWidth,
-            minHeight: CleanChatComposerMetrics.controlTouchSize)
-        .fixedSize(horizontal: true, vertical: false)
-        .contentShape(Rectangle())
         #else
         if compact || self.dynamicTypeSize.isAccessibilitySize {
             Image(systemName: "cpu")
@@ -542,6 +543,52 @@ extension OpenClawChatComposer {
 }
 
 #if os(iOS)
+/// The model chip's label: the name and a chevron. It hugs short names, stops at a width cap on one row,
+/// and truncates down to a readable minimum when the row is tight.
+private struct CleanComposerModelChipLabel<Chevron: View>: View {
+    let name: String
+    let capped: Bool
+    @ViewBuilder let chevron: () -> Chevron
+    /// About five characters, an ellipsis and the chevron at the default text size.
+    @ScaledMetric(relativeTo: .callout) private var minimumWidth: CGFloat = 72
+
+    var body: some View {
+        CleanComposerWidthCap(cap: self.capped ? CleanChatComposerMetrics.regularModelMaxWidth : .infinity) {
+            HStack(spacing: 3) {
+                Text(self.name)
+                    .font(OpenClawChatTypography.composerControlLabel)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                self.chevron()
+            }
+            .foregroundStyle(CleanChatComposerMetrics.footerInk)
+            .padding(.leading, 8)
+            .padding(.trailing, 7)
+        }
+        .frame(minWidth: self.minimumWidth, minHeight: CleanChatComposerMetrics.controlTouchSize)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Proposes at most `cap` and keeps the child's own width, so a short label hugs instead of filling the cap.
+private struct CleanComposerWidthCap: Layout {
+    let cap: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        return child.sizeThatFits(ProposedViewSize(
+            width: min(proposal.width ?? self.cap, self.cap),
+            height: proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        subviews.first?.place(
+            at: CGPoint(x: bounds.minX, y: bounds.midY),
+            anchor: .leading,
+            proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 /// Lay out the same text view across focus changes so its responder, selection, and draft survive.
 private struct CleanComposerPhoneLayout: Layout {
     let expanded: Bool
@@ -593,7 +640,8 @@ private struct CleanComposerPhoneLayout: Layout {
             CGRect(x: fieldX, y: fieldY, width: fieldWidth, height: field.height),
             CGRect(
                 x: leadingEdge,
-                y: controlsY + (height - leading.height) / 2,
+                // Open, the leading controls sit on the bottom row when the trailing ones wrap to two.
+                y: controlsY + (self.expanded ? height - leading.height : (height - leading.height) / 2),
                 width: leading.width,
                 height: leading.height),
             CGRect(
