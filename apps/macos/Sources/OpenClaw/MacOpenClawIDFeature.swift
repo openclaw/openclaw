@@ -14,7 +14,7 @@ enum MacOpenClawIDFeature {
     static let stagingClientID = "DulSrXtaYtPaLEnzEyHGuAHpVNWmaNbf"
 
     static func configuration(info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> OpenClawIDConfiguration? {
-        .current(stagingClientID: Self.stagingClientID, callbackScheme: "ai.openclaw.mac", info: info)
+        .current(stagingClientID: self.stagingClientID, callbackScheme: "ai.openclaw.mac", info: info)
     }
 
     @MainActor

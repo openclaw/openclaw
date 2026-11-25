@@ -69,7 +69,8 @@ struct OnboardingNodeInvitationServiceTests {
         let hostname = try OpenClawIDNodeEnrollmentLink(carried).hostname
         let expected = OpenClawIDSetupStep.addDevice(claw: hostname, device: "Build node", capabilities: "")
         #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "")) == expected)
-        #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "https://override.example")) == expected)
+        #expect(try await service
+            .perform(.pasteNodeInvitation(discoveryOrigin: "https://override.example")) == expected)
         await #expect(throws: OpenClawIDNodeEnrollmentError.invalidLink) {
             try await service.perform(.pasteNodeInvitation(discoveryOrigin: "http://override.example"))
         }
