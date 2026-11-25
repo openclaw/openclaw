@@ -305,8 +305,9 @@ it("exports an unchanged report when the overview groups rows by model", async (
   await selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
   await vi.waitFor(() => expect(download).toHaveBeenCalledOnce());
   const payload = JSON.parse(download.mock.calls[0]![1]) as UsageJsonExport;
-  expect(payload.sessions.map((row) => row.sessionId).toSorted()).toEqual(
-    rows.map((row) => row.sessionId),
+  expect(payload.sessions).toHaveLength(rows.length);
+  expect(new Set(payload.sessions.map((row) => row.sessionId))).toEqual(
+    new Set(rows.map((row) => row.sessionId)),
   );
   expect(payload.totals).toMatchObject({ totalTokens: 3, totalCost: 0.06 });
 });
