@@ -178,7 +178,7 @@ export function checkBrowserOrigin(params: {
 }
 
 /** Return the request Origin only when the Gateway's canonical browser policy accepts it. */
-export function resolveAcceptedBrowserOrigin(params: {
+export function resolveAcceptedGatewayBrowserOrigin(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
   publishedPort?: number;

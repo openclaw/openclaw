@@ -5,7 +5,7 @@ import {
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
-import { resolveAcceptedBrowserOrigin as resolveAcceptedBrowserOriginForGateway } from "../gateway/origin-check.js";
+import { resolveAcceptedGatewayBrowserOrigin } from "../gateway/origin-check.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   isRequestBodyLimitError,
@@ -25,7 +25,7 @@ import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 
 /** Resolve browser policy with deployment metadata owned by the serving Gateway. */
 export function resolveAcceptedBrowserOrigin(
-  params: Omit<Parameters<typeof resolveAcceptedBrowserOriginForGateway>[0], "publishedPort">,
+  params: Omit<Parameters<typeof resolveAcceptedGatewayBrowserOrigin>[0], "publishedPort">,
 ): string | undefined {
   const scope = getPluginRuntimeGatewayRequestScope();
   // New launch defaults require the serving policy as well as the caller's policy.
@@ -34,14 +34,14 @@ export function resolveAcceptedBrowserOrigin(
     scope?.browserOriginRequest?.deref() === params.req &&
     params.cfg !== undefined &&
     scope.browserOriginConfig !== undefined &&
-    resolveAcceptedBrowserOriginForGateway({
+    resolveAcceptedGatewayBrowserOrigin({
       req: params.req,
       cfg: scope.browserOriginConfig,
       publishedPort: scope.publishedPort,
     })
       ? scope.publishedPort
       : undefined;
-  return resolveAcceptedBrowserOriginForGateway({ ...params, publishedPort });
+  return resolveAcceptedGatewayBrowserOrigin({ ...params, publishedPort });
 }
 export {
   runHttpConnectionRequest,
