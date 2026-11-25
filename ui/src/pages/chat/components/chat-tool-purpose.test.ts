@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
-import { contract as knowledge } from "../../../../../extensions/knowledge/src/contract.js";
 import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
 import { projectCatalogItemForDisplay } from "../../../../../src/chat/session-catalog-display.js";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
@@ -331,17 +330,28 @@ function recordedCard(name: string, args: unknown, output?: string, details?: un
   })[0]!;
 }
 
-it("qualifies every Knowledge tool whose contract returns a publication receipt", () => {
-  for (const op of Object.values(knowledge.operations)) {
-    if (op.output !== knowledge.operations.save_page.output || !("tool" in op)) {
-      continue;
-    }
-    const name = op.tool.name;
-    const details = { ...saved, state: "accepted", message: "Accepted for publication." };
-    expect(catalogToolOperation({ id: name, name, details }, "succeeded")?.label, name).toMatch(
-      / · pending publication$/u,
-    );
-  }
+// Core UI tests cannot import the Knowledge plugin contract; these are its receipt-returning tools.
+it.each([
+  "knowledge_annotate",
+  "knowledge_correct",
+  "knowledge_create_claim",
+  "knowledge_create_relationship",
+  "knowledge_edit_body",
+  "knowledge_extract_section",
+  "knowledge_merge",
+  "knowledge_publish_batch",
+  "knowledge_recall",
+  "knowledge_reconcile_evidence",
+  "knowledge_resume",
+  "knowledge_save_page",
+  "knowledge_supersede",
+  "knowledge_unmerge",
+  "knowledge_withdraw",
+])("qualifies an accepted %s publication receipt", (name) => {
+  const details = { ...saved, state: "accepted", message: "Accepted for publication." };
+  expect(catalogToolOperation({ id: name, name, details }, "succeeded")?.label).toMatch(
+    / · pending publication$/u,
+  );
 });
 
 it("distinguishes a page edit's outcome from inspecting its receipt", async () => {
