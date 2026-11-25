@@ -1,4 +1,8 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import {
   composeReleaseAttemptJobs,
@@ -96,6 +100,60 @@ it("does not promote frozen outcome- or aggregate-specific approvals to broad gr
     evaluateReleaseChildPolicy({ child: failed, targetVersion, targetSha, waiverPolicy: frozen })
       .waivers,
   ).toEqual([plain]);
+});
+
+it("checks staged waiver additions without rejecting unchanged frozen selectors", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "release-waivers-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
+  const ledger = "scripts/lib/release-validation-waivers.json";
+  const frozen = {
+    ...grant,
+    jobName: "old job",
+    aggregates: [{ jobName: "gate", stepName: "Verify", causes: ["old job"] }],
+  };
+  const write = (waivers: unknown[]) =>
+    writeFileSync(
+      join(cwd, ledger),
+      JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers }),
+    );
+  const check = () =>
+    spawnSync(
+      process.execPath,
+      [resolve("scripts/lib/release-validation-waivers.mjs"), "--check-staged"],
+      {
+        cwd,
+        encoding: "utf8",
+      },
+    );
+  try {
+    git("init", "-q");
+    mkdirSync(join(cwd, "scripts/lib"), { recursive: true });
+    write([frozen]);
+    git("add", ledger);
+    git(
+      "-c",
+      "user.name=Tester",
+      "-c",
+      "user.email=tester@example.org",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    write([frozen, { ...frozen, jobName: "new job" }]);
+    git("add", ledger);
+    write([frozen, { ...grant, jobName: "new job", step: "Run" }]);
+    const rejected = check();
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("new job");
+    git("add", ledger);
+    expect(check().status).toBe(0);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 it("waives a whole child and its cancelled and never-run descendants without rewriting evidence", () => {

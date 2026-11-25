@@ -10659,6 +10659,73 @@ describe("package artifact reuse", () => {
     expect(legacyTuple.run).not.toContain("expiresAt");
   });
 
+  it.each([true, false])(
+    "waits for the exact running candidate producer (matching attempt: %s)",
+    (matchingAttempt) => {
+      const producer = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
+      const step = workflowStepById(producer, "producer_identity");
+      const root = tempDirs.make("release-producer-identity-");
+      const output = join(root, "output");
+      const workflowSha = "a".repeat(40);
+      const job = {
+        id: 123,
+        run_id: 456,
+        run_attempt: 2,
+        status: "queued",
+        conclusion: null,
+        name: "Prepare validation candidate / Prepare shared release candidate / Prepare shared Docker E2E image",
+      };
+      writeFileSync(join(root, "queued.json"), JSON.stringify(job));
+      writeFileSync(
+        join(root, "running.json"),
+        JSON.stringify({ ...job, status: "in_progress", run_attempt: matchingAttempt ? 2 : 1 }),
+      );
+      writeExecutable(
+        join(root, "gh"),
+        '#!/bin/sh\n[ "$*" = "api repos/openclaw/openclaw/actions/jobs/123" ] || exit 1\n' +
+          "if [ -e retry ]; then cat running.json; else cat queued.json; fi\n",
+      );
+      writeExecutable(join(root, "sleep"), "#!/bin/sh\n: > retry\n");
+      const result = runWorkflowShellScript(step.run ?? "", {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: [root, process.env.PATH].join(":"),
+          GITHUB_OUTPUT: output,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: "456",
+          GITHUB_RUN_ATTEMPT: "2",
+          JOB_CONTEXT: JSON.stringify({
+            check_run_id: job.id,
+            workflow_file_path: LIVE_E2E_WORKFLOW,
+            workflow_repository: "openclaw/openclaw",
+            workflow_sha: workflowSha,
+          }),
+          TOOLING_REPOSITORY: "openclaw/openclaw",
+          TOOLING_SHA: workflowSha,
+        },
+      });
+      if (!matchingAttempt) {
+        expect(result.status).not.toBe(0);
+        expect(existsSync(output)).toBe(false);
+        return;
+      }
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(
+        [
+          "job_id=123",
+          "job_name=" + job.name,
+          "run_attempt=2",
+          "run_id=456",
+          "workflow_path=" + LIVE_E2E_WORKFLOW,
+          "workflow_repository=openclaw/openclaw",
+          "workflow_sha=" + workflowSha,
+          "",
+        ].join("\n"),
+      );
+    },
+  );
+
   it.each(["fresh", "reused"])(
     "resolves and admits a %s candidate without a second job",
     (source) => {
@@ -10893,6 +10960,32 @@ describe("package artifact reuse", () => {
     expect(result.stderr).toContain(
       `live_suite_filter '${suiteId}' does not match any runnable suite`,
     );
+  });
+
+  it("reports missing decision provider coverage before setup and continues the native shard", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const step = workflowStep(job, "Report missing decision provider coverage");
+    const names = job.steps!.map((entry) => entry.name);
+    expect(names.indexOf(step.name)).toBeGreaterThan(names.indexOf("Checkout selected ref"));
+    expect(names.indexOf(step.name)).toBeLessThan(names.indexOf("Setup Node environment"));
+    expect(step.if).toBe(
+      "steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'",
+    );
+
+    const root = tempDirs.make("decision-live-coverage-");
+    const run = (env: NodeJS.ProcessEnv) => runWorkflowShellScript(step.run!, { cwd: root, env });
+    expect(run({})).toMatchObject({ status: 0, stdout: "" });
+    mkdirSync(join(root, "test"));
+    writeFileSync(join(root, "test", "decision-index-providers.live.test.ts"), "");
+    expect(run({})).toMatchObject({ status: 0, stdout: expect.stringContaining("::warning") });
+    for (const key of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
+      expect(run({ [key]: "fixture" })).toMatchObject({ status: 0, stdout: "" });
+    }
   });
 
   it("uploads native live reports and sanitized owned evidence after failures", () => {

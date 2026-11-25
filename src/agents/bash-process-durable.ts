@@ -36,7 +36,7 @@ import {
 } from "./bash-process-registry.js";
 import { systemdDurableSupervisor } from "./bash-process-systemd.js";
 import { settleHostExecDescendants } from "./bash-tools.exec-descendants.js";
-import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
+import { captureExecRequesterSource, maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
@@ -116,6 +116,8 @@ const ordinaryExitWakeRecorder = {
       maxOutputChars: session.maxOutputChars,
       notifyOnExit: true,
       notifyOnExitEmptySuccess: session.notifyOnExitEmptySuccess,
+      // The lost-process notice wakes the chat as the requester who started the command.
+      operatorSource: captureExecRequesterSource(session.notifySessionTarget),
     };
     ordinaryRecords.set(session, record);
     writeOrdinary(session.id, () => persistence.upsert(record));
@@ -199,7 +201,7 @@ async function settleLostOrdinaryProcess(
   });
 }
 
-/** Restore registry entries, never requester continuations or a second process manager. */
+/** Restore registry entries, never a second process manager; exits admit saved requesters again. */
 export async function initializeDurableProcesses(
   options: {
     assertCurrent?: () => void;
@@ -342,6 +344,8 @@ export async function startDurableExecProcess(
     notifyOnExit: notification.notifyOnExit ?? session.notifyOnExit,
     notifyOnExitEmptySuccess:
       notification.notifyOnExitEmptySuccess ?? session.notifyOnExitEmptySuccess,
+    // The exit after a restart wakes the chat as the requester who started the command.
+    operatorSource: captureExecRequesterSource(session.notifySessionTarget),
   };
   const assertCurrent = () => {
     persistence.assertCurrent();

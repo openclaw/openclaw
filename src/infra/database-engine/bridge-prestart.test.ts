@@ -32,6 +32,7 @@ const facts: PostgresPhysicalFacts = {
   namespace: "fixture_team_reports",
   storeId: "fixture-store",
   version: 1,
+  minReader: 1,
   capabilities: { serverMajor: 17, serverEncoding: "UTF8", clientEncoding: "UTF8" },
   catalog: [],
 };
