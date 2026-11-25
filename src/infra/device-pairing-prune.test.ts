@@ -185,6 +185,74 @@ describe("pruneSupersededSilentPairedDevices", () => {
     expect(remaining.toSorted()).toEqual(["anchor", "cidr-kept", "other-cluster", "owner-kept"]);
   });
 
+  // Browser UI clients keep a durable per-profile device identity, so distinct
+  // profiles sharing client metadata must survive each other's silent pairings.
+  test.each(["openclaw-control-ui", "webchat-ui", "openclaw-browser-copilot"])(
+    "keeps distinct %s profiles that share client metadata",
+    async (clientId) => {
+      const baseDir = await makeBaseDir();
+      await pairDevice({
+        baseDir,
+        deviceId: "profile-a",
+        approvedVia: "silent",
+        clientId,
+        clientMode: "ui",
+        displayName: "OpenClaw Web UI",
+      });
+      const anchor = await pairDevice({
+        baseDir,
+        deviceId: "profile-b",
+        approvedVia: "silent",
+        clientId,
+        clientMode: "ui",
+        displayName: "OpenClaw Web UI",
+      });
+
+      const removed = await pruneSupersededSilentPairedDevices({
+        deviceId: anchor.deviceId,
+        baseDir,
+        nowMs: agedNowMs(),
+      });
+
+      expect(removed).toEqual([]);
+      const remaining = (await listDevicePairing(baseDir)).paired.map((device) => device.deviceId);
+      expect(remaining.toSorted()).toEqual(["profile-a", "profile-b"]);
+    },
+  );
+
+  // The anchor carries the mixed-case id so the exclusion must normalize the
+  // stored clientId before the early return; without normalization the anchor
+  // would cluster with the canonical-id sibling and prune it.
+  test("keeps browser profiles when the anchor clientId differs only in case", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({
+      baseDir,
+      deviceId: "profile-a",
+      approvedVia: "silent",
+      clientId: "openclaw-control-ui",
+      clientMode: "ui",
+      displayName: "OpenClaw Web UI",
+    });
+    const anchor = await pairDevice({
+      baseDir,
+      deviceId: "profile-b",
+      approvedVia: "silent",
+      clientId: "OpenClaw-Control-UI",
+      clientMode: "ui",
+      displayName: "OpenClaw Web UI",
+    });
+
+    const removed = await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+      nowMs: agedNowMs(),
+    });
+
+    expect(removed).toEqual([]);
+    const remaining = (await listDevicePairing(baseDir)).paired.map((device) => device.deviceId);
+    expect(remaining.toSorted()).toEqual(["profile-a", "profile-b"]);
+  });
+
   test("trusted-cidr approvals never anchor a prune", async () => {
     const baseDir = await makeBaseDir();
     await pairDevice({
