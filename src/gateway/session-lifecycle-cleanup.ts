@@ -1,5 +1,6 @@
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
+import type { AgentHarnessResetParams } from "../agents/harness/types.js";
 import { acquireAgentRuntimeCleanupRegistries } from "../agents/prepared-model-runtime.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,7 +17,7 @@ export async function resetSessionAgentHarnesses(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey">;
   entry: SessionEntry;
-  reason: "reset" | "deleted";
+  reason: NonNullable<AgentHarnessResetParams["reason"]>;
   assertCurrent?: () => void;
 }): Promise<void> {
   const { agentId, canonicalKey: sessionKey } = params.target;

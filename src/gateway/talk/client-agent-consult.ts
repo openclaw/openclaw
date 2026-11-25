@@ -45,6 +45,7 @@ import {
   type TalkAgentConsultAuthority,
 } from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
+import { readTalkRealtimeInitialItems } from "./session-history.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
@@ -104,6 +105,19 @@ export function createTalkClientAgentConsultRunner(params: {
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
+  let historicalItems: Promise<typeof params.initialItems> | undefined = Promise.resolve(
+    params.initialItems,
+  );
+  // A failed post-reset read must not stick to the call: the next consult reads again.
+  const readHistory = (assertCurrent: () => void) => {
+    const read = readTalkRealtimeInitialItems(params.sessionTarget, assertCurrent);
+    read.catch(() => {
+      if (historicalItems === read) {
+        historicalItems = undefined;
+      }
+    });
+    return read;
+  };
   const authority: TalkAgentConsultAuthority = {
     ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
     operatorAuthority:
@@ -229,6 +243,16 @@ export function createTalkClientAgentConsultRunner(params: {
           runIdPrefix: params.runIdPrefix ?? "talk-realtime-consult",
           args: parsedArgs,
           transcript: params.initialItems,
+          onSessionReset: async () => {
+            historicalItems = readHistory(assertConsultCurrent);
+            await historicalItems;
+          },
+          getTranscript: () => (historicalItems ??= readHistory(assertConsultCurrent)),
+          operatorAuthority: authority.operatorAuthority,
+          assertSourceCurrent: () => {
+            assertConsultCurrent();
+            params.runAuthority?.assertCurrent();
+          },
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",

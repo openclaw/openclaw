@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-operator-authority.types.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -35,6 +36,7 @@ import {
   collectRealtimeVoiceAgentConsultVisibleText,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
+import { rollOverStaleConsultSession } from "./voice-session-reset.js";
 
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
@@ -200,6 +202,8 @@ function assertRealtimeVoiceConsultNotInterrupted(
 }
 
 export async function consultRealtimeVoiceAgent(params: {
+  /** The Gateway caller's authority; a voice reset checks the session's Access program with it. */
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
@@ -211,6 +215,10 @@ export async function consultRealtimeVoiceAgent(params: {
   runIdPrefix: string;
   args: unknown;
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+  onSessionReset?: () => Promise<void>;
+  getTranscript?: () => Promise<RealtimeVoiceAgentConsultTranscriptEntry[]>;
+  /** Owner-held caller authority (operator and device), rechecked when the reset commits. */
+  assertSourceCurrent?: () => void;
   surface: string;
   userLabel: string;
   assistantLabel?: string;
@@ -345,6 +353,24 @@ export async function consultRealtimeVoiceAgent(params: {
     storePath,
   };
   await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
+  // Reset before admission: rollover cleanup interrupts work bound to the old incarnation.
+  const sessionReset = await rollOverStaleConsultSession({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+    cwd: cwd ?? workspaceDir,
+    entry: initialSessionEntry,
+    logger: params.logger,
+    abortSignal: params.abortSignal,
+    assertSourceCurrent: params.assertSourceCurrent,
+    operatorAuthority: params.operatorAuthority,
+    messageProvider: params.messageProvider,
+  });
+  if (sessionReset) {
+    await params.onSessionReset?.();
+  }
+  params.abortSignal?.throwIfAborted();
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -439,6 +465,8 @@ export async function consultRealtimeVoiceAgent(params: {
         if (shouldFork) {
           const { forkSessionEntryFromParent } =
             await import("../auto-reply/reply/session-fork.js");
+          // An existing session counts this request as activity; only a current caller may.
+          params.assertSourceCurrent?.();
           const forked = await forkSessionEntryFromParent({
             storePath,
             parentSessionKey: requesterSessionKey,
@@ -452,7 +480,7 @@ export async function consultRealtimeVoiceAgent(params: {
             },
             entryPatch: {
               skipExisting: true,
-              skipped: { ...deliveryFields, updatedAt: now },
+              skipped: { ...deliveryFields, updatedAt: now, lastInteractionAt: now },
               forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
             },
           });
@@ -486,7 +514,10 @@ export async function consultRealtimeVoiceAgent(params: {
           },
           prepare: (entry) => {
             if (entry.sessionId?.trim()) {
-              return { ...deliveryFields, updatedAt: now };
+              // A spoken request is user interaction for idle reset, whichever voice surface sent it;
+              // a caller that lost its authority must not extend the session's activity.
+              params.assertSourceCurrent?.();
+              return { ...deliveryFields, updatedAt: now, lastInteractionAt: now };
             }
             return {
               ...deliveryFields,
@@ -523,6 +554,7 @@ export async function consultRealtimeVoiceAgent(params: {
         : lifecycleAbortController.signal;
       let runPromise: ReturnType<RealtimeVoiceAgentConsultRuntime["runEmbeddedAgent"]>;
       try {
+        const transcript = params.getTranscript ? await params.getTranscript() : params.transcript;
         abortSignal.throwIfAborted();
         await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(modelLockParams);
         abortSignal.throwIfAborted();
@@ -553,7 +585,7 @@ export async function consultRealtimeVoiceAgent(params: {
           workspaceDir,
           cwd,
           config: params.cfg,
-          prompt: buildRealtimeVoiceAgentConsultPrompt(params),
+          prompt: buildRealtimeVoiceAgentConsultPrompt({ ...params, transcript }),
           provider: params.provider,
           model: params.model,
           thinkLevel: params.thinkLevel ?? "high",

@@ -1,3 +1,5 @@
+import { consultRealtimeVoiceAgent as consultRealtimeVoiceAgentInternal } from "../talk/agent-consult-runtime.js";
+
 /** Production-private runtime seam for bundled and separately published official plugins. */
 export {
   registerRealtimeVoiceSelection,
@@ -108,9 +110,20 @@ export {
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync,
-  consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
 } from "../talk/agent-consult-runtime.js";
+
+type InternalConsultParams = Parameters<typeof consultRealtimeVoiceAgentInternal>[0];
+/**
+ * Plugin consults keep the existing contract. History and caller-authority callbacks belong
+ * to the Gateway's own Talk call owner and are not part of the SDK.
+ */
+export const consultRealtimeVoiceAgent: (
+  params: Omit<
+    InternalConsultParams,
+    "onSessionReset" | "getTranscript" | "assertSourceCurrent" | "operatorAuthority"
+  >,
+) => ReturnType<typeof consultRealtimeVoiceAgentInternal> = consultRealtimeVoiceAgentInternal;
 export {
   createRealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceAgentTalkbackQueue,
