@@ -371,9 +371,10 @@ function* planSuspiciousConfigRead(
     ) {
       continue;
     }
-    // Every entry starts from valid current config. A newer backup must not
-    // displace an intentional rollback's restored config pre-image.
+    // Preserve a configured rollback's restored config. If its gateway mode was
+    // lost, keep the candidate so startup can refuse an incompatible recovery.
     if (
+      current.gatewayMode &&
       prepared.candidate.config &&
       resolveFutureConfigActionBlock({
         action: "recover config",
