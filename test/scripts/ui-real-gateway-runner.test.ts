@@ -8,7 +8,16 @@ import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
 import { createDeferred } from "../helpers/promise.js";
 
-const fixtures = vi.hoisted(() => ({ workers: 2, serial: true, qualified: true }));
+const fixtures = vi.hoisted(() => ({
+  workers: 2,
+  serial: true,
+  qualified: true,
+  resolveConfig: vi.fn<
+    () => Promise<{
+      test: { resolvedProjects: { projectConfig: { name: string; include: string[] } }[] };
+    }>
+  >(),
+}));
 // mock-isolation: Keep eager environment-based config construction out of fixed coordinator project/budget fixtures.
 vi.mock("../vitest/vitest.ui-e2e-prebuilt.config.ts", () => ({
   createPrebuiltUiE2eVitestConfig: () => ({
@@ -25,6 +34,10 @@ vi.mock("../vitest/vitest.ui-e2e-prebuilt.config.ts", () => ({
       ],
     },
   }),
+}));
+// Config resolution is the boundary; complete factory/hook behavior is covered by ownership tests.
+vi.mock("vitest/node", () => ({
+  resolveConfig: fixtures.resolveConfig,
 }));
 vi.mock("../../scripts/lib/managed-child-process.mts", async (original) => ({
   ...(await original<typeof import("../../scripts/lib/managed-child-process.mts")>()),
@@ -67,6 +80,24 @@ beforeEach(() => {
   fixtures.workers = 2;
   fixtures.serial = true;
   fixtures.qualified = true;
+  fixtures.resolveConfig.mockReset().mockImplementation(async () => ({
+    test: {
+      resolvedProjects: [
+        {
+          projectConfig: {
+            name: "ui-e2e-serial",
+            include: fixtures.serial ? ["serial.test.ts"] : [],
+          },
+        },
+        {
+          projectConfig: {
+            name: "ui-e2e-real-gateway",
+            include: fixtures.qualified ? ["parallel.test.ts"] : [],
+          },
+        },
+      ],
+    },
+  }));
   borrowWorkers.mockReset().mockResolvedValue(undefined);
   disposeWorkers.mockReset().mockResolvedValue(undefined);
   prepareWorkers.mockClear();
@@ -96,6 +127,72 @@ beforeEach(() => {
   vi.mocked(fs.readFile).mockReset().mockResolvedValue(JSON.stringify(safeReceipt));
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  {
+    active: "ui-e2e-serial-standalone",
+    omitted: "ui-e2e-real-gateway",
+    include: ["ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts"],
+  },
+  { active: "ui-e2e-real-gateway-standalone", omitted: "ui-e2e-serial", include: [] },
+  { active: undefined, omitted: "ui-e2e-serial", include: [] },
+])("selects only final native projects ($active)", async ({ active, omitted, include }) => {
+  fixtures.resolveConfig.mockResolvedValue({
+    test: {
+      resolvedProjects: [
+        { projectConfig: { name: omitted, include } },
+        ...(active ? [{ projectConfig: { name: active, include: ["final.test.ts"] } }] : []),
+      ],
+    },
+  });
+  await expect(runRealGatewayUiTests([], env)).resolves.toBe(0);
+  expect(fixtures.resolveConfig).toHaveBeenCalledExactlyOnceWith(
+    { config: false },
+    expect.objectContaining({ test: expect.any(Object) }),
+  );
+  expect(managed.mock.calls.map(([call]) => project(call.args)).filter(Boolean)).toEqual(
+    active ? [active] : [],
+  );
+  expect(
+    managed.mock.calls.some(([call]) =>
+      call.args?.includes("scripts/test-desktop-resize-real.mts"),
+    ),
+  ).toBe(true);
+  expect(createWorkers).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "waits for native resolution before admission (reject: %s)",
+  async (reject) => {
+    const resolution = createDeferred<Awaited<ReturnType<typeof fixtures.resolveConfig>>>();
+    const failure = new Error("native config resolution failed");
+    fixtures.resolveConfig.mockReturnValue(resolution.promise);
+    const running = runRealGatewayUiTests([], env);
+    expect(fixtures.resolveConfig).toHaveBeenCalledTimes(1);
+    expect(managed).not.toHaveBeenCalled();
+    expect(createWorkers).not.toHaveBeenCalled();
+    if (reject) {
+      const rejected = expect(running).rejects.toBe(failure);
+      resolution.reject(failure);
+      await rejected;
+      expect(managed).not.toHaveBeenCalled();
+      expect(createWorkers).not.toHaveBeenCalled();
+      expect(disposeWorkers).not.toHaveBeenCalled();
+    } else {
+      resolution.resolve({
+        test: {
+          resolvedProjects: [
+            { projectConfig: { name: "ui-e2e-serial", include: ["serial.test.ts"] } },
+            { projectConfig: { name: "ui-e2e-real-gateway", include: ["qualified.test.ts"] } },
+          ],
+        },
+      });
+      await expect(running).resolves.toBe(0);
+      expect(managed).toHaveBeenCalledTimes(3);
+      expect(createWorkers).toHaveBeenCalledTimes(1);
+    }
+  },
+);
 
 it.each([
   { ownership: "local", parent: undefined },
@@ -134,6 +231,7 @@ it.each([
     return desktop.promise;
   });
   const running = runRealGatewayUiTests([], env);
+  await Promise.resolve();
   expect(managed).toHaveBeenCalledTimes(2);
   const [serialCall, desktopCall] = managed.mock.calls.map(([call]) => call);
   if (process.platform !== "win32") {
@@ -194,6 +292,7 @@ it.each([false, true])(
     const settled = vi.fn();
     const running = runRealGatewayUiTests([], env);
     const observed = running.then(settled, settled);
+    await Promise.resolve();
     expect(managed).toHaveBeenCalledTimes(2);
     managed.mock.calls[0]![0].onSignal!("SIGTERM");
     if (failCleanup) {

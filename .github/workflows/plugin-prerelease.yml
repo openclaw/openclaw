@@ -208,6 +208,11 @@ jobs:
           path: .frv-tooling
           sparse-checkout: |
             scripts/frv-test-exclusions.mjs
+            scripts/lib/managed-child-process.mts
+            scripts/lib/managed-cleanup-handoff.mts
+            scripts/lib/vitest-resource-ownership.mts
+            scripts/windows-cmd-helpers.mjs
+            scripts/lib/windows-taskkill.mjs
             scripts/lib/ci-blacksmith-capacity.mjs
             scripts/lib/ci-node-test-capacity.mts
             scripts/lib/vitest-shard-metadata.mts
