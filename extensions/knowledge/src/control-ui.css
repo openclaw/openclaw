@@ -3024,6 +3024,15 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   background: var(--bg-hover);
   border-color: var(--knowledge-hairline);
 }
+@media (pointer: coarse) {
+  .knowledge-session-panel .knowledge-session-control {
+    width: 44px;
+    height: 44px;
+  }
+  .knowledge-session-panel .knowledge-button {
+    min-height: 44px;
+  }
+}
 .knowledge-session-list {
   display: grid;
   gap: 8px;
