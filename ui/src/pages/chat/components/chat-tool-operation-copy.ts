@@ -199,10 +199,10 @@ export function catalogToolOperation(
       action = "clear_reactions";
     }
     if (receipt?.ok === false || receipt?.dryRun === true) {
-      return t(`chat.toolCards.operationLabels.message.${action}.action`);
+      return { label: t(`chat.toolCards.operationLabels.message.${action}.action`) };
     }
     if (receipt?.changed === false || removed === null || clearCount === 0) {
-      return t(`chat.toolCards.operationLabels.message.${action}.unchanged`);
+      return { label: t(`chat.toolCards.operationLabels.message.${action}.unchanged`) };
     }
   }
   const key =
