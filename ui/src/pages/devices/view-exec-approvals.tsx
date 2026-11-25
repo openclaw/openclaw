@@ -21,7 +21,10 @@ import {
   type NativeExecApprovalsSnapshot,
 } from "../../lib/nodes/page-operations.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { createSettingsTargetReveal } from "../../lib/reactive/settings-target-arrival.ts";
+import {
+  createSettingsTargetId,
+  createSettingsTargetReveal,
+} from "../../lib/reactive/settings-target-arrival.ts";
 import {
   agentDisplayName,
   DeviceDisclosure,
@@ -331,6 +334,7 @@ function PolicyScopes(props: ExecApprovalsState) {
   const inherited = createMemo(() =>
     resolveExecApprovalsDefaults(props.form, props.reported, true),
   );
+  const targetId = createSettingsTargetId();
   const revealDefaults = createSettingsTargetReveal("devices.execApprovals.defaults");
   return (
     <>
@@ -355,7 +359,17 @@ function PolicyScopes(props: ExecApprovalsState) {
         </div>
       </DeviceDisclosure>
       <For each={props.agents} keyed={(agent) => agent.id}>
-        {(agent) => <AgentPolicy state={props} agent={agent()} inherited={inherited()} />}
+        {(agent) => (
+          <AgentPolicy
+            state={props}
+            agent={agent()}
+            inherited={inherited()}
+            revealed={
+              targetId() === `devices.execApprovals.allowlist.${agent().id}` ||
+              targetId()?.startsWith(`devices.execApprovals.agents.${agent().id}.`) === true
+            }
+          />
+        )}
       </For>
     </>
   );
@@ -423,6 +437,7 @@ function AgentPolicy(props: {
   state: ExecApprovalsState;
   agent: ExecApprovalsAgentOption;
   inherited: ExecApprovalsResolvedDefaults;
+  revealed: boolean;
 }) {
   const stored = createMemo(() => props.state.form?.agents?.[props.agent.id]);
   const basePath = () => ["agents", props.agent.id];
@@ -431,6 +446,7 @@ function AgentPolicy(props: {
   return (
     <DeviceDisclosure
       setting={`devices.execApprovals.agents.${props.agent.id}`}
+      revealed={props.revealed}
       name={agentDisplayName(props.agent)}
       meta={agentSummary(props.agent, stored())}
     >
@@ -562,9 +578,17 @@ function Allowlist(props: {
   let newestField: HTMLTextAreaElement | undefined;
   const path = () => ["agents", props.agentId, "allowlist"];
   return (
-    <div class={["device-allowlist", { "device-allowlist--inactive": props.inactive }]}>
+    <div
+      id={`devices.execApprovals.allowlist.${props.agentId}`}
+      class={["device-allowlist", { "device-allowlist--inactive": props.inactive }]}
+    >
       <div class="settings-row__text">
-        <span class="settings-row__title">{t("devices.execApprovals.allowlist")}</span>
+        <span
+          id={`devices.execApprovals.allowlist.${props.agentId}-title`}
+          class="settings-row__title"
+        >
+          {t("devices.execApprovals.allowlist")}
+        </span>
         <span class="settings-row__desc">{t("devices.execApprovals.allowlistHint")}</span>
       </div>
       <For each={props.entries} keyed={false}>

@@ -610,7 +610,7 @@ function TokenRow(props: {
     );
   });
   return (
-    <div class="device-token">
+    <div class="device-token" data-settings-info>
       <div class="device-token__text">
         <span class="device-token__role">
           {t(

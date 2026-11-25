@@ -411,6 +411,10 @@ export function ProviderProfiles(
   const grouped = () => readings().length > 1;
   const canReorderBars = () =>
     props.canMutate && Boolean(subscriptionGroup()?.complete) && !subscriptionGroup()?.lock;
+  const hasOrder = () =>
+    groups().some(
+      (group) => group.stored || (!group.lock && group.complete && group.order.length > 1),
+    );
   const explanations = () => [
     ...new Set(groups().flatMap((group) => (group.explanation ? [group.explanation] : []))),
   ];
@@ -424,6 +428,8 @@ export function ProviderProfiles(
   return (
     <Show when={card().profiles.length > 0}>
       <section
+        id={hasOrder() ? `modelProviders.profileOrder.${card().id}` : undefined}
+        data-settings-info={hasOrder() ? undefined : ""}
         class="model-providers__profiles"
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
@@ -550,6 +556,7 @@ function ProviderProfileRow(
   };
   return (
     <div
+      data-settings-info
       class="model-providers__profile"
       ref={(element) => (rowElement = element)}
       role="listitem"

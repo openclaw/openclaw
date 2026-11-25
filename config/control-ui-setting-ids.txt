@@ -5,6 +5,7 @@ agent.model.fallbacks
 agent.model.primary
 agent.skills.*
 agent.thinkingDefault
+agent.tools.access.*
 agent.tools.profile
 agent.utilityModel.primary
 agents.defaults.decisionModel
@@ -103,6 +104,7 @@ device.voice.microphone
 devices.agentBinding.*
 devices.device.*
 devices.execApprovals.agents.*
+devices.execApprovals.allowlist.*
 devices.execApprovals.defaults
 devices.execApprovals.defaults.*
 devices.execApprovals.defaults.autoAllowSkills
@@ -154,6 +156,7 @@ memoryPage.enableEngine
 memoryPage.importMemory
 modelProviders.installedAgents.*
 modelProviders.moreSettings
+modelProviders.profileOrder.*
 notifications.account.agents
 notifications.account.categories.*
 notifications.account.detailLevel
@@ -175,7 +178,6 @@ plugin.memory-core.dreamingSchedule
 plugin.nostr.profile
 plugin.nostr.profile.*
 plugin.whatsapp.linkedPhone
-pluginSettings.connectProvider
 plugins.entries.*
 plugins.slots.memory
 profile.accessDetails

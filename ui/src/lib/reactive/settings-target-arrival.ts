@@ -13,6 +13,26 @@ import { projectOwner } from "./projection.ts";
 /** How long a page may take to render the linked setting before the link is dropped. */
 const TARGET_WAIT_MS = 10_000;
 
+function decodeTarget(hash: string): string | null {
+  try {
+    return decodeURIComponent(hash.slice(1)) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The linked row, for lazy lists that must render its contents before arrival. */
+export function createSettingsTargetId(): () => string | null {
+  const context = useOptionalApplication();
+  return context
+    ? projectOwner(
+        context.router,
+        (router) => decodeTarget(router.getState().location.hash),
+        Object.is,
+      ).read
+    : () => null;
+}
+
 /**
  * Brings the setting named by the route's `#<setting-id>` into view inside `host` once the
  * page has rendered it. The Settings shell mounts one for every Settings page.
@@ -41,16 +61,11 @@ export function SettingsTargetArrival(props: {
       previous = next;
       observer.disconnect();
       clearTimeout(timer);
-      let targetId: string | null = null;
-      try {
-        targetId = decodeURIComponent(next.hash.slice(1)) || null;
-      } catch {
-        // A malformed fragment names no setting.
-      }
+      const targetId = decodeTarget(next.hash);
       pending.request(targetId);
       if (targetId) {
         pending.commit();
-        observer.observe(root, { childList: true, subtree: true });
+        observer.observe(root, { childList: true, subtree: true, attributeFilter: ["id"] });
         timer = setTimeout(() => observer.disconnect(), TARGET_WAIT_MS);
       }
     };
@@ -71,18 +86,9 @@ export function SettingsTargetArrival(props: {
  * opens for the link instead of hiding its target. Outside the application it never opens.
  */
 export function createSettingsTargetReveal(disclosure: ControlUiSettingId): () => boolean {
-  const context = useOptionalApplication();
-  if (!context) {
-    return () => false;
-  }
-  const router = projectOwner(context.router, (source) => source.getState().location.hash);
+  const target = createSettingsTargetId();
   return createMemo(() => {
-    let id: string | undefined;
-    try {
-      id = decodeURIComponent(router.read().slice(1));
-    } catch {
-      return false;
-    }
+    const id = target();
     for (let place = id ? findControlUiSetting(id) : undefined; place?.entry.within;) {
       if (place.entry.within === disclosure) {
         return true;

@@ -91,6 +91,18 @@ describe("check-control-ui-setting-ids", () => {
     ]);
   });
 
+  it("rejects unnamed custom editors and credential rows, even without a settings-row class", () => {
+    const custom = '<><summary class="agent-tool-summary" /><div class="device-token" /></>';
+    expect(
+      checkSettingIds(fixture(custom, { "config/control-ui-setting-ids.txt": "" }), {
+        list: { pages: [], aliases: {} },
+      }),
+    ).toEqual([
+      expect.stringContaining("<summary> has no setting ID"),
+      expect.stringContaining("<div> has no setting ID"),
+    ]);
+  });
+
   it("sees a row component imported under another name", () => {
     const aliased = `import { SettingsRow as Row } from "../../components/solid/settings-ui.tsx";\n${NAMED.replace(
       `<SettingsRow info title="Status" />`,

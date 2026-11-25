@@ -5,9 +5,14 @@ import { findControlUiSetting } from "../../../src/shared/control-ui-settings/in
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
+import { SETTINGS_ROW_SELECTOR } from "../lib/settings-row-classes.ts";
+import { createReadToolCatalog } from "../pages/agents/panels-tools-skills.test-support.ts";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import { configPageForSection } from "../pages/config/config-sections.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createConfigSuite,
   pageRunner,
@@ -76,6 +81,83 @@ async function expectArrival(page: Page, row: Locator, title: string) {
 }
 
 suite.define(() => {
+  it.each([
+    ["mcp.servers.docs.enabled", "mcp", "config.get", '[role="switch"]'],
+    ["agent.tools.access.read", "agents/main/tools", "tools.catalog", '[role="switch"]'],
+    ["devices.execApprovals.allowlist.main", "devices", "exec.approvals.get", "textarea"],
+    [
+      "modelProviders.profileOrder.openai",
+      "model-providers",
+      "models.authStatus",
+      ".model-providers__profile-grip",
+    ],
+  ])("lands on the custom row %s after its data arrives", async (id, route, delayed, control) => {
+    await withPage(async ({ page }) => {
+      const config = {
+        agents: { entries: { main: { name: "Main" } } },
+        mcp: { servers: { docs: { command: "docs" } } },
+      };
+      const profiles = ["one", "two"].map((name) => ({
+        profileId: "openai:" + name,
+        type: "oauth",
+        status: "ok",
+      }));
+      const gateway = await installMockGateway(page, {
+        ...gatewayScenario,
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "tools.catalog",
+          "exec.approvals.get",
+          "models.authOrderSet",
+        ],
+        methodDelays: { [delayed]: 250 },
+        methodResponses: {
+          ...gatewayScenario.methodResponses,
+          "config.get": sourceConfigSnapshot(config, "custom-rows"),
+          "tools.catalog": createReadToolCatalog(),
+          "device.pair.list": { pending: [], paired: [] },
+          "node.list": { nodes: [] },
+          "system-presence": [],
+          "environments.list": { environments: [] },
+          "exec.approvals.get": {
+            exists: true,
+            hash: "rules",
+            file: { version: 1, agents: { main: { allowlist: [{ pattern: "docs" }] } } },
+          },
+          "models.authStatus": {
+            ts: Date.now(),
+            providers: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                status: "ok",
+                profiles,
+                profileOrder: profiles.map((p) => p.profileId),
+              },
+            ],
+          },
+        },
+      });
+      expect(placeHref(id)).toBe(`/settings/${route}#${id}`);
+      await page.goto(placeUrl(id));
+      const row = settingRow(page, id);
+      await expect.poll(() => row.locator(control).first().isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          row.evaluate(
+            (el) => el.hasAttribute("data-settings-arrival") && el === document.activeElement,
+          ),
+        )
+        .toBe(true);
+      if (id === "agent.tools.access.read") {
+        expect(await row.locator("..").getAttribute("id")).toBe("agent-tool-read");
+      }
+      for (const method of [...WRITE_METHODS, "exec.approvals.set", "models.authOrderSet"]) {
+        expect(await gateway.getRequests(method)).toHaveLength(0);
+      }
+    });
+  });
+
   it("opens the linked setting from a chat message without changing it", async () => {
     await withPage(async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -283,10 +365,8 @@ suite.define(() => {
           .catch(() => {});
         // Late reads add rows; give them one settle window before counting.
         await page.waitForTimeout(400);
-        const result = await page.evaluate(() => {
-          const found = [
-            ...document.querySelectorAll<HTMLElement>("main .settings-row, main .provider-row"),
-          ];
+        const result = await page.evaluate((selector) => {
+          const found = [...document.querySelectorAll<HTMLElement>(`main :is(${selector})`)];
           const ids = found.filter((row) => row.id).map((row) => row.id);
           return {
             count: found.length,
@@ -299,7 +379,7 @@ suite.define(() => {
               ),
             duplicates: [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))],
           };
-        });
+        }, SETTINGS_ROW_SELECTOR);
         rows += result.count;
         for (const id of result.ids) {
           if (findControlUiSetting(id)) {

@@ -22,6 +22,7 @@ export const AGENT_TOOLS_SETTINGS = defineSettingsPage({
   agent: true,
   agentPanel: "tools",
   settings: {
+    "agent.tools.access.*": { label: "Tool access" },
     "agent.tools.profile": { label: "Tool presets" },
   },
 });

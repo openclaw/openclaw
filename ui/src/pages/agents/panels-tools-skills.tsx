@@ -39,6 +39,7 @@ import {
 } from "../../lib/agents/tool-catalog.ts";
 import { resolveAgentConfigEntryTarget } from "../../lib/config/config-state-model.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { createSettingsTargetId } from "../../lib/reactive/settings-target-arrival.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentPanelAction, renderAgentPanelFacts, type AgentConfigState } from "./panel-ui.tsx";
@@ -64,6 +65,13 @@ export function AgentTools(
       canReadConfig: boolean;
     },
 ) {
+  const targetId = createSettingsTargetId();
+  const linkedTool = createMemo(() => {
+    const target = targetId();
+    return target?.startsWith("agent.tools.access.")
+      ? target.slice("agent.tools.access.".length)
+      : undefined;
+  });
   const toolGroups = new Map<
     HTMLDetailsElement,
     { readonly tools: AgentToolEntry[]; open: () => void }
@@ -460,7 +468,12 @@ export function AgentTools(
                       </span>
                     </span>
                   </summary>
-                  <Show when={expanded()}>
+                  <Show
+                    when={
+                      expanded() ||
+                      (linkedTool() && section().tools.some((tool) => tool.id === linkedTool()))
+                    }
+                  >
                     <div class="agent-tools-list">
                       <For each={sortedTools()} keyed={(tool) => tool.id}>
                         {(tool) => {
@@ -514,7 +527,11 @@ export function AgentTools(
                               class="agent-tool-card"
                               id={anchorId()}
                             >
-                              <summary ref={captureSummary} class="agent-tool-summary">
+                              <summary
+                                ref={captureSummary}
+                                class="agent-tool-summary"
+                                id={`agent.tools.access.${tool().id}`}
+                              >
                                 <Icon name="chevronRight" class="agent-tools-chevron" />
                                 <div class="agent-tool-summary__main">
                                   <span class="agent-tool-title mono" translate="no">

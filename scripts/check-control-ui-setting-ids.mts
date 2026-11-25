@@ -11,6 +11,7 @@ import {
   CONTROL_UI_SETTING_ID_ALIASES,
   CONTROL_UI_SETTINGS_PAGES,
 } from "../src/shared/control-ui-settings/index.ts";
+import { SETTINGS_ROW_CLASSES } from "../ui/src/lib/settings-row-classes.ts";
 import {
   isTest,
   PLUGIN_UI_SOURCE_ROOTS,
@@ -55,7 +56,7 @@ const ROW_COMPONENTS = new Set([
   "SettingsToggleRow",
 ]);
 /** Classes that draw one row of a Settings page. */
-const ROW_CLASSES = new Set(["settings-row", "provider-row"]);
+const ROW_CLASSES = new Set<string>(SETTINGS_ROW_CLASSES);
 const SNAPSHOT = "config/control-ui-setting-ids.txt";
 const guidance = (source: string) =>
   `Give the row \`setting="<id>"\` (raw rows: \`id="<id>"\`) with an ID listed in ${source}, or mark a status, fact or action row \`info\` (raw rows: \`data-settings-info\`).`;
@@ -185,7 +186,8 @@ export function checkSettingIds(
       ([file, text]) =>
         file.endsWith(".tsx") &&
         !isTest(file) &&
-        /setting|-row|Settings[A-Za-z]*Row|SettingsDisclosure/u.test(text),
+        (isSettingsSource(file) ||
+          /setting|-row|Settings[A-Za-z]*Row|SettingsDisclosure/u.test(text)),
     )
     .map(([fileName, text]) => ({ fileName, text }));
   using parser = createNativeTypeScriptParser({ cwd: root });

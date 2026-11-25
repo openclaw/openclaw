@@ -1,6 +1,7 @@
 import { CONTROL_UI_SETTING_ID_ALIASES } from "../../../src/shared/control-ui-settings/index.ts";
 import { listen } from "./reactive/listener.ts";
 import { resolveScrollBehavior } from "./scroll-behavior.ts";
+import { SETTINGS_ROW_SELECTOR } from "./settings-row-classes.ts";
 
 /** Marks the setting a link brought the reader to. */
 const SETTINGS_ARRIVAL_ATTRIBUTE = "data-settings-arrival";
@@ -99,8 +100,7 @@ function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => 
     }
   }
   const behavior = resolveScrollBehavior();
-  // A provider is one row too, drawn by its own list markup.
-  if (!target.matches(".settings-row, .provider-row")) {
+  if (!target.matches(SETTINGS_ROW_SELECTOR)) {
     target.scrollIntoView?.({ behavior, block: "start" });
     return () => {};
   }

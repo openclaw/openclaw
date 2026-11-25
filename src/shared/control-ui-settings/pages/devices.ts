@@ -18,6 +18,7 @@ export const DEVICES_SETTINGS = defineSettingsPage({
     },
     // An agent's own fields are named under its row, as in `devices.execApprovals.agents.main.ask`.
     "devices.execApprovals.agents.*": { label: "Agent policy" },
+    "devices.execApprovals.allowlist.*": { label: "Allowed command patterns" },
     "tools.exec.node": { label: "Default binding" },
     "devices.agentBinding.*": { label: "Binding" },
   },

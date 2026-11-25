@@ -410,7 +410,7 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
             {(onConnect) => (
               <EditorSection title={t("pluginsPage.auth.accounts")}>
                 <SettingsRow
-                  setting="pluginSettings.connectProvider"
+                  info
                   title={t("routeTitles.modelProviders")}
                   control={
                     <button
