@@ -159,23 +159,34 @@ ends the GUI session and its durable jobs. A host reboot or user
 manager shutdown still ends transient services; this is not a saved automation or
 an automatic command-restart policy.
 
-The existing background-process registry remains the owner. On Linux it launches a transient
-`openclaw-proc-<opaque id>` user service outside the Gateway's cgroup. The unit uses
-`ExitType=cgroup`: descendants keep the service running after its initial shell
-exits, and completion waits until the cgroup is empty. `KillMode=control-group`
-lets `process kill` stop the entire tree through `systemctl --user stop`.
+The existing background-process registry remains the owner. A durable command completes
+when its root command exits, the same as ordinary exec: the registry records the exit
+status at that moment and wakes the owning session. Completion does not stop processes
+the command left running (`cmd &`, `nohup`). Each one becomes an ordinary background
+session: the completion names its process ID and session ID, `process list` shows it,
+and `process kill`, session reset and Gateway stop end it. These processes do not
+survive a Gateway restart; only the root command does. `process kill` on a running
+durable command and `timeoutSeconds` still stop the entire tree.
+
+On Linux the registry launches a transient `openclaw-proc-<opaque id>` user service
+outside the Gateway's cgroup. When the root command exits, the unit stays loaded
+(`RemainAfterExit=yes`) with the real exit status, whatever that status is, so processes
+the command left running keep running in the unit's cgroup. `KillMode=control-group`
+lets `process kill` stop the entire tree through `systemctl --user stop` while the root
+runs. The registry releases the unit once its cgroup is empty; if those processes outlive
+the completed record, the empty unit stays loaded until the user manager restarts.
 On macOS, each durable command is a transient `ai.openclaw.durable-proc.<opaque id>` launchd job
 in the user's `gui/<uid>` domain, loaded from a plist under `$OPENCLAW_STATE_DIR/processes/`
 rather than `~/Library/LaunchAgents`, so it is never reloaded at login. launchd starts a
 small OpenClaw wrapper that runs the command in its own process group, records that
-group, waits until the group is empty, enforces `timeoutSeconds`, and records the exit
-status in a status file the returning Gateway reads. The registry reads job state from
+group, enforces `timeoutSeconds`, and records the exit status in a status file the
+returning Gateway reads when the command exits. The registry reads job state from
 `launchctl list`; a failed or unreadable listing is retried, never treated as a finished
 or missing job. `process kill` signals the wrapper, which stops the group (SIGTERM, then
 SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
 group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
-waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
-group and reports the outcome as unknown once it is empty; `process kill` can no longer
+tracked nor stopped. If the wrapper itself is killed, the registry checks the recorded
+command and reports the outcome as unknown once it has exited; `process kill` can no longer
 stop that group and reports the stop as unconfirmed. The job runs as its own
 process for macOS privacy permissions, so access the Gateway or app was granted (for
 example Full Disk Access) may not apply to a durable command.
@@ -184,10 +195,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. On Linux, `timeoutSeconds` maps to
-`RuntimeMaxSec`; on macOS the wrapper enforces it. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
+`RuntimeMaxSec`; on macOS the wrapper enforces it. Like an ordinary timeout, it ends when
+the root command exits. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
 [host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
-The shared sampler accounts their cgroup usage, including descendants after the
-initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+The shared sampler accounts the unit's cgroup usage, including descendants, while the
+root command runs. Each new unit also has hard RAM and swap bounds equal to the
 full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
