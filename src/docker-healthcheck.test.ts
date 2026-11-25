@@ -10,13 +10,17 @@ describe("Docker healthcheck", () => {
   const fetch = vi.fn<typeof globalThis.fetch>();
   const loadConfigAsync = vi.fn(async () => ({ gateway: { port: 19002 } }));
   const createConfigIO = vi.fn(() => ({ loadConfigAsync }));
-  const loadConfigModule = vi.fn(() => ({ createConfigIO }));
+  const configModuleLoaded = vi.fn();
   let probeDockerGatewayHealth: typeof import("./docker-healthcheck.js").probeDockerGatewayHealth;
 
   beforeEach(async () => {
     // Docker launches a fresh probe each time. Observe module loading from a cold entry.
     vi.resetModules();
-    vi.doMock("./config/config.js", loadConfigModule);
+    vi.doMock("./config/config.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./config/config.js")>();
+      configModuleLoaded();
+      return { ...actual, createConfigIO };
+    });
     ({ probeDockerGatewayHealth } = await import("./docker-healthcheck.js"));
     vi.stubGlobal("fetch", fetch);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
@@ -37,7 +41,7 @@ describe("Docker healthcheck", () => {
 
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19000/healthz");
-    expect(loadConfigModule).not.toHaveBeenCalled();
+    expect(configModuleLoaded).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -49,13 +53,13 @@ describe("Docker healthcheck", () => {
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
     if (port === undefined) {
-      expect(loadConfigModule).toHaveBeenCalledOnce();
+      expect(configModuleLoaded).toHaveBeenCalledOnce();
       expect(createConfigIO).toHaveBeenCalledWith({
         pluginValidation: "skip",
         shellEnvFallback: "defer",
       });
     } else {
-      expect(loadConfigModule).not.toHaveBeenCalled();
+      expect(configModuleLoaded).not.toHaveBeenCalled();
     }
   });
 
