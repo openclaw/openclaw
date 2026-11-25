@@ -1,7 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
-import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
+import { captureOwedRequesterTarget, wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
@@ -102,21 +101,10 @@ export async function continueSessionQueuedInputs(
           text: owedText,
         };
         await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          admitted =
+          const expectedTarget =
             source === undefined
               ? undefined
-              : await restoreGatewayQueuedOperatorRecovery({
-                  agentId: target.agentId,
-                  context,
-                  source,
-                  assertCurrent,
-                });
-          const expectedTarget =
-            admitted &&
-            (await captureSessionEventTargetForHost(target.agentId, target.sessionKey, {
-              operatorAuthority: admitted.authority,
-              assertCurrent,
-            }));
+              : await captureOwedRequesterTarget(owed.to, source, context, assertCurrent);
           wakeOwedExec(owed, expectedTarget ? { expectedTarget } : {}, undefined, 1);
         });
         return undefined;

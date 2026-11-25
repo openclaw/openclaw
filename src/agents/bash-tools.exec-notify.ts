@@ -3,26 +3,32 @@ import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../aut
 import type {
   SessionEventOptions,
   SessionEventOutcome,
+  SessionEventTarget,
 } from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import { readSessionEventTargetOperatorAuthority } from "../auto-reply/reply/session-event-target.js";
 import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import type { OperatorAdmissionContext } from "../gateway/operator-admission.js";
 import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
+import { restoreGatewayQueuedOperatorRecovery } from "../gateway/operator-run-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import {
   enqueueSystemEventWithReceipt,
   SystemEventQueueFullError,
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
+import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { chatRef } from "../sessions/chat-ref.js";
+import { chatRef, type ChatRef } from "../sessions/chat-ref.js";
 import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   listFinishedSessions,
@@ -248,6 +254,40 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/** The requester whose turn started the command, as a saved source; none when unavailable. */
+export function captureExecRequesterSource(target: SessionEventTarget | undefined) {
+  const source = captureQueuedOperatorRecoverySource(
+    target && readSessionEventTargetOperatorAuthority(target),
+  );
+  return source?.kind === "unavailable" ? undefined : source;
+}
+
+/** Admits a saved requester again and captures their chat as them, so the wake runs as them. */
+export async function captureOwedRequesterTarget(
+  to: ChatRef,
+  source: unknown,
+  context: OperatorAdmissionContext | undefined,
+  assertCurrent: () => void,
+): Promise<SessionEventTarget> {
+  if (!context) {
+    throw new GatewayOperatorAccessUnavailableError();
+  }
+  const admitted = await restoreGatewayQueuedOperatorRecovery({
+    agentId: to.agentId,
+    context,
+    source,
+    assertCurrent,
+  });
+  try {
+    return await captureSessionEventTarget(to.agentId, to.sessionKey, {
+      operatorAuthority: admitted.authority,
+      assertCurrent,
+    });
+  } finally {
+    admitted.release();
+  }
+}
+
 /**
  * The one exec wake: it delivers a stored exec result through session-event admission. A live
  * wake passes the producer's captured target; restart recovery passes none, so admission
@@ -351,9 +391,8 @@ async function notifyOnExit(
       return;
     }
     try {
-      const operatorSource = captureQueuedOperatorRecoverySource(
-        readSessionEventTargetOperatorAuthority(target),
-      );
+      // A restored process carries its saved requester; a live one has it on the captured target.
+      const operatorSource = session.operatorSource ?? captureExecRequesterSource(target);
       // The result is stored before any delivery: a Goal check or restart sees it from here on.
       const owed: Owed = {
         id: `exec:${processSessionInstanceId(session)}`,
@@ -361,9 +400,7 @@ async function notifyOnExit(
         kind: "exec",
         text: eventText,
         // Restart recovery replays the requester through admission, not the session principal.
-        ...(operatorSource && operatorSource.kind !== "unavailable"
-          ? { originFacts: { operatorSource } }
-          : {}),
+        ...(operatorSource ? { originFacts: { operatorSource } } : {}),
       };
       // The completion outlives the turn that started the command, so it stores and wakes under
       // its own session actor and work scope: an incognito turn's actor and signal end with it.
@@ -380,11 +417,30 @@ async function notifyOnExit(
               return false;
             },
           );
+          let expectedTarget = target;
+          if (session.operatorSource) {
+            // A restored process wakes as its requester, admitted again now. If their access
+            // ended, the stored result stays in the chat with that cause.
+            try {
+              expectedTarget = await captureOwedRequesterTarget(
+                owed.to,
+                session.operatorSource,
+                getInProcessGatewayRequestContext(),
+                () => target.assertCurrent?.(),
+              );
+            } catch (error) {
+              if (!stored) {
+                throw error;
+              }
+              await withhold(owed, resolvePendingInputEndCause(undefined, error) ?? "failed");
+              return;
+            }
+          }
           // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
           // target and request owners carry the requester's authority into the one retry too.
           wakeOwedExec(
             owed,
-            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget },
             (cancel) => recordNotifyOnExitRemoval(session, cancel),
             stored ? 1 : 0,
           );
