@@ -201,139 +201,148 @@ it.for([
       const destination = process.stdout;
       const originalListeners = destination.rawListeners("error");
       const sentinel = vi.fn();
-      destination.once("error", sentinel);
-      const baselineListeners = destination.rawListeners("error");
-      let errorListener: ((error: Error) => void) | undefined;
-      vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
-        if (String(chunk).includes(marker)) {
-          flush = typeof encoding === "function" ? encoding : callback;
-          const added = destination
-            .rawListeners("error")
-            .filter((listener) => !baselineListeners.includes(listener));
-          errorListener = added.length === 1 ? added[0] : undefined;
-          return true;
-        }
-        return typeof encoding === "function"
-          ? stdoutWrite(chunk, encoding)
-          : stdoutWrite(chunk, encoding, callback);
-      });
-      const resolve = fixtures.resolveConfig.getMockImplementation()!;
-      fixtures.resolveConfig.mockImplementation(async (...args) => {
-        const harness = args[2];
-        expect(harness.logger.outputStream).toBeInstanceOf(Writable);
-        output = harness.logger.outputStream;
-        expect(output).not.toBe(process.stdout);
-        expect(harness.logger.outputStream).not.toHaveProperty("isTTY", true);
-        expect(harness.logger.errorStream).toBe(process.stderr);
-        const end = output.end.bind(output);
-        vi.spyOn(output, "end").mockImplementation(() => {
-          outputEnding.resolve();
-          return end();
-        });
-        harness.logger.log(marker);
-        if (rejectConfig) {
-          throw configError;
-        }
-        return resolve(...args);
-      });
-      let flushed = false;
-      let emitted = false;
-      const releaseOutput = () => {
-        if (flush && !flushed) {
-          flushed = true;
-          flush(rejectOutput ? outputError : undefined);
-        }
-      };
-      const releaseError = () => {
-        if (rejectOutput && flushed && !emitted) {
-          emitted = true;
-          // Deliver only this write's event; shared stdout listeners belong to other owners.
-          expect(errorListener).toBeTypeOf("function");
-          expect(destination.rawListeners("error")).toEqual([...baselineListeners, errorListener]);
-          errorListener?.call(destination, outputError);
-        }
-      };
-      const running = runRealGatewayUiTests([], env);
-      const observed = running.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            outputEnding.promise,
-            running,
-            "Config resolution ended before output cleanup",
-          ),
-          signal,
+        destination.once("error", sentinel);
+        const baselineListeners = destination.rawListeners("error");
+        let errorListener: ((error: Error) => void) | undefined;
+        vi.spyOn(process.stdout, "write").mockImplementation((chunk, encoding, callback) => {
+          if (String(chunk).includes(marker)) {
+            flush = typeof encoding === "function" ? encoding : callback;
+            const added = destination
+              .rawListeners("error")
+              .filter((listener) => !baselineListeners.includes(listener));
+            errorListener = added.length === 1 ? added[0] : undefined;
+            return true;
+          }
+          return typeof encoding === "function"
+            ? stdoutWrite(chunk, encoding)
+            : stdoutWrite(chunk, encoding, callback);
+        });
+        const resolve = fixtures.resolveConfig.getMockImplementation()!;
+        fixtures.resolveConfig.mockImplementation(async (...args) => {
+          const harness = args[2];
+          expect(harness.logger.outputStream).toBeInstanceOf(Writable);
+          output = harness.logger.outputStream;
+          expect(output).not.toBe(process.stdout);
+          expect(harness.logger.outputStream).not.toHaveProperty("isTTY", true);
+          expect(harness.logger.errorStream).toBe(process.stderr);
+          const end = output.end.bind(output);
+          vi.spyOn(output, "end").mockImplementation(() => {
+            outputEnding.resolve();
+            return end();
+          });
+          harness.logger.log(marker);
+          if (rejectConfig) {
+            throw configError;
+          }
+          return resolve(...args);
+        });
+        let flushed = false;
+        let emitted = false;
+        const releaseOutput = () => {
+          if (flush && !flushed) {
+            flushed = true;
+            flush(rejectOutput ? outputError : undefined);
+          }
+        };
+        const releaseError = () => {
+          if (rejectOutput && flushed && !emitted) {
+            emitted = true;
+            // Deliver only this write's event; shared stdout listeners belong to other owners.
+            expect(errorListener).toBeTypeOf("function");
+            expect(destination.rawListeners("error")).toEqual([
+              ...baselineListeners,
+              errorListener,
+            ]);
+            errorListener?.call(destination, outputError);
+          }
+        };
+        const running = runRealGatewayUiTests([], env);
+        const observed = running.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
         );
-        expect(flush).toBeTypeOf("function");
-        expect(errorListener).toBeTypeOf("function");
-        expect(managed).not.toHaveBeenCalled();
-        expect(createWorkers).not.toHaveBeenCalled();
-        expect(disposeWorkers).not.toHaveBeenCalled();
-        releaseOutput();
-        if (rejectOutput) {
+        try {
           await withinTest(
             awaitGateBeforeSettlement(
-              setImmediate(),
+              outputEnding.promise,
               running,
-              "Config output settled before its destination error event",
+              "Config resolution ended before output cleanup",
             ),
             signal,
           );
-          expect(destination.rawListeners("error")).toEqual([...baselineListeners, errorListener]);
+          expect(flush).toBeTypeOf("function");
+          expect(errorListener).toBeTypeOf("function");
           expect(managed).not.toHaveBeenCalled();
           expect(createWorkers).not.toHaveBeenCalled();
-        }
-      } finally {
-        const onAbort = () => {
-          output?.destroy();
-        };
-        signal.addEventListener("abort", onAbort, { once: true });
-        if (signal.aborted) {
-          onAbort();
-        }
-        try {
+          expect(disposeWorkers).not.toHaveBeenCalled();
+          releaseOutput();
+          if (rejectOutput) {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                setImmediate(),
+                running,
+                "Config output settled before its destination error event",
+              ),
+              signal,
+            );
+            expect(destination.rawListeners("error")).toEqual([
+              ...baselineListeners,
+              errorListener,
+            ]);
+            expect(managed).not.toHaveBeenCalled();
+            expect(createWorkers).not.toHaveBeenCalled();
+          }
+        } finally {
+          const onAbort = () => {
+            output?.destroy();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          if (signal.aborted) {
+            onAbort();
+          }
           try {
             try {
-              releaseOutput();
+              try {
+                releaseOutput();
+              } finally {
+                releaseError();
+              }
+            } catch (error) {
+              onAbort();
+              throw error;
             } finally {
-              releaseError();
+              await observed;
             }
-          } catch (error) {
-            onAbort();
-            throw error;
+            expect(destination.rawListeners("error")).toEqual(baselineListeners);
           } finally {
-            await observed;
+            signal.removeEventListener("abort", onAbort);
+            if (errorListener) {
+              destination.off("error", errorListener);
+            }
           }
-          expect(destination.rawListeners("error")).toEqual(baselineListeners);
-        } finally {
-          signal.removeEventListener("abort", onAbort);
-          if (errorListener) {
-            destination.off("error", errorListener);
-          }
-          destination.off("error", sentinel);
         }
+        expect(sentinel).not.toHaveBeenCalled();
+        const result = await observed;
+        if (rejectConfig && rejectOutput && !sameError) {
+          expect(result).toMatchObject({
+            error: { name: "AggregateError", errors: [configError, outputError] },
+          });
+        } else if (rejectConfig || rejectOutput) {
+          expect("error" in result ? result.error : undefined).toBe(
+            rejectConfig ? configError : outputError,
+          );
+        } else {
+          expect(result).toEqual({ value: 0 });
+        }
+        expect(managed).toHaveBeenCalledTimes(rejectConfig || rejectOutput ? 0 : 3);
+        expect(output?.destroyed).toBe(true);
+        expect(process.stdout.destroyed).toBe(false);
+        expect(process.stderr.destroyed).toBe(false);
+      } finally {
+        destination.off("error", sentinel);
       }
-      expect(sentinel).not.toHaveBeenCalled();
       expect(destination.rawListeners("error")).toEqual(originalListeners);
-      const result = await observed;
-      if (rejectConfig && rejectOutput && !sameError) {
-        expect(result).toMatchObject({
-          error: { name: "AggregateError", errors: [configError, outputError] },
-        });
-      } else if (rejectConfig || rejectOutput) {
-        expect("error" in result ? result.error : undefined).toBe(
-          rejectConfig ? configError : outputError,
-        );
-      } else {
-        expect(result).toEqual({ value: 0 });
-      }
-      expect(managed).toHaveBeenCalledTimes(rejectConfig || rejectOutput ? 0 : 3);
-      expect(output?.destroyed).toBe(true);
-      expect(process.stdout.destroyed).toBe(false);
-      expect(process.stderr.destroyed).toBe(false);
     }),
 );
 
