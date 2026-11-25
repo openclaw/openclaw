@@ -86,8 +86,12 @@ export class ModelCatalogReader {
     );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
-      () => {
+      (invalidation) => {
         if (this.owns(binding)) {
+          // The store rechecks a pending receipt on settlement. Keep its shared wire subscribed.
+          if (invalidation === "pending" && this.pending && this.isPresented()) {
+            return;
+          }
           void this.read();
         } else {
           this.notify();
@@ -112,6 +116,10 @@ export class ModelCatalogReader {
     );
   }
 
+  private isPresented(): boolean {
+    return document.visibilityState !== "hidden" && this.options.isPresented?.() !== false;
+  }
+
   read(): Promise<ModelCatalogResult | undefined> {
     const binding = this.binding;
     if (!binding || !this.owns(binding)) {
@@ -119,7 +127,7 @@ export class ModelCatalogReader {
     }
     this.controller?.abort();
     this.controller = undefined;
-    if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
+    if (!this.isPresented()) {
       this.deferredRead = true;
       return Promise.resolve(undefined);
     }
