@@ -294,6 +294,20 @@ export function decideChannelOwnerPrincipal(config: OpenClawConfig, sender: User
     : undefined;
 }
 
+/** A plugin-run ingress turn gets the grant of its sender's channel owner principal, if any. */
+export const readIngressSenderAdmission = (
+  config: OpenClawConfig,
+  opts: { messageChannel?: string; accountId?: string; senderId?: string | null },
+) => ({
+  grant: decideTurnGrant(
+    decideChannelOwnerPrincipal(config, {
+      channelId: opts.messageChannel ?? "",
+      accountId: opts.accountId ?? "",
+      senderId: opts.senderId ?? "",
+    })?.scopes ?? [],
+  ),
+});
+
 function intersectOperatorRunModelPolicy(
   original: PreparedOperatorModelPolicy | undefined,
   current: PreparedOperatorModelPolicy | undefined,

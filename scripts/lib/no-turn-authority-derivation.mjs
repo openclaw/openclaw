@@ -47,11 +47,11 @@ const OWNER_FIELDS = new Set(["senderIsOwner", "requesterOwner"]);
 export const OWNER_PRODUCER_FILES = new Set([
   // Principals admission does not see yet: they match their own credential or owner config.
   "extensions/discord/src/monitor/native-command-auth.ts", // native slash command, no turn yet
-  "extensions/discord/src/voice/speaker-context.ts", // voice speaker, `ownerAllowFrom`
-  "extensions/facetime/src/call-events.ts", // allowlisted caller claim, host trust-gated
+  "extensions/discord/src/voice/speaker-context.ts", // realtime voice speaker, `ownerAllowFrom`
+  // FaceTime callers match the plugin's own `ownerHandles`; moving them into
+  // `commands.ownerAllowFrom` is a config migration that waits on an owner decision.
+  "extensions/facetime/src/call-events.ts",
   "extensions/facetime/src/talk-consult-controller.ts", // same caller claim
-  "src/plugins/registry-runtime.ts", // host trust gate for a plugin's ingress owner claim
-  "src/worker/embedded-agent.runtime.ts", // remote worker: its run's grant is not on the protocol
   // Channel command owner: the `commands.ownerAllowFrom` config match. Asserted-identity owners
   // and pre-turn senders have no grant yet, so this fact still sets the bit.
   "src/auto-reply/command-auth.ts",
