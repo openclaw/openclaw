@@ -76,10 +76,6 @@ struct ChatModelPickerSheet: View {
         // and turns the grouped rows gray. One opaque grouped background, as on the Pages sheet, keeps the
         // sheet and its rows the same at every height.
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
-        // A medium sheet would sit under the keyboard; searching takes the full height.
-        .onChange(of: self.isSearching) { _, searching in
-            if searching { self.detent = .large }
-        }
         // A catalog that failed or came back empty loads again each time the picker opens.
         .task {
             if self.viewModel.modelChoices.isEmpty { await self.viewModel.fetchModels() }
