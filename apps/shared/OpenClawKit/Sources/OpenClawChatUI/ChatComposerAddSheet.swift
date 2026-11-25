@@ -37,7 +37,8 @@ struct ChatComposerAddSheet: View {
     @State private var pending: [String: Bool] = [:]
     /// The root's own height, so it rests without scrolling at every text size; measured at the root and kept
     /// through a push.
-    @State private var restingHeight: CGFloat = 436
+    /// The whole list's height, measured at the root and kept through a push.
+    @State private var fittedHeight: CGFloat = 436
 
     var body: some View {
         let live = ChatComposerCapabilityFacts(self.viewModel)
@@ -51,6 +52,8 @@ struct ChatComposerAddSheet: View {
                 // Nothing started (refused before sending): show the real state again.
                 if !self.viewModel.composerCapabilitiesBusy { self.pending[key] = nil }
             })
+        let showsBranches = self.viewModel.sessionBranches.count > 1
+        let showsReset = self.showsCapabilities && self.viewModel.composerToolOverrides.overrideCount > 0
         NavigationStack(path: self.$path) {
             List {
                 self.photoSection
@@ -81,7 +84,7 @@ struct ChatComposerAddSheet: View {
                         .accessibilityIdentifier("chat-composer-add-connectors")
                     }
                 }
-                if self.viewModel.sessionBranches.count > 1 {
+                if showsBranches {
                     Section {
                         NavigationLink(value: Route.branches) {
                             self.rowLabel("Branches", systemImage: "arrow.triangle.branch")
@@ -89,12 +92,12 @@ struct ChatComposerAddSheet: View {
                         .accessibilityIdentifier("chat-composer-add-branches")
                     }
                 }
-                if self.showsCapabilities, self.viewModel.composerToolOverrides.overrideCount > 0 {
+                if showsReset {
                     Section {
                         Button {
                             self.viewModel.clearComposerToolOverrides()
                         } label: {
-                            Text("Reset Tools for This Chat").font(OpenClawChatTypography.settingsBody)
+                            Text("Reset tools for this chat").font(OpenClawChatTypography.settingsBody)
                         }
                         .disabled(self.viewModel.composerClearToolOverridesDisabled)
                         .accessibilityHint(self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
@@ -107,14 +110,13 @@ struct ChatComposerAddSheet: View {
             .listSectionSpacing(.compact)
             // The first card sits under the title as in the model sheet and the system's own sheets.
             .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
-            .contentMargins(.bottom, 8, for: .scrollContent)
             // The list's insets carry the bar and the home indicator.
             .onScrollGeometryChange(for: CGFloat.self) {
                 $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom
             } action: { _, height in
-                if self.path.isEmpty, height > 0 { self.restingHeight = height }
+                if self.path.isEmpty, height > 0 { self.fittedHeight = height }
             }
-            .navigationTitle(Text("Add"))
+            .navigationTitle(self.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if !self.selection.marked.isEmpty {
@@ -122,11 +124,9 @@ struct ChatComposerAddSheet: View {
                         Button {
                             self.attach(self.selection.marked)
                         } label: {
-                            Text(verbatim: String(format: String(localized: "Add %lld"), self.selection.marked.count))
+                            Text("Add")
                                 .font(OpenClawChatTypography.settingsBody)
                                 .fontWeight(.semibold)
-                                // The button keeps one width as the count changes.
-                                .monospacedDigit()
                         }
                         .modifier(ChatComposerProminentToolbarButton())
                         .accessibilityIdentifier("chat-composer-add-marked")
@@ -196,6 +196,24 @@ struct ChatComposerAddSheet: View {
                 self.selection.toggle(id)
             }
         }
+    }
+
+    /// An inset grouped list's content runs on past its last group (the footer gap, the bottom margin, an empty
+    /// footer area). The list is lazy, so a group below the sheet's edge has no position to measure; this is the
+    /// measured excess instead. With it the last row ends 42.6 pt above the sheet's edge at xS, L and AX3 alike
+    /// (iOS 27.2): the home indicator's 34 pt plus 8.6. Without it, 73 pt; the excess doesn't change with text size.
+    private static let emptySpaceAfterLastGroup: CGFloat = 43.8
+
+    /// Rests where the last group's footer gap meets the home indicator's inset, with nothing empty below.
+    private var restingHeight: CGFloat {
+        self.fittedHeight - Self.emptySpaceAfterLastGroup
+    }
+
+    /// While photos are marked, the title counts them and the top bar offers Add.
+    private var title: Text {
+        let count = self.selection.marked.count
+        if count == 0 { return Text("Add") }
+        return count == 1 ? Text("1 photo") : Text(verbatim: String(format: String(localized: "%lld photos"), count))
     }
 
     private var showsCapabilities: Bool {
@@ -344,7 +362,7 @@ private struct ChatComposerPhotoRow: View {
         Button { self.library.chooseMorePhotos() } label: {
             VStack(spacing: 4) {
                 Image(systemName: "plus").font(.title3)
-                Text("More Photos")
+                Text("More photos")
                     .font(OpenClawChatTypography.footnote)
                     .multilineTextAlignment(.center)
             }
@@ -455,10 +473,11 @@ private struct ChatRecentPhotoMark: View {
                 Circle().fill(Color.black.opacity(0.18))
             }
             Circle().strokeBorder(Color.white, lineWidth: 1.5)
-            // The white ring alone disappears on a light photo.
-            Circle().strokeBorder(Color.black.opacity(0.22), lineWidth: 0.5)
         }
         .frame(width: self.size, height: self.size)
+        // A thin dark ring outside the white one, so the mark reads on a white screenshot and a dark photo alike.
+        .padding(0.75)
+        .overlay { Circle().strokeBorder(Color.black.opacity(0.4), lineWidth: 0.75) }
     }
 }
 
