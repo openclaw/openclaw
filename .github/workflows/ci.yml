@@ -2631,6 +2631,7 @@ jobs:
             resolve("ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-picker-layout.e2e.test.ts"),
             resolve("ui/src/e2e/chat-composer-native-selection.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-mention-invite-editing.e2e.test.ts"),
             resolve("ui/src/e2e/chat-mcp-app-fullscreen.e2e.test.ts"),
             resolve("ui/src/e2e/tooltip-first-activation.e2e.test.ts"),
             resolve("ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts"),

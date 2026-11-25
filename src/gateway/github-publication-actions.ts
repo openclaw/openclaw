@@ -24,6 +24,7 @@ import {
   prepareGitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
@@ -33,10 +34,10 @@ type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
-  const marker = before.indexOf("\n\n<!-- openclaw-publication:");
-  const credit = before.indexOf("\n\n## Worked on by\n\n");
   // Preserve the whole original suffix; added lookalike blocks cannot replace its identity.
-  const start = marker < 0 ? credit : credit < 0 ? marker : Math.min(marker, credit);
+  const start = before.search(
+    /\n\n(?:Requested by [^\r\n]* via OpenClaw(?:\n|$)|## Worked on by\n\n|<!-- openclaw-publication:)/u,
+  );
   if (start >= 0 && !after.includes(before.slice(start))) {
     throw new Error("Keep the existing PR attribution, publication marker and footer unchanged.");
   }
@@ -108,9 +109,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     !(params.action === "ready" && params.publishingSessionKey === undefined) &&
     !captureGitHubPublicationActionAuthority(admitted.requester).operatorWrite
   ) {
-    throw new Error(
-      `The ${params.action} action needs operator write permission. Ask a Gateway admin to run it, or to give your role operator.write.`,
-    );
+    throw new OperatorRefusalError("role-denies", {
+      action: `run the ${params.action} action on this PR`,
+    });
   }
   // Stop and session revision fences only; authority was admitted when the turn started.
   const assertRequester = () => {

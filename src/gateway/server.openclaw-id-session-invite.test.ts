@@ -453,6 +453,6 @@ it.for<Mode>([
     expect(report.check2WriterInvitedTurn).toBe("accepted");
     expect(report.check2SandboxedWriterInvitedTurn).toMatch(/requires a sandboxed session/);
     expect(report.check2WriterOtherSessionTurn).toMatch(/was not found/);
-    expect(report.check2WriterOtherAgentTurn).toMatch(/cannot create sessions for agent "other"/);
+    expect(report.check2WriterOtherAgentTurn).toMatch(/did not start a session with agent "other"/);
   },
 );

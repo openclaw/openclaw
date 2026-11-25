@@ -1,22 +1,19 @@
 import { createMemo } from "solid-js";
-import type { SessionVisibility } from "../../../api/types.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
   ChatSessionAccessMobileProps,
   ChatSessionSharingMobileLabels,
   ChatSessionSharingMobileProps,
-  ChatSessionSharingModePresentation,
 } from "./chat-session-sharing-mobile.tsx";
+import { createChatSessionSharingModes } from "./chat-session-sharing-modes.tsx";
 import type { ChatSessionSharingOptionsProps } from "./chat-session-sharing-options.tsx";
-import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 import {
-  canManageChatSessionSharing,
-  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   createChatSessionSharingPresentation,
-} from "./chat-session-sharing-shared.tsx";
+} from "./chat-session-sharing-presentation.ts";
+import type { PreparedChatSessionSharing } from "./chat-session-sharing-shared.tsx";
+import { canManageChatSessionSharing } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -69,18 +66,7 @@ export function createChatSessionSharingMobileAdapter(
       source()?.state?.result?.allowedVisibilities ??
       source()?.allowedVisibilities ?? [visibility()],
   );
-  const mode = (value: SessionVisibility) => ({
-    get description() {
-      return t(CHAT_SESSION_SHARING_DESCRIPTION_KEYS[value]);
-    },
-    icon: () => <ChatSessionSharingModeIcon visibility={value} />,
-  });
-  const modes: ChatSessionSharingModePresentation = {
-    shared: mode("shared"),
-    "read-only": mode("read-only"),
-    suggest: mode("suggest"),
-    draft: mode("draft"),
-  };
+  const modes = createChatSessionSharingModes();
   const labels: ChatSessionSharingMobileLabels = {
     get sessionAccess() {
       return t("chat.sessionSharing.sessionAccess");
@@ -111,11 +97,7 @@ export function createChatSessionSharingMobileAdapter(
       return Boolean(source()?.state?.result?.publicShare);
     },
     get description() {
-      return t(
-        visibility() === "draft"
-          ? "chat.sessionSharing.publicDraftDescription"
-          : "chat.sessionSharing.publicLinkDescription",
-      );
+      return t("chat.sessionSharing.publicLinkDescription");
     },
     get url() {
       return source()?.state?.publicUrl;
@@ -228,8 +210,8 @@ export function createChatSessionSharingMobileAdapter(
       },
       get permissions() {
         const current = source();
-        return visibility() !== "shared" &&
-          visibility() !== "draft" &&
+        return ((visibility() !== "shared" && visibility() !== "draft") ||
+          rows().some((row) => row.invitedAccess)) &&
           current &&
           current.membersAvailable !== false &&
           (!current.state?.error || Boolean(current.state.result)) &&

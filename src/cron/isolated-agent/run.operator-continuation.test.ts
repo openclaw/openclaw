@@ -921,7 +921,9 @@ it.each([
       } else {
         expect(admittedOperator).toBe(scenario === "cron-scoped operator");
         expect(rejected).toContain(
-          scopedOperator ? "missing scope: operator.write" : "needs operator write permission",
+          scopedOperator
+            ? "missing scope: operator.write"
+            : "Your role on this Gateway does not allow it",
         );
       }
       if (scenario === "role revoked during merge") {

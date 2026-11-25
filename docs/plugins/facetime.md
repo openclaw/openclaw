@@ -55,11 +55,16 @@ The native companion is maintained in
 Use its matching signed release. If the package or formula is not available,
 installation cannot continue until it is published.
 
-## Configure owner identities
+## Configure allowed callers
 
 Add your FaceTime email address or full international phone number to
-`ownerHandles`. Only listed handles can use the integration. Every listed handle
-has owner authority; there is no guest tier.
+`allowedCallers`. Only listed handles can place or receive bridged calls.
+
+Owner tools follow [`commands.ownerAllowFrom`](/gateway/config-channels/commands),
+the same list that decides owner status for channel messages. Add each handle
+that should get owner tools as `facetime:<handle>`: a lowercase email address, or
+a phone number with only `+` and digits. A caller in `allowedCallers` but not in
+`commands.ownerAllowFrom` can talk to the agent without owner tools.
 
 Merge this into your OpenClaw configuration. Preserve existing plugin entries
 and add `facetime` to your existing `plugins.allow` list if you use one.
@@ -72,7 +77,7 @@ and add `facetime` to your existing `plugins.allow` list if you use one.
       facetime: {
         enabled: true,
         config: {
-          ownerHandles: ["owner@example.com", "+12065550123"],
+          allowedCallers: ["owner@example.com", "+12065550123"],
           realtime: {
             provider: "openai",
             sessionKey: "main",
@@ -81,6 +86,9 @@ and add `facetime` to your existing `plugins.allow` list if you use one.
         },
       },
     },
+  },
+  commands: {
+    ownerAllowFrom: ["facetime:owner@example.com", "facetime:+12065550123"],
   },
 }
 ```
@@ -144,8 +152,9 @@ Choose a `realtime.toolPolicy`:
 | `safe-read-only`  | Limit agent requests to a fixed set of file, search, web-fetch, and memory tools. Other plugin tools are not included automatically. |
 | `none`            | Disable agent consults. Voice conversation and call control remain available.                                                        |
 
-Invalid policy values are rejected. Only add your own identities to
-`ownerHandles`, even when choosing a restricted tool policy.
+Invalid policy values are rejected. Only add people you trust to
+`allowedCallers`: every caller can use the agent's tools that do not need owner
+status, even when choosing a restricted tool policy.
 
 ### Choose a voice
 
@@ -276,7 +285,7 @@ openclaw gateway call facetime.dial \
   --json
 ```
 
-The target must be in `ownerHandles`. Direct dialing requires `operator.write`
+The target must be in `allowedCallers`. Direct dialing requires `operator.write`
 access and counts as an explicit operator action.
 
 To end a call and check its status:
@@ -304,9 +313,16 @@ If the driver is outdated, update it from an interactive administrator session:
 openclaw gateway call facetime.updateDriver --json
 ```
 
-If upgrading a prototype configuration, run `openclaw doctor --fix`. Doctor
-migrates `whitelistHandles` to `ownerHandles` and removes the retired
+If upgrading an older configuration, run `openclaw doctor --fix`. The
+update-time Doctor pass does the same. Doctor moves `ownerHandles` (or the
+older `whitelistHandles`) to `allowedCallers` and removes the retired
 `helperHost`, `helperPort`, and `realtime.brain` settings.
+
+The old keys made every listed caller the owner. When Doctor moves them, it
+also adds each handle to `commands.ownerAllowFrom` as `facetime:<handle>`, so
+existing callers keep their owner tools. This happens once, because the old key
+is gone afterwards. Then edit owner status in `commands.ownerAllowFrom`; Doctor
+never makes an `allowedCallers` entry an owner.
 
 ## Remove the integration
 
@@ -335,7 +351,7 @@ FaceTime, check that the audio devices are removed, and restore SIP.
 
 | Symptom                                      | What to check                                                                                                                                          |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Plugin does not start                        | Confirm that it is enabled, `ownerHandles` is nonempty, and the Gateway runs in the signed-in Mac user session.                                        |
+| Plugin does not start                        | Confirm that it is enabled, `allowedCallers` is nonempty, and the Gateway runs in the signed-in Mac user session.                                      |
 | Native helper is missing or rejected         | Install the matching signed, notarized native companion. Do not bypass its signature or protocol checks.                                               |
 | Setup reports debugger attachment is blocked | Check developer-tools access and SIP debugging status in [Prepare the Mac](/plugins/facetime#prepare-the-mac).                                         |
 | Audio driver installation fails              | Verify full Xcode is installed at `/Applications/Xcode.app`, then follow [driver recovery](/plugins/facetime-recovery#recover-a-failed-driver-update). |

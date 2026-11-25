@@ -11,10 +11,12 @@ import {
 } from "../../packages/markdown-core/src/fences.js";
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
+  findHtmlIslandSpans,
   findTableBreakIndex,
   findTableContinuationAtBoundary,
   findTableContinuationHeader,
   findTableSpans,
+  mergeBreakSpans,
   resolveTableContinuation,
   type BreakSpan,
   type BreakSpans,
@@ -343,10 +345,13 @@ export class EmbeddedBlockChunker {
       removedFenceInfoLength += removedLength;
     }
     const tables = findTableSpans(source, fenceSpans, maxChars, !force);
-    const unsafe =
-      tables.length > 0
-        ? [...fenceSpans, ...tables].toSorted((left, right) => left.start - right.start)
-        : fenceSpans;
+    const islands = findHtmlIslandSpans(source, startsAtLineStart, maxChars, !force);
+    if (islands.length > 0) {
+      // Fitting islands break like fitting tables: before the island, whole.
+      tables.push(...islands);
+      tables.sort((left, right) => left.start - right.start);
+    }
+    const unsafe = tables.length > 0 ? mergeBreakSpans([...fenceSpans, ...tables]) : fenceSpans;
     const spans: BreakSpans = { fences: fenceSpans, tables, unsafe };
     const originalIndex = (index: number) =>
       removedFenceInfo.reduce(
@@ -388,7 +393,7 @@ export class EmbeddedBlockChunker {
       }
 
       if (chunking.flushOnParagraph && !force) {
-        const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
+        const paragraphBreak = findNextParagraphBreak(source, unsafe, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
         if (paragraphBreak !== null && paragraphBreak - start <= paragraphLimit) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak)}`;
@@ -725,7 +730,7 @@ function skipLeadingNewlines(value: string, start = 0): number {
 
 function findNextParagraphBreak(
   buffer: string,
-  fenceSpans: FenceSpan[],
+  fenceSpans: readonly BreakSpan[],
   startIndex = 0,
   minCharsFromStart = 1,
 ): number | null {

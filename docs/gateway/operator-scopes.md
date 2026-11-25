@@ -456,8 +456,8 @@ Set `sessions.invitedTools` to replace the participant tool defaults, or
 `sessions.others: "invited"`. Configuring both fields is an error, even if either
 list is empty. With neither field set, the defaults are:
 `read`, `write`, `edit`, `apply_patch`, `ls`, `exec`, `process`, `sessions_spawn`,
-`sessions_yield`, `skills_search`, `skills_read`, `web_search`, `web_fetch`,
-`tool_search`, `tool_describe`, `dispatch_action`, `view_image`, and
+`sessions_yield`, `github_publish`, `skills_search`, `skills_read`, `web_search`,
+`web_fetch`, `tool_search`, `tool_describe`, `dispatch_action`, `view_image`, and
 `progress_card`. `invitedTools: []` permits no tools; `invitedAlsoAllow: []` keeps
 the defaults.
 

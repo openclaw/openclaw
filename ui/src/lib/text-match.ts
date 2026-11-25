@@ -1,4 +1,5 @@
 import { escapeRegExp } from "../../../src/shared/regexp.ts";
+import { foldSearchCase } from "../../../src/shared/search-case.ts";
 
 // Preserve source offsets when case folding expands Unicode characters.
 // The pattern is literal; callers decide how each matched span is rendered.
@@ -9,7 +10,7 @@ export function matchQuery(text: string, query: string): RegExpExecArray | null 
 
 /** Case- and accent-insensitive search key. */
 export const foldSearchText = (value: string) =>
-  value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase();
+  foldSearchCase(value.normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase());
 
 /**
  * Source span of the first foldSearchText match. Folding changes length (Hangul

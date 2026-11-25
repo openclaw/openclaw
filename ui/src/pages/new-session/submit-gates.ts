@@ -10,6 +10,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
+import type { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachment-reads.ts";
 import { isPastedTextAttachment } from "../chat/pasted-text-card.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
@@ -172,7 +173,7 @@ type SubmitGateDraft = {
   readonly mentions: readonly HumanMention[];
   readonly visibility: NewSessionVisibility;
   readonly attachmentDraft: {
-    readonly reads: { readonly pendingReads: number };
+    readonly reads: Pick<ChatAttachmentReadLifecycle, "pendingReads" | "videoPreparationStatus">;
     readonly attachments: readonly ChatAttachment[];
   };
   readonly capabilities: { readonly toolOverrides: SessionToolOverrides | null };
@@ -232,7 +233,12 @@ export function resolveNewSessionSubmitBlock(
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
   if (draft.attachmentDraft.reads.pendingReads > 0) {
-    return { gate: "attachment-reads", reason: t("newSession.readingAttachment") };
+    return {
+      gate: "attachment-reads",
+      reason:
+        draft.attachmentDraft.reads.videoPreparationStatus?.message ??
+        t("newSession.readingAttachment"),
+    };
   }
   if (!pendingPlacementActive && draft.submissionOutcomeUnknown) {
     return {

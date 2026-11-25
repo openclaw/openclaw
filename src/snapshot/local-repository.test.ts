@@ -8,6 +8,7 @@ import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.j
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   createAgentDatabase,
@@ -1078,10 +1079,7 @@ it.each([
           ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_age_ms;
           ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_entries;
         `
-        : await fs.readFile(
-            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v25.sql", import.meta.url),
-            "utf8",
-          );
+        : OPENCLAW_AGENT_SCHEMA_V25_SQL;
     withDatabase(source, (db) => {
       db.exec(`${historicalSchema}\nPRAGMA user_version = ${previousVersion};`);
       db.prepare(`INSERT INTO schema_meta

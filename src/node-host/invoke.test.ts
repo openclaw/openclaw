@@ -533,10 +533,12 @@ describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
     "reports current allow-always coverage for prepared shell-wrapped system.run commands",
     async () => {
-      const { result } = await invokeCommand("system.run.prepare", {
-        command: ["/bin/sh", "-lc", "/bin/echo ok"],
-        rawCommand: "/bin/echo ok",
-      });
+      const { result } = await withEnvAsync({ BASH_ENV: undefined, ENV: undefined }, () =>
+        invokeCommand("system.run.prepare", {
+          command: ["/bin/sh", "-lc", "/bin/echo ok"],
+          rawCommand: "/bin/echo ok",
+        }),
+      );
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
         allowAlwaysCoverage?: {
           complete?: boolean;
