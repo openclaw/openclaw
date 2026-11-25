@@ -31,12 +31,16 @@ export async function resolveAgentRunAdmissionModel(
   const effectiveThinking = params.request.thinking;
   const effectiveAllowModelOverride = params.allowModelOverride;
   const runtimeConfig = params.cfgForAgent ?? params.cfg;
-  const sessionModel = await resolveGatewaySessionTurnModelRef({
-    cfg: runtimeConfig,
-    agentId: params.activeSessionAgentId,
-    sessionKey: params.resolvedSessionKey,
-    entry: params.sessionEntry,
-  });
+  // A request naming both provider and model never consults the session's selection.
+  const sessionModel =
+    effectiveProviderOverride && effectiveModelOverride
+      ? undefined
+      : await resolveGatewaySessionTurnModelRef({
+          cfg: runtimeConfig,
+          agentId: params.activeSessionAgentId,
+          sessionKey: params.resolvedSessionKey,
+          entry: params.sessionEntry,
+        });
   const activeModel = effectiveModelOverride
     ? (resolvePersistedOverrideModelRef({
         defaultProvider: effectiveProviderOverride ?? sessionModel?.provider,

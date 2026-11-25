@@ -11,6 +11,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import * as storeLookup from "../session-utils-store-lookup.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import type { AgentTurnContext } from "./types.js";
 
@@ -222,7 +223,13 @@ it.each<[string, string, boolean, { persistedModel?: string; modelOverride?: str
   },
 );
 
-it("admits image input against the model the session inherits from its parent", async () => {
+it.each([
+  { name: "against the model the session inherits from its parent", parentReadable: true },
+  {
+    name: "for a request naming provider and model without reading the parent",
+    parentReadable: false,
+  },
+])("admits image input $name", async ({ parentReadable }) => {
   // The agent default cannot read images; the parent's pick can.
   const fixture = await contentFixture("main", "text-only");
   const parentKey = "agent:main:dashboard:inherit-parent";
@@ -243,6 +250,15 @@ it("admits image input against the model the session inherits from its parent", 
     { sessionId: "inherit-child", updatedAt: 1, parentSessionKey: parentKey },
   );
 
+  const explicit = parentReadable
+    ? {}
+    : { providerOverride: "mock-openai", modelOverride: "main-vision" };
+  if (!parentReadable) {
+    vi.spyOn(storeLookup, "resolveGatewaySessionStoreTargetWithStoreAsync").mockRejectedValue(
+      new Error("parent session database unavailable"),
+    );
+  }
+
   const result = await prepareAgentContentPhase({
     ...fixture,
     request: {
@@ -251,6 +267,7 @@ it("admits image input against the model the session inherits from its parent", 
       idempotencyKey: "image-inherited-model",
     },
     requestedSessionKey,
+    ...explicit,
     knownAgents: ["main"],
   });
 
