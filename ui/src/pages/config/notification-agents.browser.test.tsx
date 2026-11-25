@@ -17,6 +17,7 @@ it.each([390, 1440])(
     const view = mountSolid(() => (
       <div class="settings-group" style={{ width: width === 390 ? "364px" : "726px" }}>
         <NotificationAgentsRow
+          setting="notifications.device.agents"
           inherit
           agentIds={undefined}
           inheritedAgentIds={[agent]}
@@ -55,8 +56,7 @@ it.each([390, 1440])(
       ),
     ).toBeLessThan(1);
     expect(getComputedStyle(label).textOverflow).toBe("ellipsis");
-    expect(button.querySelector("svg")!.getBoundingClientRect().right).toBeLessThanOrEqual(
-      bounds.right,
-    );
+    const icon = button.querySelector("svg")!;
+    expect(icon.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right);
   },
 );
