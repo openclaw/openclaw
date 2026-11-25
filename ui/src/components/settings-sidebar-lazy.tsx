@@ -9,11 +9,8 @@ import { IconButton } from "./solid/icon-button.tsx";
 const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
 });
-const SettingsSaveStatus = lazy(() => import("./settings-sidebar-shell.tsx"), {
-  export: "ShellSettingsSaveStatus",
-});
-const SettingsTargetArrival = lazy(() => import("../lib/reactive/settings-target-arrival.ts"), {
-  export: "SettingsTargetArrival",
+const SettingsFeedback = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsFeedback",
 });
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
@@ -30,28 +27,13 @@ export type SettingsSidebarFallbackProps = Pick<
 > & { canAdmin: boolean };
 
 /** Feedback waits on the Settings chunk without ever holding the page. */
-export function LazySettingsSaveStatus(
-  props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSaveStatus>[0],
+export function LazySettingsFeedback(
+  props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsFeedback>[0],
 ) {
   return (
     <Errored fallback={null}>
       <Loading fallback={null}>
-        <SettingsSaveStatus host={props.host} />
-      </Loading>
-    </Errored>
-  );
-}
-
-/** A link's arrival loads with Settings; it finds rows the page already drew when it mounts. */
-export function LazySettingsTargetArrival(
-  props: Parameters<
-    typeof import("../lib/reactive/settings-target-arrival.ts").SettingsTargetArrival
-  >[0],
-) {
-  return (
-    <Errored fallback={null}>
-      <Loading fallback={null}>
-        <SettingsTargetArrival router={props.router} host={props.host} />
+        <SettingsFeedback host={props.host} />
       </Loading>
     </Errored>
   );

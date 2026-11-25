@@ -2,11 +2,7 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
-import {
-  LazySettingsSaveStatus,
-  LazySettingsTargetArrival,
-  LazySettingsSidebar,
-} from "../components/settings-sidebar-lazy.tsx";
+import { LazySettingsFeedback, LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayConnectionView } from "../components/solid/gateway-connection-view.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
@@ -513,17 +509,11 @@ export function ApplicationShell(props: {
               onNotFound={() => props.host.shellNavigation.recoverNotFoundRoute()}
               notFoundRecoveryReady={view().gatewayConnected}
             />
-            <Show when={view().settingsTakeover}>
-              <LazySettingsTargetArrival
-                router={view().runtime.router}
-                host={() => props.host.routeOutlet}
-              />
-            </Show>
           </ShellLayoutProvider>
         </main>
         <Show when={view().settingsTakeover}>
           <div class="settings-save-status" inert={settingsSaveStatusInert()}>
-            <LazySettingsSaveStatus host={props.host} />
+            <LazySettingsFeedback host={props.host} />
           </div>
         </Show>
         <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
