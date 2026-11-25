@@ -204,29 +204,6 @@ function createMalformedTool(name: string) {
   };
 }
 
-function installConsoleMethodSpy(method: "log" | "warn") {
-  const spy = vi.fn();
-  loggingState.rawConsole = {
-    log: method === "log" ? spy : vi.fn(),
-    info: vi.fn(),
-    warn: method === "warn" ? spy : vi.fn(),
-    error: vi.fn(),
-  };
-  return spy;
-}
-
-function requireConsoleMessage(spy: { mock: { calls: unknown[][] } }, index = 0): string {
-  const call = spy.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected console call ${index}`);
-  }
-  expect(typeof call[0]).toBe("string");
-  if (typeof call[0] !== "string") {
-    throw new Error(`expected console call ${index} to contain a string message`);
-  }
-  return call[0];
-}
-
 function resolveOptionalDemoTools(toolAllowlist?: readonly string[]) {
   return resolvePluginTools(createResolveToolsParams({ toolAllowlist }));
 }

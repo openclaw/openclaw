@@ -65,14 +65,6 @@ function compactRun(id: number, text: string, label = "blacksmith-32vcpu-ubuntu-
   return timingRun(id, [{ kind: "compact", labels: [label], text }]);
 }
 
-function timingLog(
-  text: string,
-  label = "blacksmith-32vcpu-ubuntu-2404",
-  kind: "compact" | "tooling" | "release-packed" = "compact",
-) {
-  return { kind, labels: [label], text };
-}
-
 function mockTimingFile(contents: string) {
   const original = fs.readFileSync;
   const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
