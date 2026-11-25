@@ -32,6 +32,7 @@ import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/rem
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeAuthStore,
@@ -539,7 +540,7 @@ describe("remote catalog publication boundaries", () => {
         logGateway: { debug: vi.fn(), warn: vi.fn() },
       } as never,
     });
-    expect(respond.mock.calls[0]?.[0]).toBe(success);
+    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(success);
     return respond.mock.calls[0]?.[success ? 1 : 2];
   }
   afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
@@ -716,6 +717,50 @@ describe("remote catalog publication boundaries", () => {
       pricingSpy.mockRestore();
     }
     expect(calls).toBe(2);
+  });
+
+  it("models.list refresh acquires the replacement when hosted publication interrupts discovery", async ({
+    signal,
+  }) => {
+    const discovering = createDeferred();
+    const release = createDeferred();
+    const native = vi.fn(async () => []);
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+      const id = `discovered-${captureRemoteModelCatalogSnapshot()?.generatedAt}`;
+      const row = { id, provider: "custom", name: id };
+      return { entries: [row], routeVariants: [row] };
+    });
+    native.mockImplementationOnce(async () => {
+      discovering.resolve();
+      await release.promise;
+      return [];
+    });
+    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+      harnessRegistry("native-test", {
+        label: "Native test",
+        runAttempt: vi.fn(),
+        loadModelCatalog: native,
+      }),
+    );
+    await setup();
+    const pending = listModels(true);
+    void pending.catch(() => undefined);
+    try {
+      await withinTest(discovering.promise, signal);
+      expect(
+        await withinTest(
+          applyRemoteModelCatalogUpdate(() => config),
+          signal,
+        ),
+      ).toBe("published");
+      release.resolve();
+      const result = await withinTest(pending, signal);
+      expect(result.models.map((model: { id: string }) => model.id)).toContain("discovered-300");
+      expect(native).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+    }
   });
 
   it("models.list does not retry after the remote replacement itself loses authority", async () => {

@@ -92,9 +92,11 @@ export type CostUsageSummary = {
 
 export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
 
+export type UsageCivilDays = { from: string; through: string };
+
 export type UsageDailyBucket =
-  | { mode: "utc-offset"; utcOffsetMinutes: number }
-  | { mode: "time-zone"; timeZone: string };
+  | { mode: "utc-offset"; utcOffsetMinutes: number; civilDays?: never }
+  | { mode: "time-zone"; timeZone: string; civilDays?: UsageCivilDays };
 
 type SessionDailyUsage = CostUsageTotals & {
   date: string; // YYYY-MM-DD

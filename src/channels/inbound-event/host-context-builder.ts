@@ -5,6 +5,7 @@ import {
   bindUnlinkedChannelRequester,
 } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { decideChannelOwnerPrincipal } from "../../gateway/operator-admission.js";
 import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
@@ -148,20 +149,22 @@ export function createHostChannelInboundEventContextBuilder<
               () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
             );
           }
-          let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
-          if (
+          const sender =
             principal &&
-            requester &&
             built.SenderId === principal.senderId &&
             (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
             built.OriginatingChannel === principal.channelId &&
+            batch.every((input) => JSON.stringify(input?.verifiedPrincipal) === principalKey)
+              ? principal
+              : undefined;
+          const linked =
+            sender &&
+            requester &&
             batch.every(
               (input) =>
-                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
-                input?.requesterProfile?.id === requester.id &&
-                input.requesterProfile.isCurrent(),
-            )
-          ) {
+                input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+            );
+          if (linked && requester) {
             // Retain the remote provenance and record the attested human contribution too.
             for (const input of batch) {
               if (input) {
@@ -172,22 +175,27 @@ export function createHostChannelInboundEventContextBuilder<
                 );
               }
             }
-            const prepared = batch.at(-1)?.operatorAuthority;
-            // The operator decision is fixed here, when the message is admitted.
-            if (
-              prepared &&
-              owner.isLive() &&
-              owner.resolveGatewayContext?.() === gateway &&
-              batch.every((input) =>
-                input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
-              )
-            ) {
-              operatorAuthority = captureChannelOperatorRunAuthority({
-                ...prepared.operatorProfile,
-                recoveryReference: prepared.recoveryReference,
-                getRuntimeConfig: () => gateway.getRuntimeConfig(),
-              });
-            }
+          }
+          const prepared = batch.at(-1)?.operatorAuthority;
+          const config = gateway.getRuntimeConfig();
+          // The operator decision is fixed here, when the message is admitted. A listed owner is
+          // the owner principal even when linked; another linked operator profile keeps its grant.
+          const admitted =
+            sender && owner.isLive() && owner.resolveGatewayContext?.() === gateway
+              ? (decideChannelOwnerPrincipal(config, sender) ??
+                (linked &&
+                prepared &&
+                batch.every((input) => input?.operatorAuthority?.isCurrent(config))
+                  ? { ...prepared.operatorProfile, recoveryReference: prepared.recoveryReference }
+                  : undefined))
+              : undefined;
+          const operatorAuthority =
+            admitted &&
+            captureChannelOperatorRunAuthority({
+              ...admitted,
+              getRuntimeConfig: () => gateway.getRuntimeConfig(),
+            });
+          if (linked && requester) {
             bindRequesterProfile(built, {
               ...requester,
               operatorAuthority,

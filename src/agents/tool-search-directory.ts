@@ -208,6 +208,8 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
 }
 
 type ToolDirectoryRow = { label: string; description: string };
+// On-demand tools load as top-level tools once looked up; dispatch_action and exec refuse them.
+const ON_DEMAND_ROW_MARK = "[loads on lookup]";
 type NativeToolDirectoryRow = ToolDirectoryRow & { id: string; pinned: boolean };
 
 function prepareToolDirectoryRow(
@@ -224,7 +226,7 @@ function prepareToolDirectoryRow(
   return {
     id: entry.id,
     pinned: entry.id === `openclaw:core:${entry.name}` && isCoreCodingSurfaceToolName(entry.name),
-    label: `- ${name}${ownerName ? ` (${ownerName})` : ""}`,
+    label: `- ${name}${ownerName ? ` (${ownerName})` : ""}${entry.onDemand ? ` ${ON_DEMAND_ROW_MARK}` : ""}`,
     description: entry.description,
   };
 }
@@ -274,6 +276,7 @@ function formatToolSearchCatalogDirectory(
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
   const total = deferredEntries.filter((entry) => entry.source === "openclaw").length;
+  const hasOnDemand = deferredEntries.some((entry) => entry.onDemand);
   const footerForCount = (included: number) => {
     const omitted = total - included;
     let guidance =
@@ -281,11 +284,15 @@ function formatToolSearchCatalogDirectory(
         ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
         : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
-      guidance +=
-        " Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+      guidance += hasOnDemand
+        ? ` Tools marked ${ON_DEMAND_ROW_MARK} become top-level tools after tool_describe; then call them by name. Other deferred names are not directly callable: call dispatch_action with the result id or name in id and all tool parameters in args, even when other guidance names a deferred tool directly.`
+        : " Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
     } else if (mode === "directory") {
       guidance +=
-        " Call a unique deferred tool name directly, or use dispatch_action with its id and args.";
+        " Call a unique deferred tool name directly, or use dispatch_action with its id and args" +
+        (hasOnDemand
+          ? `; tools marked ${ON_DEMAND_ROW_MARK} become top-level after tool_describe, then call them only by name.`
+          : ".");
     }
     return omitted > 0 ? `${omitted}${omittedLabel}${guidance}` : guidance;
   };

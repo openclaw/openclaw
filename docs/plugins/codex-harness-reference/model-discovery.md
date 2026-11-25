@@ -140,35 +140,17 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.169.0`, which already meets
-the reported GPT-6.2 minimum version. The table below is a historical snapshot, not the
-current catalog: a `model/list` check against `0.162.1` in an isolated,
-unauthenticated Codex home returned these visible bundled catalog entries on
-October 18, 2026:
-
-| Model id        | Input modalities | Reasoning efforts                    | Default effort |
-| --------------- | ---------------- | ------------------------------------ | -------------- |
-| `gpt-6.1-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-6-astra`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-6-sol`     | text, image      | low, medium, high, xhigh, max, ultra | medium         |
-| `gpt-6-luna`    | text, image      | low, medium, high, xhigh, max        | medium         |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra | medium         |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             | medium         |
-
-The `gpt-6.1-sol` entry also advertises the `priority` service tier as Fast. This bundled
-snapshot does not establish account access: authenticated catalogs can differ,
-and native discovery still requires a current account. Run `/codex models`
-after starting or upgrading the gateway to inspect the actual public picker
-for your account. Existing configured model selections remain unchanged.
+The bundled harness is `@openai/codex` `0.172.0`, which exceeds the reported
+GPT-6.2 minimum version. On November 25, 2026, an unauthenticated `model/list`
+check with this version returned 11 visible entries and one default. Authenticated
+catalogs can differ. Run `/codex models` after starting or upgrading the Gateway
+to see the picker for your account. OpenClaw does not change existing configured
+model selections on upgrade.
+</Note>
 
 OpenClaw reasoning controls preserve supported native levels, including `ultra`.
 Codex owns Ultra's proactive delegation and model-specific inference effort;
 Platform API effort metadata does not downgrade the selected runtime mode.
-Hidden models can also appear in the app-server catalog for internal or
-specialized flows without being normal model-picker choices.
-</Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
 

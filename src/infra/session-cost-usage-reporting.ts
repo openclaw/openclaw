@@ -168,7 +168,10 @@ export async function loadSessionCostSummary(params: {
 }
 
 export async function loadSessionUsageTimeSeries(
-  params: SessionUsageDiagnosticParams & { maxPoints?: number },
+  params: SessionUsageDiagnosticParams & {
+    maxPoints?: number;
+    matchesTimestamp?: (ms: number) => boolean;
+  },
 ): Promise<SessionUsageTimeSeries | null> {
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     if (scoped.maxPoints !== undefined && scoped.maxPoints !== null) {
@@ -187,7 +190,11 @@ export async function loadSessionUsageTimeSeries(
     for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, prepareCost);
       const timestamp = entry?.timestamp?.getTime();
-      if (!entry?.usage || !timestamp) {
+      if (
+        !entry?.usage ||
+        !timestamp ||
+        (scoped.matchesTimestamp && !scoped.matchesTimestamp(timestamp))
+      ) {
         continue;
       }
       points.push({

@@ -24,7 +24,12 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
+import type {
+  BackupTask,
+  Capture,
+  Restore,
+  PostgresUpgradeInspection,
+} from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
@@ -320,6 +325,56 @@ export function fingerprintPostgresBackup(
 ) {
   return runBackupTask<string>(
     { operation: "fingerprint", params: { sourcePath, config, pluginOwners } },
+    () => {},
+  );
+}
+
+/** Read physical PostgreSQL metadata without migrating the selected store. */
+export function inspectPostgresUpgrade(sourcePath: string, config: OpenClawConfig) {
+  return runBackupTask<PostgresUpgradeInspection>(
+    { operation: "inspect-upgrade", params: { sourcePath, config } },
+    () => {},
+  );
+}
+
+/** Call for the complete store inventory before allocating any protected copy. */
+export function preflightPostgresUpgrade(sourcePaths: string[], config: OpenClawConfig) {
+  return runBackupTask<void>(
+    { operation: "preflight-upgrade", params: { sourcePaths, config } },
+    () => {},
+  );
+}
+
+export function clonePostgresUpgrade(
+  sourcePath: string,
+  anchorPath: string,
+  config: OpenClawConfig,
+) {
+  return runBackupTask<{ namespace: string }>(
+    { operation: "clone-upgrade", params: { sourcePath, anchorPath, config } },
+    () => {},
+  );
+}
+
+export function validatePostgresUpgrade(
+  anchorPath: string,
+  config: OpenClawConfig,
+  expectedVersion: number,
+) {
+  return runBackupTask<void>(
+    { operation: "validate-upgrade", params: { anchorPath, config, expectedVersion } },
+    () => {},
+  );
+}
+
+/** Keep the preserved anchor when this operation refuses or server cleanup fails. */
+export function retirePostgresUpgrade(
+  anchorPath: string,
+  config: OpenClawConfig,
+  activeAnchors: string[],
+) {
+  return runBackupTask<void>(
+    { operation: "retire-upgrade", params: { anchorPath, config, activeAnchors } },
     () => {},
   );
 }

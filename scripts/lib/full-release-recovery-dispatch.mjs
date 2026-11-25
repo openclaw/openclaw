@@ -14,19 +14,28 @@ import {
 import { dirname } from "node:path";
 import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { parse as parseYaml } from "yaml";
-import { validateArtifactProducerRun } from "../full-release-artifacts.mjs";
 import {
   authenticateReceiptRecovery,
+  receiptRecoveryPolicyRequest,
   receiptRecoverySourceRequest,
   validateReceiptRecoveryRequest,
+  verifyReceiptRecoveryPolicy,
+  verifyWaiverPolicyCommit,
 } from "../full-release-receipt-recovery.mjs";
 import {
   releaseChildSpec,
   validateReleaseChildDispatchBinding,
 } from "../full-release-validation-policy.mjs";
 import { restoreOriginalPublicationAdmission } from "../release-ci-summary.mjs";
-import { inspectActionsArtifactZip, readBoundedRegularFile } from "./actions-artifact-archive.mjs";
+import { readBoundedRegularFile } from "./actions-artifact-archive.mjs";
 import { assertRequestPath } from "./full-release-dispatch-request.mts";
+import {
+  artifactJson,
+  discoverPublicationArtifacts,
+  one,
+  witnessedRun,
+} from "./full-release-publication-artifacts.mjs";
+import { isWaived, readReleaseValidationWaiversAsync } from "./release-validation-waivers.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
@@ -37,140 +46,6 @@ function requireValue(value, message) {
     throw new Error("Receipt recovery: " + message);
   }
 }
-function one(values, label) {
-  requireValue(values.length === 1, label + " is missing or ambiguous");
-  return values[0];
-}
-
-// Contents are discovery indexes, not authority. The receipt owner authenticates
-// every selected descriptor before the operator can send a POST.
-async function artifactJson(client, run, name, file) {
-  const metadata = one(
-    (await client.getRunArtifacts(String(run.id))).filter((entry) => entry.name === name),
-    name,
-  );
-  const downloaded = await client.downloadArtifactArchive({
-    expected: {
-      repository: REPOSITORY,
-      runId: Number(run.id),
-      workflowSha: run.head_sha,
-      artifactId: Number(metadata.id),
-      artifactName: name,
-      artifactDigest: metadata.digest,
-      artifactSizeBytes: metadata.size_in_bytes,
-      artifactExpiresAt: metadata.expires_at,
-    },
-    maxArchiveBytes: 1024 * 1024,
-    token: process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN,
-  });
-  const bytes = inspectActionsArtifactZip(downloaded.archiveBytes, [file], {
-    maxArchiveBytes: 1024 * 1024,
-    maxEntryBytes: MAX_BYTES,
-    maxExpandedBytes: MAX_BYTES,
-  }).get(file);
-  return { metadata, bytes, value: JSON.parse(bytes.toString("utf8")) };
-}
-
-async function witnessedRun(client, jobs, jobName, workflow, allowReuse = false) {
-  const job = one(
-    jobs.filter((entry) => entry.name === jobName),
-    "original " + jobName,
-  );
-  const log = await client.getJobLog(job.id);
-  requireValue(
-    typeof log === "string" && Buffer.byteLength(log) <= 8 * 1024 * 1024,
-    "dispatch log exceeds limit",
-  );
-  const matches = [
-    ...log.matchAll(
-      /(Dispatched|Reused) ([\w.-]+\.ya?ml): https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)/gu,
-    ),
-  ];
-  const match = one(matches, "original dispatch witness for " + jobName);
-  requireValue(
-    (match[1] === "Dispatched" || allowReuse) &&
-      match[2] === workflow &&
-      match[3] === REPOSITORY &&
-      match[5] === "1",
-    "original dispatch identity differs",
-  );
-  return { run: await client.getRun(match[4]), log, reused: match[1] === "Reused" };
-}
-
-async function discoverPublicationArtifacts(parent, source, jobs, client, originalCandidate) {
-  const workflow = parseYaml(client.getWorkflowSource(parent.head_sha));
-  const records = {};
-  for (const stage of originalCandidate ? ["npm", "docker"] : ["npm", "candidate", "docker"]) {
-    const job = one(
-      Object.values(workflow.jobs).filter(
-        (entry) => entry.env?.CHILD_WORKFLOW_KIND === "artifact-" + stage,
-      ),
-      "frozen artifact job " + stage,
-    );
-    const { run } = await witnessedRun(client, jobs, job.name, "full-release-artifacts.yml");
-    const receipt = (
-      await artifactJson(
-        client,
-        run,
-        "full-release-artifact-receipt-" + run.id + "-" + run.run_attempt,
-        "artifact-receipt.json",
-      )
-    ).value;
-    requireValue(
-      receipt.schema === "openclaw.full-release-artifact-receipt/v1" &&
-        receipt.stage === stage &&
-        receipt.sourceSha === source.candidateSha &&
-        receipt.toolingSha === parent.head_sha &&
-        receipt.dispatchId === "full-release-validation-" + parent.id + "-1-artifacts-" + stage &&
-        String(receipt.runId) === String(run.id) &&
-        Number(receipt.runAttempt) === run.run_attempt,
-      "artifact receipt discovery identity differs",
-    );
-    validateArtifactProducerRun(receipt, run, String(run.id), String(run.run_attempt));
-    records[stage] = receipt.outputs;
-  }
-  let pluginNpm = null;
-  if (source.publicationSelection?.pluginPublishScope !== "none") {
-    const { run: pluginRun } = await witnessedRun(
-      client,
-      jobs,
-      "Prepare exact plugin npm artifacts",
-      "plugin-npm-release.yml",
-    );
-    const plugin = await artifactJson(
-      client,
-      pluginRun,
-      "plugin-npm-prepared-" +
-        source.candidateSha +
-        "-" +
-        pluginRun.id +
-        "-" +
-        pluginRun.run_attempt,
-      "plugin-npm-prepared.json",
-    );
-    pluginNpm = {
-      ...plugin.value.producer,
-      artifactId: plugin.metadata.id,
-      artifactName: plugin.metadata.name,
-      artifactDigest: plugin.metadata.digest,
-      artifactSizeBytes: plugin.metadata.size_in_bytes,
-    };
-  }
-  return {
-    candidate: originalCandidate ?? JSON.parse(records.candidate.binding_json),
-    publicationArtifacts: {
-      npmPreflight: JSON.parse(records.npm.qualified_preflight_bundle_json),
-      docker: {
-        preparedRunId: records.docker.prepared_run_id,
-        preparedRunAttempt: records.docker.prepared_run_attempt,
-        preparedArtifactName: records.docker.prepared_artifact_name,
-        preparedManifestSha256: records.docker.prepared_manifest_sha256,
-      },
-      pluginNpm,
-    },
-  };
-}
-
 export function parseReceiptRecoveryArgs(args) {
   const options = { command: "recover", repository: REPOSITORY, runId: "", json: false };
   const names = {
@@ -178,12 +53,18 @@ export function parseReceiptRecoveryArgs(args) {
     "--workflow-sha": "workflowSha",
     "--request-file": "requestFile",
     "--reconcile-request": "reconcileRequest",
+    "--policy-sha": "policySha",
+    "--policy-admission-run": "policyAdmissionRun",
   };
   const seen = new Set();
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     requireValue(!seen.has(flag), "duplicate recovery option: " + flag);
     seen.add(flag);
+    if (flag === "--prepare-policy-admission") {
+      options.preparePolicyAdmission = true;
+      continue;
+    }
     if (flag === "--json") {
       options.json = true;
       continue;
@@ -196,15 +77,28 @@ export function parseReceiptRecoveryArgs(args) {
   }
   if (options.reconcileRequest) {
     requireValue(
-      !options.runId && !options.workflowSha && !options.requestFile,
+      !options.runId &&
+        !options.workflowSha &&
+        !options.requestFile &&
+        !options.policySha &&
+        !options.policyAdmissionRun &&
+        !options.preparePolicyAdmission,
       "--reconcile-request cannot change the retained request",
     );
   } else {
     requireValue(
       /^[1-9][0-9]*$/u.test(options.runId) &&
         /^[a-f0-9]{40}$/u.test(options.workflowSha ?? "") &&
-        options.requestFile,
-      "recover requires --run ORIGINAL --workflow-sha P --request-file PATH",
+        (options.preparePolicyAdmission ? !options.requestFile : options.requestFile),
+      "recover requires --run ORIGINAL --workflow-sha P and a request file unless preparing policy admission",
+    );
+    requireValue(
+      options.preparePolicyAdmission
+        ? /^[a-f0-9]{40}$/u.test(options.policySha ?? "") && !options.policyAdmissionRun
+        : (!options.policySha && !options.policyAdmissionRun) ||
+            (/^[a-f0-9]{40}$/u.test(options.policySha ?? "") &&
+              /^[1-9][0-9]*$/u.test(options.policyAdmissionRun ?? "")),
+      "policy recovery requires --policy-sha Q and --policy-admission-run ID (or --prepare-policy-admission)",
     );
   }
   return options;
@@ -284,11 +178,7 @@ async function discoverOriginalAdmission(parent, jobs, client) {
   };
 }
 
-export async function discoverReceiptRecoveryRequest(runId, workflowSha, client) {
-  requireValue(
-    /^[1-9][0-9]*$/u.test(runId) && /^[a-f0-9]{40}$/u.test(workflowSha),
-    "original run and exact P are required",
-  );
+async function discoverOriginalQualification(runId, client) {
   const parent = await client.getRunAttempt(runId, 1);
   requireValue(
     String(parent.id) === runId &&
@@ -313,6 +203,23 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
     qualificationSha: parent.head_sha,
     workflowRef: parent.head_branch,
   });
+  return { parent, jobs, inventory, source, admission };
+}
+
+export async function discoverReceiptRecoveryRequest(
+  runId,
+  workflowSha,
+  client,
+  policyOptions = {},
+) {
+  requireValue(
+    /^[1-9][0-9]*$/u.test(runId) && /^[a-f0-9]{40}$/u.test(workflowSha),
+    "original run and exact P are required",
+  );
+  const { parent, jobs, inventory, source, admission } = await discoverOriginalQualification(
+    runId,
+    client,
+  );
   let plan;
   if (inventory.some((entry) => entry.name === "full-release-execution-plan-" + runId)) {
     // An invalid existing plan is not a reason to fall back to discovery.
@@ -324,10 +231,48 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
     jobs,
     client,
     plan?.candidate,
+    admission.request.inputs,
   );
+  const requestId = randomUUID();
+  let policyQualification;
+  if (policyOptions.policyAdmissionRun) {
+    const admissionRunId = Number(policyOptions.policyAdmissionRun);
+    const run = await client.getRun(policyOptions.policyAdmissionRun);
+    requireValue(
+      Number.isSafeInteger(admissionRunId) && run.id === admissionRunId && run.run_attempt === 1,
+      "waiver policy admission must identify its current first attempt",
+    );
+    policyQualification = {
+      sha: policyOptions.policySha,
+      admission: client.resolveQualificationAdmissionDescriptor({
+        repository: REPOSITORY,
+        runId: admissionRunId,
+        runAttempt: 1,
+        workflowRef: run.head_branch,
+        workflowSha: run.head_sha,
+      }),
+    };
+  }
+  const policy = await verifyReceiptRecoveryPolicy(
+    { requestId, policyQualification },
+    admission,
+    client,
+  );
+  const waivers =
+    policy?.waiverPolicy ??
+    (await readReleaseValidationWaiversAsync((path) =>
+      client.getWorkflowSource(parent.head_sha, path),
+    ));
+  const scope = {
+    targetSha: source.candidateSha,
+    targetVersion: admission.baselinePolicy.candidateVersion,
+  };
   const children = {};
   for (const coverage of admission.coverage.children) {
     const role = coverage.key;
+    if (isWaived({ ...scope, childRole: role }, waivers)) {
+      continue;
+    }
     if (plan?.childReuse?.[role]) {
       children[role] = plan.childReuse[role];
       continue;
@@ -409,8 +354,9 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
     "current parent must be a terminal attempt of the original qualification",
   );
   return validateReceiptRecoveryRequest({
+    ...(policyQualification && { policyQualification }),
     schema: "openclaw.full-release-receipt-recovery/v1",
-    requestId: randomUUID(),
+    requestId,
     workflowSha,
     repository: REPOSITORY,
     originalParent: { runId, runAttempt: 1, currentRunAttempt: currentParent.run_attempt },
@@ -597,17 +543,40 @@ export async function dispatchReceiptRecovery(options, client) {
   if (options.reconcileRequest) {
     return reconcileReceiptRecovery(options.reconcileRequest, client);
   }
+  if (options.preparePolicyAdmission) {
+    const { parent, admission } = await discoverOriginalQualification(options.runId, client);
+    requireValue(
+      parent.status === "completed" && ["success", "failure"].includes(parent.conclusion),
+      "original parent is not terminal",
+    );
+    await verifyWaiverPolicyCommit(client, admission, options.policySha, { preparing: true });
+    return {
+      qualificationRequest: receiptRecoveryPolicyRequest(
+        admission,
+        options.policySha,
+        randomUUID(),
+      ),
+    };
+  }
   assertRequestPath(options.requestFile);
   if (existsSync(options.requestFile)) {
     const retained = readRecord(options.requestFile);
     requireValue(
       retained.request.originalParent.runId === options.runId &&
-        retained.request.workflowSha === options.workflowSha,
-      "existing request differs from requested original run or P",
+        retained.request.workflowSha === options.workflowSha &&
+        retained.request.policyQualification?.sha === options.policySha &&
+        retained.request.policyQualification?.admission.runId ===
+          (options.policyAdmissionRun ? Number(options.policyAdmissionRun) : undefined),
+      "existing request differs from requested original run, P or policy admission",
     );
     return reconcileReceiptRecovery(options.requestFile, client);
   }
-  const request = await discoverReceiptRecoveryRequest(options.runId, options.workflowSha, client);
+  const request = await discoverReceiptRecoveryRequest(
+    options.runId,
+    options.workflowSha,
+    client,
+    options,
+  );
   const wire = JSON.stringify({ ref: "main", inputs: { request: JSON.stringify(request) } });
   requireValue(
     Buffer.byteLength(JSON.stringify({ request: JSON.stringify(request) })) <= 65_535,
@@ -625,13 +594,14 @@ export async function dispatchReceiptRecovery(options, client) {
   // Authenticate live admission here; the workflow owns full receipt verification.
   // Repeating that multi-minute scan locally makes the selected main SHA go stale.
   const parent = await client.getRunAttempt(request.originalParent.runId, 1);
-  await client.verifyQualificationAdmission({
+  const originalAdmission = await client.verifyQualificationAdmission({
     descriptor: request.qualificationAdmission,
     repository: request.repository,
     candidateSha: request.candidateBinding.request.targetSha,
     qualificationSha: request.candidateBinding.request.toolingSha,
     workflowRef: parent.head_branch,
   });
+  await verifyReceiptRecoveryPolicy(request, originalAdmission, client);
   const ref = await client.getRef("refs/heads/main");
   requireValue(
     ref.object?.type === "commit" && ref.object.sha === request.workflowSha,

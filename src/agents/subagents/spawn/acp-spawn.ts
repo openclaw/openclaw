@@ -105,6 +105,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
 import { withPreparedSessionCapabilityRead } from "./subagent-session-store.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
+import { resolveParticipationSpawnError } from "./subagent-spawn-participation.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
 
 type SpawnAcpSandboxMode = "inherit" | "require";
@@ -165,6 +166,10 @@ export async function spawnAcpDirect(
   params: SpawnAcpParams,
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
+  const participationError = resolveParticipationSpawnError({ runtime: "acp" }, ctx, undefined);
+  if (participationError) {
+    return buildAcpSpawnError("runtime_policy", participationError, "forbidden");
+  }
   const cfg = getRuntimeConfig();
   const creatorProfileId = requesterCreatorProfileId(
     getGatewayToolCallerIdentity()?.requesterOrigin,

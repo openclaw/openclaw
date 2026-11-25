@@ -1,4 +1,5 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -36,12 +37,14 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { projectCompletedProjectMoves } from "../project-move-replay.js";
-import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { recordRuntimeContextProjection } from "../session-prompt-state.js";
+import { recordRuntimeContextProjection } from "../prompt-cache-observability.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
-import { createAttemptDeferredToolResolver } from "./attempt-deferred-tool-resolver.js";
+import {
+  createAttemptDeferredToolResolver,
+  installAttemptOnDemandToolLoader,
+} from "./attempt-deferred-tool-resolver.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
@@ -66,6 +69,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
+  persistCompactedCurrentUserTurnReplay,
   prepareForeignPendingUserTurns,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
@@ -149,6 +153,14 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     ...clientTools,
   });
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
+  const deferredToolInput = {
+    attempt,
+    clientTools,
+    customTools: allCustomTools,
+    runAbortSignal: input.runAbortSignal,
+    sessionAgentId: input.sessionAgentId,
+  };
+  installAttemptOnDemandToolLoader(deferredToolInput);
 
   const { session: activeSession } = await createAgentSession({
     systemPrompt: input.initialSystemPrompt.trim(),
@@ -162,13 +174,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sessionManager: input.sessionManager,
     settingsManager,
     resourceLoader,
-    resolveDeferredTool: createAttemptDeferredToolResolver({
-      attempt,
-      clientTools,
-      customTools: allCustomTools,
-      runAbortSignal: input.runAbortSignal,
-      sessionAgentId: input.sessionAgentId,
-    }),
+    resolveDeferredTool: createAttemptDeferredToolResolver(deferredToolInput),
     withSessionWriteSettlement: (operation) =>
       input.transcriptLifecycle.withTranscriptWrite(operation),
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
@@ -286,6 +292,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         // A recovery resumes its admitted history, including accepted steering.
         // Its newer user tail is not an orphan to replace with the original input.
         if (attempt.replayCurrentTranscript) {
+          await persistCompactedCurrentUserTurnReplay({
+            activeSession,
+            sessionManager,
+            currentUserTurnMessage,
+          });
           return undefined;
         }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
@@ -435,11 +446,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(
       replayCompletedMoves ? projectCompletedProjectMoves(history) : history,
     );
     applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
-    if (
-      !input.appendOnlyRuntimeContext &&
-      recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)
-    ) {
-      declarePromptHistoryRewrite({ ...attempt, reason: "runtimeContextCarrier" });
+    if (!input.appendOnlyRuntimeContext) {
+      recordRuntimeContextProjection(removedRuntimeContext, converted);
     }
     return converted;
   };
@@ -490,10 +498,7 @@ export async function prepareEmbeddedAttemptSessionManager(
     config: attempt.config,
     env: process.env,
   });
-  const isOpenAIResponsesApi =
-    attempt.model.api === "openai-responses" ||
-    attempt.model.api === "azure-openai-responses" ||
-    attempt.model.api === "openai-chatgpt-responses";
+  const responsesApi = isOpenAIResponsesApi(attempt.model.api);
 
   const preparedUserTurnMessage =
     attempt.skipPreparedUserTurnMessage || attempt.replayCurrentTranscript
@@ -598,7 +603,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? attempt.userTurnTranscriptRecorder
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-    missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+    missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
@@ -720,7 +725,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       },
       preparedUserTurnMessage,
     },
-    isOpenAIResponsesApi,
+    isOpenAIResponsesApi: responsesApi,
     preparedUserTurnMessage,
     sessionManager,
     transcriptPolicy,

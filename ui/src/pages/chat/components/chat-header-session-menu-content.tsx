@@ -125,6 +125,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     });
     const assignment = readSessionMethodAccess(snapshot, {
       method: "sessions.assignOwner",
+      missingScopeReasonKey: "sessionsView.assignPermissionDenied",
       params: { key: row.key, owner: { type: "human", id: snapshot.selfUser?.id ?? "profile" } },
       requiredScope: "operator.write",
     });

@@ -15,14 +15,14 @@ export type PrepareResult =
   | { ok: true; releaseRoot: string; buildId?: string; version: string }
   | { ok: false; reason: string; stderrTail: string };
 
-/** One deadline includes fetch, dependencies, core build and UI build. */
+/** One deadline includes fetch, dependencies and the full build, including Control UI. */
 export async function prepareGit(params: {
   checkout: string;
   sha: string;
   staging: string;
   node: string;
   timeoutMs: number;
-  onStep?: (name: string) => void | Promise<void>;
+  onStep?: (name: string, status: "in_progress" | "completed") => void | Promise<void>;
 }): Promise<PrepareResult> {
   const releaseRoot = path.join(params.staging, "openclaw");
   const deadline = Date.now() + params.timeoutMs;
@@ -55,11 +55,16 @@ export async function prepareGit(params: {
     timeoutMs: remaining(),
     env,
     stepIndex: steps.length,
-    totalSteps: 5,
+    totalSteps: 4,
     results: steps,
     progress: {
       onStepStart: async ({ name: stepName }) => {
-        await params.onStep?.(stepName);
+        await params.onStep?.(stepName, "in_progress");
+      },
+      onStepComplete: async ({ name: stepName, exitCode }) => {
+        if (exitCode === 0) {
+          await params.onStep?.(stepName, "completed");
+        }
       },
     },
   });
@@ -84,11 +89,12 @@ export async function prepareGit(params: {
       commandEnv: NodeJS.ProcessEnv = env,
     ) => {
       reason = `${name}-failed`;
-      await params.onStep?.(name);
+      await params.onStep?.(name, "in_progress");
       const result = await runCommand(argv, { cwd, env: commandEnv, timeoutMs: remaining() });
       if (result.code !== 0 || result.killed || result.signal) {
         throw new Error(result.stderr || result.stdout || `${name} exited ${result.code}`);
       }
+      await params.onStep?.(name, "completed");
     };
     await run(
       "worktree",
@@ -120,7 +126,6 @@ export async function prepareGit(params: {
       pnpmEnv,
     );
     await run("build", ["pnpm", "build"], releaseRoot, pnpmEnv);
-    await run("ui-build", ["pnpm", "ui:build"], releaseRoot, pnpmEnv);
     reason = "metadata-failed";
     const version = await readPackageVersion(releaseRoot);
     if (!version) {

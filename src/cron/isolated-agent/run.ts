@@ -41,6 +41,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { finishReplyOperationBackend } from "../../sessions/session-controller.state.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronExecutionIdle } from "../execution-idle.js";
@@ -474,6 +475,10 @@ async function runCronIsolatedAgentTurnInTrace(
               const execution = await prepared.context.sessionPreparationEffect.run(() =>
                 withAgentRunLifecycleGeneration(runLifecycleGeneration, executeAdmittedCronRun),
               );
+              if (ownReplyOperation) {
+                // No retry can start another backend now. Finalization may await child results.
+                finishReplyOperationBackend(ownReplyOperation);
+              }
               // Publish the execution fact captured before bookkeeping; cron persistence
               // and delivery retain their separate workflow outcome.
               terminalOutcome = resolveCronAgentTerminalOutcome({

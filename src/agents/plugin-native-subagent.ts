@@ -81,7 +81,6 @@ export function createRequestNativeSubagentRuntime(
   const assertCurrent = () => {
     guard.assertCurrent();
     source.assertCurrent();
-    source.operatorAuthority.assertCurrent();
     source.options.abortSignal?.throwIfAborted();
     if (!resolveGatewayContext()) {
       throw new Error("Native subagent Gateway binding is no longer active.");

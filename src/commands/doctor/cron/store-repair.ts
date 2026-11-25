@@ -153,7 +153,7 @@ export async function repairCronDefaultStoreSelectionForDoctor(
   authority: PluginDoctorRepairAuthority,
   selection: Extract<CronStoreSelection, { status: "unresolved" }>,
   storeKey: string,
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   return await commitCronDoctorRepair(scope, authority, {
     plan: ["default-store", selection, storeKey],
     assertRowsUnchanged(db) {
@@ -370,13 +370,11 @@ export async function backupCronStoreForDoctor(
     assertCurrent: () => void;
     assertRowsUnchanged: (db: EngineConnection) => void;
   },
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   repair.assertCurrent();
   const sourcePath = resolveOpenClawStateSqlitePath(scope.env);
   const input = stateEngineInput();
   if (input) {
-    const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
-    const config = { database: { engine: "postgres" as const, postgres: input } };
     const assertSource = () => {
       repair.assertCurrent();
       const present = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
@@ -388,6 +386,8 @@ export async function backupCronStoreForDoctor(
       }
     };
     assertSource();
+    const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
+    const config = { database: { engine: "postgres" as const, postgres: input } };
     const before = await fingerprintPostgresBackup(sourcePath, config);
     repair.assertCurrent();
     await capturePostgresBackup({
@@ -436,7 +436,7 @@ async function commitCronDoctorRepair(
     assertRowsUnchanged: (db: EngineConnection) => void;
     write: (db: EngineConnection) => void;
   },
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   const backup = await backupCronStoreForDoctor(scope, {
     plan: repair.plan,
     assertCurrent: () => authority.assertCurrent(),
@@ -455,7 +455,7 @@ async function commitCronDoctorRepair(
     );
   } catch (error) {
     throw new Error(
-      `Cron Doctor repair failed; verified backup retained at ${backup.backupPath}: ${String(error)}`,
+      `Cron Doctor repair failed${backup.backupPath ? `; verified backup retained at ${backup.backupPath}` : ""}: ${String(error)}`,
       { cause: error },
     );
   }

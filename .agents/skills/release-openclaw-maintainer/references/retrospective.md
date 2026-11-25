@@ -76,15 +76,21 @@ change, and evidence shape.
 
 ## Follow through
 
-Each nudge-that-should-be-a-default and each P0/P1 follow-up becomes a skill,
-tooling, or issue change on `main` (release-process changes then reach the
-active release branch per the shared release boundaries). Link them from the
-retrospective PR when they exist.
+`release/retrospectives/issue-ledger.md` is the canonical tracker for each
+nudge-that-should-be-a-default and P0/P1 follow-up. Record its disposition there
+and link scoped repair issues or PRs from the matching ledger entry and
+retrospective PR. Implement skill and tooling fixes on `main`; release-process
+changes then reach the active release branch per the shared release boundaries.
+
+Unresolved follow-ups do not require a separate release-wide tracking issue.
+Do not duplicate the ledger in an umbrella issue, as happened with the
+[beta.2 duplicate tracker](https://github.com/openclaw/tideclaw/issues/32).
 
 ## Track in-flight fixes per agent
 
 Use the [shared tracker issue body](https://github.com/openclaw/tideclaw/issues/11)
-for per-agent active claims and status, not repository progress commits.
+only for per-agent active claims and status linked to ledger entries, not a
+second findings tracker or repository progress commits.
 Before editing, freshly read the body and merge only your own section,
 preserving other agents and your still-active batches; verify the result.
 Once a batch is finished **and its durable ledger-update PR is merged**,

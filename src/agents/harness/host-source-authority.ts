@@ -1,4 +1,8 @@
 import {
+  bindSessionMcpStoreOwner,
+  inheritSessionMcpStoreOwner,
+} from "../../config/sessions/session-mcp-store-admission.js";
+import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
@@ -157,16 +161,9 @@ export function retainHarnessSource(
     ? undefined
     : bindOperatorModelExecution(source, undefined);
   const release = nativeModelPolicySupported ? source.retain?.() : modelExecution?.release;
-  const assertSourceCurrent = () => {
-    if (nativeModelPolicySupported) {
-      source.assertCurrent();
-    } else {
-      modelExecution?.assertCurrent();
-    }
-  };
   try {
     assertActive();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertActive();
   } catch (error) {
     release?.();
@@ -188,7 +185,7 @@ export function retainHarnessSource(
   };
   const assertCurrent = () => {
     assertRetained();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertRetained();
   };
   return Object.freeze({
@@ -256,7 +253,6 @@ export function assertCompactionSource(
   source.assertActive();
   if (source.operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(source.operatorAuthority);
-    source.operatorAuthority.assertCurrent();
   }
 }
 
@@ -278,5 +274,23 @@ export function retainAgentHarnessCompactionSource(
       released = true;
       release?.();
     }
+  };
+}
+
+/** The MCP store witness and work already admitted by the host expire together. */
+export function createHarnessHostLifetime(storeAdmission: object | undefined) {
+  const controller = new AbortController();
+  return {
+    signal: controller.signal,
+    bindAbortSignal(signal: AbortSignal | undefined) {
+      return signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    },
+    bindCapabilities(capabilities: object) {
+      inheritSessionMcpStoreOwner(storeAdmission, capabilities);
+      return () => {
+        bindSessionMcpStoreOwner(capabilities, undefined);
+        controller.abort();
+      };
+    },
   };
 }

@@ -12,7 +12,7 @@ import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { accountCreditBalance, type AccountUsageRead } from "./account-usage.tsx";
 import { neighborOffset, reorderByArrow } from "./profile-reorder.ts";
 
-function UsageTrack(props: { label?: string; children: JSX.Element }) {
+function UsageTrack(props: { label?: string; heading?: JSX.Element; children: JSX.Element }) {
   return (
     <div
       class="model-providers__usage-window"
@@ -20,7 +20,7 @@ function UsageTrack(props: { label?: string; children: JSX.Element }) {
       aria-label={props.label}
     >
       <span class={props.label === undefined ? undefined : "model-providers__usage-label"}>
-        {props.label}
+        {props.label ?? props.heading}
       </span>
       <div class="model-providers__usage-track">{props.children}</div>
     </div>
@@ -36,6 +36,7 @@ export function AccountUsageBars(props: {
   onReorder: (ids: string[]) => void;
 }) {
   const ids = createMemo(() => props.readings.map((read) => read.account().profileId));
+  const pending = createMemo(() => props.readings.some((read) => read.result().loading));
   const tracks = createMemo(() => {
     const accounts = props.readings.map((read) => ({
       id: read.account().profileId,
@@ -48,33 +49,37 @@ export function AccountUsageBars(props: {
           value.snapshot?.windows.filter((w) => !w.groupLabel).map((w) => w.label) ?? [],
       ),
     );
-    return Array.from(labels, (label) => ({
-      label,
-      segments: accounts.map(({ id, name, value }) => {
-        const window = value.snapshot?.windows.find((w) => !w.groupLabel && w.label === label);
-        const percent = window && remainingPercent(window);
-        const reset = window && resetText(window);
-        const quota =
-          percent === undefined
-            ? (value.error ??
-              value.snapshot?.error ??
-              t(value.loading ? "common.loading" : "modelProviders.limits.notReported"))
-            : t("usage.providerUsage.remaining", { percent: String(percent) });
-        return {
-          id,
-          percent,
-          tone: window && remainingTone(window),
-          detail: [
-            name,
-            label,
-            quota,
-            reset?.date && t("usage.providerUsage.resets", { date: reset.date }),
-          ]
-            .filter(Boolean)
-            .join(" · "),
-        };
-      }),
-    }));
+    // Reserve the common Codex slots, not entitlements. Only a reported window gets a label.
+    const slots = new Set(["5h", "Week", ...labels]);
+    return [...slots]
+      .filter((label) => pending() || labels.has(label))
+      .map((label) => ({
+        label,
+        reported: labels.has(label),
+        segments: accounts.map(({ id, name, value }) => {
+          const window = value.snapshot?.windows.find((w) => !w.groupLabel && w.label === label);
+          const percent = window && remainingPercent(window);
+          const reset = window && resetText(window);
+          const quota =
+            percent === undefined
+              ? (value.error ?? value.snapshot?.error ?? t("modelProviders.limits.notReported"))
+              : t("usage.providerUsage.remaining", { percent: String(percent) });
+          return {
+            id,
+            pending: value.loading,
+            percent,
+            tone: window && remainingTone(window),
+            detail: [
+              name,
+              label,
+              quota,
+              reset?.date && t("usage.providerUsage.resets", { date: reset.date }),
+            ]
+              .filter(Boolean)
+              .join(" · "),
+          };
+        }),
+      }));
   });
   const drag = createPointerDrag({ cancelOnEscape: true });
   const [preview, setPreview] = createSignal<{
@@ -210,8 +215,17 @@ export function AccountUsageBars(props: {
       data-sorting={preview() ? true : undefined}
       aria-label={t("modelProviders.limits.subscriptionLimits")}
     >
-      <Loading fallback={<small>{t("common.loading")}</small>}>
-        <UsageTrack>
+      <Loading fallback={<small role="status">{t("common.loading")}</small>}>
+        <UsageTrack
+          heading={
+            <small
+              role={pending() ? "status" : undefined}
+              style={{ visibility: pending() ? undefined : "hidden" }}
+            >
+              {t("common.loading")}
+            </small>
+          }
+        >
           <For each={props.readings}>
             {(read, index) => {
               const id = () => read.account().profileId;
@@ -241,35 +255,47 @@ export function AccountUsageBars(props: {
         </UsageTrack>
         <For each={tracks()} keyed={(track) => track.label}>
           {(track) => (
-            <UsageTrack label={track().label}>
+            <UsageTrack label={track().reported ? track().label : undefined}>
               <For each={track().segments} keyed={(s) => s.id}>
                 {(segment, index) => {
                   const id = () => segment().id;
                   const pressed = () =>
                     selected()?.id === id() && selected()?.label === track().label;
                   return (
-                    <ColumnButton
-                      index={index()}
-                      class="model-providers__usage-segment"
-                      data-account-segment={id()}
-                      data-known={segment().percent !== undefined}
-                      data-tone={segment().tone}
-                      aria-label={segment().detail}
-                      title={segment().detail}
-                      aria-pressed={pressed() ? "true" : "false"}
-                      activate={() =>
-                        select(pressed() ? undefined : { id: id(), label: track().label })
+                    <Show
+                      when={track().reported && !segment().pending}
+                      fallback={
+                        <span
+                          aria-hidden="true"
+                          class={segment().pending ? "model-providers__usage-segment" : undefined}
+                          data-grabbed={preview()?.source === index() || undefined}
+                          style={{ translate: translation(index()) }}
+                        />
                       }
                     >
-                      <span
-                        class="model-providers__segment-fill"
-                        aria-hidden="true"
-                        style={{ width: (segment().percent ?? 0) + "%" }}
-                      />
-                      <strong>
-                        {segment().percent === undefined ? "—" : segment().percent + "%"}
-                      </strong>
-                    </ColumnButton>
+                      <ColumnButton
+                        index={index()}
+                        class="model-providers__usage-segment"
+                        data-account-segment={id()}
+                        data-known={segment().percent !== undefined}
+                        data-tone={segment().tone}
+                        aria-label={segment().detail}
+                        title={segment().detail}
+                        aria-pressed={pressed() ? "true" : "false"}
+                        activate={() =>
+                          select(pressed() ? undefined : { id: id(), label: track().label })
+                        }
+                      >
+                        <span
+                          class="model-providers__segment-fill"
+                          aria-hidden="true"
+                          style={{ width: (segment().percent ?? 0) + "%" }}
+                        />
+                        <strong>
+                          {segment().percent === undefined ? "—" : segment().percent + "%"}
+                        </strong>
+                      </ColumnButton>
+                    </Show>
                   );
                 }}
               </For>
@@ -288,19 +314,14 @@ export function AccountUsageBars(props: {
               return (
                 <span
                   class="model-providers__credit"
+                  aria-hidden={read.result().loading ? "true" : undefined}
                   data-grabbed={preview()?.source === index() || undefined}
                   style={{ translate: translation(index()) }}
                 >
                   <span class="settings-control__sr-label">
-                    {read.name()}:{" "}
-                    {credit() ??
-                      t(
-                        read.result().loading
-                          ? "common.loading"
-                          : "modelProviders.limits.notReported",
-                      )}
+                    {read.name()}: {credit() ?? t("modelProviders.limits.notReported")}
                   </span>
-                  <span aria-hidden="true">{credit() ?? "—"}</span>
+                  <span aria-hidden="true">{read.result().loading ? "" : (credit() ?? "—")}</span>
                 </span>
               );
             }}
@@ -309,14 +330,14 @@ export function AccountUsageBars(props: {
         <For each={props.readings}>
           {(read) => {
             const outcome = () => {
-              const { loading, error, snapshot } = read.result();
+              const { error, snapshot } = read.result();
               const failure = error ?? snapshot?.error;
               if (failure !== undefined) {
                 return failure
                   ? t("modelProviders.limits.readFailed", { error: failure })
                   : t("usage.providerUsage.unavailable");
               }
-              return loading ? t("common.loading") : undefined;
+              return undefined;
             };
             return (
               <Show when={outcome()}>

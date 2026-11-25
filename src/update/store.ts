@@ -22,6 +22,7 @@ export type Trial = {
   createdAt: number;
   attempts: number;
   config?: string;
+  acceptCapabilities?: boolean;
   restoring?: Array<{ suffix: string; files: string[] }>;
   outcome?: {
     status: "succeeded" | "rolled-back";
@@ -95,7 +96,10 @@ export function writeTrial(trial: Trial, prefix = resolvePrefix()): Promise<void
 }
 
 export async function createTrialPending(
-  input: Pick<Trial, "runId" | "target" | "previous" | "version" | "buildId">,
+  input: Pick<
+    Trial,
+    "runId" | "target" | "previous" | "version" | "buildId" | "acceptCapabilities"
+  >,
   prefix = resolvePrefix(),
 ): Promise<Trial> {
   const previous = await readTrial(prefix);

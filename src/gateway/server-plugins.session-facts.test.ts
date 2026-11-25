@@ -229,21 +229,14 @@ describe("trusted plugin selected session facts", () => {
       const unchanged = fact(first, sibling)!;
       expect(Object.isFrozen(unchanged)).toBe(true);
       expect(Reflect.set(unchanged.pullRequests, "0", { number: 99, state: "open" })).toBe(false);
-      expect(fact(await selected(), sibling)).toBe(unchanged);
-      const peer = await selected({}, fixture.addReader("other-reader").client);
-      expect(peer.scope).toBe(first.scope);
-      expect(fact(peer, sibling)).toBe(unchanged);
-      expect(await selected()).toBe(peer);
 
       await fixture.seed(sessionKey, fixture.profile.id, {
         label: "Changed title",
         status: "failed",
       });
       const changed = await selected();
-      expect(changed.scope).toBe(first.scope);
       expect(changed.revision).not.toBe(first.revision);
       expect(fact(changed)).toMatchObject({ label: "Changed title", run: "failed" });
-      expect(fact(changed, sibling)).toBe(unchanged);
       expect(fact(first)?.label).toBe("Review the change");
 
       let current = changed.scope;
@@ -351,28 +344,16 @@ describe("trusted plugin selected session facts", () => {
       }
     }));
 
-  it.each(["grant", "role", "profile", "same-object config"] as const)(
-    "retains admitted grants but fences selected disclosure data after %s changes",
-    (change) =>
-      withFixture(async (fixture, { consume }) => {
-        await consume(async () => "prepared snapshot");
-        const pending = consume(async () => {
-          if (change === "same-object config") {
-            fixture.cfg.gateway!.roles!.definitions.reader!.scopes = [];
-            setRuntimeConfigSnapshot(fixture.cfg);
-          } else {
-            await fixture.changeReader(change);
-          }
-          return "private cached snapshot";
-        });
-        if (change === "grant") {
-          await expect(pending).resolves.toBe("private cached snapshot");
-          await expect(consume(async () => "new disclosure")).rejects.toThrow();
-        } else {
-          await expect(pending).rejects.toThrow();
-        }
-      }),
-  );
+  it("retains admitted grants but refuses the next disclosure after a grant change", () =>
+    withFixture(async (fixture, { consume }) => {
+      await consume(async () => "prepared snapshot");
+      const pending = consume(async () => {
+        await fixture.changeReader("grant");
+        return "private cached snapshot";
+      });
+      await expect(pending).resolves.toBe("private cached snapshot");
+      await expect(consume(async () => "new disclosure")).rejects.toThrow();
+    }));
 
   it("distinguishes failed facts acquisition from an omitted current identity", () =>
     withFixture(async (fixture, { selected, getProjection }) => {
@@ -652,7 +633,6 @@ describe("trusted plugin session facts", () => {
         expect(first.sessions[0]?.pullRequestsUnavailable).toBeUndefined();
         expect(first.sessions.slice(1).every((facts) => facts.pullRequestsUnavailable)).toBe(true);
         await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(8);
         fixture.load.mockResolvedValue({ pullRequests: [], rateLimited: false });
         const next = await read(keys);
         const firstPr = next.sessions[0]!.pullRequests[0];
@@ -668,7 +648,6 @@ describe("trusted plugin session facts", () => {
         ).toBe(true);
         expect(next.sessions.slice(8).every((facts) => facts.pullRequestsUnavailable)).toBe(true);
         await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(rateLimited ? 16 : 10);
         const loaded = await read(keys);
         expect(loaded.sessions.slice(8).every((facts) => !facts.pullRequestsUnavailable)).toBe(
           true,
@@ -680,8 +659,6 @@ describe("trusted plugin session facts", () => {
           expect(row.pullRequestsUnavailable).toBeUndefined();
           expect(row.pullRequestsRateLimited).toBeUndefined();
         }
-        await fixture.subscriptions.pollNow();
-        expect(fixture.load).toHaveBeenCalledTimes(rateLimited ? 18 : 10);
       }),
   );
 

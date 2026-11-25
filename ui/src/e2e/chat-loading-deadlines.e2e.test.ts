@@ -398,13 +398,8 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe("Try again");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
-          await alert
-            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-            .waitFor();
-          expect(await alert.locator("details").getAttribute("open")).toBeNull();
-          await alert.locator("summary").click();
-          await details.waitFor();
-          expect(await details.textContent()).toContain(renderedDiagnostic);
+          await alert.getByText(renderedDiagnostic, { exact: true }).waitFor();
+          expect(await details.count()).toBe(0);
           await sendButton.click();
         }
         const send = await gateway.waitForRequest("chat.send");

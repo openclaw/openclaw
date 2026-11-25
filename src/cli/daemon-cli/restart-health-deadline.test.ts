@@ -60,7 +60,7 @@ describe("shared restart observation deadline", () => {
     "port-inspection",
     "startup-health",
     "gateway-health",
-    "legacy-owner",
+    "state-owner",
   ])("bounds a stalled %s read and stops its late continuation", async (phase) => {
     const entered = createDeferred();
     const released = createDeferred();
@@ -100,7 +100,7 @@ describe("shared restart observation deadline", () => {
           return gatewayHealthResponse()(options);
         });
         break;
-      case "legacy-owner":
+      case "state-owner":
         vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
         inspectPortUsage.mockResolvedValue(portUsage());
         readActiveGatewayLockIdentity.mockImplementation(stalled(undefined));
@@ -113,7 +113,7 @@ describe("shared restart observation deadline", () => {
         port: 18789,
         deadline,
         requireOwnedListener: true,
-        waitForMissingService: phase === "legacy-owner" ? false : undefined,
+        waitForMissingService: phase === "state-owner" ? false : undefined,
       }).catch((error: unknown) => error);
       await entered.promise;
       monotonicClock.nowMs = 1_000;

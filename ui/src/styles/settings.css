@@ -649,10 +649,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   overflow-wrap: anywhere;
 }
 
-/* A phone gives the help the screen's width, whatever the row's "?" offset. Like everywhere,
-   it opens above the row so the setting's own text and control stay in view. */
+/* Center schema help on phones regardless of where the section or field puts its trigger.
+   Open above it when possible so the settings it explains stay in view. */
 @media (max-width: 640px) {
-  .oc-overlay[data-placement].config-field-help__popover {
+  .oc-overlay[data-placement]:is(.config-section-help__popover, .config-field-help__popover) {
     --oc-overlay-max-width: calc(100dvw - 32px);
 
     width: var(--oc-overlay-max-width);
@@ -1109,34 +1109,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
    starts and when it ends. */
 .cfg-secret-actions {
-  display: grid;
   flex: none;
-}
-
-.cfg-secret-actions > * {
-  grid-area: 1 / 1;
 }
 
 .cfg-secret-actions__buttons {
   display: flex;
   gap: var(--space-2);
-}
-
-.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
-  visibility: hidden;
-}
-
-.cfg-secret-actions .btn {
-  display: inline-grid;
-  place-items: center;
-}
-
-.cfg-secret-actions__label {
-  grid-area: 1 / 1;
-}
-
-.cfg-secret-actions__label:not([data-shown]) {
-  visibility: hidden;
 }
 
 .cfg-secret-actions__saved {

@@ -4,8 +4,8 @@ import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-invent
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
-  isRuntimeTestFileIncluded,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 
 const options = {
   compact: true,

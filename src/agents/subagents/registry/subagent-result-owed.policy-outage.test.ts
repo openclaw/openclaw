@@ -99,6 +99,7 @@ it("keeps a finished child's result owed when its followup access policy is temp
         assertCurrent: () => authority!.assertCurrent(),
         release() {},
         run: (run) => run(),
+        runWithRequester: (run) => run(),
       },
     });
     followup.promoteYield("followup-before-policy-outage", [child], 1);
@@ -127,8 +128,7 @@ it("keeps a finished child's result owed when its followup access policy is temp
     expect(
       afterRecovery.delivery?.status === "delivered" ||
         (afterRecovery.requesterSettleWake !== undefined &&
-          (afterRecovery.delivery?.status === "pending" ||
-            afterRecovery.delivery?.disposition === "retryable")),
+          afterRecovery.delivery?.status === "pending"),
       JSON.stringify(afterRecovery.delivery),
     ).toBe(true);
   } finally {

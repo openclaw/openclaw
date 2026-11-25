@@ -14,44 +14,38 @@ export function parseSessionDiffPatch(patch: string, formatGap: (count: number) 
   const lines: DiffLine[] = [];
   let truncated = false;
   let inHunk = false;
-  let oldNo = 0;
-  let newNo = 0;
-  // Next expected lines after the previous hunk; drive inter-hunk gap coordinates.
-  let oldNext: number | undefined;
-  let newNext: number | undefined;
+  let oldNo = 1;
+  let newNo = 1;
   const rawLines = patch.replace(/\r\n/g, "\n").split("\n");
   if (rawLines.at(-1) === "") {
     rawLines.pop();
   }
   for (const raw of rawLines) {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
-    if (hunk) {
-      const oldStart = Number.parseInt(hunk[1] ?? "", 10);
-      const newStart = Number.parseInt(hunk[2] ?? "", 10);
-      const gap = oldNext === undefined ? oldStart - 1 : oldStart - oldNext;
-      if (gap > 0) {
-        lines.push({
-          kind: "skip",
-          text: formatGap(gap),
-          gap: {
-            oldStart: oldNext ?? oldStart - gap,
-            newStart: newNext ?? newStart - gap,
-            count: gap,
-          },
-        });
-      }
-      oldNo = oldStart;
-      newNo = newStart;
-      inHunk = true;
-      continue;
-    }
-    if (!inHunk || raw.startsWith("\\")) {
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw);
+    if (!hunk && (!inHunk || raw.startsWith("\\"))) {
       // Header lines before the first hunk and "\ No newline at end of file".
       continue;
     }
     if (lines.length >= MAX_SESSION_DIFF_FILE_LINES) {
       truncated = true;
       break;
+    }
+    if (hunk) {
+      // Git anchors an empty range to the preceding line.
+      const oldStart = Number(hunk[1]) + (hunk[2] === "0" ? 1 : 0);
+      const newStart = Number(hunk[3]) + (hunk[4] === "0" ? 1 : 0);
+      const gap = oldStart - oldNo;
+      if (gap > 0) {
+        lines.push({
+          kind: "skip",
+          text: formatGap(gap),
+          gap: { oldStart: oldNo, newStart: newNo, count: gap },
+        });
+      }
+      oldNo = oldStart;
+      newNo = newStart;
+      inHunk = true;
+      continue;
     }
     const kind = raw.startsWith("+") ? "add" : raw.startsWith("-") ? "del" : "ctx";
     lines.push({ kind, lineNo: kind === "del" ? oldNo : newNo, text: raw.slice(1) });
@@ -61,8 +55,6 @@ export function parseSessionDiffPatch(patch: string, formatGap: (count: number) 
     if (kind !== "del") {
       newNo += 1;
     }
-    oldNext = oldNo;
-    newNext = newNo;
   }
   return { lines, truncated };
 }

@@ -58,8 +58,8 @@ struct CommandCenterTabSessionFilterTests {
         ])
         let sections = CommandSessionGrouping.sections(from: active)
         #expect(sections.flatMap(\.entries).map(\.key).sorted() == ["awake", "boundary", "expired"])
-        #expect(CommandCenterTab.sessionDetail(entries[1], now: now).hasPrefix("Wakes "))
-        #expect(!CommandCenterTab.sessionDetail(entries[2], now: now).hasPrefix("Wakes "))
+        #expect(SessionPresentation.detail(entries[1], now: now).hasPrefix("Wakes "))
+        #expect(!SessionPresentation.detail(entries[2], now: now).hasPrefix("Wakes "))
     }
 
     @Test(arguments: ["main", "work"], [false, true]) @MainActor
@@ -94,9 +94,9 @@ struct CommandCenterTabSessionFilterTests {
         #expect(!ChatSessionSidebarModel.canDeleteSession(key: row.key, mainSessionKey: resolvedMain))
         #expect(!ChatSessionSidebarModel.canArchiveSession(row, mainSessionKey: resolvedMain))
         #expect(ChatSessionSidebarModel.canDeleteSession(key: other.key, mainSessionKey: resolvedMain))
-        #expect(CommandCenterTab.sessionWorkItem(for: row, currentSessionKey: resolvedMain).state == "open")
-        #expect(CommandCenterTab.sessionTitle(main) == "Original topic")
-        #expect(CommandCenterTab.sessionTitle(other) == "Packing")
+        #expect(SessionPresentation.workItem(for: row, currentSessionKey: resolvedMain).state == "open")
+        #expect(SessionPresentation.title(main) == "Original topic")
+        #expect(SessionPresentation.title(other) == "Packing")
     }
 
     @Test(arguments: [true, false]) @MainActor
@@ -193,12 +193,12 @@ struct CommandCenterTabSessionFilterTests {
         }
 
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
                 == "Compare session naming")
-        #expect(CommandCenterTab.sessionTitle(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        #expect(SessionPresentation.title(entry(key: "agent:main:ios-abc123")) == "iOS chat")
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(
                     key: "agent:main:ios-abc123",
                     displayName: "Compare session naming",
@@ -207,14 +207,14 @@ struct CommandCenterTabSessionFilterTests {
 
         let nodeKey = "agent:main:node-1234567890ab"
         let autoLabel = "OpenClaw App · Pixel · 1234567890ab"
-        #expect(CommandCenterTab.sessionTitle(entry(key: nodeKey, autoLabel: autoLabel)) == autoLabel)
+        #expect(SessionPresentation.title(entry(key: nodeKey, autoLabel: autoLabel)) == autoLabel)
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: nodeKey, displayName: "Compare session naming", autoLabel: autoLabel))
                 == "Compare session naming")
         let manualLabel = "OpenClaw App · Release planning · 1234567890ab"
         #expect(
-            CommandCenterTab.sessionTitle(
+            SessionPresentation.title(
                 entry(key: nodeKey, displayName: "Compare session naming", label: manualLabel, autoLabel: autoLabel))
                 == manualLabel)
     }
@@ -226,6 +226,6 @@ struct CommandCenterTabSessionFilterTests {
           {"key":"agent:main:fresh","displayName":"agent:main:fresh","autoLabel":"Fix the flaky test"}
         ]
         """.utf8))
-        #expect(sessions.map(CommandCenterTab.sessionTitle) == ["Release prep", "Fix the flaky test"])
+        #expect(sessions.map(SessionPresentation.title) == ["Release prep", "Fix the flaky test"])
     }
 }

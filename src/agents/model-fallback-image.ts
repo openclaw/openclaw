@@ -28,7 +28,6 @@ export function resolveAllowedImageFallbackCandidates(params: ImageFallbackSelec
   const authority = params.operatorAuthority;
   if (authority) {
     assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
   }
   const candidates = resolveImageFallbackCandidates(params);
   if (params.modelOverride?.trim()) {
@@ -73,7 +72,6 @@ export async function runWithImageModelFallback<T>(
       total: candidates.length,
       abortSignal: params.abortSignal,
     }).catch((error: unknown) => {
-      params.operatorAuthority?.assertCurrent();
       params.abortSignal?.throwIfAborted();
       throw error;
     });

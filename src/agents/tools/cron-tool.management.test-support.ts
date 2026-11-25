@@ -20,9 +20,7 @@ export async function withCronManagementCaller<T>(
   const capability = createCronCreatorAuthorityCapability(
     runId,
     origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
-    origin === "channel-owner"
-      ? { source: "channel-owner", isCurrent: () => true }
-      : { source: "control-ui-admin" },
+    { source: origin === "channel-owner" ? "channel-owner" : "operator" },
   );
   if (!capability) {
     throw new Error("expected management authority capability");

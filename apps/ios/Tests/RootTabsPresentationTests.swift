@@ -42,10 +42,10 @@ struct RootTabsPresentationTests {
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
     }

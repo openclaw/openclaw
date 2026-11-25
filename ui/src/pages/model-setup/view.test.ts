@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { activationTargetId } from "./state.ts";
 import {
   detected,
@@ -495,6 +496,9 @@ describe("renderModelSetup", () => {
         : {}),
       deviceCode: { code: "ABCD-EFGH", ...(copied ? { expiresInMinutes: 10 } : {}) },
     });
+    await waitForFast(() =>
+      expect(container.querySelector(".wizard-sign-in__code button")).not.toBeNull(),
+    );
 
     if (copied) {
       const link = container.querySelector<HTMLAnchorElement>(
@@ -521,7 +525,7 @@ describe("renderModelSetup", () => {
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
-    ({ sensitive, expectedType }) => {
+    async ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
         renderSetup(
@@ -544,6 +548,9 @@ describe("renderModelSetup", () => {
           container,
         );
       renderStep(null);
+      await waitForFast(() =>
+        expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+      );
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',

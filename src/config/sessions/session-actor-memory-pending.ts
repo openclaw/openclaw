@@ -25,6 +25,7 @@ import {
   resolvePendingInputHistoryLimit,
   selectPendingInputHistoryPage,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 import type {
   SessionInputCompletion,
@@ -260,6 +261,8 @@ export function createSessionActorMemoryPending(
           ? {
               ...row,
               state: "queued",
+              // Like the SQL kernel: an adopted owed row takes the new bytes.
+              message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,
               end_cause: null,
@@ -287,6 +290,12 @@ export function createSessionActorMemoryPending(
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
+        for (const key of input.absorbedIdempotencyKeys ?? []) {
+          const absorbed = state.pendingInputs.get(key);
+          if (absorbed?.state === "queued" && absorbed.consumed_event_id === null) {
+            state.pendingInputs.delete(key);
+          }
+        }
       } else if (input.kind === "complete") {
         const retained = completion(input);
         if (

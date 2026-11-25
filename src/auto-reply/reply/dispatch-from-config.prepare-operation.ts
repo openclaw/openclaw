@@ -70,11 +70,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
   const input = readReplySourceInput(params.replyOptions);
   const assertRequestCurrent = () => {
     params.replyOptions?.assertChannelAuthority?.();
-    const sourceAuthority = input?.sourceAdapter?.authority;
-    sourceAuthority?.assertCurrent();
-    if (params.replyOptions?.operatorAuthority !== sourceAuthority) {
-      params.replyOptions?.operatorAuthority?.assertCurrent();
-    }
+    input?.sourceAdapter?.authority?.assertCurrent?.();
     params.replyOptions?.internalEventExecution?.assertCurrent?.();
     if (isPreDispatchOperationAborted() || input?.retirementRequested) {
       throw new DispatchReplyOperationAbortedError();

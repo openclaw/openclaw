@@ -14,7 +14,10 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
-import { summarizeCompactionHistory } from "../compaction.js";
+import {
+  formatWarmCompactionSummaryInstructions,
+  summarizeCompactionHistory,
+} from "../compaction.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import type { AgentMessage, SessionTreeEntry } from "../runtime/index.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
@@ -499,28 +502,49 @@ export async function executeCompactionSafeguard(
       let splitTurnSummaryLocal = "";
       let historySummary = "";
       const producerLosses = new Set<CompactionLoss>();
+      // The warm request holds the whole history, split turn included, in one request.
+      // Corrective attempts keep the bounded summarizer.
+      const warmSummary =
+        attempt === 0 && !prepared && reconciliationCount > 0 ? event.warmSummary : undefined;
       try {
-        historySummary =
-          reconciliationCount > 0
-            ? await (prepared
-                ? prepared.summarize("history", {
-                    ...llmSummaryParams,
-                    summaryPrompt: { kind: "custom", instructions: structuredInstructions },
-                    customInstructions: correctiveInstructions,
-                    previousSummary,
-                  })
-                : compactionSafeguardDeps.summarizeCompactionHistory({
-                    ...llmSummaryParams,
-                    messages: summaryFacts.reconciliationMessages,
-                    summaryPrompt: { kind: "custom", instructions: structuredInstructions },
-                    customInstructions: correctiveInstructions,
-                    previousSummary,
-                  }))
-            : buildStructuredFallbackSummary(previousSummary);
+        if (warmSummary) {
+          try {
+            historySummary = await warmSummary(
+              formatWarmCompactionSummaryInstructions({
+                ...llmSummaryParams,
+                summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+              }),
+              signal,
+            );
+          } catch (error) {
+            signal.throwIfAborted();
+            // Its owner falls back to the client compactor; record no safeguard failure.
+            log.warn(`Compaction safeguard: warm summary failed: ${formatErrorMessage(error)}`);
+            return { cancel: true };
+          }
+        } else {
+          historySummary =
+            reconciliationCount > 0
+              ? await (prepared
+                  ? prepared.summarize("history", {
+                      ...llmSummaryParams,
+                      summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                      customInstructions: correctiveInstructions,
+                      previousSummary,
+                    })
+                  : compactionSafeguardDeps.summarizeCompactionHistory({
+                      ...llmSummaryParams,
+                      messages: summaryFacts.reconciliationMessages,
+                      summaryPrompt: { kind: "custom", instructions: structuredInstructions },
+                      customInstructions: correctiveInstructions,
+                      previousSummary,
+                    }))
+              : buildStructuredFallbackSummary(previousSummary);
+        }
 
         historySummary = reconcileRequestSelection(historySummary);
 
-        if (preparation.isSplitTurn && turnPrefixCount > 0) {
+        if (!warmSummary && preparation.isSplitTurn && turnPrefixCount > 0) {
           const splitTurnFocusLabel = "Additional context from /compact";
           const splitTurnFocus = wrapUntrustedInstructionBlock(
             splitTurnFocusLabel,
