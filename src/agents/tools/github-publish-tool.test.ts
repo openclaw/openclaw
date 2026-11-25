@@ -357,12 +357,11 @@ it("keeps the definition short and delivers each procedure in the result that ne
   }
   const { callGateway, execute } = setup();
   const next = async (args: unknown) => {
-    const { content, details } = await execute(args);
-    const text = content[0]?.type === "text" ? JSON.parse(content[0].text) : {};
-    expect(text, "text and details match; Code Mode reads details").toEqual(details);
-    return String(text.next ?? "");
+    const [block] = (await execute(args)).content;
+    return block?.type === "text" ? String(JSON.parse(block.text).next ?? "") : "";
   };
-  expect((await execute({ title: "Change" })).details).toMatchObject(publication);
+  const published = await execute({ title: "Change" });
+  expect(published.details).toEqual(publication);
   expect(await next({ title: "Change" })).toContain(
     "retain requestId, finish the turn and await its result here; do not submit another publication",
   );
@@ -468,7 +467,7 @@ it("retains original receipt observation without offering or invoking authentica
   expect(Value.Check(tool.parameters, observation)).toBe(true);
   expect(Value.Check(tool.parameters, { action: "publish" })).toBe(false);
   expect(Value.Check(tool.parameters, {})).toBe(false);
-  expect((await execute(observation)).details).toMatchObject(receipt);
+  expect((await execute(observation)).details).toEqual(receipt);
   expect(callGateway).toHaveBeenCalledExactlyOnceWith("sessions.github.readiness", {
     ...caller,
     requestId,
@@ -506,6 +505,5 @@ it("tells an unbound conversation how to publish, but not when reading a child",
   expect(own.next).toContain("publish with workspacePath");
   const child = (await execute({ action: "readiness", publishingSessionKey: "agent:main:child" }))
     .details;
-  expect(child).toMatchObject(unbound);
-  expect((child as { next?: string }).next).not.toContain("workspacePath");
+  expect(child).toEqual(unbound);
 });

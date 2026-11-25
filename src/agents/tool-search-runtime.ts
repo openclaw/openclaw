@@ -693,7 +693,7 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
   }
   // An explicit error can explain itself only in model-facing text; keep that reason.
   if (result.isError !== true || hasErrorMessage(details)) {
-    return details;
+    return withTextGuidance(details, result.content);
   }
   const message = collectTextContentBlocks(result.content)
     .map((text) => text.trim())
@@ -706,6 +706,23 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
     return { message };
   }
   return isRecord(details) ? { ...details, message } : details;
+}
+
+/** Text may add `next` guidance beside a tool's details payload; a Code Mode value keeps it. */
+function withTextGuidance(details: unknown, content: AgentToolResult<unknown>["content"]): unknown {
+  const [block] = content;
+  if (!isRecord(details) || details.next !== undefined || content.length !== 1) {
+    return details;
+  }
+  if (block?.type !== "text" || !block.text.includes('"next":')) {
+    return details;
+  }
+  try {
+    const next = asOptionalRecord(JSON.parse(block.text))?.next;
+    return typeof next === "string" ? { ...details, next } : details;
+  } catch {
+    return details;
+  }
 }
 
 function hasErrorMessage(details: unknown): boolean {

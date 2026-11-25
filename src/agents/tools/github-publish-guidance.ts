@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { jsonResult } from "./common.js";
+import { jsonResult, textResult } from "./common.js";
 
 /** The github_publish definition: a short summary and one line per offered action. */
 export function describeGitHubPublishTool(options: {
@@ -70,9 +70,9 @@ export const githubActionGuidance = {
     'requested or publishing means accepted, not finished: retain requestId, finish the turn and await its result here; do not submit another publication to recover it. The receipt does not resume you. If authorized review, CI or landing remains, continue before ending the turn, or schedule a continuation with automations when it offers add (at + agentTurn + sessionTarget "session:<this session key from Runtime>"; rearm a waiting one with next_check, not a new job); otherwise explain the remaining work. Publishing this checkout again updates the same PR.',
 } as const;
 
-/** Guidance rides in details too: Code Mode returns only details to the model. */
+/** The model reads the guidance in the result text; details keep the Gateway's payload. */
 export function guidedResult<T>(next: string | undefined, payload: T) {
-  return jsonResult(
-    next && isRecord(payload) && payload.next === undefined ? { ...payload, next } : payload,
-  );
+  return next && isRecord(payload) && payload.next === undefined
+    ? textResult(JSON.stringify({ ...payload, next }), payload)
+    : jsonResult(payload);
 }
