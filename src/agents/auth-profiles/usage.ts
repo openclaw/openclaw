@@ -62,6 +62,7 @@ import { withAuthProfileUsage } from "./usage-write.js";
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 export {
   clearExpiredCooldowns,
+  clearTransientCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   resolveInlineProviderApiKeyUsageId,
