@@ -343,7 +343,7 @@ export function runGeneratedPublisherScenario(
     const fixture = prepareGeneratedPublisherFixture(root, baseChangePath, options);
     return runPreparedGeneratedPublisher(fixture, options.expectFailure ?? false);
   } finally {
-    rmSync(root, { force: true, recursive: true });
+    tempDirs.cleanup();
   }
 }
 
@@ -380,7 +380,8 @@ function runPreparedGeneratedPublisher(
 }
 
 export function runGeneratedPublisherReconcileThenPublish() {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-generated-pr-sequence-"));
+  const tempDirs = createTempDirTracker();
+  const root = tempDirs.make("openclaw-generated-pr-sequence-");
   try {
     const fixture = prepareGeneratedPublisherFixture(root, null, {
       autoMerge: true,
