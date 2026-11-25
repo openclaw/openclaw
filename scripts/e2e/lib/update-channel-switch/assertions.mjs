@@ -14,7 +14,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <read-source-pnpm-pin|prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
+    "usage: assertions.mjs <read-source-pnpm-pin|prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-owner-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
   );
   process.exit(2);
 }
@@ -234,6 +234,18 @@ function assertMainRefusal() {
   assert.equal(payload.reason, "unsupported-package-target");
 }
 
+function assertOwnerRefusal(status, route) {
+  assert.notEqual(Number(status), 0, "resident-owned installer switch must fail");
+  const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  assert.equal(payload.ok, false);
+  assert.match(
+    payload.error?.message ?? "",
+    new RegExp(
+      `^The resident launcher owns this installation\\. ${route} requires the in-place installer`,
+    ),
+  );
+}
+
 function assertDirtyUpdate(root, expectedHead) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(payload.reason, "dirty", "ordinary untracked input must block admission");
@@ -328,6 +340,7 @@ const commands = {
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
   "assert-main-refusal": assertMainRefusal,
+  "assert-owner-refusal": assertOwnerRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,

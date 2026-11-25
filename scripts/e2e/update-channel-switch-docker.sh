@@ -44,6 +44,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
   -e "OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" \
   -e "OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE=$OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE" \
+  -e "OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE=$OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE" \
   -e "OPENCLAW_UPDATE_CHANNEL_SWITCH_FIXTURE_PNPM_PIN=$fixture_pnpm_pin" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
@@ -272,6 +273,18 @@ stable_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw upda
 stable_status=$?
 set -e
 printf "%s\n" "$stable_json"
+if [ "${OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE:?missing Git-to-package contract}" = refuse ]; then
+  # The resident launcher keeps the Git install; the switch must not happen.
+  UPDATE_JSON="$stable_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+    assert-owner-refusal "$stable_status" "--channel stable"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
+  status_json="$(openclaw update status --json)"
+  printf "%s\n" "$status_json"
+  STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
+  echo "OK"
+  exit 0
+fi
 if [ "$stable_status" -ne 0 ]; then
   exit "$stable_status"
 fi
