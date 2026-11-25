@@ -35,6 +35,18 @@ struct ChatTranscriptSearchTests {
         #expect(ChatTranscriptSearchResults(rows: [], query: "match").selection(after: first.id) == nil)
     }
 
+    @Test func `find matches visible phrases across emphasis and keeps literal code searchable`() {
+        let user = self.message("A **red** fox", role: "user")
+        let assistant = self.message("A _réd_ fox")
+        let plain = self.message("a red fox")
+        let code = self.message("A `**red**` fox")
+        let rows = [user, assistant, plain, code].map(ChatTranscriptRow.message)
+
+        let phrase = ChatTranscriptSearchResults(rows: rows, query: "red fox")
+        #expect(phrase.messageIDs == [user.id, assistant.id, plain.id])
+        #expect(ChatTranscriptSearchResults(rows: rows, query: "**red**").messageIDs == [user.id, code.id])
+    }
+
     private func message(_ text: String, role: String = "assistant") -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: role,

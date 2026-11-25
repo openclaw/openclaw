@@ -9,9 +9,27 @@ struct ChatTranscriptSearchResults: Equatable {
         self.messageIDs = query.isEmpty ? [] : rows.compactMap { row in
             guard case let .message(message) = row,
                   ["user", "assistant"].contains(message.role.lowercased()),
-                  ChatMessageVisibleText.visibleText(in: message).localizedStandardContains(query)
+                  Self.matches(message, query: query)
             else { return nil }
             return message.id
+        }
+    }
+
+    private static func matches(_ message: OpenClawChatMessage, query: String) -> Bool {
+        let text = ChatMessageVisibleText.visibleText(in: message)
+        if text.localizedStandardContains(query) { return true }
+        guard text.contains("*") || text.contains("_") else { return false }
+
+        let markdown = ChatMarkdownDisplayPreprocessor.preserveChatSoftBreaks(in: text)
+        guard let parsed = try? AttributedString(markdown: markdown) else { return false }
+        // Find may cross emphasis runs within a block, but never join two separate paragraphs.
+        return parsed.runs[\.presentationIntent].contains { _, range in
+            let block = parsed[range]
+            let hasEmphasis = block.runs.contains { run in
+                let intent = run.inlinePresentationIntent ?? []
+                return !intent.isDisjoint(with: [.emphasized, .stronglyEmphasized])
+            }
+            return hasEmphasis && String(block.characters).localizedStandardContains(query)
         }
     }
 
