@@ -209,6 +209,8 @@ export type CronFailureNotificationDetail =
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
     }
+  /** A deterministic setup refusal: the operator must record the intended account. */
+  | { kind: "inference-account-unrecorded" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 

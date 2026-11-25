@@ -101,8 +101,10 @@ async function describeCronInferenceMigration(
         provider: selection.provider,
         modelId: selection.model,
       }).policy?.id;
+    // Codex also runs host-managed stored accounts, which the scheduled account guard refuses
+    // when unbound; Doctor adopts them the same way.
     if (
-      (runtime && runtime !== "openclaw" && runtime !== "auto") ||
+      (runtime && runtime !== "openclaw" && runtime !== "auto" && runtime !== "codex") ||
       hasSyntheticLocalProviderAuthConfig({
         cfg,
         provider: selection.provider,
@@ -119,6 +121,9 @@ async function describeCronInferenceMigration(
       (await loadAuthProfileStoreWithoutExternalProfilesAsync(selection.owner.agentDir));
     signal?.throwIfAborted();
     const [attempt] = prepareAgentRuntimeAuth({
+      ...(runtime === "codex"
+        ? { harnessId: runtime, harnessRuntime: runtime, harnessAuthBootstrap: "harness" as const }
+        : {}),
       config: cfg,
       agentId,
       provider: selection.provider,
@@ -140,7 +145,9 @@ async function describeCronInferenceMigration(
           context,
         }),
     }).attempts;
-    if (isConfiguredKeyAuthSource(attempt?.plan.credentialSource)) {
+    const source = attempt?.plan.credentialSource;
+    // Native or credentialless Codex login has no stored account to record.
+    if (isConfiguredKeyAuthSource(source) || (runtime === "codex" && source?.kind !== "profile")) {
       return undefined;
     }
     return "cron: automation has no recorded inference account; run openclaw doctor --fix before its next scheduled run to migrate a clear stored account or see the explicit adoption needed. This is an account check, not a requirement to pin its model.";

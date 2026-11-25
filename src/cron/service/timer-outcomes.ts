@@ -310,7 +310,9 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) || job.operatorSource) &&
+      // Missing account configuration does not revoke the job creator's authority.
+      result.failureNotificationDetail?.kind !== "inference-account-unrecorded"
     ) {
       // A permanent error here means a retired plugin or a refused operator source:
       // the job can never run again as written.

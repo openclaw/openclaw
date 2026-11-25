@@ -370,8 +370,12 @@ export async function runCronSessionTurn(
       errorClassification:
         operatorAdmissionFailure ??
         (result.terminalOutcome
-          ? resolveCronAgentErrorClassification(result.terminalOutcome, result.errorReason)
-          : undefined),
+          ? resolveCronAgentErrorClassification(
+              result.terminalOutcome,
+              result.errorReason,
+              result.automationResult?.errorClassification,
+            )
+          : result.automationResult?.errorClassification),
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

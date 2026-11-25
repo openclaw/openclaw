@@ -43,6 +43,8 @@ export function resolveCronAgentTerminalOutcome(params: {
 export function resolveCronAgentErrorClassification(
   terminal: AgentRunTerminalOutcome,
   reason?: FailoverReason,
+  /** An owned setup refusal applies only to failures, never cancellation or timeout. */
+  failureClassification?: CronRunErrorClassification,
 ): CronRunErrorClassification | undefined {
   if (terminal.stopReason === "auth-revoked" && terminal.reason !== "hard_timeout") {
     return { kind: "reason", reason: "auth_permanent" };
@@ -61,7 +63,7 @@ export function resolveCronAgentErrorClassification(
     case "abandoned":
     case "failed":
       // An unknown run failure does not invalidate the automation's operator source.
-      return { kind: "reason", reason: reason ?? "unknown" };
+      return failureClassification ?? { kind: "reason", reason: reason ?? "unknown" };
   }
   return terminal.reason satisfies never;
 }
