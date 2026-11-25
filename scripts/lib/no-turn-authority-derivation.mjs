@@ -77,7 +77,6 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/gateway/cron-job-turn-target.ts",
   "src/gateway/mcp-http.request.ts",
   "src/gateway/openai-compatible-http.ts",
-  "src/gateway/operator-admission.ts",
   "src/gateway/server-methods/conversations.ts",
   "src/gateway/server-methods/send.ts",
   "src/gateway/server-methods/tools-invoke.ts",
@@ -124,7 +123,6 @@ const PROVENANCE_READS = new Set([
 ]);
 export const CAPABILITY_PROVENANCE_FILES = new Set([
   "src/agents/agent-tools.turn-authority.ts",
-  "src/agents/automations-run-scope.ts",
   "src/gateway/server-methods/cron-creator-authority-admission.ts",
   "src/gateway/skill-library-authoring.ts",
 ]);
