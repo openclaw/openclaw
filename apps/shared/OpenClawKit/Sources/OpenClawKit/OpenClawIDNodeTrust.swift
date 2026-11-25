@@ -404,7 +404,8 @@ public enum OpenClawIDNodeTrust {
             let member = try item.fields(["account_id", "role", "peer_keys"])
             let account = try member["account_id"]!.text()
             guard !account.isEmpty, account.utf16.count <= 256,
-                  try ["operator", "viewer"].contains(member["role"]!.text())
+                  // Roles are opaque signed names (protocol `isMemberRole`); they carry no authority here.
+                  try OpenClawIDNodeEnrollmentLink.matches(member["role"]!.text(), "^[a-z][a-z0-9_-]{0,63}$")
             else { throw OpenClawIDNodeEnrollmentError.malformed }
             _ = try self.strings(member["peer_keys"]!, prefix: "iroh:")
         }
