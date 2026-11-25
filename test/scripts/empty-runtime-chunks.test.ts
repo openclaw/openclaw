@@ -1,13 +1,46 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { build } from "tsdown";
+import { build, type InlineConfig, type Rolldown } from "tsdown";
 import { expect, it } from "vitest";
 import { createEmptyRuntimeChunksPlugin } from "../../scripts/lib/empty-runtime-chunks.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+function createBuildOptions(cwd: string): InlineConfig {
+  return {
+    config: false,
+    cwd,
+    outDir: "dist",
+    dts: false,
+    target: "node22",
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".js" }),
+    minify: { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
+    sourcemap: "hidden",
+    logLevel: "silent",
+  };
+}
+
+function runNodeJsonProbe(cwd: string, source: string[]): unknown {
+  const output = execFileSync(
+    resolveTestNodeExecPath(),
+    ["--input-type=module", "-e", source.join("\n")],
+    { cwd, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
+  );
+  return JSON.parse(output);
+}
+
+function mapAssetBytes(asset: Rolldown.OutputBundle[string] | undefined): Buffer {
+  if (!asset || asset.type !== "asset") {
+    throw new Error("Expected an emitted sourcemap asset");
+  }
+  return typeof asset.source === "string"
+    ? Buffer.from(asset.source, "utf8")
+    : Buffer.from(asset.source);
+}
 
 it.each([
   { reference: "bare", order: "before" },
@@ -50,8 +83,7 @@ it.each([
     let retainedFile = "";
     let removedSpan: { start: number; end: number } | undefined;
     const { bundles } = await build({
-      config: false,
-      cwd: root,
+      ...createBuildOptions(root),
       entry: {
         "sdk/barrel": "barrel.ts",
         "sdk/empty": "empty.ts",
@@ -60,13 +92,6 @@ it.each([
         async: "async.ts",
         ...(externalCollision ? { collision: "collision.ts" } : {}),
       },
-      outDir: "dist",
-      dts: false,
-      target: "node22",
-      fixedExtension: false,
-      outExtensions: () => ({ js: ".js" }),
-      minify: { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
-      sourcemap: "hidden",
       outputOptions: { chunkFileNames: "[name]-🦊-[hash].mjs" },
       plugins: [
         {
@@ -163,7 +188,6 @@ it.each([
         },
         createEmptyRuntimeChunksPlugin(),
       ],
-      logLevel: "silent",
     });
     try {
       const chunks = bundles
@@ -216,28 +240,20 @@ it.each([
           }
         }
       }
-      const result = execFileSync(
-        resolveTestNodeExecPath(),
-        [
-          "--input-type=module",
-          "-e",
-          [
-            'import * as api from "./dist/sdk/barrel.js";',
-            'import * as empty from "./dist/sdk/empty.js";',
-            'import { value, load } from "./dist/async.js";',
-            `const observed = await import(${JSON.stringify(`./dist/${observedFile}`)});`,
-            "console.log(JSON.stringify({",
-            "keys: Object.keys(api), values: [api.a(), api.b(), value],",
-            "empty: Object.keys(empty), lazy: Object.keys(await load()),",
-            'effect: globalThis[Symbol.for("empty-chunk-effect")],',
-            'externalEffect: globalThis[Symbol.for("empty-chunk-external")] ?? null,',
-            "namespace: observed.emptyNamespace ? Object.keys(observed.emptyNamespace) : null",
-            "}));",
-          ].join("\n"),
-        ],
-        { cwd: root, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
-      );
-      expect(JSON.parse(result)).toEqual({
+      const result = runNodeJsonProbe(root, [
+        'import * as api from "./dist/sdk/barrel.js";',
+        'import * as empty from "./dist/sdk/empty.js";',
+        'import { value, load } from "./dist/async.js";',
+        `const observed = await import(${JSON.stringify(`./dist/${observedFile}`)});`,
+        "console.log(JSON.stringify({",
+        "keys: Object.keys(api), values: [api.a(), api.b(), value],",
+        "empty: Object.keys(empty), lazy: Object.keys(await load()),",
+        'effect: globalThis[Symbol.for("empty-chunk-effect")],',
+        'externalEffect: globalThis[Symbol.for("empty-chunk-external")] ?? null,',
+        "namespace: observed.emptyNamespace ? Object.keys(observed.emptyNamespace) : null",
+        "}));",
+      ]);
+      expect(result).toEqual({
         keys:
           reference === "namespace" && observedFile === "sdk/barrel.js"
             ? ["a", "b", "emptyNamespace"]
@@ -279,16 +295,8 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
     mapBytes: Buffer;
   }> = [];
   const { bundles } = await build({
-    config: false,
-    cwd: root,
+    ...createBuildOptions(root),
     entry: { left: "left.ts", right: "right.ts" },
-    outDir: "dist",
-    dts: false,
-    target: "node22",
-    fixedExtension: false,
-    outExtensions: () => ({ js: ".js" }),
-    minify: { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
-    sourcemap: "hidden",
     plugins: [
       {
         name: "elide-real-shared-chunk",
@@ -310,11 +318,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
           }
           removedFile = shared.fileName;
           removedMap = shared.sourcemapFileName;
-          const sidecar = bundle[removedMap];
-          if (!sidecar || sidecar.type !== "asset") {
-            throw new Error("Expected the shared chunk's emitted sourcemap asset");
-          }
-          expect(sidecar.source.length).toBeGreaterThan(0);
+          expect(mapAssetBytes(bundle[removedMap]).length).toBeGreaterThan(0);
           const entryChunks = chunks.filter((chunk) => chunk.isEntry);
           expect(entryChunks.map((entry) => entry.fileName).sort()).toEqual([
             "left.js",
@@ -325,10 +329,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
             if (entry.sourcemapFileName === null) {
               throw new Error("Expected a mapped entry's sourcemap filename");
             }
-            const asset = bundle[entry.sourcemapFileName];
-            if (!asset || asset.type !== "asset") {
-              throw new Error("Expected a mapped entry's emitted sourcemap asset");
-            }
+            const mapBytes = mapAssetBytes(bundle[entry.sourcemapFileName]);
             const spans: Array<{ start: number; end: number }> = [];
             for (const node of this.parse(entry.code).body) {
               if (
@@ -348,10 +349,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
               spans,
               map: JSON.stringify(entry.map),
               mapFileName: entry.sourcemapFileName,
-              mapBytes:
-                typeof asset.source === "string"
-                  ? Buffer.from(asset.source, "utf8")
-                  : Buffer.from(asset.source),
+              mapBytes,
             });
           }
           expect(entries).toHaveLength(2);
@@ -361,7 +359,6 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
       },
       createEmptyRuntimeChunksPlugin(),
     ],
-    logLevel: "silent",
   });
   try {
     const output = bundles.flatMap((bundle) => bundle.chunks);
@@ -377,14 +374,7 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
       expect(JSON.stringify(after.map)).toBe(entry.map);
       expect(after.sourcemapFileName).toBe(entry.mapFileName);
       const asset = output.find((item) => item.fileName === entry.mapFileName);
-      if (!asset || asset.type !== "asset") {
-        throw new Error("Expected the entry's original sourcemap asset");
-      }
-      expect(
-        typeof asset.source === "string"
-          ? Buffer.from(asset.source, "utf8")
-          : Buffer.from(asset.source),
-      ).toEqual(entry.mapBytes);
+      expect(mapAssetBytes(asset)).toEqual(entry.mapBytes);
       expect(fs.readFileSync(path.join(root, "dist", entry.mapFileName))).toEqual(entry.mapBytes);
       expect(after.imports).toEqual(entry.imports.filter((name) => name !== removedFile));
       expect(after.code.length).toBe(entry.code.length);
@@ -394,16 +384,10 @@ it("removes an elided chunk's real sourcemap while preserving mapped entry posit
         }
       }
     }
-    const result = execFileSync(
-      resolveTestNodeExecPath(),
-      [
-        "--input-type=module",
-        "-e",
-        'import { left } from "./dist/left.js"; import { right } from "./dist/right.js"; console.log(JSON.stringify([left, right, globalThis[Symbol.for("elided-shared-effect")] ?? null]));',
-      ],
-      { cwd: root, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
-    );
-    expect(JSON.parse(result)).toEqual([41, 1, null]);
+    const result = runNodeJsonProbe(root, [
+      'import { left } from "./dist/left.js"; import { right } from "./dist/right.js"; console.log(JSON.stringify([left, right, globalThis[Symbol.for("elided-shared-effect")] ?? null]));',
+    ]);
+    expect(result).toEqual([41, 1, null]);
   } finally {
     for (const bundle of bundles) {
       await bundle[Symbol.asyncDispose]();
