@@ -381,22 +381,25 @@ const descendantCleanupFailure = "service child cleanup did not complete before 
 const unconfirmedCleanupNote = expect.stringContaining("OpenClaw could not confirm");
 
 // A stopped tree can outlive the cleanup deadline (e.g. a process outside it holds its output).
-it.each([{ extinctionJoin: true }, { extinctionJoin: false }])(
-  "keeps the timeout as the result when cleanup then expires (extinctionJoin=$extinctionJoin)",
-  async ({ extinctionJoin }) => {
+// The host join may fail with the same expiry, succeed (only the output stayed open), or be absent.
+it.each(["rejects", "succeeds", "absent"] as const)(
+  "keeps the timeout as the result when cleanup then expires (extinction join %s)",
+  async (extinctionJoin) => {
     const expired = new Error(descendantCleanupFailure);
     queueRun(undefined, "@1\n", (input) => ({
       wait: async () => {
         input.onCancel?.("overall-timeout");
         throw expired;
       },
-      ...(extinctionJoin
-        ? {
+      ...(extinctionJoin === "absent"
+        ? {}
+        : {
             waitForExtinction: async () => {
-              throw expired;
+              if (extinctionJoin === "rejects") {
+                throw expired;
+              }
             },
-          }
-        : {}),
+          }),
     }));
     const cleanupScope = createAgentCleanupScope();
     await cleanupScope.run(async () => {
