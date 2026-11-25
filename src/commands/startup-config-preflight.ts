@@ -173,7 +173,8 @@ async function prepareStartupConfig(
       await withPluginLifecycleLease(
         { env, assertCurrent: assertLeaseCurrent, processBound: true },
         async (pluginLease) => {
-          // Recovery must consume the current config after both writers settle.
+          // Refuse backup drift before a fresh plan can skip the changed candidate.
+          read.recovery?.assertBackupUnchanged();
           read = await readAdmitted();
           if (!read.snapshot.valid) {
             return;
