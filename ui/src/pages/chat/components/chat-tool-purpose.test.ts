@@ -61,6 +61,21 @@ it.each([
 );
 
 it.each([
+  [
+    "kill",
+    { status: "completed", cancellationRequested: true, terminationConfirmed: false },
+    "Requested process stop",
+  ],
+  ["clear", { status: "completed" }, "Removed finished process record"],
+] as const)("describes what a completed process %s call did", async (action, details, label) => {
+  const container = await mountCard(
+    { id: action, name: "process", args: { action, sessionId: "job" }, completed: true, details },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-row__title")).toBe(label);
+});
+
+it.each([
   { code: "await tools.read({ path: 'README.md' })" },
   { command: "set -euo pipefail\npnpm test" },
 ])("shows the recorded exec action and retains purpose in inspection: %j", async (args) => {

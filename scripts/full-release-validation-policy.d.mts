@@ -229,4 +229,5 @@ export function qualificationChildDispatchInputs(
   admission: import("./release-qualification-admission.mjs").QualificationAdmission,
   binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
   workflowSource: string,
+  parentWorkflowSource?: string,
 ): Record<string, string>;

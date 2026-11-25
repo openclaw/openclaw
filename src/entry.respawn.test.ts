@@ -46,6 +46,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("runs one-shot model inference in process unless Node must reload its trust store", () => {
+  const local = ["infer", "model", "run", "--local", "--prompt-stdin"];
+  const alias = ["--profile", "dev", "capability", "model", "--agent", "main", "run"];
+  for (const args of [local, alias, [...alias, "--gateway"]]) {
+    expect(buildPlan({ args, autoNodeExtraCaCerts: "" })).toBeNull();
+  }
+  const withCa = requirePlan({ args: local, autoNodeExtraCaCerts: systemCa });
+  expect(withCa.env.NODE_EXTRA_CA_CERTS).toBe(systemCa);
+  expect(withCa.argv).not.toContain(warningFlag);
+  const otherCommand = ["infer", "model", "--agent", "run", "list"];
+  expect(requirePlan({ args: otherCommand, autoNodeExtraCaCerts: "" }).argv).toContain(warningFlag);
+});
+
 it.each([undefined, "--max-old-space-size=4096"])(
   "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
   (nodeOptions) => {

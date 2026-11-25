@@ -119,24 +119,21 @@ describe("chat pane session access", () => {
       sessionKey: "agent:main:dashboard:incognito-current",
       required: "operator.admin",
     },
-  ])(
-    "refuses creation from $sessionKey without $required",
-    async ({ scope, sessionKey, required }) => {
-      const sessions = {
-        create: vi.fn(async () => "agent:main:new"),
-      } as unknown as SessionCapability;
-      const client = {} as GatewayBrowserClient;
-      const { pane, state } = createTestChatPane({ client, sessions });
-      state.sessionKey = sessionKey;
-      pane.context.gateway.snapshot.hello = hello(scope, ["sessions.create"]);
+  ])("refuses creation from $sessionKey without $required", async ({ scope, sessionKey }) => {
+    const sessions = {
+      create: vi.fn(async () => "agent:main:new"),
+    } as unknown as SessionCapability;
+    const client = {} as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions });
+    state.sessionKey = sessionKey;
+    pane.context.gateway.snapshot.hello = hello(scope, ["sessions.create"]);
 
-      await expect(pane.createSession()).resolves.toBe(false);
+    await expect(pane.createSession()).resolves.toBe(false);
 
-      expect(sessions.create).not.toHaveBeenCalled();
-      expect(state.lastError).toContain(required);
-      expect(state.chatError).toBe(state.lastError);
-    },
-  );
+    expect(sessions.create).not.toHaveBeenCalled();
+    expect(state.lastError).toBe("You don’t have permission to do this.");
+    expect(state.chatError).toBe(state.lastError);
+  });
 
   it("refuses header rename when sessions.patch is unavailable or lacks write scope", () => {
     for (const snapshot of [hello("operator.write", ["sessions.create"]), hello("operator.read")]) {
