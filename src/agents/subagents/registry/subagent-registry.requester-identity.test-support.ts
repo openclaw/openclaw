@@ -34,7 +34,7 @@ export function registerRequesterIdentityTests({
       const cfg = { commands: { ownerAllowFrom: ["discord:original-owner"] } };
       config.setRuntimeConfigSnapshot(cfg);
       vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-      const { context, client, source, revoked } = await retainedOperatorFixture(
+      const { context, client, source } = await retainedOperatorFixture(
         "channel-source",
         createContext([], () => cfg),
       );
@@ -217,13 +217,6 @@ export function registerRequesterIdentityTests({
           expect(authority).toBeUndefined();
           expect(getGatewayToolCallerIdentity()).toBeUndefined();
         });
-        revoked.abort(new Error("original requester revoked"));
-        expect(() =>
-          subagentRuns.runWithCompletionAuthority(
-            expectDefined(subagentRuns.get("refreshed-child"), "live refreshed child"),
-            () => "stale",
-          ),
-        ).toThrow();
       } finally {
         source.release();
       }

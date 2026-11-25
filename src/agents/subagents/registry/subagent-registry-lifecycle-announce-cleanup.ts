@@ -560,7 +560,7 @@ export const startSubagentAnnounceCleanupFlow = (
               clearTimeout(deadlineTimer);
             },
           });
-        return authority ? authority.runWithRequester(deliver) : deliver();
+        return authority?.requesterOrigin ? authority.runWithRequester(deliver) : deliver();
       });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
