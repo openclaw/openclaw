@@ -410,7 +410,7 @@ describe("receipt-backed aggregate recovery", () => {
       },
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
-    expect(new Set(calls).size).toBe(10);
+    expect(new Set(calls).size).toBe(11);
     const normalCi = recovery.children.normalCi;
     if (!normalCi) {
       throw new Error("fixture is missing the normal CI child");
