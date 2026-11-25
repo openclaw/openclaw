@@ -135,15 +135,21 @@ export function useRoles() {
       note: string,
       success: string,
     ) {
-      return run((isCurrent) =>
-        writer.patch(context.runtimeConfig, isCurrent, {
+      return run(async (isCurrent) => {
+        const ok = await writer.patch(context.runtimeConfig, isCurrent, {
           build,
           note,
           success,
           canDispatch: () =>
             isCurrent() && canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin"),
-        }),
-      );
+        });
+        // A default or definition change moves people between roles, so refresh who has each.
+        // Awaited: a refresh joins any read in flight, so the next write waits for a fresh one.
+        if (ok) {
+          await directorySource.load(true);
+        }
+        return ok;
+      });
     },
     assign(selected: readonly RoleProfile[], role: string) {
       const client = gateway.client;
@@ -152,7 +158,7 @@ export function useRoles() {
       }
       return run(async (isCurrent) => {
         const ok = await writer.assign(client, isCurrent, selected, role);
-        void directorySource.load(true);
+        await directorySource.load(true);
         return ok;
       });
     },

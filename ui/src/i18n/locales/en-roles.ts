@@ -26,6 +26,7 @@ const enRoles = {
     enableDefaultNoAdminRole:
       "No role here can manage roles, and the names admin and administrator are taken. Create a role with Gateway admin access first.",
     enableDefaultSave: "Turn on roles",
+    enableDefaultSaving: "Turning on roles…",
     githubMappings: "GitHub mappings",
     githubMappingsDescription: "Roles given to GitHub logins before their first sign-in.",
     githubMappingsCount: "{count} logins",

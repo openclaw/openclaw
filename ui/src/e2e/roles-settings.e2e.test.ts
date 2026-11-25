@@ -98,6 +98,7 @@ async function openRoles(
         sourceConfig: config,
       },
       "users.list": { profiles: PROFILES },
+      "config.patch": { ok: true, config, hash: "roles-hash-2" },
     },
   });
   await page.goto(suite.server.baseUrl + "settings/roles" + search);
@@ -269,8 +270,19 @@ suite.define(() => {
       expect(await self.locator("input").isChecked()).toBe(true);
       expect(await dialog.getByText("gateway-owner").count()).toBe(0);
       await proof(page, "roles-enable-default");
+      const listed = (await gateway.getRequests("users.list")).length;
+      // Hold the assignment so the in-progress state is observable.
+      await gateway.setMethodDelay("users.setRole", 1500);
       await dialog.getByRole("button", { name: "Turn on roles" }).click();
-      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
+      const busy = dialog.locator("button[aria-busy='true']");
+      await expect.poll(() => busy.textContent()).toContain("Turning on roles…");
+      expect(await busy.locator(".btn__spinner").count()).toBe(1);
+      await expect.poll(() => dialog.count()).toBe(0);
+      expect((await gateway.getRequests("config.patch")).length).toBe(1);
+      // Who has each role is reloaded after the assignment and again after the default.
+      await expect
+        .poll(async () => (await gateway.getRequests("users.list")).length)
+        .toBe(listed + 2);
       const [assigned] = await gateway.getRequests("users.setRole");
       expect(assigned?.params).toEqual({ profileId: "p-dev", role: "administrator" });
       const [request] = await gateway.getRequests("config.patch");

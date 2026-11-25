@@ -42,6 +42,8 @@ function Frame(props: {
   onClose: () => void;
   onSubmit: () => void;
   submitLabel: string;
+  /** Shown with a spinner on the submit button while the dialog's writes run. */
+  busyLabel?: string;
   submitDisabled: boolean;
   danger?: boolean;
   wide?: boolean;
@@ -84,8 +86,12 @@ function Frame(props: {
             type="submit"
             class={["btn", props.danger ? "danger" : "primary"]}
             disabled={props.submitDisabled || props.busy}
+            aria-busy={props.busy ? "true" : undefined}
           >
-            {props.submitLabel}
+            <Show when={props.busy}>
+              <span class="btn__spinner" aria-hidden="true" />{" "}
+            </Show>
+            {props.busy ? (props.busyLabel ?? props.submitLabel) : props.submitLabel}
           </button>
         </openclaw-modal-actions>
       </form>
@@ -473,6 +479,7 @@ function EnableDefaultDialog(props: DialogProps) {
       wide
       onClose={props.onClose}
       submitLabel={t("rolesPage.enableDefaultSave")}
+      busyLabel={t("rolesPage.enableDefaultSaving")}
       submitDisabled={!plan() || !props.roles.peopleLoaded()}
       onSubmit={() => void save()}
     >
