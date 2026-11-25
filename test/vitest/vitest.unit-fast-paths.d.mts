@@ -18,11 +18,17 @@ export function collectUnitFastTestFileAnalysis(
 ): UnitFastFileAnalysis[];
 export function getUnitFastTestFilesForIncludePatterns(
   includePatterns: string[],
-  options?: { dir?: string },
+  options?: { dir?: string; cwd?: string },
 ): string[];
-export function getUnitFastTestFiles(includePatterns?: string[] | null): string[];
-export function getUnitFastIsolatedTestFiles(includePatterns?: string[] | null): string[];
-export function getUnitFastTimerTestFiles(includePatterns?: string[] | null): string[];
+export function getUnitFastTestFiles(includePatterns?: string[] | null, cwd?: string): string[];
+export function getUnitFastIsolatedTestFiles(
+  includePatterns?: string[] | null,
+  cwd?: string,
+): string[];
+export function getUnitFastTimerTestFiles(
+  includePatterns?: string[] | null,
+  cwd?: string,
+): string[];
 export function isUnitFastTestFile(file: string): boolean;
 export function isUnitFastIsolatedTestFile(file: string): boolean;
 export function isUnitFastTimerTestFile(file: string): boolean;
