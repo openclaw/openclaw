@@ -54,7 +54,7 @@ final class ChatModelAccountsOwner {
 @MainActor
 func chatModelFailedProviders(_ viewModel: OpenClawChatViewModel) -> Set<String> {
     guard viewModel.modelAvailabilityIsSessionScoped else { return [] }
-    return Set(viewModel.modelPickerCatalog.providers.filter { $0.signInNeed == .authFailed }.map(\.id))
+    return Set(viewModel.modelPickerCatalog().providers.filter { $0.signInNeed == .authFailed }.map(\.id))
 }
 
 // MARK: - Accounts
@@ -194,7 +194,7 @@ struct ChatModelAccountPage: View {
         {
             return account.name
         }
-        return self.viewModel.modelPickerCatalog.providers.first { $0.id == self.accountID }?.displayName
+        return self.viewModel.modelPickerCatalog().providers.first { $0.id == self.accountID }?.displayName
             ?? ChatModelPickerStore.providerDisplayName(self.accountID)
     }
 
