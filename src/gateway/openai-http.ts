@@ -540,7 +540,6 @@ export async function handleOpenAiHttpRequest(
       sessionKey,
       runId,
       messageChannel,
-      senderIsOwner,
       requestAuth: handled.requestAuth,
       operatorScopes: handled.operatorScopes,
       abortSignal: abortController.signal,

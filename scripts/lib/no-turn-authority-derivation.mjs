@@ -86,7 +86,6 @@ export const OWNER_PRODUCER_FILES = new Set([
   "src/gateway/talk/client-tool-authority.ts",
   "src/gateway/tool-resolution-authority.ts",
   "src/gateway/tool-resolution.ts",
-  "src/gateway/tools-invoke-http.ts",
   "src/mcp/codex-supervision-tools-serve.ts",
   "src/plugins/memory-audience.ts",
   "src/plugins/plugin-command-execution.ts",

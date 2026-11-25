@@ -35,7 +35,11 @@ import {
   openclawIdSubjectRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { decideTurnGrant } from "./operator-admission.js";
+import {
+  decideOperatorAdmission,
+  decideTurnGrant,
+  prepareOperatorAdmission,
+} from "./operator-admission.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
@@ -528,4 +532,29 @@ export async function prepareGatewayOperatorRunAuthority(
     release();
     throw error;
   }
+}
+
+/** Admits an HTTP request once, as the principal its credential names on a socket. */
+export async function prepareGatewayHttpOperatorRunAuthority(
+  input: GatewayOperatorRunAdmissionInput & { client: GatewayClient },
+): Promise<PreparedGatewayOperatorRunAuthority | undefined> {
+  const { client } = input;
+  // The owner's own credential (shared token or password, private no-auth) names the owner
+  // principal with the request's scopes, as on a Control UI socket; admission decides the grant.
+  if (
+    client.authenticatedUserProfile?.profileId !== GATEWAY_OWNER_PROFILE_ID ||
+    client.internal?.openclawIdPrincipal
+  ) {
+    return prepareGatewayOperatorRunAuthority(input);
+  }
+  const facts = {
+    kind: "recorded",
+    snapshot: {
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      scopes: client.connect.scopes ?? [],
+      gatewayAccessGrant: null,
+      assignedRole: null,
+    },
+  } as const;
+  return decideOperatorAdmission(facts, await prepareOperatorAdmission(facts, input.context));
 }
