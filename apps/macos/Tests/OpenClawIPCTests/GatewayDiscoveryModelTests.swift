@@ -1,3 +1,4 @@
+import Synchronization
 import Testing
 @testable import OpenClawDiscovery
 
@@ -11,14 +12,20 @@ struct GatewayDiscoveryModelTests {
         #expect(model.statusText == "Stopped")
     }
 
-    @Test func `inactive discovery does not retain its model for host resolution`() {
+    @Test func `inactive discovery neither resolves its display name nor retains its model`() {
+        let displayNameReads = Mutex(0)
         weak var released: GatewayDiscoveryModel?
         do {
-            let model = GatewayDiscoveryModel(localDisplayName: "Test Mac")
+            let model = GatewayDiscoveryModel(localDisplayName: displayNameReads.withLock { reads in
+                reads += 1
+                return "Test Mac"
+            })
             released = model
             #expect(model.gateways.isEmpty)
+            #expect(displayNameReads.withLock { $0 } == 0)
         }
         #expect(released == nil)
+        #expect(displayNameReads.withLock { $0 } == 0)
     }
 
     @Test func `local gateway matches lan host`() {

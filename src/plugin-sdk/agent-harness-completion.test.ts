@@ -121,7 +121,7 @@ it.each<[string, AgentHarnessCompletionDelivery, boolean]>([
     "steer evidence does not prove direct delivery",
     direct([
       { phase: "steer-primary", delivered: true, path: "steered" },
-      { phase: "steer-fallback", delivered: false, path: "none", reason: "steer_dropped" },
+      { phase: "steer-fallback", delivered: false, path: "none" },
     ]),
     false,
   ],
@@ -250,8 +250,8 @@ it("rechecks source authority after asynchronous delivery work", async () => {
   await rejects({ isSourceSessionAdmissionAllowed: () => current }, "source owner retired");
 });
 
-it("blocks a replaced requester revision after awaited origin resolution", async () => {
+it("delivers to the requester chat after its revision changes during origin resolution", async () => {
   retireDuringOriginResolution(replaceRequester);
-  await expect(deliver()).resolves.toMatchObject({ delivered: false, recoveryBlocked: true });
-  expect(mocks.deliver).not.toHaveBeenCalled();
+  await expect(deliver()).resolves.toMatchObject({ delivered: true });
+  expect(mocks.deliver).toHaveBeenCalledOnce();
 });

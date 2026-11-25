@@ -6,6 +6,7 @@ import {
   findPaletteOption,
   mountSearch,
   paletteInput,
+  pressKey,
   registerCommandPaletteTestHooks,
   searchPalette,
   setInputValue,
@@ -60,12 +61,14 @@ it("loads eligible visible icons and reloads retained rows without retrying fail
   );
   const initialRow = workboard();
   const input = paletteInput(palette);
+  pressKey(input, "Tab", { cancelable: true });
   setInputValue(input, "Draft a plan for the next release including all testing steps.");
   await palette.updateComplete;
   expect(workboard()).toBe(initialRow);
   expect(initialRow?.closest("[inert]")).not.toBeNull();
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:workboard-1");
   setInputValue(input, "workboard");
+  pressKey(input, "Tab", { cancelable: true });
   await vi.advanceTimersByTimeAsync(200);
   await waitForIcon(2);
 
@@ -74,13 +77,13 @@ it("loads eligible visible icons and reloads retained rows without retrying fail
   flush();
   for (const available of [true, false]) {
     hasIcon = available;
-    emit("cron");
+    emit("chat.metadata.changed", { commandsChanged: true });
     await settlePalette(palette, 0);
     expect(row?.querySelector("img")).toBeNull();
     expect(fetchIcon).toHaveBeenCalledTimes(2);
   }
   hasIcon = true;
-  emit("cron");
+  emit("chat.metadata.changed", { commandsChanged: true });
   await vi.advanceTimersByTimeAsync(0);
   await waitForIcon(3);
   expect(workboard()).toBe(row);

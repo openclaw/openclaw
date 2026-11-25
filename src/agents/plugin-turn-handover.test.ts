@@ -153,6 +153,33 @@ describe("plugin turn handover", () => {
     expect(() => control.assertCurrent()).not.toThrow();
   });
 
+  it("hands over an invoked instance absent from the turn's initial registry", async () => {
+    const initial = createRegistryWithInstance("unused");
+    const { registry, instance } = createRegistryWithInstance("foreign", true);
+    const refresh = createAgentPluginRuntimeRefresh();
+    const { control, release } = refresh.run(() => {
+      const captured = captureAgentPluginRuntimeRefresh();
+      captured.bindConsumer(() => true);
+      const releaseWork = retainRuntimePluginWork(
+        [registry],
+        "prepared-generation-lease",
+        captureTurnHandoverRequest([initial.registry], () => [instance]),
+      );
+      return { control: captured, release: releaseWork };
+    });
+    const cancel = instance.reserveReplacement();
+    try {
+      await settle();
+      expect(control.isPending()).toBe(true);
+      expect(instance.retainedWorkCount).toBe(1);
+      expect(control.stopAtStep()).toBe(true);
+    } finally {
+      cancel();
+      release();
+      refresh.close();
+    }
+  });
+
   it("lets the run's own tool request win the refresh source", async () => {
     const { registry, instance } = createRegistryWithInstance("swap", true);
     const control = createRetainedTurnControl(registry);

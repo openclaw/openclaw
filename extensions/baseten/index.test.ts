@@ -10,12 +10,18 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
-import { createSolidPngBuffer, makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  createSolidPngBuffer,
+  makeAgentAssistantMessage,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { withConfiguredCatalogLoopback } from "../test-support/configured-catalog-loopback.test-support.js";
 import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
 import { applyBasetenConfig, buildStaticBasetenModels } from "./api.js";
 import { registerModel, toolReplayMessages } from "./baseten.test-support.js";
 import basetenPlugin from "./index.js";
+import { buildStaticBasetenProvider } from "./provider-catalog.js";
 
 const KEY = "resolved-marker";
 const BASE_URL = "https://inference.baseten.co/v1";
@@ -377,4 +383,113 @@ it("prepares image input from the authenticated catalog and preserves live limit
       ]),
     }),
   );
+});
+
+it("uses the registered configured catalog and cancels only its consumer", async ({ signal }) => {
+  const provider = await registerSingleProviderPlugin(basetenPlugin);
+  if (!provider.catalog) {
+    throw new Error("Missing registered catalog");
+  }
+  await withConfiguredCatalogLoopback(async (fixture) => {
+    const { origin, requests } = fixture;
+    const run = (
+      path: string,
+      key = "discovery-a",
+      consumerSignal?: AbortSignal,
+      discovery = true,
+    ) => {
+      const auth = {
+        apiKey: `marker-${key}`,
+        discoveryApiKey: discovery ? key : undefined,
+        profileId: "baseten:fixture",
+        mode: "api_key" as const,
+        source: "profile" as const,
+      };
+      const configured = {
+        baseUrl: ` ${origin}/${path} `,
+        models: [],
+        apiKey: "unselected-config-key",
+      };
+      return fixture.track(
+        provider.catalog!.run({
+          config: { models: { providers: { baseten: configured } } },
+          env: {},
+          signal: consumerSignal,
+          resolveProviderAuth: () => auth,
+          resolveProviderApiKey: () => {
+            throw new Error("Do not reselect auth");
+          },
+        }),
+      );
+    };
+    const expectCatalog = (result: unknown, path: string, key = "discovery-a") => {
+      const baseUrl = `${origin}/${path}`;
+      expect(result).toMatchObject({
+        provider: {
+          baseUrl,
+          apiKey: `marker-${key}`,
+          models: [expect.objectContaining({ id: "private/opaque-model" })],
+        },
+        outcomes: [
+          {
+            provider: "baseten",
+            profileId: "baseten:fixture",
+            status: "ready",
+            modelIdCatalog: { baseUrl, modelIds: ["private/opaque-model"] },
+          },
+        ],
+      });
+    };
+    expect(await run("static", "inference-only", undefined, false)).toEqual({
+      provider: {
+        ...buildStaticBasetenProvider(),
+        baseUrl: `${origin}/static`,
+        apiKey: "marker-inference-only",
+      },
+    });
+    expect(requests).toHaveLength(0);
+    expectCatalog(await run("a"), "a");
+    expectCatalog(await run("a"), "a");
+    expectCatalog(await run("a", "discovery-b"), "a", "discovery-b");
+    expectCatalog(await run("b"), "b");
+    expect(requests).toEqual([
+      ["/a/models", "GET", "Bearer discovery-a"],
+      ["/a/models", "GET", "Bearer discovery-b"],
+      ["/b/models", "GET", "Bearer discovery-a"],
+    ]);
+    const controller = new AbortController();
+    controller.abort(new Error("consumer already closed"));
+    for (const path of ["a", "cold"]) {
+      expect(await run(path, "discovery-a", controller.signal)).toMatchObject({
+        providers: {},
+        outcomes: [{ provider: "baseten", status: "unavailable" }],
+      });
+    }
+    expect(requests).toHaveLength(3);
+    const cancelled = new AbortController();
+    const first = run("held", "discovery-a", cancelled.signal);
+    const second = run("held");
+    let remainingSettled = false;
+    void fixture.track(
+      second.then(() => {
+        remainingSettled = true;
+      }),
+    );
+    await withinTest(fixture.firstChunk, signal);
+    cancelled.abort(new Error("first catalog consumer closed"));
+    expect(await withinTest(first, signal)).toMatchObject({
+      providers: {},
+      outcomes: [{ provider: "baseten", status: "unavailable" }],
+    });
+    expect(remainingSettled).toBe(false);
+    expect(fixture.heldPending).toBe(true);
+    expect(requests).toHaveLength(4);
+    fixture.finish();
+    expectCatalog(await withinTest(second, signal), "held");
+    await fixture.drain();
+    expect(fixture.calls).toBe(4);
+    expect(fixture.releases).toBe(4);
+    expect(fixture.bodies).toHaveLength(4);
+    expect(fixture.bodies.every((body) => !body.locked)).toBe(true);
+  }, signal);
 });

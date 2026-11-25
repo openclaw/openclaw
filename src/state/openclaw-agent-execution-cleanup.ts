@@ -52,7 +52,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   params.assertOwned();
   // Uncertified retirement cannot lend proof while shared-state cleanup admission waits.
   if (!refusedBeforeAgentOpen) {
-    invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+    invalidateOpenClawAgentDatabaseValidation(params.lease.path, "execution cleanup");
   }
   const context = {
     environment: params.context.environment,
@@ -94,7 +94,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           params.assertOwned();
           if (request.stage === "prepare" && request.facts === "agent-integrity-invalidated") {
-            invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+            invalidateOpenClawAgentDatabaseValidation(params.lease.path, "execution cleanup");
           }
           grant();
         }),
@@ -176,7 +176,8 @@ export async function closeAgentDatabaseNativeGeneration(params: {
   const { pathname, context, processOwner, opening, readOpenedStore, assertCleanupOwned } = params;
   const errors: unknown[] = [];
   try {
-    processOwner?.assertCurrent();
+    const assertCurrent = await processOwner?.prepareAccess();
+    assertCurrent?.();
   } catch (error) {
     // Ordinary admission may retire first; only physical ownership loss forbids lease settlement.
     if (processOwner?.signal.aborted) {
@@ -239,7 +240,7 @@ async function finishAgentDatabaseRetirementAfterOwnershipLoss(
   errors: unknown[],
 ): Promise<void> {
   await stopped;
-  invalidateOpenClawAgentDatabaseValidation(pathname);
+  invalidateOpenClawAgentDatabaseValidation(pathname, "execution cleanup");
   const lockPath = resolveGatewayStateOwnerPath(stateDatabasePath);
   const replacement = await readFile(lockPath, "utf8").then(
     (raw) => {

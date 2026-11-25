@@ -7,6 +7,7 @@ import {
   hasValidSessionEntryIdentity,
   normalizeSessionEntryTimestamp,
 } from "./session-entry-json.js";
+import { preserveSessionDelegatedOperatorSource } from "./session-entry-lineage.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
 import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -27,6 +28,7 @@ export function installSessionActorMemoryEntry(
     throw new Error("Refusing invalid memory session entry identity");
   }
   next = preserveCreationStamp(next, previous);
+  next = preserveSessionDelegatedOperatorSource(next, previous);
   next.createdAt ??= previous?.updatedAt ?? Date.now();
   const sameWindow = previous?.sessionId === next.sessionId;
   const sameLifecycle = sameWindow && previous?.lifecycleRevision === next.lifecycleRevision;
@@ -51,6 +53,15 @@ export function installSessionActorMemoryEntry(
     next.profileInvolvement = { ...involvement, key: state.hot.target.sessionKey };
   } else {
     delete next.profileInvolvement;
+  }
+  // Authenticated sources follow this logical node like durable writes; a new node starts without.
+  const operatorSources = Object.hasOwn(entry, "operatorSources")
+    ? entry.operatorSources
+    : previous?.operatorSources;
+  if (operatorSources && previous) {
+    next.operatorSources = operatorSources;
+  } else {
+    delete next.operatorSources;
   }
   // Publication never follows a copied transcript; only its lifecycle owner may select an audience.
   delete next.publicShare;

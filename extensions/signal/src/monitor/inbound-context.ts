@@ -3,13 +3,13 @@ import {
   resolveInboundSupplementalSenderAllowed,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatSignalSenderDisplay,
   isSignalSenderAllowed,
   resolveSignalSender,
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
+import { renderSignalMentions } from "./mentions.js";
 
 export function resolveSignalQuoteContext(params: {
   cfg: Parameters<typeof resolveChannelContextVisibilityMode>[0]["cfg"];
@@ -23,7 +23,10 @@ export function resolveSignalQuoteContext(params: {
     channel: "signal",
     accountId: params.accountId,
   });
-  const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
+  const quoteText = renderSignalMentions(
+    params.dataMessage?.quote?.text ?? "",
+    params.dataMessage?.quote?.mentions,
+  ).trim();
   const quoteSender = resolveSignalSender({
     sourceNumber: params.dataMessage?.quote?.author ?? null,
     sourceUuid: params.dataMessage?.quote?.authorUuid ?? null,
@@ -43,6 +46,7 @@ export function resolveSignalQuoteContext(params: {
   });
 
   return {
+    quoteText,
     contextVisibilityMode,
     quoteSenderAllowed,
     visibleQuoteText: visibleQuote?.body ?? "",

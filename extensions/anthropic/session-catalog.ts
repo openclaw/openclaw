@@ -157,6 +157,14 @@ function toGenericClaudeHost(
       return [
         {
           ...metadata,
+          exportPolicy:
+            host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID
+              ? {
+                  origin: "native-local" as const,
+                  automatic: true,
+                  ...(session.sourceHomeId ? { stableHostThreadIdentity: true as const } : {}),
+                }
+              : { origin: "federated" as const, automatic: false },
           ...(name ? { name } : {}),
           ...(recencyAt != null ? { recencyAt } : {}),
           ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
@@ -193,6 +201,7 @@ export function createClaudeSessionCatalogRuntime(
         allowPartialResults: _allowPartialResults,
         agentId: _agentId,
         listNodes,
+        exportSource,
         onHost,
         waitUntil,
         signal,
@@ -204,6 +213,7 @@ export function createClaudeSessionCatalogRuntime(
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
+        exportSource,
         allowProcessHomeFallback,
         listNodes,
         waitUntil,
@@ -221,24 +231,25 @@ export function createClaudeSessionCatalogRuntime(
       const blockCursor = /^block:(\d+):(.+)$/u.exec(cursor ?? "");
       const skip = Number(blockCursor?.[1] ?? 0);
       if (!Number.isSafeInteger(skip) || (cursor?.startsWith("block:") && !blockCursor)) {
-        throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+        throw new ClaudeCatalogParamsError("chat history cursor is invalid");
       }
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
         hostId: request.hostId,
+        sourceHomeId: request.sourceHomeId,
         threadId,
         cursor: blockCursor?.[2] ?? cursor,
         limit,
         allowProcessHomeFallback: request.allowProcessHomeFallback,
       });
       if (skip && !page.items.length) {
-        throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+        throw new ClaudeCatalogParamsError("chat history cursor is invalid");
       }
       const projected = page.items.flatMap((row, index) => {
         const blocks = toGenericClaudeItems(row);
         const offset = index === 0 ? skip : 0;
         if (offset && offset >= blocks.length) {
-          throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+          throw new ClaudeCatalogParamsError("chat history cursor is invalid");
         }
         return blocks.slice(offset).map((item, block) => ({ item, row, skip: offset + block }));
       });
@@ -254,7 +265,7 @@ export function createClaudeSessionCatalogRuntime(
       }
       const resume = projected[items.length];
       if (resume && !isExactClaudeSessionCursor(resume.row.resumeCursor)) {
-        throw new Error("Update the Claude session node to page mixed transcript blocks");
+        throw new Error("Update the Claude session node to page mixed chat history blocks");
       }
       // Native byte-end anchors use base64url (no colon), so the block prefix is
       // distinct. Anchors survive appends, changed page sizes, and byte-budget cuts.
@@ -317,7 +328,7 @@ export function createClaudeSessionCatalogRuntime(
             }
             const source = await fs.stat(localRecord.filePath).catch(() => undefined);
             if (!source?.isFile()) {
-              throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+              throw new ClaudeCatalogParamsError("Claude session chat history is unavailable");
             }
             record = localRecord;
           } else if (hostId.startsWith("node:")) {

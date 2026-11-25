@@ -5,7 +5,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 // exposing the same checks to structured lint and repair commands.
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
-import { isUpdateDoctorInspectionReportMode } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import {
@@ -36,6 +35,7 @@ import {
   noteDoctorRepairResult,
   resolveDoctorMode,
   resolveDoctorWorkspaceDir,
+  shouldDeferPostActivationInspections,
 } from "./doctor-health-contribution-utils.js";
 import {
   recordDoctorHealthWarnings,
@@ -66,7 +66,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
     cfg: ctx.cfg,
     doctorOnlyStateMigrations: true,
     ...(ctx.env ? { env: ctx.env } : {}),
-    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+    legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: ctx.cfg }),
   });
   const pendingDetails = [
     ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
@@ -220,7 +220,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   if (
     !doctorOnlyStateMigrations ||
@@ -229,7 +232,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     const { detectLegacyStateMigrations, runLegacyStateMigrations } =
       await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const legacyState = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
@@ -410,14 +413,6 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
-function shouldDeferPostActivationInspections(env: NodeJS.ProcessEnv): boolean {
-  return (
-    isUpdateDoctorRun(env) &&
-    !resolveUpdateRehearsalRoot(env) &&
-    isUpdateDoctorInspectionReportMode(env)
-  );
-}
-
 function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     ...resolveInitialDoctorHealthContributions({
@@ -504,6 +499,12 @@ async function selectPostActivationInspections(
       ? [{ contribution, checks }]
       : [];
   });
+}
+
+/** The serving release owns which advisory inspections can run after activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  const inspections = await selectPostActivationInspections(resolveDoctorHealthContributions());
+  return [...new Set(inspections.flatMap(({ checks }) => checks.map((check) => check.id)))];
 }
 
 async function runDoctorHealthContributionList(
@@ -629,6 +630,7 @@ async function runDoctorHealthContributionList(
           return;
         }
         if (retirementOnly && !ctx.retirementOnly) {
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}`);
           return;
         }
       } catch (error) {
@@ -655,6 +657,7 @@ async function runDoctorHealthContributionList(
         recordDoctorHealthWarnings(ctx, [], [message]);
         if (retirementOnly) {
           ctx.retirementOnly = false;
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}.failed`);
           return;
         }
       }
@@ -687,12 +690,24 @@ async function runDoctorHealthContributionList(
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   const contributions = resolveDoctorHealthContributions();
-  ctx.retirementOnly =
-    ctx.retirementOnly === true &&
-    ctx.configResult.retirementOnly === true &&
-    !ctx.agentDatabaseRefusals?.length &&
-    !ctx.healthFindings?.length &&
-    !ctx.updateWarnings?.length;
+  if (ctx.retirementOnly) {
+    const blockers = [
+      ...(ctx.configResult.retirementOnly !== true
+        ? (ctx.configResult.retirementOnlyBlockers ?? ["preparation"]).map(
+            (reason) => `config.${reason}`,
+          )
+        : []),
+      Boolean(ctx.agentDatabaseRefusals?.length) && "agent-admission",
+      Boolean(ctx.healthFindings?.length) && "startup-findings",
+      Boolean(ctx.updateWarnings?.length) && "startup-warnings",
+    ].filter((blocker): blocker is string => Boolean(blocker));
+    if (blockers.length > 0) {
+      ctx.retirementOnly = false;
+      for (const blocker of blockers) {
+        ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
+      }
+    }
+  }
   if (ctx.retirementOnly) {
     const retained = new Set([
       "doctor:write-config-migrations",
@@ -702,6 +717,13 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
       "doctor:write-config",
       "doctor:final-config-validation",
     ]);
+    // The last Doctor receipt replaces earlier selectors in shipped updaters.
+    // Keep deferrals in the narrow pass without running the inspections here.
+    if (shouldDeferPostActivationInspections(ctx.env ?? process.env)) {
+      for (const { contribution } of await selectPostActivationInspections(contributions)) {
+        retained.add(contribution.id);
+      }
+    }
     await runDoctorHealthContributionList(
       ctx,
       contributions.filter((entry) => retained.has(entry.id)),

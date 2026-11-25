@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import {
+  buildOutboundMediaLoadOptions,
   canonicalizeBase64,
   estimateBase64DecodedBytes,
   extensionForMime,
+  type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import { getFeishuRuntime } from "./runtime.js";
 
@@ -14,6 +16,7 @@ type DocxUploadInput = {
   image?: string;
   maxBytes: number;
   localRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   fileName?: string;
   remoteReadTimeoutMs?: number;
 };
@@ -129,6 +132,7 @@ export async function resolveDocxUploadInput(
     const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
       url: input.url,
       maxBytes: input.maxBytes,
+      ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: input.mediaAccess }).ssrfPolicy,
       ...(input.remoteReadTimeoutMs !== undefined
         ? {
             responseHeaderTimeoutMs: input.remoteReadTimeoutMs,

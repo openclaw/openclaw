@@ -10,12 +10,15 @@ import {
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import { listUnverifiedDataAtRisk, readRecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { loadPluginCohortRecovery } from "./update-run-recovery-store.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
 /** This one-shot helper already owns the parked state; no installed snapshot worker is needed. */
@@ -47,13 +50,9 @@ export async function recoverInterruptedManagedUpdate(params: {
   if (!run || run.status !== "running") {
     throw new Error("Interrupted updater has no current running record");
   }
-  const risk =
-    run.verification.recovery?.serviceRestartSafe === false
-      ? run.verification.recovery.dataAtRisk
-      : undefined;
-  if (risk) {
-    throw new Error(`keep the gateway stopped: data at risk (${risk})`);
-  }
+  // Only this run's own mark blocks entry: post-core repair below verifies earlier marks
+  // and records their receipts before the history-wide check after it.
+  assertRunRestartSafe(readRecordedDataAtRisk(run));
   assertCurrent();
   const anchor = resolvePackageActivationAnchor(root);
   let publication;
@@ -101,7 +100,9 @@ export async function recoverInterruptedManagedUpdate(params: {
   if (!installed.serviceRestartSafe || !installed.version) {
     throw new Error("Installed runtime identity could not be verified");
   }
-  const identity = packageActivationIdentity(root, true);
+  // A release link is read through; the link itself is the installation's lease key.
+  const installedIdentity = () => packageActivationIdentity(fs.realpathSync(root), true);
+  const identity = installedIdentity();
   const original =
     identity === params.originalIdentity &&
     params.original.serviceRestartSafe &&
@@ -110,16 +111,34 @@ export async function recoverInterruptedManagedUpdate(params: {
   if (original) {
     await publicationOwner?.retireVerified();
     assertCurrent();
-    return { recovery: params.original, status: "rolled-back" as const };
+    let warning: string | undefined;
+    // The original runtime settles a plugin cohort the killed updater reserved.
+    // A failure leaves it for update repair; the original Gateway still restarts.
+    if (loadPluginCohortRecovery(params.runId, { allowNativeRead: true })) {
+      const repaired = await params.finalize().catch((error: unknown) => {
+        warning = `Plugin recovery remains pending (${String(error)}); run openclaw update repair before the next update.`;
+        // A failed repair may still have recorded data risk for this run.
+        return readManagedHandoffUpdateRun(params.runId);
+      });
+      assertCurrent();
+      assertRestartSafe(repaired);
+    }
+    return { recovery: params.original, status: "rolled-back" as const, warning };
   }
   const candidate = publication?.descriptor.candidate;
+  // A release switch has no journal; the run record names the release it intended.
+  const release = run.origin.packageRelease;
   const expected = candidate
     ? candidate.identity === identity
       ? candidate
       : undefined
-    : params.original.serviceRestartSafe && params.original.buildId && run.after.buildId
-      ? run.after
-      : undefined;
+    : release && resolveUpdateInstallRoot(release.slot) === root
+      ? release.to.identity === identity
+        ? { version: release.to.version, buildId: release.to.build }
+        : undefined
+      : params.original.serviceRestartSafe && params.original.buildId && run.after.buildId
+        ? run.after
+        : undefined;
   if (
     !expected?.version ||
     installed.version !== expected.version ||
@@ -127,17 +146,39 @@ export async function recoverInterruptedManagedUpdate(params: {
   ) {
     throw new Error("Installed runtime does not match this update's recorded candidate");
   }
-  const recovery = (await params.finalize())?.verification.recovery;
+  const repaired = await params.finalize();
   assertCurrent();
-  if (
-    packageActivationIdentity(root, true) !== identity ||
-    (recovery?.serviceRestartSafe === false && recovery.dataAtRisk)
-  ) {
-    throw new Error(
-      "Installed generation changed or data risk was recorded during post-core repair",
-    );
+  assertRestartSafe(repaired);
+  if (installedIdentity() !== identity) {
+    throw new Error("Installed generation changed during post-core repair");
   }
   await publicationOwner?.retireVerified();
   assertCurrent();
   return { recovery: installed, status: "succeeded" as const };
+}
+
+function assertRestartSafe(run: UpdateRunRecord | undefined) {
+  // Post-core repair records a receipt on its own run when it verified a mark, and it
+  // refuses for a mark on any recent run, so any unverified mark keeps the Gateway down.
+  // Repair may have advanced the schema past this helper's reader; then only this run's
+  // own record can be judged, and its mark still stands.
+  let history: UpdateRunRecord[] | undefined;
+  try {
+    history = withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
+      allowNativeRead: true,
+    });
+  } catch {
+    history = undefined;
+  }
+  assertRunRestartSafe(
+    history ? listUnverifiedDataAtRisk(history)[0]?.mark : readRecordedDataAtRisk(run),
+  );
+}
+
+function assertRunRestartSafe(dataAtRisk: string | undefined) {
+  if (dataAtRisk) {
+    throw new Error(
+      `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,
+    );
+  }
 }

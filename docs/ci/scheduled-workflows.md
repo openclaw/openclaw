@@ -59,26 +59,24 @@ Normal CI no longer appends a second, partial extension inventory. Inspect both
 `CI` and `Plugin Prerelease` for hourly coverage; Full Release Validation pins
 both existing children to its exact target.
 
-Full Release Validation and ordinary manual CI retain `validation_tier=full`
+Full Release Validation and ordinary manual CI retain the full validation tier
 by default. They additionally run release-only runtime/UI tests,
-minimum-Node compatibility, iOS screenshots, native Release builds, Android
-packaging, and all six Docker seed scenarios. Hourly iOS retains
-`ios-build (tests)`: Swift lint, Rust tests, voice cleanup, native Access, and
-the complete focused app/notification lifecycle inventory. Managed attachment
-UI/export proof, Watch operation simulator suites, and Watch delivery UI proof
-run only in full-tier manual/release validation, with every case and assertion
-retained there. Android retains phone/Wear tests and lint. The Docker survivor uses the existing main smoke package,
-including runtime, assets, public SDK declarations, and tarball integrity.
-The manual SDK API diff report stays manual-only: a scheduled tip has no change
-range to compare.
+minimum-Node compatibility, macOS Release builds, and all six Docker seed
+scenarios. They do not qualify candidate-source iOS or Android apps. Mobile
+release E2E belongs to the dedicated store-release workflows, not Gateway CI.
+Hourly and explicit main-tier iOS retain the tests phase: Swift lint,
+Rust tests, voice cleanup, native Access, and the complete focused
+app/notification lifecycle inventory. Android retains phone/Wear tests and lint.
+The Docker survivor uses the existing main smoke package, including runtime,
+assets, public SDK declarations, and tarball integrity. The manual SDK API diff
+report stays manual-only: a scheduled tip has no change range to compare.
 
 Main-tier iOS builds target the selected simulator's native architecture and
 disable compiler indexing, as PR smoke already does. Voice and lifecycle tests
 disable Xcode's verbose diagnostic collection while retaining their logs and
-xcresult bundles. Full-tier manual/release validation keeps universal simulator
-builds and failure diagnostics. This removes duplicate architecture work and
-diagnostic stalls observed in 76–94-minute hourly jobs; it does not establish a
-new completion bound.
+xcresult bundles. This removes duplicate architecture work and diagnostic
+stalls observed in 76–94-minute hourly jobs; it does not establish a new
+completion bound.
 
 Scheduled CI uses automatic-main [runner placement](/ci/runners), including
 hybrid placement on the first attempt when configured. Native runner labels,
@@ -117,6 +115,8 @@ on the same branch within 24 hours and the complete input diff is unchanged.
 Skipped jobs cannot advance the comparison base. Missing proof, incomplete
 diffs, or API errors request fresh validation. Each decision reports its reason.
 Both workflows retain their PR scopes and refresh proof daily for dependency drift.
+Plugin Init Scaffold Validation uses GitHub-hosted Ubuntu 24.04 independently of
+restricted Boat admission.
 
 Sandbox Common Smoke runs daily at 05:23 UTC and retains PR and manual runs.
 Plugin NPM Release runs its nonpublishing metadata and unpublished-package pack
@@ -142,9 +142,8 @@ For an immediate main-tier CI run, choose **CI → Run workflow → main**, sele
 gh workflow run ci.yml --ref main -f validation_tier=main -f include_android=true
 ```
 
-The individual standalone workflows can also be run manually. Direct `CI`
-dispatches and release-validation children retain their existing inputs and
-behavior; set `include_android=true` when requesting complete platform coverage.
+The individual standalone workflows can also be run manually. Direct CI dispatches use Gateway qualification by default; select the main
+validation tier and include Android when requesting ordinary main-tier app coverage.
 To measure hourly coverage on a development branch, dispatch `ci.yml` on that
 branch with `validation_tier=main` and `include_android=true`. The main tier
 requires the workflow and checkout to share one revision; it cannot qualify a
@@ -152,7 +151,7 @@ frozen release target or replace an exact-head PR release gate.
 
 ### What stays on pushes
 
-CodeQL retains all seven main-push security categories. CI retains
+CodeQL batches main security scans hourly. CI retains
 `security-fast` (committed private keys and changed-workflow security auditing)
 on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
 production dependency auditing; only release dispatches run it, as a warning.
@@ -313,33 +312,36 @@ Before tolerating a partial Kova verdict, the report gate requires aggregate RSS
 
 OpenClaw-native source checks run in the separate `source_performance` job, in parallel with the Kova lanes after `resolve_target`: gateway boot timing and memory across default, skipped-channel, internal-hook, and fifty-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance check. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The publisher includes these source artifacts in the `mock-provider` report bundle, with the Markdown summary at `source/index.md` and raw JSON beside it.
 
-Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints a short-lived ClawSweeper GitHub App token scoped only to `openclaw/clawgrit-reports` contents and passes it only to the Git push step. It commits `report.json`, `report.md`, `index.md`, source-check artifacts, and bundle metadata/checksums under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
+Every lane uploads its complete GitHub artifact, including CPU, heap, trace, and compressed diagnostic bundles. A separate publisher job downloads and validates those artifacts, then mints short-lived ClawSweeper GitHub App tokens scoped to contents and pull-request operations in `openclaw/clawgrit-reports`. It opens a run-specific pull request and requests a squash merge under the repository's branch rules. Reports become available on `main` after the merge: `report.json`, `report.md`, `index.md`, source-check artifacts, and bundle metadata/checksums live under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`; the full diagnostic archive stays in the linked Actions artifact. The publisher rejects any report file over 50 MB before attempting a push. The current tested-ref pointer is `openclaw-performance/<tested-ref>/latest-<lane>.json`; publishers for each lane queue across workflow runs so their report PRs do not race on this pointer. Scheduled runs and `profile=release` dispatches fail if app-token creation or report publication fails. Manual non-release dispatches keep publication advisory and retain the GitHub artifacts when authentication or publishing fails. The previous source baseline is fetched anonymously from the public reports repository, so a successful baseline fetch does not prove publisher authentication.
 
 All explicit Performance workflow Git commands use the pinned Git lifecycle owner,
 prepared in `RUNNER_TEMP` before each job's selected checkout. Target resolution,
 Kova revision/install Git, source revision and baseline Git, and local publisher
-operations remain unbounded. Only the initial reports fetch, each push, and each
-reconciliation fetch have a 120-second deadline. The owner drains the entire Git
-process tree before reads, checkout reuse, artifact consumers, outputs, or retry;
-exclusive reports fetches reclaim only invocation-created locks after extinction.
+operations remain unbounded. The initial reports fetch has a 120-second deadline;
+the shared PR publisher bounds its base fetches at 120 seconds and branch pushes
+at 60 seconds. The owner drains the entire Git process tree before reads,
+checkout reuse, artifact consumers, outputs, or retry; exclusive reports fetches
+reclaim only invocation-created locks after extinction.
 
-Report preparation and all fetches are anonymous. The App token is created only
-after a new report is prepared, removed from the environment immediately, and
-passed as a masked Basic header to push commands alone; it never enters the remote
-URL or repository config. A verified existing report succeeds before token creation.
+Report preparation fetches are anonymous. App tokens are created only after a
+new report is prepared. The shared publisher temporarily stores a masked Basic
+authorization header in the isolated reports checkout's local Git config for
+fetches and pushes, then removes it on completion. The pull-request token is
+used for GitHub API operations. Neither token enters the remote URL. A verified
+existing report succeeds before token creation.
 Only a successful empty `ls-tree` lookup means a baseline or report is absent;
 repository/read failures are terminal. Malformed baseline pointer JSON remains
 advisory, as does an ordinary baseline fetch failure after verified cleanup.
 
-Publication allows exactly five pushes. Every failed push, including the fifth,
-gets a 2/4/6/8/10-second backoff followed by one anonymous reconciliation fetch.
-A fetched remote report proves success even after the fifth ambiguous push; direct
-push success needs no fetch. Otherwise, attempts 1–4 replay the report commit on
-detached `FETCH_HEAD` with `cherry-pick -X theirs`, preserving concurrent unique
-reports while the current writer wins the latest pointer. There is no fifth-attempt
-replay. Ordinary fetch failures warn and retry on attempts 1–4. Only typed Git
-failure or timeout after verified cleanup permits recovery; owner setup, census,
-cleanup failure, and cancellation stop before fallback, retry, replay, or success.
+The shared publisher pushes a run-specific branch under an exact-head lease.
+After a push timeout, it checks whether the remote accepted that commit and
+retries once only if the remote head is unchanged. It reconciles the pull request
+against the exact published head before requesting a squash merge. Changed
+report paths fail publication instead of overwriting another writer's output;
+per-lane job concurrency prevents competing report publishers from preparing
+against the same latest pointer. Git owner failure and cancellation stop before
+recovery or success.
+
 Full Release Validation continues to disable the publisher entirely and retains
 performance evidence only as workflow artifacts.
 
@@ -427,6 +429,61 @@ ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
 
+For the prepared Node-cache pair mode, the runner snapshots every regular file's
+bytes and permissions and every internal symlink target before and after the
+schedule. Only the workload root's Git metadata is excluded; ignored generated
+files and installed dependencies remain covered. Dangling or escaping symlinks
+and special files are rejected. Both scans use the aggregate deadline and sit
+outside individual pair measurements.
+
+`prepared-inventory.json` retains the initial inventory; `prepared-integrity.json`
+binds its digest and comparison scope and records complete added, removed, and
+changed metadata. Changed or unverified input prevents successful analysis.
+After uncertain child settlement the runner does not inspect the workload.
+This is a pre/post integrity boundary: it cannot detect a mutation that is fully
+reverted between snapshots and does not replace preparation or cache-acceptance
+qualification.
+
+#### Node compile-cache diagnostic qualification
+
+Before using native cache diagnostics to admit a benchmark, qualify their meaning
+on Linux with Node **24.22.1**:
+
+```bash
+node scripts/vitest-pair-benchmark.mts \
+  --mode node-cache-diagnostics \
+  --output /tmp/node-cache-diagnostics \
+  --run-attempt 1
+```
+
+For a hosted check, select the branch containing the helper and bind `target_ref`
+to that branch's exact commit:
+
+```bash
+gh workflow run openclaw-performance.yml --ref <branch> \
+  -f mode=node-cache-diagnostics \
+  -f target_ref=<exact-40-character-sha> \
+  -f publish_reports=false
+```
+
+This starts one five-minute Ubuntu job with the pinned Node runtime. It does not
+install packages, use provider secrets, or start the other performance jobs.
+The workflow uploads the diagnostic output even when qualification fails.
+
+The output directory must not exist. This runs a tiny ESM fixture with caching
+disabled, an empty cache, a restored seed, and changed source at the same path.
+It requires a successful native cache read and explicit V8 acceptance for the
+seeded case. Incomplete, duplicate, interleaved, or contradictory source records
+fail qualification. The grammar follows Node's pinned
+[cache reader and acceptance result](https://github.com/nodejs/node/blob/v24.22.1/src/compile_cache.cc)
+and [ESM cache consumption](https://github.com/nodejs/node/blob/v24.22.1/src/module_wrap.cc).
+
+The result contains runtime identities, source and log digests, four control
+observations, complete logs, and a terminal manifest. Owned scratch is removed
+after child processes settle; uncertain child ownership retains it. This is
+synthetic diagnostic proof. It does not establish cache acceptance for an
+OpenClaw workload, run paired measurements, or change the scheduled workflow.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions
@@ -479,7 +536,7 @@ QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic pa
 
 - The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out mock parity plus live Matrix, Telegram, Discord, WhatsApp, and Slack jobs. Live jobs use the `qa-live-shared` environment; Telegram, Discord, WhatsApp, and Slack use Convex leases, while Matrix provisions disposable local credentials.
 - Manual and scheduled aggregate runs retain the default `all` concurrency scope. Trusted release calls use separate `matrix` and `buzz` scopes so those lanes can run together for one target SHA; Matrix calls for the same SHA still serialize, while Buzz calls serialize across SHAs because they share pooled credentials.
-- Release Matrix catalog validation runs on a 16-vCPU Blacksmith runner with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
+- Release Matrix catalog validation uses GitHub-hosted Ubuntu in `github` and `boat` modes and the 4-vCPU Blacksmith class otherwise, with a 90-minute job budget. Changes to that timeout, runner size, or concurrency require a matching workflow guard and exact-candidate release proof.
 - `QA Profile Evidence` balances taxonomy category groups across eight isolated jobs, keeps non-isolating live channels on one shard, then asks QA Lab to merge their validated evidence into one attested `qa-evidence.json`. A timed-out or missing shard always fails aggregation; `allow_failures` applies only when every shard completed and produced valid evidence. Direct `Maturity scorecard` dispatches default `allow_failures` on so incomplete evidence can still render a diagnostic docs artifact. A terminal result gate runs after optional generated-PR publication and fails the run when any scenario failed or remained blocked; reusable release calls remain strict by default.
 
 Scheduled, manual, and release Matrix checks use the fixed-response mock provider so the live transport contract is isolated from model latency and normal provider-plugin startup. Telegram release checks use the same fixed-response model setup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
@@ -488,11 +545,19 @@ Scheduled, manual, and release Matrix checks use the fixed-response mock provide
 
 For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
+## OpenGrep
+
+OpenGrep PR-diff and manual full scans run on GitHub-hosted Ubuntu 24.04.
+
 ## CodeQL
 
-The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, `main` push, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
+The `CodeQL` workflow is a narrow first-pass security scanner. Hourly, manual, and non-draft pull request runs scan Actions workflow code and the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
-The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
+Main scans run at minute 23 of every hour, separately from CI. An active scheduled scan finishes; a newer hour can replace pending work. Main pushes do not start another scan. Manual dispatch always runs all seven categories and stays independent of the schedule.
+
+Scheduled admission compares accumulated changes separately for each of the seven categories, against that category's last successful scan. Inputs come from its CodeQL profile's extraction paths; shared workflow, admission, and query configuration changes refresh every category. Supported `paths-ignore` patterns exclude files that CodeQL does not extract; unknown pattern syntax retains the scan. The seven decisions share run, job, and tree metadata within one admission step, while keeping independent successful baselines. Changes limited to comments, blank lines, or standalone `-whitespace` rules in regular `.gitattributes` files do not invalidate extraction; other attribute changes remain shared inputs. When GitHub caps the changed-file list, admission uses an exact Git tree comparison before authorizing a skip. Unchanged inputs skip that category; missing proof, unsupported profiles, incomplete comparisons, and lookup failures run it. Proof older than 24 hours triggers a fresh scan even without source changes. Skipped scans never advance the comparison baseline.
+
+The pull request guard stays light: it starts for root or nested `.gitattributes` changes and changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, `scripts`, `src`, or process-owning bundled plugin runtime paths, and it runs the same high-confidence security matrix as the scheduled workflow. Attribute changes select all seven categories because checkout transformations can affect either language. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
 
@@ -708,6 +773,7 @@ Treat GitHub titles, comments, bodies, review text, branch names, and commit mes
 ### Barnacle inactivity lifecycle
 
 The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
+It uses GitHub-hosted Ubuntu so scheduled runs do not depend on restricted Boat admission.
 `scripts/github/stale-lifecycle.mjs` owns issues and PRs, including manual backfills.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.

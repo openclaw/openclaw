@@ -8,7 +8,10 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../infra/sqlite-database-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -16,11 +19,6 @@ import {
   type OpenClawStateAsyncLeaseContext,
 } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceLocator,
-  TranscriptUtterance,
-} from "./provider-types.js";
 import {
   isCaseSensitiveDirectory,
   legacyTranscriptSessionSelector,
@@ -52,8 +50,13 @@ import {
 import type { TranscriptReadRequests } from "./store-worker-contract.js";
 import type { TranscriptAppendScheduler } from "./store-worker.types.js";
 import type { TranscriptWriteOperations } from "./store-write.worker-contract.js";
-import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceLocator,
+  TranscriptUtterance,
+  TranscriptsSummary,
+} from "./types.js";
 
 export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
@@ -323,7 +326,9 @@ export class TranscriptsStore {
     };
     const operation = createTranscriptStoreOperation(this.databaseOptions);
     operation.assertCurrent();
-    const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
+    const writeToken = getSqliteDatabaseAdmissionIdentityForPath(operation.databaseOptions.path)
+      ? readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path)
+      : undefined;
     const key = JSON.stringify([
       operation.databaseOptions.path,
       operation.databaseOptions.readOnly,

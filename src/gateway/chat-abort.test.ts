@@ -42,8 +42,6 @@ import {
   abortChatRunById,
   abortChatRunsForProvider,
   registerChatAbortController,
-  resolveAgentRunExpiresAtMs,
-  resolveChatRunExpiresAtMs,
   type ChatAbortOps,
   updateChatRunProvider,
 } from "./chat-abort.js";
@@ -246,35 +244,6 @@ it.each([
 );
 
 describe("registerChatAbortController", () => {
-  it("bounds default and agent run expiry calculations to valid Date timestamps", async () => {
-    expect(resolveChatRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
-    expect(resolveChatRunExpiresAtMs({ now: 8_640_000_000_000_000, timeoutMs: 60_000 })).toBe(0);
-    expect(resolveAgentRunExpiresAtMs({ now: Number.NaN, timeoutMs: 60_000 })).toBe(0);
-  });
-
-  it("records hidden/internal visibility for agent registrations", async () => {
-    rpcSourceTesting.clear();
-    const registration = registerChatAbortController({
-      target: captureSessionTarget({
-        storeScope: "/synthetic/chat-registration",
-        sessionKey: "main",
-        incarnation: "sess-1",
-      }),
-      runId: "run-internal-agent",
-      sessionId: "sess-1",
-      sessionKey: "main",
-      timeoutMs: 60_000,
-      controlUiVisible: false,
-      kind: "agent",
-    });
-
-    expect(registration.entry?.adapter).toMatchObject({
-      controlUiVisible: false,
-      kind: "agent",
-    });
-    expect(rpcSourceTesting.get("run-internal-agent")?.adapter.controlUiVisible).toBe(false);
-  });
-
   it("adopts a reserved source without allocating a second mailbox sequence", async () => {
     rpcSourceTesting.clear();
     const target = captureSessionTarget({

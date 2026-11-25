@@ -1,22 +1,29 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
+import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
+import { readSessionQueuedInputPage } from "../src/config/sessions/session-pending-input-history.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
+import { setUserProfileRole } from "../src/state/user-profile-writes.worker.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
+  connectProxiedRestartOperator,
   connectRestartClient,
   readRestartSession,
   restartEnv,
@@ -43,7 +50,7 @@ const childMarker = (cycle: number) => `RESTART_CHILD_${cycle}`;
 const queued = (cycle: number, ordinal: number) => `QUEUED_BEFORE_RESTART_${cycle}_${ordinal}`;
 const LITERAL_QUEUED_COMMAND = "/stop";
 const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
-const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
+const CRASH_QUEUED = "QUEUED_BEFORE_RESTART_2_0";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
 
@@ -88,13 +95,16 @@ async function providerFixture(signal: AbortSignal) {
   const calls: Array<{
     cycle: number;
     name: Case | "child";
+    input: string;
     current: string;
     resumeInput: boolean;
     ordinal: number;
   }> = [];
-  const summaries: Array<{ cycle: number; ordinal: number }> = [];
+  const summaries: Array<{ cycle: number; name: Case; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
+  const releasedResumes = new Set<number>();
+  const callbacks = new Map<string, number>();
   let finalizer: ServerResponse | undefined;
   let finalizerAdmission: unknown;
   let ordinal = 0;
@@ -123,6 +133,7 @@ async function providerFixture(signal: AbortSignal) {
           }
           if (request.url?.startsWith("/tool/") || request.url === "/timer") {
             gate(request.url).resolve();
+            callbacks.set(request.url, (callbacks.get(request.url) ?? 0) + 1);
             response.writeHead(204).end();
             return;
           }
@@ -145,12 +156,17 @@ async function providerFixture(signal: AbortSignal) {
             }
           };
           const tools = restartToolNames(body);
-          if (JSON.stringify(body).includes("You are a context summarization assistant.")) {
-            const cycle = Number(/RESTART_CASE_(\d+)_compact/.exec(input)?.[1]);
+          // A warm summary reuses the turn's own prompt and history and appends the checkpoint
+          // instruction; the cold summarizer sends the same instruction with its own prompt.
+          if (JSON.stringify(body).includes("Create a structured context checkpoint summary")) {
+            const match = /RESTART_CASE_(\d+)_(\w+)/.exec(input);
+            const name = CASES.find((candidate) => candidate === match?.[2]);
+            assert(name, `Unexpected synthetic summary input: ${input}`);
+            const cycle = Number(match?.[1]);
             expect(Number.isFinite(cycle)).toBe(true);
-            summaries.push({ cycle, ordinal: requestOrdinal });
+            summaries.push({ cycle, name, ordinal: requestOrdinal });
             text(
-              `## Goal\nContinue ${marker(cycle, "compact")}.\n## Progress\nThe warmup finished. Check current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
+              `## Goal\nContinue ${marker(cycle, name)}.\n## Progress\nCheck current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
             );
             return;
           }
@@ -171,6 +187,7 @@ async function providerFixture(signal: AbortSignal) {
           calls.push({
             cycle,
             name,
+            input,
             current,
             resumeInput: hasNewResumeInput(body),
             ordinal: requestOrdinal,
@@ -200,15 +217,20 @@ async function providerFixture(signal: AbortSignal) {
           };
           if (restarting) {
             if (hasNewResumeInput(body)) {
-              gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
-                heldResumes.set(cycle, { response, ordinal: requestOrdinal });
-                return;
-              }
-              if (name === "compact" || name === "tool") {
-                issued.add(`gateway:${cycle}:${name}`);
-                tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
-                return;
+                // Compaction can replay this turn after the test releases its first request.
+                if (!releasedResumes.has(cycle)) {
+                  heldResumes.set(cycle, { response, ordinal: requestOrdinal });
+                  gate(`resume:${cycle}:${name}`).resolve();
+                  return;
+                }
+              } else {
+                gate(`resume:${cycle}:${name}`).resolve();
+                if (name === "compact" || name === "tool") {
+                  issued.add(`gateway:${cycle}:${name}`);
+                  tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
+                  return;
+                }
               }
               text(`RESUMED_${cycle}_${name}`);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
@@ -288,6 +310,10 @@ async function providerFixture(signal: AbortSignal) {
             );
             return;
           }
+          if (name === "parent") {
+            tool("sessions_yield", {});
+            return;
+          }
           text(`FINISHED_${cycle}_${name}`);
         },
         { ignoreAborted: true },
@@ -305,9 +331,11 @@ async function providerFixture(signal: AbortSignal) {
     },
     calls,
     summaries,
+    callbacks: (url: string) => callbacks.get(url) ?? 0,
     failed: failed.promise,
     wait: (name: string) => withinTest(Promise.race([gate(name).promise, failed.promise]), signal),
     restart: () => {
+      releasedResumes.clear();
       restarting = true;
     },
     prepare: () => {
@@ -316,6 +344,7 @@ async function providerFixture(signal: AbortSignal) {
     release: (cycle: number) => {
       const held = heldResumes.get(cycle);
       assert(held, "The resumed stream was never admitted");
+      releasedResumes.add(cycle);
       writeOpenAiResponsesText(held.response, {
         text: `RESUMED_${cycle}_stream`,
         messageId: `msg_${held.ordinal}`,
@@ -334,9 +363,11 @@ async function providerFixture(signal: AbortSignal) {
 }
 
 it.skipIf(process.platform === "win32")(
-  "resumes a persisted mid-turn main session exactly once after SIGKILL",
-  { timeout: 120_000 },
-  async ({ signal }) => {
+  "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const proofStartedAt = performance.now();
+    const elapsedMs: Record<string, number> = {};
     const provider = await providerFixture(signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     const instance = await createOpenClawTestInstance({
@@ -345,12 +376,108 @@ it.skipIf(process.platform === "win32")(
       config: restartResumeConfig(model),
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
+    let phase = "initial startup";
+    onTestFailed(() => {
+      process.stderr.write(
+        `restart-resume failed during ${phase}; elapsedMs=${JSON.stringify(elapsedMs)}\n${instance.logs()}\n`,
+      );
+    });
+    const partialKey = key(1, "stream");
+    const pluginDir = instance.state.path("held-restart-finalizer");
+    await writeRestartPlugin(
+      pluginDir,
+      {
+        id: "held-restart-finalizer",
+        activation: { onStartup: true },
+        configSchema: { type: "object", properties: {} },
+      },
+      `export default { id: "held-restart-finalizer", register(api) {
+        api.on("agent_end", async (event, ctx) => {
+          if (!event.success && ctx.sessionKey === ${JSON.stringify(partialKey)})
+            await fetch(${JSON.stringify(provider.finalizerUrl)}, { method: "POST", body: "{}" });
+        });
+      } };`,
+    );
+    await instance.state.writeConfig({
+      ...asRecord(JSON.parse(await readFile(instance.configPath, "utf8"))),
+      plugins: {
+        enabled: true,
+        load: { paths: [pluginDir] },
+        allow: ["held-restart-finalizer", "openai"],
+        slots: { memory: "none" },
+        entries: {
+          "held-restart-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+        },
+      },
+    });
     let client: GatewayClient | undefined;
     const sessionKey = key(0, "stream");
+    const staleKey = key(9, "idle");
+    const unmarkedKey = key(10, "idle");
+    const staleStartedAt = Date.now() - 24 * 60 * 60_000;
+    const history = (targetKey: string) =>
+      client!.request<{
+        messages: unknown[];
+        sessionInfo: { hasActiveRun: boolean };
+      }>("chat.history", { sessionKey: targetKey });
+    const waitFinal = (targetKey: string, text: string) =>
+      vi.waitFor(
+        async () => {
+          const result = await history(targetKey);
+          expect(JSON.stringify(result.messages)).toContain(text);
+          expect(result.sessionInfo.hasActiveRun).toBe(false);
+        },
+        { timeout: 15_000 },
+      );
+    const expectSettled = (targetKey: string, runId: string) => {
+      const entry = readRestartSession(instance.state.agentDir(), targetKey);
+      expect(entry).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+      expect(entry?.lifecycleRunId).toBeUndefined();
+    };
+    const seedUnfinished = async (targetKey: string, startedAt: number) => {
+      const runId = randomUUID();
+      const scope = {
+        agentId: "main",
+        env: instance.env,
+        storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: instance.env }),
+      };
+      const before = await readSessionEntrySummariesInWorker(scope);
+      const entry = before.find((row) => row.sessionKey === targetKey)?.entry;
+      assert(entry, "Synthetic session must already exist");
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: targetKey },
+        {
+          ...entry,
+          sessionId: entry.sessionId,
+          lifecycleRunId: runId,
+          activeWriterRunId: runId,
+          lastRunId: undefined,
+          startedAt,
+          updatedAt: Date.now(),
+          status: undefined,
+          endedAt: undefined,
+          abortedLastRun: undefined,
+          resumeAfterRestart: undefined,
+        },
+      );
+      const summaries = await readSessionEntrySummariesInWorker(scope);
+      const seeded = summaries.find((row) => row.sessionKey === targetKey)?.entry;
+      expect(seeded).toMatchObject({ lifecycleRunId: runId, startedAt });
+      expect(seeded?.status).toBeUndefined();
+      return runId;
+    };
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        elapsedMs.firstBootReady = Math.round(performance.now() - proofStartedAt);
+        await client.request("sessions.create", { key: staleKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: staleKey,
+          message: marker(9, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(staleKey, "FINISHED_9_idle");
         await client.request("sessions.create", { key: sessionKey, agentId: "other" });
         await client.request("chat.send", {
           sessionKey,
@@ -364,6 +491,8 @@ it.skipIf(process.platform === "win32")(
         const interrupted = readRestartSession(instance.state.agentDir("other"), sessionKey);
         expect(interrupted?.lifecycleRunId).toEqual(expect.any(String));
         expect(interrupted?.resumeAfterRestart).toBeUndefined();
+        // Historical incomplete projections can be touched recently without belonging to this boot.
+        const staleRun = await seedUnfinished(staleKey, staleStartedAt);
         provider.restart();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
@@ -376,24 +505,685 @@ it.skipIf(process.platform === "win32")(
           { timeout: 15_000 },
         );
         provider.release(0);
+        await waitFinal(sessionKey, "RESUMED_0_stream");
+        elapsedMs.crashResumeCompleted = Math.round(performance.now() - proofStartedAt);
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
+        expectSettled(staleKey, staleRun);
+        expect(provider.calls.filter((call) => call.cycle === 9 && call.resumeInput)).toEqual([]);
+
+        provider.prepare();
+        await client.request("sessions.create", { key: unmarkedKey, agentId: "main" });
+        await client.request("chat.send", {
+          sessionKey: unmarkedKey,
+          message: marker(10, "idle"),
+          idempotencyKey: randomUUID(),
+        });
+        await waitFinal(unmarkedKey, "FINISHED_10_idle");
+        await client.request("sessions.create", { key: partialKey, agentId: "other" });
+        await client.request("chat.send", {
+          sessionKey: partialKey,
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        process.kill(child.pid, "SIGTERM");
+        await awaitGateBeforeSettlement(
+          provider.wait("finalize"),
+          closed,
+          "Gateway exited before finalizer hold",
+        );
+        expect(
+          readRestartSession(instance.state.agentDir("other"), partialKey)?.resumeAfterRestart,
+        ).toBeDefined();
+        await instance.crashGateway();
+        await client.stopAndWait();
+        client = undefined;
+        {
+          using database = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), {
+            readOnly: true,
+          });
+          const boot = database
+            .prepare(
+              "SELECT completed_at_ms, outcome FROM gateway_boot_lifecycle WHERE pid = ? ORDER BY started_at_ms DESC LIMIT 1",
+            )
+            .get(child.pid);
+          expect(boot).toEqual({ completed_at_ms: null, outcome: null });
+          process.stdout.write(`[restart-resume-proof] partial-shutdown ${JSON.stringify(boot)}\n`);
+        }
+        elapsedMs.partialKill = Math.round(performance.now() - proofStartedAt);
+        provider.releaseFinalizer();
+        phase = "seeding partial-shutdown recovery";
+        const unmarkedStartedAt = readRestartSession(
+          instance.state.agentDir(),
+          unmarkedKey,
+        )?.startedAt;
+        assert(typeof unmarkedStartedAt === "number");
+        // Partial marking must not hide unfinished work from this predecessor in another store.
+        const olderPartialRun = await seedUnfinished(staleKey, staleStartedAt);
+        await seedUnfinished(unmarkedKey, unmarkedStartedAt);
+        provider.restart();
+        phase = "partial-shutdown startup";
+        await instance.startGateway();
+        phase = "partial-shutdown connect";
+        client = await connectRestartClient(instance, {}, signal);
+        phase = "partial-shutdown resume provider admission";
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        phase = "partial-shutdown final reply";
+        await waitFinal(partialKey, "RESUMED_1_stream");
+        await waitFinal(unmarkedKey, "RESUMED_10_idle");
+        elapsedMs.thirdResumeCompleted = Math.round(performance.now() - proofStartedAt);
+        phase = "partial-shutdown history and settlement";
+        expect(JSON.stringify((await history(staleKey)).messages)).not.toContain(RESUME);
+        expect(
+          provider.calls
+            .filter((call) => call.resumeInput)
+            .map(({ cycle, name }) => ({ cycle, name }))
+            .toSorted((left, right) => left.cycle - right.cycle),
+        ).toEqual([
+          { cycle: 0, name: "stream" },
+          { cycle: 1, name: "stream" },
+          { cycle: 10, name: "idle" },
+        ]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        expectSettled(staleKey, olderPartialRun);
+        process.stdout.write(`[restart-resume-proof] elapsedMs=${JSON.stringify(elapsedMs)}\n`);
+      },
+      () => client?.stopAndWait(),
+      provider.releaseFinalizer,
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "leaves interrupted dashboard automation with cron while resuming operator work",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "restart-automation-owner",
+      signal,
+      config: { ...restartResumeConfig(model), cron: { enabled: true } },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CRON: "0" },
+    });
+    let client: Awaited<ReturnType<typeof connectRestartClient>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: key(0, "stream"), agentId: "other" });
+        await client.request("cron.add", {
+          agentId: "other",
+          name: "Restart automation owner",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 2_000 },
+          sessionTarget: `session:${key(0, "stream")}`,
+          wakeMode: "now",
+          idleOnly: false,
+          payload: { kind: "agentTurn", message: marker(0, "stream") },
+          delivery: { mode: "none" },
+        });
+        await provider.wait("ready:0:stream");
+        await client.request("chat.send", {
+          sessionKey: key(1, "stream"),
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
+        const beforeRestart = provider.calls.at(-1)!.ordinal;
+        provider.restart();
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        const scope = {
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+        };
+        const rows = await readSessionEntrySummariesInWorker(scope);
+        expect(
+          rows.find((row) => row.sessionKey === key(0, "stream"))?.entry.resumeAfterRestart,
+        ).toBeUndefined();
+        expect(
+          rows.find((row) => row.sessionKey === key(1, "stream"))?.entry.resumeAfterRestart,
+        ).toBeDefined();
+        await closeOpenClawAgentDatabasesAsync();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await provider.wait("resume:1:stream");
+        provider.release(1);
         await vi.waitFor(
           async () => {
-            const history = await client!.request<{
+            expect(
+              provider.calls.some((call) => call.cycle === 0 && call.ordinal > beforeRestart),
+            ).toBe(true);
+            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+              sessionKey: key(0, "stream"),
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(JSON.stringify(history.messages)).not.toContain("this run could not resume");
+          },
+          { timeout: 30_000 },
+        );
+        expect(provider.calls.filter((call) => call.resumeInput).map((call) => call.cycle)).toEqual(
+          [1],
+        );
+        expect(instance.logs()).not.toContain("Queued operator authority cannot be recovered");
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "records a visible outcome when a marked run loses requester authority before restart",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const origin = "https://revocation.restart.example.test";
+    const deniedUser = "denied@restart.example.test";
+    const healthyUser = "healthy@restart.example.test";
+    const admin = "admin@restart.example.test";
+    const scopes = ["operator.read", "operator.write"];
+    const instance = await createOpenClawTestInstance({
+      name: "restart-admission-failure",
+      signal,
+      config: {
+        ...restartResumeConfig(model),
+        gateway: {
+          // A role assignment narrows recovery only when named-role enforcement is enabled.
+          roles: {
+            default: "operator",
+            definitions: {
+              operator: {
+                scopes: ["operator.admin"],
+                agents: "*",
+                sessions: { others: "write" },
+              },
+              reader: {
+                scopes: ["operator.read"],
+                agents: "*",
+                sessions: { others: "view" },
+              },
+            },
+          },
+          mode: "local",
+          bind: "loopback",
+          trustedProxies: ["127.0.0.1", "::1"],
+          auth: {
+            mode: "trusted-proxy",
+            token: undefined,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
+            },
+            identityScopes: { [admin]: ["operator.admin"] },
+          },
+          controlUi: { enabled: false, allowedOrigins: [origin] },
+        },
+      },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    const connectAs = (user: string, requested = scopes) =>
+      connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
+    let deniedRunId: string | undefined;
+    let deniedProfileId: string | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        for (const cycle of [0, 1]) {
+          client = await connectAs(cycle === 0 ? deniedUser : healthyUser);
+          if (cycle === 0) {
+            const self = await client.call<{ profile: { id: string } }>("users.self", {});
+            deniedProfileId = self.profile.id;
+          }
+          const accepted = await client.call<{ runId: string }>("chat.send", {
+            sessionKey: key(cycle, "stream"),
+            message: marker(cycle, "stream"),
+            idempotencyKey: randomUUID(),
+          });
+          if (cycle === 0) {
+            deniedRunId = accepted.runId;
+          }
+          await provider.wait(`ready:${cycle}:stream`);
+          if (cycle === 0) {
+            await client.close();
+            client = undefined;
+          }
+        }
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(process.kill(child.pid, "SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        assert(client, "Healthy sibling client unavailable after marking");
+        await client.close();
+        client = undefined;
+        await instance.stopGateway();
+        const scope = {
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+        };
+        const rows = await readSessionEntrySummariesInWorker(scope);
+        for (const cycle of [0, 1]) {
+          expect(rows.find((row) => row.sessionKey === key(cycle, "stream"))?.entry).toHaveProperty(
+            "resumeAfterRestart",
+          );
+        }
+        const denied = rows.find((row) => row.sessionKey === key(0, "stream"))?.entry;
+        assert(denied);
+        expect(denied).toHaveProperty(
+          "resumeAfterRestart.operatorSource.snapshot.profileId",
+          deniedProfileId,
+        );
+        // Change only the captured requester, not the owner or Gateway-wide auth generation.
+        assert(deniedProfileId);
+        setUserProfileRole(deniedProfileId, "reader", { env: instance.env });
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        const started = performance.now();
+        await instance.startGateway();
+        client = await connectAs(admin, ["operator.admin"]);
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        await vi.waitFor(
+          async () => {
+            for (const cycle of [0, 1]) {
+              const history = await client!.call<{
+                messages: unknown[];
+                sessionInfo: { hasActiveRun: boolean };
+              }>("chat.history", { sessionKey: key(cycle, "stream") });
+              expect(JSON.stringify(history.messages)).toContain(
+                cycle === 0
+                  ? "The Gateway restarted, but this run could not resume."
+                  : "RESUMED_1_stream",
+              );
+              expect(history.sessionInfo.hasActiveRun).toBe(false);
+            }
+          },
+          { timeout: 15_000 },
+        );
+        expect(provider.calls.filter((call) => call.resumeInput).map((call) => call.cycle)).toEqual(
+          [1],
+        );
+        expect(instance.logs()).toContain(key(0, "stream"));
+        expect(instance.logs()).toContain(
+          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+        );
+        assert(deniedRunId);
+        expect(instance.logs()).toContain(deniedRunId);
+        expect(instance.logs()).toContain('"admissionStage":"principal"');
+        process.stdout.write(
+          `[restart-admission-proof] marked=2 resumed=1 visibleFailure=1 recoveryMs=${performance.now() - started}\n`,
+        );
+      },
+      () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "resumes a signed-in person's session and queued input on a Gateway without roles",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const origin = "https://control.restart.example.test";
+    const email = "person@restart.example.test";
+    const admin = "admin@restart.example.test";
+    const scopes = ["operator.read", "operator.write"];
+    const instance = await createOpenClawTestInstance({
+      name: "restart-untiered-person",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: {
+        ...restartResumeConfig(model),
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          trustedProxies: ["127.0.0.1", "::1"],
+          auth: {
+            mode: "trusted-proxy",
+            token: undefined,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+              deviceAutoApprove: { enabled: true, scopes },
+            },
+            identityScopes: { [admin]: ["operator.admin"] },
+          },
+          controlUi: { enabled: false, allowedOrigins: [origin] },
+        },
+      },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    const connectAs = (user: string, requested: string[]) =>
+      connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
+    const sessionKey = key(2, "stream");
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectAs(email, scopes);
+        const self = await client.call<{ profile: { id: string } }>("users.self", {});
+        expect(self.profile.id).not.toBe("gateway-owner");
+        // The first send creates the session; its accepted input alone records the source.
+        await client.call("chat.send", {
+          sessionKey,
+          message: marker(2, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:2:stream");
+        // Another person's queued input runs under that sender's own recorded source.
+        const sender = await connectAs(admin, ["operator.admin"]);
+        try {
+          await sender.call("chat.send", {
+            sessionKey,
+            message: queued(2, 1),
+            idempotencyKey: randomUUID(),
+          });
+        } finally {
+          await sender.close();
+        }
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.close();
+        client = undefined;
+        await instance.stopGateway();
+        const marked = (
+          await readSessionEntrySummariesInWorker({
+            agentId: "other",
+            env: instance.env,
+            storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          })
+        ).find((row) => row.sessionKey === sessionKey)?.entry;
+        expect(marked?.resumeAfterRestart).toBeDefined();
+        assert(marked, "Interrupted session must retain its restart marker");
+        const pending = await readSessionQueuedInputPage({
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          sessionKey,
+          sessionId: marked.sessionId,
+        });
+        expect(pending.rows.map((row) => row.message_json)).toEqual([
+          expect.stringContaining(queued(2, 1)),
+        ]);
+        // The recorded source keeps the connection's own scopes; restart grants no more.
+        expect(marked?.operatorSources?.[self.profile.id]?.scopes).toEqual(scopes);
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        await instance.startGateway();
+        client = await connectAs(email, scopes);
+        await provider.wait("resume:2:stream");
+        provider.release(2);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{
               messages: unknown[];
               sessionInfo: { hasActiveRun: boolean };
             }>("chat.history", { sessionKey });
-            expect(JSON.stringify(history.messages)).toContain("RESUMED_0_stream");
+            const text = JSON.stringify(history.messages);
+            expect(text).toContain("RESUMED_2_stream");
+            expect(text).toContain(`HANDLED_${queued(2, 1)}`);
             expect(history.sessionInfo.hasActiveRun).toBe(false);
           },
           { timeout: 15_000 },
         );
+        // A host event in the person's session runs as its principal, outside restart recovery.
+        const operator = await connectAs(admin, ["operator.admin"]);
+        try {
+          await operator.call("system-event", {
+            text: "SYSTEM_TURN_AFTER_RESTART",
+            sessionKey,
+            wake: true,
+          });
+        } finally {
+          await operator.close();
+        }
+        await vi.waitFor(
+          async () => {
+            const history = await client!.call<{ messages: unknown[] }>("chat.history", {
+              sessionKey,
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+          },
+          { timeout: 15_000 },
+        );
+        expect(instance.logs()).not.toContain("no current run authority");
+      },
+      () => client?.close(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+// An input the Gateway acknowledged is owed a turn when a graceful restart follows its ack. A
+// follow-up either queues behind the running turn, or, when the previous turn has just ended,
+// becomes its own turn and is still being admitted at SIGTERM.
+it.skipIf(process.platform === "win32").for([
+  { state: "queued behind a running turn", delayMs: 60, predecessorEnded: false },
+  { state: "admitted as its own turn", delayMs: 0, predecessorEnded: true },
+])(
+  "keeps an acknowledged follow-up $state across a graceful restart",
+  { timeout: 180_000 },
+  async ({ delayMs, predecessorEnded }, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-acked-followup-restart",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    const sessionKey = key(3, "stream");
+    const followupKey = randomUUID();
+    let client: GatewayClient | undefined;
+    const history = () =>
+      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
+        "chat.history",
+        { sessionKey, limit: 100 },
+      );
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        const first = await client.request<{ runId: string }>(
+          "chat.send",
+          { sessionKey, message: marker(3, "stream"), idempotencyKey: randomUUID() },
+          { expectFinal: false },
+        );
+        await provider.wait("ready:3:stream");
+        if (predecessorEnded) {
+          await client.request("chat.abort", { sessionKey, runId: first.runId });
+          await vi.waitFor(
+            async () => expect((await history()).sessionInfo.hasActiveRun).toBe(false),
+            { timeout: 15_000 },
+          );
+        }
+        await client.request(
+          "chat.send",
+          {
+            sessionKey,
+            message: queued(3, 1),
+            idempotencyKey: followupKey,
+            ...(predecessorEnded ? {} : { queueMode: "followup" }),
+          },
+          { expectFinal: false },
+        );
+        await delay(delayMs);
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        // Accepted rows key the request's idempotency key with a ':user' suffix.
+        const cancelled = () => {
+          using database = new DatabaseSync(
+            resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+            { readOnly: true },
+          );
+          return database
+            .prepare(
+              "SELECT idempotency_key, consumed_event_id FROM session_pending_inputs WHERE idempotency_key LIKE ? AND state = 'cancelled' AND end_cause = 'restart-unrecoverable'",
+            )
+            .all(`${followupKey}%`);
+        };
+        const callsBeforeRestart = provider.calls.length;
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        // An interrupted turn resumes; its held resume request is released when it arrives.
+        void provider
+          .wait("resume:3:stream")
+          .then(() => provider.release(3))
+          .catch(() => {});
+        await vi.waitFor(
+          async () => {
+            expect(
+              provider.calls
+                .slice(callsBeforeRestart)
+                .some((call) => call.input.includes(queued(3, 1))),
+              JSON.stringify(cancelled()),
+            ).toBe(true);
+            expect((await history()).sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 30_000 },
+        );
+        expect(cancelled()).toEqual([]);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+// A turn that started before SIGTERM has its user entry in the transcript. Restart resume
+// continues that turn; the accepted input is not replayed and its tool does not run again.
+it.skipIf(process.platform === "win32")(
+  "continues a turn stopped mid-tool-call without replaying its input",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-mid-tool-restart",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(model),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    const sessionKey = key(3, "tool");
+    const inputKey = randomUUID();
+    let client: GatewayClient | undefined;
+    const history = () =>
+      client!.request<{ messages: unknown[]; sessionInfo: { hasActiveRun: boolean } }>(
+        "chat.history",
+        { sessionKey, limit: 100 },
+      );
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request(
+          "chat.send",
+          { sessionKey, message: marker(3, "tool"), idempotencyKey: inputKey },
+          { expectFinal: false },
+        );
+        await provider.wait("/tool/3/tool");
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const closed = once(child, "close");
+        provider.restart();
+        expect(child.kill("SIGTERM")).toBe(true);
+        expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
         await client.stopAndWait();
         client = undefined;
         await instance.stopGateway();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await client.request("chat.history", { sessionKey });
-        expect(provider.calls.filter((call) => call.resumeInput)).toHaveLength(1);
+        await provider.wait("resume:3:tool");
+        await vi.waitFor(
+          async () => {
+            const { messages, sessionInfo } = await history();
+            expect(JSON.stringify(messages)).toContain("RESUMED_3_tool");
+            expect(sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 30_000 },
+        );
+        const { messages } = await history();
+        const userEntries = messages.filter(
+          (message) =>
+            isRecord(message) &&
+            message.role === "user" &&
+            JSON.stringify(message).includes(marker(3, "tool")),
+        );
+        expect(userEntries).toHaveLength(1);
+        // A replayed input would reach the model as a new turn and be answered with HANDLED_*.
+        expect(JSON.stringify(messages)).not.toContain("HANDLED_");
+        expect(provider.callbacks("/tool/3/tool")).toBe(1);
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        using database = new DatabaseSync(
+          resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          { readOnly: true },
+        );
+        expect(
+          database
+            .prepare(
+              "SELECT state, end_cause FROM session_pending_inputs WHERE idempotency_key LIKE ?",
+            )
+            .all(`${inputKey}%`),
+        ).toEqual([]);
       },
       () => client?.stopAndWait(),
       () => instance.cleanup(),
@@ -609,6 +1399,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 } else if (name !== "tool") {
                   if (name === "parent") {
                     await waitProvider(`child:${cycle}`);
+                    await waitProvider(`ready:${cycle}:${name}`);
+                    const parked = readRestartSession(
+                      instance.state.agentDir("main"),
+                      key(cycle, name),
+                      sharedStore,
+                    );
+                    assert(parked?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+                    expect(
+                      await client!.request("agent.wait", {
+                        runId: parked.lifecycleRunId,
+                        timeoutMs: 30_000,
+                      }),
+                    ).toMatchObject({ status: "ok", yielded: true });
+                    return;
                   }
                   await waitFinal(key(cycle, name), `FINISHED_${cycle}_${name}`);
                 }
@@ -720,7 +1524,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             provider.releaseFinalizer();
             expect.soft(provider.finalizerAdmission()).toEqual({
-              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              admission: "accepted",
               attempts: 1,
             });
           }
@@ -749,7 +1553,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
             cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
-          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
+          expect(
+            readSqliteCleanCloseSeal(sessionStore, await stat(sessionStore, { bigint: true })),
+          ).toBeDefined();
+          // Reservation observations cover every store and arrive after settlement.
+          const allDatabasesClosed = shutdownLogs.indexOf(
+            "restart trace: restart.close.agent-databases ",
+          );
+          expect(allDatabasesClosed, shutdownLogs).toBeGreaterThan(cleanClose);
+          expect(shutdownLogs).not.toMatch(
+            /shutdown failed in|agent-databases resources remain after grace/,
+          );
+          expect(shutdownLogs.slice(allDatabasesClosed).includes("[close-backfill-proof]")).toBe(
+            false,
+          );
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
@@ -798,8 +1615,22 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle")
+              .filter(
+                (name) =>
+                  name !== "stream" &&
+                  name !== "idle" &&
+                  name !== "background" &&
+                  name !== "parent",
+              )
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
+            // The stopped background command is reported as its own input, not as a resume.
+            ...(cases.includes("background")
+              ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
+            // A yielded parent receives its interrupted child's restored completion.
+            ...(cases.includes("parent")
+              ? [{ name: "parent" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
             { name: "stream", text: `HANDLED_${fresh(cycle)}` },
@@ -836,14 +1667,24 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             const resumes = calls.filter((call) => call.resumeInput);
             if (name === "background") {
-              expect(resumes[0]?.current).toContain(
-                "Background exec processes were stopped; rerun them if still needed.",
+              // The process registry reports the stopped command; the resume input does not.
+              expect(
+                calls.some((call) =>
+                  call.current.includes("was stopped when the Gateway shut down"),
+                ),
+              ).toBe(true);
+            }
+            if (name === "parent") {
+              const completions = calls.filter((call) =>
+                call.current.includes("status: error: Gateway stopped"),
               );
+              expect(completions).toHaveLength(1);
+              expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
             }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(
@@ -860,7 +1701,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
           expect(children.sessions[0]?.hasActiveRun).toBe(false);
           expect(["queued", "running", "interrupted"]).not.toContain(children.sessions[0]?.status);
           if (cycle === 1) {
-            const summary = provider.summaries.find((request) => request.cycle === cycle);
+            const summary = provider.summaries.find(
+              (request) => request.cycle === cycle && request.name === "compact",
+            );
             const resume = provider.calls.find(
               (request) =>
                 request.cycle === cycle && request.name === "compact" && request.resumeInput,
@@ -885,7 +1728,18 @@ it.skipIf(process.platform === "win32").for([true, false])(
         provider.release(2);
         await waitFinal(crashKey, "RESUMED_2_stream");
         await send(crashKey, AFTER_CRASH);
+        await waitFinal(crashKey, `HANDLED_${CRASH_QUEUED}`);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
+        const crashInputs = provider.calls
+          .filter((call) => call.cycle === 2 && call.name === "stream")
+          .map((call) => call.current);
+        const crashQueuedIndex = crashInputs.findIndex((input) => input.includes(CRASH_QUEUED));
+        expect(crashQueuedIndex).toBeGreaterThan(
+          crashInputs.findIndex((input) => input.includes(RESUME)),
+        );
+        expect(crashInputs.findIndex((input) => input.includes(AFTER_CRASH))).toBeGreaterThan(
+          crashQueuedIndex,
+        );
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
         ).toHaveLength(1);
@@ -914,7 +1768,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
-        expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);
+        // A replayed resume can carry the earlier queued input as compacted history.
+        expect(
+          provider.calls.filter(
+            (call) => call.cycle === 2 && !call.resumeInput && call.current.includes(CRASH_QUEUED),
+          ),
+        ).toHaveLength(1);
       },
       () => client?.stopAndWait(),
       provider.releaseFinalizer,

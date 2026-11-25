@@ -6,8 +6,10 @@ export type InlineCodeState = {
   open: boolean;
   /** Backtick run length required to close the current inline code span. */
   ticks: number;
+  /** Whether the previous chunk ended in prose with an unpaired backslash. */
+  escaped?: boolean;
   /** Inline cursor before the unfinished delimiter line, if it needs to be reclassified. */
-  beforePendingFence?: Pick<InlineCodeState, "open" | "ticks">;
+  beforePendingFence?: Pick<InlineCodeState, "open" | "ticks" | "escaped">;
 };
 
 /** Creates the carry-forward state used when scanning inline code across chunks. */
@@ -43,6 +45,8 @@ export function buildCodeSpanIndex(
   let open = initialState.open;
   let ticks = initialState.ticks;
   let openStart = open ? 0 : -1;
+  // Outside code, a backslash escapes the next backtick (CommonMark); inside code it is literal.
+  let escaped = !open && initialState.escaped === true;
 
   let i = 0;
   // The scanner emits ordered, disjoint fences and the input cursor only advances.
@@ -50,15 +54,29 @@ export function buildCodeSpanIndex(
   let fenceIndex = 0;
   while (i < text.length) {
     if (pendingStart >= 0 && i >= pendingStart && !beforePendingFence) {
-      beforePendingFence = { open, ticks };
+      beforePendingFence = { open, ticks, escaped };
     }
     const fence = fenceSpans[fenceIndex];
     if (fence && i >= fence.start) {
       i = fence.end;
       fenceIndex += 1;
+      escaped = false;
       continue;
     }
 
+    if (escaped) {
+      escaped = false;
+      // An escaped backtick is literal, and an escaped backslash cannot escape what follows.
+      if (text[i] === "`" || text[i] === "\\") {
+        i += 1;
+        continue;
+      }
+    }
+    if (text[i] === "\\" && !open) {
+      escaped = true;
+      i += 1;
+      continue;
+    }
     if (text[i] !== "`") {
       i += 1;
       continue;
@@ -94,7 +112,10 @@ export function buildCodeSpanIndex(
     inlineState: {
       open,
       ticks,
-      ...(pendingStart >= 0 ? { beforePendingFence: beforePendingFence ?? { open, ticks } } : {}),
+      ...(escaped ? { escaped } : {}),
+      ...(pendingStart >= 0
+        ? { beforePendingFence: beforePendingFence ?? { open, ticks, escaped } }
+        : {}),
     },
     fenceState: nextFenceState,
     // Each scanner emits ordered, disjoint spans; inline spans can enclose fences.

@@ -1,13 +1,19 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, Loading, Show } from "solid-js";
+import { Show } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import {
+  SettingsEmpty,
+  SettingsGroup,
+  SettingsPage,
+  SettingsSection,
+  SettingsUnavailable,
+} from "../../components/solid/settings-ui.tsx";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
@@ -18,28 +24,36 @@ import {
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
+  renderPublisherIdentity,
 } from "./overview.tsx";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
-import type { PluginDetailRead } from "./plugins-detail-reads.ts";
+import type { PluginCatalogIdentity } from "./plugins-page-model.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
+import { PluginRecommendedPrompts } from "./recommended-prompts.tsx";
 
 export type PluginCatalogDetailProps = {
   registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
   registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
+  onSelectPrompt?: (prompt: string) => void;
+  promptBusy?: boolean;
+  promptBlockedReason?: string | null;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
   message?: PluginRowMessage;
   onContinueInstall?: (request: PluginInstallRequest) => void;
   skillsSection?: JSX.Element;
   connected: boolean;
+  preview?: PluginCatalogIdentity;
   result: PluginDiscoveryDetailResult | null;
-  read: PluginDetailRead;
+  error?: string;
   backHref: string;
   onBack: () => void;
   onRetry: () => void;
   canInstall: boolean;
+  installTitle?: string;
   installBlockedReason: string | null;
   onInstall: () => void;
   iconUrls: Readonly<Record<string, string>>;
@@ -61,107 +75,165 @@ export function renderPluginReadme(readme: string | undefined): JSX.Element {
       />
     </article>
   ) : (
-    <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>
+    <SettingsGroup>
+      <SettingsEmpty message={t("pluginsPage.detailNoReadme")} />
+    </SettingsGroup>
   );
 }
 
 function CatalogDetailContent(props: {
-  value: PluginDiscoveryDetailResult;
+  identity: PluginCatalogIdentity;
   state: PluginCatalogDetailProps;
 }) {
   let installButton: HTMLButtonElement | undefined;
-  const plugin = () => props.value.plugin;
-  const detail = () => props.value.detail;
+  const catalog = () => props.identity.catalog;
+  const failed = () => props.state.error !== undefined;
+  const result = () => (failed() ? null : props.state.result);
   const installing = () =>
     Boolean(props.state.installProgress && props.state.installProgress.finishedAt === undefined);
-  const packageIcon = () =>
-    plugin().catalog.imageUrl ? props.state.iconUrls[plugin().catalog.imageUrl!] : undefined;
-  const authorIcon = () =>
-    detail().author?.imageUrl ? props.state.iconUrls[detail().author!.imageUrl!] : undefined;
+  const iconUrl = () => catalog().imageUrl;
+  const authorIconUrl = () => props.state.result?.detail.author?.imageUrl;
+  const artwork = (url?: string) => (url ? props.state.iconUrls[url] : undefined);
+  const artworkLoading = (url?: string) => Boolean(url && props.state.iconLoading?.(url));
+  const panel = () => {
+    const error = props.state.error;
+    if (error !== undefined) {
+      return <CatalogDetailError message={error} onRetry={props.state.onRetry} />;
+    }
+    const detail = result()?.detail;
+    if (!detail) {
+      return (
+        <div aria-hidden="true">
+          <CatalogDetailLoadingCards />
+        </div>
+      );
+    }
+    return renderPluginContentCapabilities({
+      contracts: detail.contracts,
+      uiCapabilities: detail.uiCapabilities,
+      skillsSection: props.state.skillsSection,
+      skills: detail.skills,
+      tools: (detail.contracts?.tools ?? []).map((name) => ({ name })),
+      mcpServers: detail.mcpServers,
+      mcpServerDetails: detail.mcpServerDetails,
+    });
+  };
   return (
     <PluginDetailShell
-      registerRemovalHeading={props.state.registerRemovalHeading}
+      registerHeading={props.state.registerRemovalHeading}
       id="plugin-catalog-detail"
-      name={plugin().catalog.name}
-      summary={plugin().catalog.summary}
+      name={catalog().name}
+      summary={catalog().summary}
       backHref={props.state.backHref}
       backLabel={t("tabs.plugins")}
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          neutralFallback
           registerIcon={props.state.registerIcon}
-          slug={plugin().id}
-          name={plugin().catalog.name}
-          iconUrl={packageIcon()}
-          authorIconUrl={authorIcon()}
-          whiteBackground={plugin().catalog.official && Boolean(packageIcon())}
-          loading={Boolean(
-            (plugin().catalog.imageUrl && props.state.iconLoading?.(plugin().catalog.imageUrl!)) ||
-            (detail().author?.imageUrl && props.state.iconLoading?.(detail().author!.imageUrl!)),
-          )}
+          slug={props.identity.id}
+          name={catalog().name}
+          iconUrl={artwork(iconUrl())}
+          authorIconUrl={artwork(authorIconUrl())}
+          whiteBackground={catalog().official && Boolean(artwork(iconUrl()))}
+          loading={artworkLoading(iconUrl()) || artworkLoading(authorIconUrl())}
         />
       }
+      rail
       titleAction={
-        <>
-          {plugin().local.action === "install" || installing() ? (
-            <ReasonedDisabledControl
-              reason={props.state.installBlockedReason}
-              descriptionTarget={() => installButton ?? null}
-            >
-              <PluginInstallAction
-                registerInstallAction={props.state.registerInstallAction}
-                onButtonRef={(element) => (installButton = element)}
-                buttonClass="btn oc-action plugin-catalog-detail__install"
-                primary
-                disabled={!props.state.canInstall}
-                busy={Boolean(props.state.busy)}
-                progress={props.state.installProgress}
-                onInstall={props.state.onInstall}
-              />
-            </ReasonedDisabledControl>
-          ) : undefined}
-          {renderPluginAskAction(
-            props.state.onAskPlugin,
-            plugin().local.action !== "install" && !installing(),
+        <Show when={result()}>
+          {(loaded) => (
+            <>
+              {renderPluginAskAction(
+                props.state.onAskPlugin,
+                loaded().plugin.local.action !== "install" && !installing(),
+              )}
+              {loaded().plugin.local.action === "install" || installing() ? (
+                <ReasonedDisabledControl
+                  reason={props.state.installBlockedReason}
+                  descriptionTarget={() => installButton ?? null}
+                >
+                  <PluginInstallAction
+                    registerInstallAction={props.state.registerInstallAction}
+                    onButtonRef={(element) => (installButton = element)}
+                    buttonClass="btn oc-action plugin-catalog-detail__install"
+                    primary
+                    title={props.state.installTitle}
+                    disabled={!props.state.canInstall}
+                    busy={Boolean(props.state.busy)}
+                    progress={props.state.installProgress}
+                    onInstall={props.state.onInstall}
+                  />
+                </ReasonedDisabledControl>
+              ) : undefined}
+            </>
           )}
-        </>
+        </Show>
       }
-      identity={renderPluginPublisher(props.value)}
-      sidebar={renderPluginMetadata(props.value)}
-      panel={
-        <>
-          {renderPluginRowMessage(props.state.message, {
-            busy: props.state.busy,
-            onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
-          })}
-          {renderPluginContentCapabilities({
-            contracts: detail().contracts,
-            uiCapabilities: detail().uiCapabilities,
-            skillsSection: props.state.skillsSection,
-            skills: detail().skills,
-            tools: (detail().contracts?.tools ?? []).map((name) => ({ name })),
-            mcpServers: detail().mcpServers,
-            mcpServerDetails: detail().mcpServerDetails,
-          })}
-        </>
+      identity={
+        props.state.result
+          ? renderPluginPublisher(props.state.result)
+          : renderPublisherIdentity({
+              handle: catalog().author,
+              catalogOfficial: catalog().official,
+            })
       }
-      readme={detail().readme ? renderPluginReadme(detail().readme) : undefined}
+      sidebar={
+        failed()
+          ? undefined
+          : renderPluginMetadata(result() ?? undefined, undefined, undefined, !result())
+      }
+      recommendations={
+        <Show when={result()}>
+          {(loaded) => (
+            <PluginRecommendedPrompts
+              id={loaded().plugin.id}
+              name={loaded().plugin.catalog.name}
+              prompts={loaded().detail.recommendedPrompts}
+              iconUrl={artwork(iconUrl())}
+              registerIcon={props.state.registerIcon}
+              busy={props.state.busy || props.state.promptBusy}
+              disabled={Boolean(props.state.promptBlockedReason)}
+              disabledReason={props.state.promptBlockedReason}
+              onSelect={props.state.onSelectPrompt}
+            />
+          )}
+        </Show>
+      }
+      notices={
+        result()
+          ? renderPluginRowMessage(props.state.message, {
+              busy: props.state.busy,
+              onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
+            })
+          : undefined
+      }
+      panel={panel()}
+      readme={result()?.detail.readme ? renderPluginReadme(result()?.detail.readme) : undefined}
     />
+  );
+}
+
+function CatalogDetailLoadingCards() {
+  return (
+    <>
+      <div class="plugin-catalog-detail__loading-card skeleton" />
+      <div class="plugin-catalog-detail__loading-card skeleton" />
+    </>
   );
 }
 
 function CatalogDetailLoading() {
   return (
     <section
-      class="plugin-catalog-detail plugin-catalog-detail--loading"
+      class="plugin-catalog-detail plugin-catalog-detail--rail plugin-catalog-detail--loading"
       aria-label={t("pluginsPage.detailLoading")}
     >
       <div class="plugin-catalog-detail__back skeleton" />
       <PluginDetailLoadingHero />
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main" aria-hidden="true">
-          <div class="plugin-catalog-detail__loading-card skeleton" />
-          <div class="plugin-catalog-detail__loading-card skeleton" />
+          <CatalogDetailLoadingCards />
         </div>
         <aside class="plugin-catalog-detail__sidebar">
           {renderPluginMetadata(undefined, undefined, undefined, true)}
@@ -171,41 +243,42 @@ function CatalogDetailLoading() {
   );
 }
 
+function CatalogDetailError(props: { message: string; onRetry: () => void }) {
+  return (
+    <InlineAlert
+      tone="danger"
+      action={
+        <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
+          {t("pluginsPage.tryAgain")}
+        </button>
+      }
+    >
+      {formatUiExternalText(props.message)}
+    </InlineAlert>
+  );
+}
+
 export function renderPluginCatalogDetail(props: PluginCatalogDetailProps): JSX.Element {
-  const source = createMemo(() => props.read);
-  const receipt = createMemo(() => source().receipt());
-  const resultId = createMemo(() => props.result?.plugin.id);
-  const read = () => source().value();
   return (
     <SettingsPage {...{ wide: true, carapace: true }}>
-      <Loading on={resultId() ?? receipt()} fallback={<CatalogDetailLoading />}>
-        <Errored
-          fallback={(error, reset) => (
-            <div class="callout danger oc-banner oc-banner-error" role="alert">
-              <span>{formatUiExternalText(formatUiError(error()))}</span>
-              <button
-                type="button"
-                class="btn btn--sm"
-                onClick={() => {
-                  props.onRetry();
-                  reset();
-                }}
-              >
-                {t("pluginsPage.tryAgain")}
-              </button>
-            </div>
-          )}
+      {!props.connected ? (
+        <SettingsSection>
+          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+        </SettingsSection>
+      ) : (
+        <Show
+          when={props.result?.plugin ?? props.preview}
+          fallback={
+            props.error === undefined ? (
+              <CatalogDetailLoading />
+            ) : (
+              <CatalogDetailError message={props.error} onRetry={props.onRetry} />
+            )
+          }
         >
-          {read()}
-          {!props.connected ? (
-            <p class="plugin-catalog-detail__empty">{t("pluginsPage.discoveryOffline")}</p>
-          ) : (
-            <Show when={props.result} fallback={<CatalogDetailLoading />}>
-              {(result) => <CatalogDetailContent value={result()} state={props} />}
-            </Show>
-          )}
-        </Errored>
-      </Loading>
+          {(identity) => <CatalogDetailContent identity={identity()} state={props} />}
+        </Show>
+      )}
     </SettingsPage>
   );
 }

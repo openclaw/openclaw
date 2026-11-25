@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntry as loadEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
-import { searchSessionTranscriptsReadOnlySync as searchTranscripts } from "../config/sessions/session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchTranscripts } from "../config/sessions/session-transcript-search.worker.js";
 import {
   readMigrationArtifactIdentity,
   moveMigrationArtifact,

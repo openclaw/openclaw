@@ -1,6 +1,9 @@
 /** Tests the direct chat type a local operator's root session records at creation. */
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import {
   agentCommand,
@@ -10,6 +13,8 @@ import {
   registerAgentCommandCompactionTestHooks,
   requireCompactionStorePath as requireStorePath,
 } from "./agent-command.compaction.test-support.js";
+import { buildCommandAttemptToolContext } from "./command/attempt-tool-context.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
 
 // Register hooks for this file, not as a cached support-module side effect.
 registerAgentCommandCompactionTestHooks();
@@ -62,4 +67,68 @@ describe("agentCommand operator direct root", () => {
 
     expect(entry.chatType).toBeUndefined();
   });
+});
+
+it("preserves the private source route from new explicit-session ingress through progress and work", async () => {
+  const { agentCommandFromIngress } = await import("./agent-command.js");
+  let exercised = false;
+  state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+    const context = buildCommandAttemptToolContext(params);
+    expect(params.sessionKey).toBe("agent:main:explicit:followthrough-ingress");
+    expect(context.messageProvider).toBe("webchat");
+    expect(params.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
+    setRuntimeConfigSnapshot(params.cfg);
+    const message = createMessageTool({
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+      agentSessionKey: params.sessionKey,
+      runSessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      currentChannelProvider: context.messageProvider,
+      sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+    });
+    const progress = await message.execute("progress", {
+      action: "send",
+      message: "synthetic progress",
+      final: false,
+    });
+    expect(progress.details).toMatchObject({
+      sourceReplySink: "internal-ui",
+      deliveryStatus: "sent",
+    });
+    const output = path.join(params.workspaceDir, "followthrough.txt");
+    await fs.writeFile(output, "synthetic work after successful progress");
+    expect(await fs.readFile(output, "utf8")).toBe("synthetic work after successful progress");
+    const final = await message.execute("complete", {
+      action: "send",
+      message: "synthetic complete",
+      final: true,
+    });
+    expect(final.details).toMatchObject({ sourceReplySink: "internal-ui", deliveryStatus: "sent" });
+    exercised = true;
+    return makeResult({
+      sessionId: params.sessionId,
+      text: "synthetic complete",
+      runner: "embedded",
+    });
+  });
+  await agentCommandFromIngress({
+    agentId: "main",
+    sessionId: "followthrough-ingress",
+    message: "synthetic followthrough",
+    model: "openai/gpt-5.5",
+    thinking: "medium",
+    timeout: "60",
+    json: true,
+    messageChannel: "webchat",
+    channel: "webchat",
+    sourceReplyDeliveryMode: "message_tool_only",
+    allowModelOverride: true,
+    cleanupBundleMcpOnRunEnd: true,
+    cleanupCliLiveSessionOnRunEnd: true,
+    oneShotCliRun: true,
+  });
+  expect(exercised).toBe(true);
 });

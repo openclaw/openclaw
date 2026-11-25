@@ -73,7 +73,10 @@ import {
   runUpdateDoctorProcess,
   withUpdateDoctorChild,
 } from "./update-command-doctor-child.js";
-import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
+import {
+  createOwedPluginStepWarning,
+  type PluginUpdateWarning,
+} from "./update-command-plugins-internals.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { validatePostPluginConfigInFreshProcess } from "./update-command-post-plugin-config-check.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
@@ -466,7 +469,8 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         ) {
           warning = {
             reason: "doctor-advisory",
-            message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}: ${message}`,
+            // The ledger truncates this message; keep the next step ahead of the output.
+            message: `Post-update plugin Doctor did not complete${exitCode == null ? "" : ` (exit ${exitCode})`}. Run \`openclaw update repair\` to retry post-update plugin repair.\n${message}`,
             guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
           };
           if (doctorStep) {
@@ -570,6 +574,7 @@ export async function completePostCorePluginUpdate(
   let entryPath: string | undefined;
   let freshConfigValidation: PostPluginConfigValidation | undefined;
   let includeOptionalInspections = false;
+  let doctorStarted = false;
   if (pluginUpdate.status !== "error") {
     try {
       entryPath = await resolveGatewayInstallEntrypoint(params.root);
@@ -587,6 +592,7 @@ export async function completePostCorePluginUpdate(
       assertCurrent();
       if (freshDoctorRequired) {
         await params.beforeDoctor?.();
+        doctorStarted = true;
         let inspectionCheckIds: string[] | null | undefined;
         const warning = await runUpdateFinalizationDoctorInFreshProcess({
           ...params,
@@ -652,18 +658,24 @@ export async function completePostCorePluginUpdate(
       const failedUpdate = params.pluginUpdate;
       const reason = String(err);
       const failureFacts = collectUpdateDoctorFailureFacts(err);
+      // Doctor's own named failure, a missing entrypoint and a Gateway that could not be parked
+      // leave the installation unverified. Any other failure around a started Doctor is owed;
+      // the config and readiness checks below still decide whether the Gateway may start.
+      const owed = doctorStarted && failureFacts.length === 0;
       pluginUpdate = {
         ...failedUpdate,
-        status: "error",
-        reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+        status: owed ? "warning" : "error",
+        ...(owed ? {} : { reason: POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON }),
         ...(failureFacts.length ? { failureFacts } : {}),
         warnings: [
           ...(failedUpdate.warnings ?? []),
-          {
-            reason,
-            message: `Post-update plugin Doctor did not complete: ${reason}`,
-            guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
-          },
+          owed
+            ? createOwedPluginStepWarning("post-plugin-doctor", err)
+            : {
+                reason,
+                message: `Post-update plugin Doctor did not complete: ${reason}`,
+                guidance: ["Run `openclaw update repair` to retry post-update plugin repair."],
+              },
         ],
       };
     }

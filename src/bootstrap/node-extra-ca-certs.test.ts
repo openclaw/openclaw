@@ -50,6 +50,7 @@ describe("Node startup Linux CA defaults", () => {
     ["/home/test/.local/share/pnpm/node", undefined],
     ["/home/test/.nvm\\versions\\node\\v22\\bin\\node", undefined],
   ] as const)("does not infer Linux CA settings for %s with NVM_DIR=%j", (execPath, NVM_DIR) => {
+    vi.spyOn(fs, "accessSync").mockImplementation(allowOnly(GENERIC_CA_BUNDLE_PATH));
     expect(
       resolveNodeStartupTlsEnvironment({
         env: { NVM_DIR },

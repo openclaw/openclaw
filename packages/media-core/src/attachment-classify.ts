@@ -177,6 +177,12 @@ export async function classifyAttachmentBytes(params: {
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
   }
+  // SQLite, ELF, and PE still have NUL pages. Text recovery below is for
+  // bytes with no magic type, including a malformed declared MIME such as "plain".
+  const magicMime = await detectMime({ buffer: params.buffer });
+  if (magicMime && magicMime === mime && attachmentClassFromMime(magicMime) === "binary") {
+    return { mime: magicMime, class: "binary" };
+  }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };

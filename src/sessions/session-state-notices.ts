@@ -20,6 +20,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import { acknowledgeSessionStateNoticesInWorker } from "./session-state-notice-acknowledgment.js";
+import { sessionStateNoticeText } from "./session-state-notice-text.js";
 
 const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 const log = createSubsystemLogger("sessions/state-notices");
@@ -79,7 +80,8 @@ const notices = resolveGlobalSingleton(
                 {
                   agentId: latest.agentId,
                   sessionKey: latest.sessionKey,
-                  source: "session",
+                  source: "session_state",
+                  replyExpectation: "optional",
                   expectedTarget: target,
                   occurrences,
                   preserveOccurrenceOnRejection: true,
@@ -143,13 +145,6 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   } catch {
     return undefined;
   }
-}
-
-// Terse on purpose: this line lands in model prompts, possibly repeatedly across
-// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
-// and the reconciliation call must be self-contained (explicit target sessionKey).
-function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
 export function enqueueSessionStateNotice(params: {

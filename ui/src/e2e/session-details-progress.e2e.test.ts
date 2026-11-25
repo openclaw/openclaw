@@ -20,6 +20,54 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "shows a divider in desktop Details with preceding content: %s",
+    async (withPeople) => {
+      await suite.withPage(
+        { colorScheme: "dark", reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const sessionKey = `agent:main:details-divider-${withPeople ? "multiple" : "single"}`;
+          const message =
+            "The revised layout is ready for review. Next, check it at a narrow width.";
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: ["progressCard.get", "progressCard.refresh"],
+            historyMessages: [{ role: "assistant", content: "Review the revised layout." }],
+            methodResponses: {
+              "progressCard.get": {
+                card: { sessionKey, revision: 1, updatedAt: Date.now(), markdown: message },
+              },
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  label: "Layout review",
+                  createdActor: withPeople ? { type: "human", id: "ada", label: "Ada" } : undefined,
+                  updatedAt: 1,
+                },
+              ]),
+            },
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const details = await openChatDetails(page);
+          const progress = details.locator("openclaw-chat-details-progress");
+          await progress.getByRole("paragraph").filter({ hasText: message }).waitFor();
+          const groups = details.locator("[data-details-group]");
+          expect(
+            await groups.evaluateAll((nodes) =>
+              nodes.map((node) => node.getAttribute("data-details-group")),
+            ),
+          ).toEqual(withPeople ? ["people"] : []);
+          const border = (element: Element) => getComputedStyle(element).borderTopWidth;
+          if (withPeople) {
+            expect(await groups.evaluate(border)).toBe("0px");
+          }
+          expect(await progress.evaluate(border)).toBe(withPeople ? "1px" : "0px");
+        },
+      );
+    },
+  );
+
   it("opens inactive split-pane Details on the first click", async () => {
     const sessionKey = "agent:main:details-first-click";
     await suite.withPage(

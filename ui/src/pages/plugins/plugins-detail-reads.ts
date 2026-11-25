@@ -2,10 +2,11 @@ import { createMemo, createSignal, type Accessor } from "solid-js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
-import { loadPluginDiscoveryDetail } from "../../lib/plugins/index.ts";
+import { loadPluginDiscoveryDetail, type PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { pluginRowKey } from "./plugin-row-message.tsx";
 import type {
   createPluginsPageState,
@@ -18,12 +19,8 @@ import type { PluginToolPreview } from "./tool-preview.tsx";
 type ReadReceipt = { result: Promise<unknown> };
 export type PluginDetailRead = { receipt: Accessor<ReadReceipt | null>; value: Accessor<null> };
 
-function createRead() {
+function createReadReceipt() {
   const [receipt, setReceipt] = createSignal<ReadReceipt | null>(null, { ownedWrite: true });
-  const value = createMemo(async () => {
-    await receipt()?.result;
-    return null;
-  });
   let retire = () => {};
   const reset = () => {
     retire();
@@ -31,7 +28,6 @@ function createRead() {
   };
   return {
     receipt,
-    value,
     reset,
     release: () => retire(),
     observe: (result: Promise<unknown>) => {
@@ -55,12 +51,20 @@ export function createPluginDetailReads(options: {
   routeData: () => PluginsRouteData | undefined;
   uninstalling: () => boolean;
   selectInstalled: (pluginId: string | null) => void;
+  findCatalogEntry: (id: string) => PluginDiscoveryEntry | undefined;
 }) {
-  const inspection = createRead();
-  const catalog = createRead();
+  const inspectionReceipt = createReadReceipt();
+  const inspection = {
+    ...inspectionReceipt,
+    value: createMemo(async () => {
+      await inspectionReceipt.receipt()?.result;
+      return null;
+    }),
+  };
+  const catalog = createReadReceipt();
   const { state, setState } = options;
   /** Local inspection owns availability; optional metadata never delays the installed controls. */
-  async function showDetails(pluginId: string | null): Promise<void> {
+  async function showDetails(pluginId: string | null, loadInspection = true): Promise<void> {
     inspection.reset();
     options.selectInstalled(pluginId);
     const plugin = state.result?.plugins.find((entry) => entry.id === pluginId);
@@ -83,7 +87,7 @@ export function createPluginDetailReads(options: {
       : null;
     setState({ detail: initial });
     const scope = gateway.capture();
-    if (!plugin?.installed || !initial || !scope || !canInspect) {
+    if (!loadInspection || !plugin?.installed || !initial || !scope || !canInspect) {
       return;
     }
     const { client } = scope;
@@ -169,24 +173,30 @@ export function createPluginDetailReads(options: {
     if (uninstalling && current?.id === id) {
       return;
     }
-    const previous = current?.id === id ? current.result : null;
+    const previous = current?.id === id ? current : null;
+    const previousResult = previous?.result;
     if (
-      previous?.detail.origin === "local" &&
-      previous.plugin.local.installed &&
+      previousResult?.detail.origin === "local" &&
+      previousResult.plugin.local.installed &&
       inventory &&
-      !inventory.plugins.some((plugin) => plugin.id === previous.plugin.local.pluginId)
+      !inventory.plugins.some((plugin) => plugin.id === previousResult.plugin.local.pluginId)
     ) {
       setState({ catalogDetail: null });
       void showDetails(null);
       context.replace("plugins", { pathname: pathForRoute("plugins", context.basePath) });
       return;
     }
-    const detail: PluginsPageCatalogDetail | null = id ? { id, result: previous } : null;
+    const scope = gateway.capture();
+    const entry = id && scope && !previous?.preview ? options.findCatalogEntry(id) : undefined;
+    // Borrow only display facts from the same selection. Local state comes from inventory/detail.
+    const preview = previous?.preview ?? (entry && { id: entry.id, catalog: entry.catalog });
+    const detail: PluginsPageCatalogDetail | null = id
+      ? { id, preview, result: previousResult ?? null }
+      : null;
     if (current?.id !== id) {
       void showDetails(null);
     }
     setState({ catalogDetail: detail });
-    const scope = gateway.capture();
     if (!detail || !scope) {
       return;
     }
@@ -207,19 +217,31 @@ export function createPluginDetailReads(options: {
       return;
     }
     void showDetails(null);
+    const isCurrent = () => gateway.isCurrent(scope) && state.catalogDetail === detail;
     try {
       const read = loadPluginDiscoveryDetail(scope.client, detail.id);
       catalog.observe(read);
       const result = await read;
-      if (gateway.isCurrent(scope) && state.catalogDetail === detail) {
-        setState({ catalogDetail: { ...detail, result } });
-        void showDetails(
-          result.plugin.local.installed ? (result.plugin.local.pluginId ?? null) : null,
+      if (isCurrent()) {
+        const local = result.plugin.local;
+        const currentInstalled = state.result?.plugins.find(
+          (plugin) => plugin.installed && plugin.catalogId === detail.id,
         );
+        if (local.installed && state.result && !currentInstalled) {
+          // Inventory may remove an identity while its older catalog response is in flight.
+          setState({ catalogDetail: null });
+          void showDetails(null);
+          context.replace("plugins", { pathname: pathForRoute("plugins", context.basePath) });
+          return;
+        }
+        setState({ catalogDetail: { ...detail, result } });
+        void showDetails(local.installed ? (currentInstalled?.id ?? local.pluginId ?? null) : null);
         clearInstallLink();
       }
-    } catch {
-      // The admitted read receipt presents this failure; keep the accepted result.
+    } catch (error) {
+      if (isCurrent()) {
+        setState({ catalogDetail: { ...detail, error: formatUiError(error) } });
+      }
     }
   }
   return { inspection, catalog, showDetails, showCatalogDetail };

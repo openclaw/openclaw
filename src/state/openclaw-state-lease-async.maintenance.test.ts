@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
@@ -189,6 +189,7 @@ function fixture(
   };
   mocks.startHeartbeat.mockImplementation((params) => {
     expect(params.startupContext).toBe(context);
+    assert(params.expiryObservation);
     params.retainCleanup?.(cleanup);
     f.started.resolve();
     if (startup) {
@@ -205,6 +206,7 @@ function fixture(
     }
     return {
       ready: f.ready.promise,
+      expiryObservation: params.expiryObservation,
       assertRunning: assertCurrent,
       verify: async () => Date.now() + params.leaseMs,
       renew: async () => Date.now() + params.leaseMs,

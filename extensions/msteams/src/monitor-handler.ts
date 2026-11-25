@@ -3,9 +3,11 @@ import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { maybeHandleMSTeamsApprovalCardSubmit } from "./approval-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { buildMSTeamsAdaptiveCardActivity } from "./message-activity.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
+import { buildMSTeamsConversationReference } from "./monitor-handler/inbound-facts.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./msteams-ingress.js";
@@ -100,6 +102,20 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
           normalizeOptionalLowercaseString(ctx.activity?.conversation?.conversationType) ??
           "personal";
         const isPersonal = conversationType === "personal";
+        if (isPersonal) {
+          // Installing the app opens the personal chat; keep it so proactive sends
+          // reach this user before they message the bot. dmPolicy gates inbound only.
+          await deps.conversationStore
+            .upsert(
+              normalizeMSTeamsConversationId(ctx.activity.conversation?.id ?? ""),
+              buildMSTeamsConversationReference(ctx.activity),
+            )
+            .catch((err: unknown) => {
+              deps.log.debug?.("failed to save conversation reference", {
+                error: formatUnknownError(err),
+              });
+            });
+        }
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {
           const botName = ctx.activity?.recipient?.name || "OpenClaw";

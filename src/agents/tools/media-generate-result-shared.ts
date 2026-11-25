@@ -9,7 +9,6 @@ import {
   stagedInputDirectory,
 } from "../../media/staged-inputs.js";
 import { extractOriginalFilename, type SavedMedia } from "../../media/store.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   formatGeneratedAttachmentLines,
   sanitizeGeneratedMediaDisplayText,
@@ -68,9 +67,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
   const { result, attachments, mediaUrls } = params;
   const sandboxPaths: string[] = [];
   const stagingMessages: string[] = [];
-  const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
   const assertCurrent = () => {
-    assertSourceCurrent();
     if (params.taskHandle && !isMediaGenerationOperationCurrent(params.taskHandle.runId)) {
       throw new Error("Media generation task is no longer active");
     }

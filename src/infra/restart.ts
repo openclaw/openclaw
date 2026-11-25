@@ -68,6 +68,17 @@ let pendingRestartSignalAdmission: GatewayRestartSignalAdmissionLease | null = n
 let restartTransientGeneration = 0;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
+/** Live restart work, including preparation that still leaves inbound admission open. */
+export function hasPendingGatewayRestart(): boolean {
+  // Idle preparation owns a poll; fenced preparation owns its admission lease. The preparing
+  // flag alone can outlive a refused custom emission and does not establish live recovery.
+  return (
+    pendingRestartTimer !== null ||
+    activeDeferralPolls.size > 0 ||
+    pendingRestartSignalAdmission !== null
+  );
+}
+
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
   const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
   return isUpdateRestart(next) && !isUpdateRestart(current);
@@ -492,7 +503,7 @@ async function emitPreparedGatewayRestartUnderAdmission(
     !scheduledRequest?.isCurrent() &&
     !pendingRestartRequest?.isCurrent()
   ) {
-    restartLog.warn("scheduled restart cancelled: requester authority changed");
+    restartLog.warn("scheduled restart cancelled: the requester may no longer restart the Gateway");
     clearPendingScheduledRestart();
     await rejectPreparedRestartHooks(preparedHooksList);
     return { status: "failed" };

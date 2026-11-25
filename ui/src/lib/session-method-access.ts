@@ -26,11 +26,15 @@ export type SessionMethodAccessRequest = {
   method: string;
   params?: unknown;
   requiredScope?: OperatorScope;
+  /** Optional UI copy for a missing grant; other denials keep their own explanation. */
+  missingScopeReasonKey?: string;
   /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
   sessionScope?: boolean;
   /** Opt into the explicit desired-state mutation allowlist. */
   allowDeferred?: boolean;
   session?: SessionAccessRow;
+  /** A read proved no session row exists yet; the Gateway binds the first turn to the caller. */
+  sessionAbsent?: boolean;
 };
 
 export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
@@ -40,6 +44,7 @@ export function sessionAccessRowForBatch(rows: readonly SessionAccessRow[]) {
 function deniedAccess(
   requiredScope: OperatorScope,
   cause: Exclude<SessionMethodAccess, { allowed: true }>["cause"],
+  missingScopeReasonKey?: string,
 ): SessionMethodAccess {
   return {
     allowed: false,
@@ -50,9 +55,8 @@ function deniedAccess(
         disconnected: "sessionsView.actionRequiresConnection",
         "method-unavailable": "sessionsView.actionUnavailable",
         "session-not-owned": "sessionsView.actionRequiresOwnership",
-        "missing-scope": "sessionsView.actionRequiresScope",
+        "missing-scope": missingScopeReasonKey ?? "sessionsView.actionPermissionDenied",
       }[cause],
-      { scope: requiredScope },
     ),
   };
 }
@@ -80,7 +84,7 @@ export function readSessionMethodScopeAccess(
     !Array.isArray(scopes) ||
     !roleScopesAllow({ role, requestedScopes: [requiredScope], allowedScopes: scopes })
   ) {
-    return deniedAccess(requiredScope, "missing-scope");
+    return deniedAccess(requiredScope, "missing-scope", request.missingScopeReasonKey);
   }
   const patch =
     request.method === "sessions.patchMany" && isRecord(request.params)
@@ -95,14 +99,16 @@ export function readSessionMethodScopeAccess(
     isRecord(patch) &&
     (typeof patch.archived === "boolean" || Object.hasOwn(patch, "communication")) &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
-  // Only parentless creation has no existing row whose ownership must be checked.
+  // Parentless creation, and the first turn of a session proven absent, have no existing
+  // row whose ownership must be checked: the Gateway records the caller as its creator.
   const createsWithoutParent =
-    request.method === "sessions.create" &&
-    !(
-      isRecord(request.params) &&
-      typeof request.params.parentSessionKey === "string" &&
-      request.params.parentSessionKey.trim()
-    );
+    (request.method === "sessions.create" &&
+      !(
+        isRecord(request.params) &&
+        typeof request.params.parentSessionKey === "string" &&
+        request.params.parentSessionKey.trim()
+      )) ||
+    (request.method === "chat.send" && request.sessionAbsent === true && !request.session);
   if (
     (patchNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&

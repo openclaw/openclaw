@@ -25,6 +25,24 @@ the browser process.
 
 Other common Linux launch failures:
 
+- `Socket path too long`: Chromium cannot fit its process-singleton Unix socket
+  under a long temporary-directory path. Managed launches use `/tmp` when the
+  inherited temp path exceeds 50 bytes, leaving room for Chromium's private
+  directory and socket name. This does not change the Gateway's environment
+  or managed browser profile directory.
+
+- `GPU process isn't usable. Goodbye.`: Chromium exhausted its GPU fallback
+  options. Check the preceding Chrome stderr for the first GPU-process failure.
+  Inherited jemalloc `LD_PRELOAD` with `MALLOC_CONF=background_thread:true`
+  can make the zygote multi-threaded before fork, causing GPU subprocess launch
+  failures (`error_code=1002`). Managed Chrome launches strip `MALLOC_CONF` and
+  jemalloc entries from `LD_PRELOAD`, preserving other preload libraries and the
+  Gateway's own allocator settings. Wrappers that re-add these variables must
+  remove them before executing Chrome.
+  Managed headless launches already use `--headless=new --disable-gpu`; try
+  removing custom GPU flags from `browser.extraArgs` and verify the configured
+  browser executable works on the host. Adding `--enable-unsafe-swiftshader`
+  lowers WebGL security guarantees and is not a general fix for this fatal error.
 - `The profile appears to be in use by another Chromium process`: stale
   `Singleton*` lock files in the managed profile directory. OpenClaw removes
   these locks and retries once when the lock points at a dead process on the
@@ -106,7 +124,25 @@ WantedBy=default.target
 systemctl --user enable --now openclaw-browser.service
 ```
 
+### Missing shared libraries
+
+`error while loading shared libraries`: the browser binary exists, but the
+host is missing a required runtime library. `openclaw browser doctor` runs
+the local managed executable with `--version` and reports the loader error
+as a failed **Chromium executable** check. Install the named library through
+your distribution's package manager, or use a browser package that includes
+the required dependencies. Downloading Playwright's Chromium alone does not
+install system libraries. The probe does not start a browser or touch its
+profile; ordinary status checks remain passive.
+
 ### Verify the browser works
+
+OpenClaw logs a managed browser as started only after HTTP discovery and a CDP
+command succeed. A child that exits during startup returns its exit code or
+signal and captured stderr to the browser tool, and logs the failure. Abnormal
+exits after readiness are also logged with bounded stderr. After correcting the
+executable or launch arguments, retry; if the browser remains unavailable, use
+another configured profile or an alternative tool.
 
 These calls go to the OpenClaw browser control service, not to the Chrome CDP
 port used above. Its port is derived from `gateway.port` (default `18791` =

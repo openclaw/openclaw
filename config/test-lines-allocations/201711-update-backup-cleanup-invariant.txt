@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #201711 over the 400 allowance: the generated-combination test of the backup-retention invariant (every database keeps an intact updater backup until a verified update supersedes it), its real-producer fixtures, and the regressions from three review rounds (content-verified and full-image successors, missing live database, partial and remounted receipt families, configured agent directories, running-run backup tags, live-database and bounded-status guards).
+354

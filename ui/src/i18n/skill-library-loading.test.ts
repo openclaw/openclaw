@@ -20,7 +20,9 @@ it.each([
       throw new Error("Session library copy must be registered");
     }
     expect(manager.t("skillLibrary.session.selected")).toBe("Ausgewählt");
-    expect(manager.t("skillLibrary.session.readOnly")).toContain("exact revision");
+    expect(manager.t("skillLibrary.session.readOnly")).toContain(
+      "revision selected for this session",
+    );
     expect(manager.t("skillLibrary.binaryRead")).toBe(
       "Binary attachment retained with this revision.",
     );

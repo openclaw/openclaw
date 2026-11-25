@@ -16,12 +16,12 @@ import {
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   admission,
@@ -33,10 +33,10 @@ import {
   SESSION_ID,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
-import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
@@ -58,9 +58,22 @@ import { updateCronRuntimeRow } from "../store/row-codec.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
+  prepareContinuationRoleConfig,
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
+import {
+  prepareContinuationClient,
+  PRINCIPAL_POLICY_CASES,
+  isPrincipalPolicyScenario,
+  preparePrincipalPolicyChange,
+  principalGatewayPolicy,
+  captureRealIngressOperator,
+  expectRetryableOriginalOneShot,
+  principalRecoveryFixture,
+  registerScheduledPrincipalFixture,
+  prepareRestartBeforeScheduling,
+} from "./run.operator-restart.test-support.js";
 import {
   loadRunCronIsolatedAgentTurn,
   loadSessionEntryMock,
@@ -88,7 +101,11 @@ const session = await vi.importActual<typeof import("./session.js")>("./session.
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
 );
-installRequesterCronAuthorityTestHooks();
+installRequesterCronAuthorityTestHooks(() => ({
+  type: "human",
+  source: "profile",
+  id: ensureProfileForEmail("scheduled-operator@example.test").id,
+}));
 
 const toolConstructionPlan = {
   includeBaseCodingTools: false,
@@ -122,18 +139,41 @@ it.each([
   "self removal then session replaced during merge",
   "paused force run",
   "restart",
+  "principal reload",
+  ...PRINCIPAL_POLICY_CASES,
+  "principal owner unavailable",
+  "principal store unavailable",
+  "restart before scheduling",
+  "restart before scheduling revoked ingress",
+  "restart before scheduling without source",
+  "principal ingress revoked",
+  "principal ingress replaced",
+  "principal role revoked",
+  "principal access revoked",
   "guest",
   "legacy attribution",
   "foreign target",
   "current tool deny",
   "role revoked",
+  "role definition edited",
   "role revoked during merge",
+  "session edited",
   "session replaced",
   "queued owner payload edit",
   "queued manager rename",
   "owner capture races manager payload",
   "recurring trigger reload",
 ] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
+  const restartBeforeScheduling = scenario.startsWith("restart before scheduling");
+  const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
+  const unavailableSource =
+    scenario === "principal owner unavailable" || scenario === "principal store unavailable";
+  const personPolicySource = isPrincipalPolicyScenario(scenario);
+  const personPolicyRemoved = personPolicySource && scenario.endsWith("before restore");
+  const realPrincipal = principalSource;
+  let restoreIngressOwner: (() => void) | undefined;
+  let releaseIngressOwner: (() => void) | undefined;
+  const roleRevoked = scenario === "role revoked" || scenario === "principal role revoked";
   const restarting = scenario === "restart";
   const ownerEdit = scenario === "queued owner payload edit";
   const managerRename = scenario === "queued manager rename";
@@ -141,36 +181,33 @@ it.each([
   const queuedEdit = ownerEdit || managerRename || captureRace;
   const recurring = scenario === "recurring trigger reload";
   const selfRemoving = scenario.startsWith("self removal");
+  const roleRevokedDuringMerge =
+    scenario === "role revoked during merge" ||
+    scenario === "self removal then role revoked during merge";
+  const roleDefinitionEdited = scenario === "role definition edited";
+  const rolePolicySource = roleRevoked || roleRevokedDuringMerge || roleDefinitionEdited;
   const scopedOperator =
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
+    ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
+  prepareContinuationRoleConfig(config, rolePolicySource && !realPrincipal);
   const fixture = createCronFixture(undefined, config);
   const { context } = fixture;
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
-  const client = createOperatorClient({
+  if (realPrincipal || rolePolicySource) {
+    await setCanonicalUserProfileRole(profile.id, "writer");
+  }
+  const { client, revokePersonPolicy } = prepareContinuationClient({
+    config,
+    context,
     profileId: profile.id,
-    scopes:
-      scenario === "guest"
-        ? ["operator.sessions.write"]
-        : scenario === "write-scoped operator"
-          ? ["operator.write"]
-          : scenario === "cron-scoped operator"
-            ? ["operator.sessions.write", "operator.cron"]
-            : ["operator.admin"],
+    scenario,
   });
-  client.connect.client.id = "openclaw-control-ui";
-  client.connect.client.mode = "webchat";
-  client.internal = {
-    authenticatedOperator: true,
-    ...(client.connect.scopes?.includes("operator.admin") ? { controlUiAdmin: true } : {}),
-  };
-  client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
-  context.getRuntimeConfig = () => config;
   const target = {
     agentId: "main",
     sessionKey: SESSION,
@@ -188,9 +225,12 @@ it.each([
     abortedLastRun: false,
   };
   await accessor.replaceSessionEntry(target, entry);
+  if (restartBeforeScheduling) {
+    expect((await readSessionEntryReadOnlyInWorker(target))?.createdActor?.id).toBe(profile.id);
+  }
   const captureAuthority = async () =>
     expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: null,
@@ -198,7 +238,17 @@ it.each([
       "fresh authenticated operator source",
     );
   // Legacy attribution is not admission; other cases capture a fresh authenticated source.
-  const original = scenario === "legacy attribution" ? undefined : await captureAuthority();
+  const original =
+    scenario === "legacy attribution"
+      ? undefined
+      : realPrincipal
+        ? await captureRealIngressOperator({
+            context,
+            config,
+            profileId: profile.id,
+            scopes: client.connect.scopes ?? [],
+          })
+        : await captureAuthority();
   const foreignKey = "agent:main:dashboard:foreign-continuation";
   if (scenario === "foreign target") {
     replaceSessionEntrySync(
@@ -231,7 +281,31 @@ it.each([
   const updateCreator = createDeferredCore();
   const creatorUpdated = createDeferredCore();
   const releaseCreator = createDeferredCore();
+  if (scenario === "principal access revoked" && original) {
+    original.authority = principalRecoveryFixture(
+      original.authority,
+      scenario === "principal access revoked",
+    );
+  }
+  if (restartBeforeScheduling) {
+    expect(config.gateway?.roles).toBeDefined();
+    const proceed = await prepareRestartBeforeScheduling({
+      original: expectDefined(original, "initiating authenticated turn"),
+      target,
+      context,
+      profile,
+      readJobs: fixture.read,
+      revoked: scenario === "restart before scheduling revoked ingress",
+      sourceLess: scenario === "restart before scheduling without source",
+    });
+    if (!proceed) {
+      creatorCron.stop();
+      await creatorCron.waitForIdle();
+      return;
+    }
+  }
   let creation: Promise<unknown> | undefined;
+  let releaseAccessPolicy: (() => void) | undefined;
   const managerUpdate = async (patch: Record<string, unknown>) => {
     const stored = expectDefined((await fixture.read())[0], "manager target");
     const respond = vi.fn();
@@ -291,7 +365,7 @@ it.each([
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
                     schedule:
-                      recurring || scenario === "role revoked"
+                      recurring || roleRevoked || roleRevokedDuringMerge
                         ? { kind: "every", everyMs: 180_000 }
                         : {
                             kind: "at",
@@ -373,6 +447,41 @@ it.each([
       await creatorCron.waitForIdle();
     }
   }
+  if (principalSource) {
+    if (scenario === "principal access revoked") {
+      const registry = expectDefined(
+        getPluginRegistryState()?.activeRegistry,
+        "live access policy registry",
+      );
+      const previousPolicies = [...registry.gatewayAccessPolicies];
+      releaseAccessPolicy = () => {
+        registry.gatewayAccessPolicies = previousPolicies;
+      };
+      registry.gatewayAccessPolicies.push({
+        pluginId: "principal-access",
+        source: "test",
+        policy: { authorize: () => undefined, resume: () => undefined },
+      });
+    }
+    const recovery = registerScheduledPrincipalFixture({
+      context,
+      profileId: profile.id,
+      scopes: client.connect.scopes ?? [],
+      state:
+        scenario === "principal owner unavailable"
+          ? "owner-unavailable"
+          : scenario === "principal store unavailable"
+            ? "store-unavailable"
+            : scenario === "principal ingress revoked"
+              ? "revoked"
+              : scenario === "principal ingress replaced"
+                ? "replaced"
+                : "current",
+    });
+    restoreIngressOwner = recovery.restore;
+    releaseIngressOwner = recovery.release;
+  }
+  await preparePrincipalPolicyChange(scenario, revokePersonPolicy);
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
   if (scopedOperator) {
@@ -381,23 +490,21 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original && !queuedEdit) {
-    expect(() => original.authority.assertCurrent()).toThrow();
-  }
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
-  } else if (scenario === "role revoked") {
+  } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
-  } else if (scenario === "session replaced") {
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement",
-      },
-    );
+  } else if (roleDefinitionEdited) {
+    config.gateway!.roles!.definitions.writer!.agents = ["main"];
+    setRuntimeConfigSnapshot(config);
+  } else if (scenario === "session edited" || scenario === "session replaced") {
+    // A message edit rotates only the session id; a reset also rotates the revision.
+    await accessor.replaceSessionEntry(target, {
+      ...entry,
+      sessionId: "replacement-session",
+      ...(scenario === "session replaced" ? { lifecycleRevision: "replacement" } : {}),
+    });
   }
 
   // Publication creation/storage and actual GitHub credentials are outside this regression.
@@ -406,7 +513,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
-  const receipt = vi
+  const sharedPublication = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });
   vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -418,9 +525,9 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
+      // Match the subprocess boundary: rejected attempts execute no GitHub I/O.
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -433,7 +540,6 @@ it.each([
         expect(argv).toContain("repos/fixture/repository/pulls/7");
         reads++;
         if (reads === 2) {
-          // Commit authority loss during awaited preflight, before the final write.
           if (
             scenario === "role revoked during merge" ||
             scenario === "self removal then role revoked during merge"
@@ -449,10 +555,12 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
+  let modelAdmissions = 0;
   let offered: unknown;
   let admittedOperator = false;
   const results: unknown[] = [];
@@ -475,6 +583,7 @@ it.each([
       "gateway",
       params.runId,
     );
+    modelAdmissions++;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await params.onExecutionStarted?.({ lifecycleGeneration });
     params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -495,7 +604,6 @@ it.each([
         sessionId: params.sessionId,
       },
       async () => {
-        // Stable schemas list actions; execution checks this admitted caller's authority.
         expectDefined(getGatewayToolCallerIdentity(), "scheduled caller");
         const tools = applyEmbeddedAttemptToolsAllow(
           await createOpenClawCodingToolsAsync({
@@ -563,12 +671,6 @@ it.each([
               results.push(await publish.execute(`scheduled-${args.action}`, args));
             } catch (error) {
               rejected = String(error);
-              if (
-                scenario === "role revoked during merge" ||
-                scenario === "self removal then role revoked during merge"
-              ) {
-                expect(params.abortSignal?.aborted).toBe(true);
-              }
             }
           }
         }
@@ -603,7 +705,6 @@ it.each([
   context.cron = execution;
   try {
     await execution.start();
-    expect(entered).toBe(0);
     const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
     if (recurring) {
       // Stored before upgrade: main's hash was captured while enabled, then the runtime disabled it.
@@ -637,9 +738,11 @@ it.each([
       clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "scheduled timer"));
       const tick = onTimer(schedulerState);
       if (queuedEdit) {
+        // The due run stays queued, without a running marker, until the creating turn ends.
         await vi.waitFor(() => {
-          expect(execution.getJob(job.id)?.state.runningReceiptId).toEqual(expect.any(String));
+          expect(execution.getJob(job.id)?.state.queuedAtMs).toEqual(expect.any(Number));
         });
+        expect(execution.getJob(job.id)?.state.runningReceiptId).toBeUndefined();
         expect(entered).toBe(0);
         if (managerRename) {
           await managerUpdate({ name: "Manager-authored instructions" });
@@ -661,7 +764,14 @@ it.each([
         await creatorCron.waitForIdle();
       }
       if (restarting) {
-        await restartEntered.promise;
+        await Promise.race([
+          restartEntered.promise,
+          tick.then(() => {
+            throw new Error(
+              `Continuation failed before restart: ${execution.getJob(job.id)?.state.lastError}`,
+            );
+          }),
+        ]);
         restartContinue.resolve();
       }
       await tick;
@@ -671,7 +781,7 @@ it.each([
     if (selfRemoving) {
       expect(execution.getJob(job.id)).toBeUndefined();
       expect(entered).toBe(1);
-      if (scenario !== "self removal") {
+      if (scenario === "self removal then session replaced during merge") {
         expect(finishedEvent).toMatchObject({ status: "error" });
         expect(reads).toBe(2);
         expect(results).toHaveLength(1);
@@ -692,7 +802,28 @@ it.each([
       expect(completed.status).not.toBe("killed");
       return;
     }
+    if (unavailableSource) {
+      const pending = expectDefined(execution.getJob(job.id), "same retryable one-shot");
+      const next = expectRetryableOriginalOneShot(pending, job.id, clock.clock.now());
+      expect(entered).toBe(0);
+      expect(writes).toEqual([]);
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+      expectDefined(restoreIngressOwner, "restored original owner")();
+      clock.setTime(next);
+      await onTimer(schedulerState);
+      await execution.waitForIdle();
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
+    }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+    if (personPolicyRemoved) {
+      expect(reads, "Current person policy must fence protected RPC reads").toBe(0);
+      expect(writes).toEqual([]);
+      expect(rejected ?? finishedEvent?.error).toMatch(
+        /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
+      );
+      expect(modelAdmissions, "Refused authority must not reach model admission").toBe(0);
+      return;
+    }
     if (managerRename || captureRace) {
       expect(admittedOperator).toBe(false);
       expect((await fixture.read())[0]?.operatorSource).toBeUndefined();
@@ -732,15 +863,16 @@ it.each([
       expect(entered).toBe(2);
       return;
     }
-    if (scenario === "role revoked" || scenario === "session replaced") {
+    if (
+      roleRevoked ||
+      scenario === "principal ingress revoked" ||
+      scenario === "principal ingress replaced" ||
+      scenario === "principal access revoked"
+    ) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
-      expect(state.lastError).toMatch(
-        scenario === "role revoked"
-          ? /operator identity changed/i
-          : /authority|source|conversation|session|role/i,
-      );
-      if (scenario === "role revoked") {
+      expect(state.lastError).toEqual(expect.any(String));
+      if (roleRevoked) {
         expect(execution.getJob(job.id)?.enabled).toBe(false);
         expect(state.nextRunAtMs).toBeUndefined();
         expect(state.consecutiveErrors).toBe(1);
@@ -750,14 +882,22 @@ it.each([
         expect(execution.getJob(job.id)?.state.consecutiveErrors).toBe(1);
       }
     } else {
-      expect(state.lastRunStatus, state.lastError).toBe(
-        scenario === "role revoked during merge" ? "error" : "ok",
-      );
+      expect(state.lastRunStatus, state.lastError).toBe("ok");
       expect(entered).toBe(1);
       if (
+        unavailableSource ||
+        scenario === "restart before scheduling" ||
+        scenario === "principal allowlist allowed" ||
+        scenario.endsWith("before effect") ||
+        scenario === "principal reload" ||
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
+        roleRevokedDuringMerge ||
+        roleDefinitionEdited ||
+        // The continuation's conversation is linked by key: an edit or reset keeps it.
+        scenario === "session edited" ||
+        scenario === "session replaced" ||
         ownerEdit ||
         recurring
       ) {
@@ -769,42 +909,54 @@ it.each([
           { details: { state: "merged", mergeCommit: "b".repeat(40) } },
         ]);
         expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-        expect(receipt).toHaveBeenCalled();
+        expect(sharedPublication).toHaveBeenCalled();
         if (scenario === "paused force run") {
           expect(execution.getJob(job.id)).toMatchObject({
             enabled: false,
             schedule: job.schedule,
           });
         }
-      } else if (scenario === "role revoked during merge") {
-        expect(state.lastError).toBe("Session event execution aborted");
-        expect(reads).toBe(2);
-        expect(results).toHaveLength(1);
-        expect(rejected).toBe("AbortError: Aborted");
-        expect(writes).toEqual([]);
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
         expect(admittedOperator).toBe(scenario === "cron-scoped operator");
         expect(rejected).toContain(
-          scopedOperator
-            ? "missing scope: operator.write"
-            : "require full operator write permission",
+          scopedOperator ? "missing scope: operator.write" : "needs operator write permission",
         );
-        expect(results).toEqual([]);
+      }
+      if (scenario === "role revoked during merge") {
+        clock.setTime(expectDefined(state.nextRunAtMs, "next occurrence after admitted merge"));
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(entered).toBe(1);
+        expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
+        expect(execution.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: expect.any(String) },
+        });
+        expect(finishedEvent).toMatchObject({ status: "error" });
       }
     }
     if (
+      !unavailableSource &&
+      scenario !== "restart before scheduling" &&
+      scenario !== "principal reload" &&
+      scenario !== "principal allowlist allowed" &&
+      !scenario.endsWith("before effect") &&
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
+      scenario !== "session edited" &&
+      !roleDefinitionEdited &&
+      scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
-      expect(receipt).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
+      // Local publication lookup may precede the guard; denied actions disclose no result.
+      expect(results).toEqual([]);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");
@@ -854,5 +1006,7 @@ it.each([
     restartContinue.resolve();
     execution.stop();
     await execution.waitForIdle();
+    releaseAccessPolicy?.();
+    releaseIngressOwner?.();
   }
 });

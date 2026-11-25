@@ -28,7 +28,6 @@ import { readSessionTranscriptBoundedActiveContextCore as readContext } from "./
 import {
   readLatestSessionTranscriptMessageEvent as readLatest,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActivePathEntryRelation as entryRelation,
   readSessionTranscriptBoundedMessageTailPage as readTailPage,
   readSessionTranscriptMessageEventPage as readPage,
   readSessionTranscriptMessageEvents,
@@ -36,6 +35,7 @@ import {
   SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
+  clearHistoryNavigation,
   readActiveTranscriptStats as activeStats,
   readSessionTranscriptHistoryAnchorPage as anchorPage,
   readSessionTranscriptHistoryEventById as messageById,
@@ -226,9 +226,7 @@ describe("SQLite active transcript event projection", () => {
           expect(messageById(scope, "legacy-child")).toBeUndefined();
           return;
         }
-        expect(entryRelation(scope, "active")).toBe("exact");
         expect(readLatest(scope)?.event).toMatchObject({ id: "active" });
-        expect(entryRelation(scope, "root")).toBe("ancestor");
         expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
         const activeRows = sessionSql(
           "SELECT event.event_json FROM session_transcript_active_events AS active JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq WHERE active.session_id = ? ORDER BY active.active_position",
@@ -368,15 +366,7 @@ describe("SQLite active transcript event projection", () => {
     ]);
     // An upgraded transcript keeps its original rows until a payload write.
     runOpenClawAgentWriteTransaction(
-      (database) => {
-        database.db
-          .prepare(`UPDATE transcript_events
-        SET navigation_type = NULL, navigation_custom_type = NULL,
-            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-            navigation_last_custom_type = NULL, navigation_valid = 1
-        WHERE session_id = ?`)
-          .run(scope.sessionId);
-      },
+      (database) => clearHistoryNavigation(database, scope.sessionId),
       { agentId: scope.agentId, env: scope.env },
     );
     const page = resetWindow();
@@ -523,8 +513,6 @@ describe("SQLite active transcript event projection", () => {
     });
     await reconcile();
     expect(readRecent(1, 1, 1_024).activeLeafEntryId).toBe("newer-compaction");
-    expect(entryRelation(scope, "newer-compaction")).toBe("exact");
-    expect(entryRelation(scope, "post-reset")).toBe("ancestor");
     expect(countMessages(scope)).toBe(3);
     expect(messageById(scope, "old")).toMatchObject({ event: { id: "old" } });
   });

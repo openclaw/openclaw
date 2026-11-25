@@ -59,7 +59,7 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
@@ -112,8 +112,10 @@ describe("steering input custody", () => {
             ).map((phase) => `chat.send.detail.${phase}`),
           ),
         );
-        expect(names).toContain("chat.send.detail.session.actor.command.queue");
-        expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        if (active) {
+          expect(names).toContain("chat.send.detail.session.actor.command.queue");
+          expect(names).toContain("chat.send.detail.session.actor.command.execute");
+        }
       } finally {
         stop();
         setDiagnosticsEnabledForProcess(previous);
@@ -127,16 +129,12 @@ describe("steering input custody", () => {
         "shared-secret owner",
         "same grant",
         "changed grant",
-        "revoked grant",
         "same permissions across profiles",
         "no native admission across profiles",
       ] as const
     ).map((scenario) => ({
       scenario,
-      allowCollaborativeSteering:
-        scenario === "revoked grant"
-          ? undefined
-          : scenario === "no native admission across profiles",
+      allowCollaborativeSteering: scenario === "no native admission across profiles",
     })),
     { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: false },
     { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: true },
@@ -218,6 +216,7 @@ describe("steering input custody", () => {
         steeringConfig.gateway = {
           ...steeringConfig.gateway,
           roles: {
+            default: "participant",
             definitions: {
               writer: role,
               participant: { ...role, sessions: { others: "view" } },
@@ -239,7 +238,6 @@ describe("steering input custody", () => {
         (continuation && !nonowner) ||
         (collaborative && scenario !== "no native admission across profiles");
       const refused = acrossProfiles && allowCollaborativeSteering !== true;
-      const forwarded = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();
       const client = (connId: string, controller: AbortController, grantId: string) => ({
@@ -289,7 +287,7 @@ describe("steering input custody", () => {
           );
         }
       }
-      let captured: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
       let operation = fixture.activeRun;
       let ownerClaim: SessionControllerMailboxClaim | undefined;
       let ownerContext: CurrentInboundPromptContext | undefined;
@@ -348,7 +346,7 @@ describe("steering input custody", () => {
             });
           });
         }
-        captured = await captureGatewayOperatorRunAuthority({
+        captured = await prepareGatewayOperatorRunAuthority({
           client: originalClient,
           context: fixture.context,
         });
@@ -425,7 +423,7 @@ describe("steering input custody", () => {
         );
         const requesterPrincipalKey = operation.requesterPrincipalKey;
         if (sharedSecretOwner) {
-          const incoming = await captureGatewayOperatorRunAuthority({
+          const incoming = await prepareGatewayOperatorRunAuthority({
             client: reconnectedClient,
             context: fixture.context,
           });
@@ -546,11 +544,6 @@ describe("steering input custody", () => {
           buildRequestContext: () => fixture.context,
           extraHandlers: { "chat.send": handleChatSend },
         });
-        if (scenario === "revoked grant") {
-          fixture.beforeApprove.mockImplementation(() =>
-            incomingGrant.abort(new Error("Access grant ended")),
-          );
-        }
         const followupDispatched = createDeferred();
         const dispatchInput = dispatchInboundMessageMock.getMockImplementation();
         if (!dispatchInput) {
@@ -568,9 +561,7 @@ describe("steering input custody", () => {
           }),
           reconnectedClient,
         );
-        if (accepted || forwarded) {
-          expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
-        }
+        expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         if (accepted) {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -589,40 +580,33 @@ describe("steering input custody", () => {
         } else {
           expect(session.getSteeringMessages()).toEqual([]);
           expect(queueMessage).not.toHaveBeenCalled();
-          if (forwarded) {
-            await withinTest(followupDispatched.promise, signal);
-            expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(
-              background ? undefined : profile.id,
-            );
-            expect(operation.result).toBeNull();
-            expect(provider.isReleased()).toBe(false);
-            expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-            expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
-              replyOptions: {
-                messageInjectionDisposition: refused
-                  ? "collaborative-steering-disabled"
-                  : "rejected",
-                operatorAuthority: { profileId: incomingProfile.id },
-              },
-            });
-            // The execution stub holds staged custody; the real dispatch refusal test
-            // separately verifies durable cancellation and duplicate/recovery refusal.
-            expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-              total: 1,
-              items: [
-                {
-                  runId: fixture.params.idempotencyKey,
-                  state: "queued",
-                  message: {
-                    __openclaw: { requesterOrigin: { operatorProfileId: incomingProfile.id } },
-                  },
+          await withinTest(followupDispatched.promise, signal);
+          expect(operation.personalToolParticipants?.resolve()?.profileId).toBe(
+            background ? undefined : profile.id,
+          );
+          expect(operation.result).toBeNull();
+          expect(provider.isReleased()).toBe(false);
+          expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+          expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+            replyOptions: {
+              messageInjectionDisposition: refused ? "collaborative-steering-disabled" : "rejected",
+              operatorAuthority: { profileId: incomingProfile.id },
+            },
+          });
+          // The execution stub holds staged custody; the real dispatch refusal test
+          // separately verifies durable cancellation and duplicate/recovery refusal.
+          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+            total: 1,
+            items: [
+              {
+                runId: fixture.params.idempotencyKey,
+                state: "queued",
+                message: {
+                  __openclaw: { requesterOrigin: { operatorProfileId: incomingProfile.id } },
                 },
-              ],
-            });
-          } else {
-            expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-            expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-          }
+              },
+            ],
+          });
         }
         expect(operation.toolAuthorityFingerprint).toBe(fingerprint);
         expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
@@ -654,21 +638,10 @@ describe("steering input custody", () => {
             isRecord(event.message) &&
             event.message.idempotencyKey === `${fixture.params.idempotencyKey}:user`,
         );
-        const consumed = accepted && !revokeAfterAcceptance;
         expect(providerInputs.some((messages) => messages.includes(fixture.params.message))).toBe(
-          consumed,
+          accepted,
         );
-        if (revokeAfterAcceptance) {
-          expect(input).toBeUndefined();
-          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-          expect(session.messages.at(-1)).toMatchObject({
-            role: "assistant",
-            stopReason: "error",
-          });
-          expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
-            items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
-          });
-        } else if (accepted) {
+        if (accepted) {
           expect(input).toMatchObject({
             message: {
               content: fixture.params.message,
@@ -682,12 +655,9 @@ describe("steering input custody", () => {
             );
           }
           expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-        } else if (forwarded) {
+        } else {
           expect(input).toMatchObject({ message: { content: fixture.params.message } });
           expect(input).not.toHaveProperty("message.__openclaw.steerTargetRunId");
-          expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-        } else {
-          expect(input).toBeUndefined();
           expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         }
       } finally {

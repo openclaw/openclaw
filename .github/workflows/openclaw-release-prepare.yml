@@ -12,8 +12,13 @@ on:
         options:
           - prepare
           - admit-qualification
+          - recover-qualification
+      recovery_request:
+        description: Exact original qualification plan and terminal child attempts from --prepare-recovery
+        required: false
+        type: string
       qualification_request:
-        description: Exact reviewed C=Q qualification request from full-release-validation-at-sha
+        description: Exact reviewed C/Q qualification request from full-release-validation-at-sha
         required: false
         type: string
       publish_inputs:
@@ -32,8 +37,42 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
+  RELEASE_RECOVERY_CONTRACT: "1"
 
 jobs:
+  recover_qualification:
+    name: Seal retained qualification
+    if: github.repository == 'openclaw/openclaw' && inputs.operation == 'recover-qualification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout authenticated P recovery owner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          submodules: false
+      - name: Set up trusted recovery dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          install-deps: "false"
+      - name: Install trusted recovery dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify and seal original qualification
+        id: recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release-ci-summary.mjs --seal-recovery
+      - name: Upload immutable recovery aggregate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.recovery.outputs.artifact_name }}
+          path: ${{ runner.temp }}/qualification-recovery/full-release-validation-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
   prepare:
     name: Start or recover exact npm and ClawHub preparation
     if: github.repository == 'openclaw/openclaw' && inputs.operation == 'prepare'
@@ -54,6 +93,16 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
       - name: Dispatch non-publishing preparation
         id: dispatch
         env:
@@ -101,14 +150,25 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+
+      - name: Setup trusted readiness dependencies
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          node-version: "24.22.1"
+      - name: Install trusted readiness dependencies
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+      # Set up trusted tooling before introducing candidate files into the workspace.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
           path: .release-source
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "24.22.1"
       - name: Fetch and verify every prepared package
         id: seal
         env:

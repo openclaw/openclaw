@@ -21,7 +21,7 @@ import {
 } from "../infra/session-delivery-queue-storage.js";
 import { SESSION_DELIVERY_QUEUE_NAME } from "../infra/session-delivery-queue.records.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -258,9 +258,7 @@ describe("registered correlated completion recovery custody", () => {
             expect(readChild()?.delivery?.status).toBe("in_progress");
           }
         } else {
-          expect(readChild()?.delivery?.status).toBe(
-            outcome === "recovered" ? "delivered" : "suspended",
-          );
+          expect(readChild()?.delivery?.status).toBe("delivered");
           expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
           if (change === "successor") {
             expect(successor).toBeDefined();

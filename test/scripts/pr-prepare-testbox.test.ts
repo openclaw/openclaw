@@ -15,12 +15,24 @@ function writeExecutable(path: string, lines: string[]) {
 const readLines = (path: string) => readFileSync(path, "utf8").trim().split("\n");
 
 function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
+  const boat = env.OPENCLAW_PR_GATES_REMOTE === "boat";
+  const timing = boat
+    ? {
+        provider: "ascii-box",
+        leaseId: "cbx_stub",
+        runId: "run_stub",
+        exitCode: 0,
+        runStatus: "succeeded",
+        leaseStopped: env.FAIL_STAGE !== "cleanup",
+      }
+    : { provider: "blacksmith-testbox", leaseId: "tbx_stub", exitCode: 0, runStatus: "passed" };
   const workDir = tempDirs.make("openclaw-pr-gates-remote-");
   const stubBin = join(workDir, "bin");
   mkdirSync(stubBin);
   writeExecutable(join(stubBin, "node"), [
     `if [ "$1" != scripts/crabbox-wrapper.mjs ]; then exec '${process.execPath}' "$@"; fi`,
     "printf 'ARG:%s\\n' \"$@\"",
+    'printf "MAX_TTL=%s\\n" "${CRABBOX_MAX_TTL:-}"',
     ...(prepareScript
       ? [
           'while [ "$1" != -- ]; do shift; done',
@@ -29,7 +41,7 @@ function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
           'test "${OMIT_STAMP:-}" != 1 || exit 0',
         ]
       : []),
-    `printf '{"provider":"blacksmith-testbox","leaseId":"tbx_stub","exitCode":0,"runStatus":"passed"}\\n' >&2`,
+    `printf '%s\\n' '${JSON.stringify(timing)}' >&2`,
   ]);
 
   if (prepareScript) {
@@ -44,7 +56,7 @@ function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
   }
   const result = runGatesBash(
     prepareScript ??
-      `run_remote_testbox_gates 'prepare gates (blacksmith-testbox)' .local/gates-test.log pr-424242-gates false ${capturedBase}`,
+      `run_remote_prepare_gates 'prepare gates (blacksmith-testbox)' .local/gates-test.log pr-424242-gates false ${capturedBase} ${boat ? "boat" : "testbox"}`,
     {
       cwd: workDir,
       gatesOnly: true,
@@ -56,11 +68,17 @@ function runRemoteGate(env: NodeJS.ProcessEnv, prepareScript?: string) {
 }
 
 it.each([
-  [" 02 ", "001", ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"]],
-  [undefined, "3", ["OPENCLAW_VITEST_MAX_WORKERS=3"]],
-] as const)("forwards normalized Testbox controls (%s, %s)", (projects, workers, expected) => {
+  [
+    " 02 ",
+    "001",
+    ["OPENCLAW_TEST_PROJECTS_PARALLEL=2", "OPENCLAW_VITEST_MAX_WORKERS=1"],
+    "testbox",
+  ],
+  [undefined, "3", ["OPENCLAW_VITEST_MAX_WORKERS=3"], "boat"],
+] as const)("forwards normalized remote controls (%s, %s)", (projects, workers, expected, mode) => {
   const { result, logPath } = runRemoteGate({
     FORCE_COLOR: "1",
+    OPENCLAW_PR_GATES_REMOTE: mode,
     OPENCLAW_TEST_PROJECTS_PARALLEL: projects,
     OPENCLAW_VITEST_MAX_WORKERS: workers,
   });
@@ -69,10 +87,21 @@ it.each([
     .filter((line) => line.startsWith("ARG:"))
     .map((line) => line.slice(4));
   const option = (name: string) => args[args.indexOf(name) + 1];
-  expect([option("--provider"), option("--blacksmith-org")]).toEqual([
-    "blacksmith-testbox",
-    "openclaw",
-  ]);
+  if (mode === "boat") {
+    expect([
+      option("--provider"),
+      option("--class"),
+      option("--ttl"),
+      option("--idle-timeout"),
+      option("--stop-after"),
+    ]).toEqual(["ascii-box", "fast", "60m", "15m", "always"]);
+    expect(readFileSync(logPath, "utf8")).toContain("MAX_TTL=60m");
+  } else {
+    expect([option("--provider"), option("--blacksmith-org")]).toEqual([
+      "blacksmith-testbox",
+      "openclaw",
+    ]);
+  }
   expect(args).toEqual(expect.arrayContaining([...expected]));
 });
 
@@ -87,28 +116,35 @@ it("rejects injected worker controls before remote dispatch", () => {
 it("rejects an uncaptured base before remote dispatch", () => {
   const { result, logPath } = runRemoteGate(
     {},
-    `run_remote_testbox_gates gates .local/gates-test.log pr-424242-gates false '${capturedBase}; touch injected'`,
+    `run_remote_prepare_gates gates .local/gates-test.log pr-424242-gates false '${capturedBase}; touch injected'`,
   );
   expect(result.status).toBe(2);
   expect(result.stderr).toContain("require the captured check-base commit");
   expect(existsSync(logPath)).toBe(false);
 });
-it.each([
-  { failure: "", stages: ["build", "check", "test"], docsOnly: false },
-  { failure: "build", stages: ["build"], docsOnly: false },
-  { failure: "check", stages: ["build", "check"], docsOnly: false },
-  { failure: "test", stages: ["build", "check", "test"], docsOnly: false },
-  { failure: "", stages: ["build", "check"], docsOnly: true },
-  { failure: "stamp", stages: ["build", "check", "test"], docsOnly: false },
-  { failure: "head", stages: ["build", "check", "test"], docsOnly: false },
-  { failure: "review", stages: ["build", "check", "test"], docsOnly: false },
-])(
-  "isolates ordered prepare gates (failure=$failure, docsOnly=$docsOnly)",
-  ({ failure, stages, docsOnly }) => {
+it.each(
+  ["testbox", "boat"].flatMap((mode) =>
+    [
+      { failure: "", stages: ["build", "check", "test"], docsOnly: false },
+      { failure: "build", stages: ["build"], docsOnly: false },
+      { failure: "check", stages: ["build", "check"], docsOnly: false },
+      { failure: "test", stages: ["build", "check", "test"], docsOnly: false },
+      { failure: "", stages: ["build", "check"], docsOnly: true },
+      { failure: "stamp", stages: ["build", "check", "test"], docsOnly: false },
+      { failure: "head", stages: ["build", "check", "test"], docsOnly: false },
+      { failure: "review", stages: ["build", "check", "test"], docsOnly: false },
+      ...(mode === "boat"
+        ? [{ failure: "cleanup", stages: ["build", "check", "test"], docsOnly: false }]
+        : []),
+    ].map((scenario) => Object.assign(scenario, { mode })),
+  ),
+)(
+  "isolates ordered $mode prepare gates (failure=$failure, docsOnly=$docsOnly)",
+  ({ failure, stages, docsOnly, mode }) => {
     const head = "a".repeat(40);
     const { result, workDir, logPath } = runRemoteGate(
       {
-        OPENCLAW_PR_GATES_REMOTE: "testbox",
+        OPENCLAW_PR_GATES_REMOTE: mode,
         FAIL_STAGE: failure,
         OMIT_STAMP: failure === "stamp" ? "1" : "",
       },
@@ -136,7 +172,7 @@ it.each([
         // Conditional callers disable errexit: failures and missing receipts must still prevent stamps.
         "prepare_local_gate_workspace() { echo unexpected-local-bootstrap >&2; return 97; }",
         "pnpm() { echo unexpected-local-pnpm >&2; return 96; }",
-        "if prepare_gates 424242; then exit 0; else exit $?; fi",
+        `if prepare_gates 424242; then require_correction_publication_gates 424242 ${head}; else exit $?; fi`,
       ].join("\n"),
     );
     expect(result.status, result.stdout + result.stderr).toBe(failure ? 1 : 0);
@@ -156,9 +192,15 @@ it.each([
     }
     const stamp = readFileSync(stampPath, "utf8");
     expect(stamp).toContain(`LAST_VERIFIED_HEAD_SHA=${head}`);
-    expect(stamp).toContain(`GATES_MODE=${docsOnly ? "docs_only" : "remote_testbox"}`);
+    expect(stamp).toContain(`GATES_MODE=${docsOnly ? "docs_only" : `remote_${mode}`}`);
     expect(stamp).toContain(`FULL_GATES_HEAD_SHA=${docsOnly ? "''" : head}`);
-    expect(stamp).toContain(`REMOTE_GATES_LEASE_ID=${docsOnly ? "''" : "tbx_stub"}`);
+    if (!docsOnly && mode === "boat") {
+      expect(stamp).toContain("REMOTE_GATES_PROVIDER=ascii-box");
+      expect(stamp).toContain("REMOTE_GATES_RUN_ID=run_stub");
+    }
+    expect(stamp).toContain(
+      `REMOTE_GATES_LEASE_ID=${docsOnly ? "''" : mode === "boat" ? "cbx_stub" : "tbx_stub"}`,
+    );
   },
 );
 
@@ -170,6 +212,7 @@ it("extracts the last successful blacksmith-testbox timing stamp", () => {
 GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/1234
 {"not":"a stamp"}
 not json at all
+{"provider":"blacksmith-testbox","leaseId":"tbx_earlier","exitCode":0,"runStatus":"passed"}
 {"provider":"blacksmith-testbox","leaseId":"tbx_first","exitCode":1,"runStatus":"failed"}
 {"provider":"blacksmith-testbox","leaseId":"tbx_final","exitCode":0,"runStatus":"passed"}
 GitHub Actions run: https://github.com/openclaw/openclaw/actions/runs/9999
@@ -184,4 +227,31 @@ GitHub Actions run: https://github.com/example/other/actions/runs/8888
   expect(result.stdout.trim()).toBe(
     "tbx_final\thttps://github.com/openclaw/openclaw/actions/runs/1234",
   );
+});
+
+it.each([
+  { provider: "aws" },
+  { leaseId: "tbx_other" },
+  { runId: "" },
+  { runStatus: "cancelled" },
+  { runStatus: "passed" },
+  { exitCode: 1 },
+  { leaseStopped: undefined },
+])("rejects incomplete Boat timing ($provider, $runStatus, $leaseStopped)", (override) => {
+  const log = join(tempDirs.make("openclaw-pr-boat-stamp-"), "gates-test.log");
+  writeFileSync(
+    log,
+    JSON.stringify({
+      provider: "ascii-box",
+      leaseId: "cbx_stub",
+      runId: "run_stub",
+      exitCode: 0,
+      runStatus: "succeeded",
+      leaseStopped: true,
+      ...override,
+    }) + "\n",
+  );
+  const result = runGatesBash(`require_remote_boat_gate_stamp '${log}'`);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("confirmed lease cleanup");
 });

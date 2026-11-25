@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import type { PluginRuntimeLoadContext } from "./runtime/load-context.js";
 
 export function createToolLoadContext(
@@ -14,6 +15,7 @@ export function createToolLoadContext(
     autoEnabledReasons: {},
     workspaceDir,
     env: process.env,
+    environmentKey: captureEnvironmentKey(overrides.env),
     logger: { info() {}, warn() {}, error() {} },
     ...overrides,
   };

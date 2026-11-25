@@ -177,6 +177,20 @@ describe("runCli exit behavior", () => {
     expect(buildProgramMock).not.toHaveBeenCalled();
   });
 
+  it.each(["infer", "capability"])("reads core proxy config before %s model run", async (root) => {
+    const proxy = { enabled: true, proxyUrl: "https://proxy.example" };
+    loadConfigMock.mockReturnValueOnce({ proxy });
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(cliArgs(root, "model", "run", "--local"));
+
+    expect(loadConfigMock.mock.calls).toEqual([
+      [{ observe: false, pluginValidation: "core-only" }],
+    ]);
+    expect(startProxyMock).toHaveBeenCalledWith(proxy);
+    expect(createPluginCliLoadSessionMock).not.toHaveBeenCalled();
+  });
+
   it("awaits runtime support before choosing source-only proxy config", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
     isCurrentRuntimeSupportedMock.mockResolvedValueOnce(false);
@@ -298,6 +312,8 @@ describe("runCli exit behavior", () => {
     }
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+    expect(loadConfigMock.mock.calls).toEqual([[{ observe: false, skipPluginValidation: true }]]);
+    expect(createPluginCliLoadSessionMock).toHaveBeenCalledOnce();
     expect(observedStdoutIsTTY).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });

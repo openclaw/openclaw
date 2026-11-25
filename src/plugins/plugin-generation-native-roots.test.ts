@@ -12,6 +12,7 @@ import {
 } from "./plugin-native-admission-state.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
+import { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,8 +34,10 @@ it.each([
       await withPluginCache(cache, () =>
         withPluginSourceCaptureStorage(storage, async () => {
           const admission = nativeAdmissionStateFor();
-          const original = createPluginGenerationNativeRoots(storage);
-          const reference = original.allocate();
+          const original = createPluginGenerationNativeRoots();
+          const reference = original.allocate(
+            createPluginNativeCaptureRoot(storage.stateDir, storage.placement),
+          );
           const filename = path.join(reference.directory, "addon.node");
           fs.writeFileSync(filename, "native bytes");
           const publication: PluginSourceAdmissionPublication = {
@@ -63,8 +66,7 @@ it.each([
             });
             await original.close();
           }
-          const preparing =
-            mode === "fresh" ? original : createPluginGenerationNativeRoots(storage);
+          const preparing = mode === "fresh" ? original : createPluginGenerationNativeRoots();
           const gate = createDeferredCore<boolean>();
           adoptPluginNativeAdmissions(
             admission,

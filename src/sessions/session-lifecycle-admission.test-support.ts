@@ -88,14 +88,6 @@ export function setRpcSourceIdentityForTest(
   }
 }
 
-export function setRpcSourceTerminalProjectionForTest(
-  source: rpc.RpcSourceRef,
-  terminal: boolean,
-): void {
-  source.adapter.projectSessionTerminalPending = terminal;
-  source.adapter.projectSessionTerminalPersisted = false;
-}
-
 /** Drops test-owned controller singletons after their operations have been completed. */
 export function resetSessionControllerStateForTest(): void {
   storage.rpcSourcesByRunId.clear();

@@ -1,4 +1,5 @@
 /** Converts live or stored session routing into cron delivery config. */
+import { requesterCreatorProfileId, type RequesterOrigin } from "../agents/requester-origin.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -9,6 +10,10 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "../utils/message-channel-constants.js";
+import {
+  cronDeliveryUsesDefaultDestination,
+  resolveCronDefaultDeliveryDestination,
+} from "./delivery-defaults.js";
 import type { CronDelivery, CronMessageChannel } from "./types.js";
 
 function isInternalDeliveryContext(context?: DeliveryContext): boolean {
@@ -69,9 +74,27 @@ export async function resolveCronStoredDeliveryContext(params: {
 export async function resolveCronCreationDelivery(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  /** Requested job owner and delivery; a configured default destination skips inference. */
+  job?: { agentId?: unknown; delivery?: Record<string, unknown> };
+  /** Authenticated requester; its human profile is the creator the Gateway stamps. */
+  requesterOrigin?: RequesterOrigin;
   currentDeliveryContext?: DeliveryContext;
   agentSessionKey?: string;
 }): Promise<CronDelivery | null> {
+  // A configured default outranks the creating chat. Pinning the chat route here
+  // would make it an explicit per-job route and hide the default, so route-less
+  // jobs stay route-less and resolve the current default at run time.
+  const jobAgentId = typeof params.job?.agentId === "string" ? params.job.agentId.trim() : "";
+  if (
+    cronDeliveryUsesDefaultDestination({ delivery: params.job?.delivery }, "announce") &&
+    resolveCronDefaultDeliveryDestination({
+      cronConfig: params.cfg.cron,
+      agentId: jobAgentId || params.agentId,
+      creatorProfileId: requesterCreatorProfileId(params.requesterOrigin),
+    })
+  ) {
+    return null;
+  }
   // A live internal surface is not missing context: do not pin an older stored
   // external route onto the job. Run-time source routing remains session-owned.
   if (isInternalDeliveryContext(params.currentDeliveryContext)) {

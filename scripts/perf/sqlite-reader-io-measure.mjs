@@ -8,7 +8,6 @@
  * no >20% CPU/time regression for session scans; report tiny-query overhead separately.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, statfsSync } from "node:fs";
 import { Session } from "node:inspector/promises";
@@ -17,6 +16,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -261,16 +261,7 @@ if (values["metrics-only"]) {
   }
   // Evict only this owned fixture from the OS cache, never global drop_caches.
   db.close();
-  const evict = spawnSync(
-    "python3",
-    [
-      "-c",
-      "import os,sys; f=os.open(sys.argv[1],os.O_RDONLY); os.fsync(f); os.posix_fadvise(f,0,0,os.POSIX_FADV_DONTNEED); os.close(f)",
-      workerData.filename,
-    ],
-    { encoding: "utf8" },
-  );
-  assert.equal(evict.status, 0, evict.stderr);
+  evictLinuxFilePageCache(workerData.filename);
   const cold = new DatabaseSync(workerData.filename, { readOnly: true });
   cold.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048");
   const ownerModule = values["owner-module"] ? await import(values["owner-module"]) : undefined;

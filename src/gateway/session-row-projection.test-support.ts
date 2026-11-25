@@ -167,7 +167,11 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
-  const childActivity = createSessionRowChildActivity();
+  const childActivity = createSessionRowChildActivity((link) =>
+    matching({ key: link.key, agentId: link.agentId, storePath: link.storePath }).flatMap(
+      (row) => row.materialized?.source.childLinks ?? [],
+    ),
+  );
   const childVisibility = createSessionRowChildVisibility();
   const revisions = createSessionRowProjectionRevisions(rows, new Map());
   const store = { ...params.store };
@@ -287,6 +291,7 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
+    readRestoredCompletion: () => undefined,
     readChildVisibility: (...args) => childVisibility.read(...args),
     readChildActivity: (record, now, excluded, token) =>
       childActivity.read(record, rowContext, now, excluded, token),
@@ -316,6 +321,7 @@ export function createSessionRowProjectionFixture(params: {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
+    onMembershipChange() {},
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
     hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
@@ -362,6 +368,7 @@ export function createSessionRowProjectionFixture(params: {
         now,
         subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
+        preparedRunState: options?.preparedRunState,
         excludedChildKeys: options?.excludedChildKeys,
         childActivity:
           options?.childActivity ??
@@ -459,6 +466,11 @@ export function createSessionRowProjectionFixture(params: {
       scope: (options) => {
         const ownerAgentIds = new Set(listAgentIds(cfg));
         return {
+          targets: [
+            ...new Map(
+              [...rows.values()].map((row) => [JSON.stringify(row.storeTarget), row.storeTarget]),
+            ).values(),
+          ],
           paths: new Map(
             [...rows.values()].map((row, index) => [row.storeTarget.storePath, index]),
           ),

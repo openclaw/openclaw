@@ -24,6 +24,7 @@ import {
   resolvePublicSessionWidgetToken,
 } from "./control-ui-public-session-token.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
+import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -176,7 +177,7 @@ export async function serveControlUiPublicSessionMedia(params: {
               );
             }
             res.setHeader("ETag", representation.etag);
-            if (req.headers["if-none-match"] === representation.etag) {
+            if (matchesHttpIfNoneMatch(req.headers["if-none-match"], representation.etag)) {
               res.statusCode = 304;
               res.end();
             } else {

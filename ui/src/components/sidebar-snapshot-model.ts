@@ -91,7 +91,7 @@ export function snapshotSessions(
         unread: row.unread || undefined,
         isRunVisuallyActive: (row.isRunVisuallyActive ?? row.hasActiveRun) || undefined,
         hasAutomation: row.hasAutomation || undefined,
-        status: row.isChild || row.status !== "done" ? row.status : undefined,
+        status: row.status !== "done" ? row.status : undefined,
         workSession: row.workSession || undefined,
         acpSession: row.acpSession || undefined,
         workspaceKind: row.workspaceKind,
@@ -116,6 +116,7 @@ export function snapshotSessions(
         isChild: row.isChild,
         category: row.category,
         archived: row.archived,
+        snoozedUntil: row.snoozedUntil,
         boardFace: row.boardFace,
         state: Object.values(state).some((value) => value !== undefined) ? state : undefined,
         childrenDisplayMode: display?.childrenDisplayMode,
@@ -166,6 +167,7 @@ export function restoreSnapshotSession(
   selected: string,
 ): SidebarRecentSession {
   const state = row.state;
+  const children = row.children.map((child) => restoreSnapshotSession(child, selected));
   return {
     ...row,
     ...state,
@@ -194,9 +196,11 @@ export function restoreSnapshotSession(
     },
     childSessionKeys: row.children.map((child) => child.key),
     childLoadParentKeys: row.childLoadParentKeys ?? [],
-    children: row.children.map((child) => restoreSnapshotSession(child, selected)),
+    children,
     loadingChildren: false,
-    containsActiveDescendant: false,
+    containsActiveDescendant: children.some(
+      (child) => child.visuallyActive || child.containsActiveDescendant,
+    ),
     runningChildCount: state?.runningChildCount ?? 0,
   };
 }

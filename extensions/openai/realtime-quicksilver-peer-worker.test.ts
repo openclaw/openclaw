@@ -21,10 +21,20 @@ function createPeer(
 
 // Observe encrypted RTP on another event loop: a same-thread receiver would
 // hide the gap by processing its queued callbacks after the deliberate stall.
+// Use a loopback-only ICE-lite answerer. Adding a loopback candidate alongside
+// discovered addresses still lets full ICE nominate a LAN or STUN pair. The
+// media worker must negotiate real ICE/DTLS and RTP, but the test needs no LAN
+// path and the answerer does not gather public STUN candidates.
 const receiverSource = `const { parentPort, workerData } = require('node:worker_threads');
 (async () => {
   const { RTCPeerConnection, useOPUS } = await import(workerData.weriftUrl);
-  const peer = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] }, iceServers: [] });
+  const peer = new RTCPeerConnection({
+    codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] },
+    iceLite: true,
+    iceUseIpv4: false,
+    iceUseIpv6: false,
+    iceAdditionalHostAddresses: ['127.0.0.1'],
+  });
   const transceiver = peer.addTransceiver('audio', { direction: 'sendrecv' });
   const counts = new Int32Array(workerData.counts);
   if (workerData.output) {

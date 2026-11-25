@@ -38,7 +38,6 @@ type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
 export type SessionRowBadgesParams = {
-  isChild?: boolean;
   incognito?: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   pullRequestCount?: number;
@@ -62,7 +61,7 @@ export type SessionRowBadge = {
     | "gitPullRequestDraft"
     | "gitPullRequestClosed"
     | "alertTriangle"
-    | "pencil"
+    | "draft"
     | "globe";
   modifier: string;
   count?: number;
@@ -81,16 +80,15 @@ export function resolveSessionRowBadges(
     ? `${params.pullRequest.numbers.map((number) => `#${number}`).join(", ")} · ${translate(`chat.pullRequests.${params.pullRequest.state}`)}`
     : undefined;
   const pullRequestState = params.pullRequest?.state;
-  const placementState = params.isChild ? undefined : params.placementState;
+  const placementState = params.placementState;
   const cloudPlacementState = isCloudWorkerPlacementState(placementState)
     ? placementState
     : undefined;
   const workspaceConflictCount = Math.max(0, Math.floor(params.workspaceConflictCount ?? 0));
-  // Child rows suppress ordinary placement chrome, but a retained conflict must stay discoverable.
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
-  const diskSpaceStatus = params.isChild ? undefined : params.diskSpaceStatus;
+  const diskSpaceStatus = params.diskSpaceStatus;
   const diskSpaceLabel =
     diskSpaceStatus === "critical"
       ? translate("sessionsView.cloudWorkerDiskCritical")
@@ -184,7 +182,7 @@ export function resolveSessionRowBadges(
   if (params.hasComposerDraft) {
     badges.push({
       label: translate("sessionsView.unsentDraft"),
-      icon: "pencil",
+      icon: "draft",
       modifier: "draft",
     });
   }

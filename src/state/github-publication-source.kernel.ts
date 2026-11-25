@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
@@ -63,7 +62,7 @@ function isGitHubPublicationSourceCurrent(
 }
 
 function readSessionFacts(
-  sourceDb: DatabaseSync,
+  sourceDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
 ): GitHubPublicationSessionFacts {
   // The source owner admitted this schema before minting the capability. Exact row
@@ -90,7 +89,7 @@ function readSessionFacts(
 
 /** Shared-state facts remain transaction-held for both durable and memory session sources. */
 export function readGitHubPublicationSourceFacts(
-  source: DatabaseSync | GitHubPublicationSessionFacts,
+  source: EngineConnection | GitHubPublicationSessionFacts,
   stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
 ): GitHubPublicationSourceFacts {
@@ -168,13 +167,13 @@ export function readGitHubPublicationSourceFacts(
 
 /** Equality is a source predicate, never a replacement for the requester's live capability. */
 export function assertGitHubPublicationSourceFacts(
-  sourceDb: DatabaseSync | GitHubPublicationSessionFacts,
+  sourceDb: EngineConnection | GitHubPublicationSessionFacts,
   stateDb: EngineConnection,
   selector: GitHubPublicationSourceSelector,
   expected: GitHubPublicationSourceFacts,
 ): void {
   if (!isDeepStrictEqual(readGitHubPublicationSourceFacts(sourceDb, stateDb, selector), expected)) {
-    throw new Error("GitHub publication source authority changed.");
+    throw new Error("GitHub publication source ended. Retry the publication.");
   }
 }
 

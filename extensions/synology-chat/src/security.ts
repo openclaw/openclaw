@@ -26,6 +26,8 @@ export async function authorizeUserForDmWithIngress(params: {
     accountId: params.accountId,
     identity: {
       key: "sender-id",
+      // The NAS sends user_id on the token-checked outgoing webhook.
+      authentication: "verified",
       entryIdPrefix: "synology-chat-entry",
     },
     subject: { stableId: params.userId },
@@ -48,7 +50,7 @@ export function sanitizeInput(text: string): string {
   const dangerousPatterns = [
     /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/gi,
     /you\s+are\s+now\s+/gi,
-    /system:\s*/gi,
+    /\bsystem:\s*/gi,
     /<\|.*?\|>/g, // special tokens
   ];
 

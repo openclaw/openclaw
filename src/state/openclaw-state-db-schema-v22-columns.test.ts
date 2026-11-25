@@ -9,7 +9,7 @@ import { bindAcpSessionIdentity } from "../acp/runtime/session-meta-write.kernel
 import { createUnattributedExecutionContext } from "../audit/execution-decision-facts.test-support.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import type { SessionAcpIdentity } from "../config/sessions/types.js";
-import { listWorkshopChangesInDatabase } from "../skills/workshop/changes.kernel.js";
+import { listWorkshopChangesInDatabase } from "../skills/workshop-changes/changes.kernel.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   migratePortableIdentityColumnsV22,

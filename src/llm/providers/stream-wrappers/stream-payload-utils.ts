@@ -9,14 +9,17 @@ export function wrapProviderPayloadHook(
   onPayload: PayloadHook | undefined,
   after: (payload: unknown, result: unknown, model: Parameters<PayloadHook>[1]) => unknown,
   before?: (payload: unknown, model: Parameters<PayloadHook>[1]) => void,
+  /** The before/after callbacks preserve retained input items; caller hooks remain editable. */
+  inputObserver = false,
 ): PayloadHook {
-  return (payload, model) => {
+  const hook: PayloadHook = (payload, model) => {
     before?.(payload, model);
     const result = onPayload?.(payload, model);
     return isPromiseLike(result)
       ? Promise.resolve(result).then((resolved) => after(payload, resolved, model))
       : after(payload, result, model);
   };
+  return inputObserver ? markModelPayloadObserver(hook, onPayload) : hook;
 }
 
 /** Policy patches own request fields; they never mutate retained Responses input items. */

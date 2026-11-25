@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,7 +15,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -50,31 +52,17 @@ async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<un
   await Promise.race([receipts.waitFor(ready, "ready"), settled]);
 }
 
-const reclamationChildren: Promise<ChildProcess>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    try {
-      for (const child of await Promise.all(reclamationChildren)) {
-        expect(child).toMatchObject({ exitCode: 0, signalCode: null });
-      }
-    } finally {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    cleanup();
   });
 });
 let cacheRoot: string;
 beforeEach(async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  reclamationChildren.length = 0;
-  processMocks.execFile.mockReset().mockImplementation((file, args, options, callback) => {
-    const child = actual.execFile(file, args, options, callback);
-    if (isWorkerMode(args, "reclaim")) {
-      reclamationChildren.push(once(child, "close").then(() => child));
-    }
-    return child;
-  });
+  processMocks.execFile.mockReset().mockImplementation(actual.execFile);
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
@@ -94,10 +82,6 @@ function installWorker(
         import fs from "node:fs";
         import path from "node:path";
         ${receipt ? fixtureReceiptClientSource(receipts.endpoint) : ""}
-        if (process.argv[3] === "reclaim") {
-          process.stdout.write(JSON.stringify({ ok: true, warnings: [] }));
-          process.exit(0);
-        }
         const reply = ${JSON.stringify(reply)};
         ${reply === "valid" ? "" : 'process.on("SIGTERM", () => {});'}
         const block = (stagingRoot, id) => {
@@ -156,9 +140,14 @@ it.skipIf(process.platform === "win32")(
     const original = fs.readFileSync(source);
     const root = tempDirs.make("sqlite-sigterm-");
     const ready = path.join(root, "ready");
-    const preload = path.join(root, "hold-copy.mjs");
+    const copyEntry = path.join(root, "hold-copy.mjs");
+    const copyWorker = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
+    const generationModule = new URL(
+      `./runtime-worker-generation${path.extname(new URL(import.meta.url).pathname)}`,
+      import.meta.url,
+    );
     fs.writeFileSync(
-      preload,
+      copyEntry,
       `
     import fs from "node:fs";
     const open = fs.openSync;
@@ -171,6 +160,7 @@ it.skipIf(process.platform === "win32")(
       }
       return descriptor;
     };
+    await import(${JSON.stringify(copyWorker.href)});
   `,
     );
     const snapshotModule = workerUrls.resolveRuntimeWorkerUrl(
@@ -179,30 +169,35 @@ it.skipIf(process.platform === "win32")(
     const child = spawn(
       process.execPath,
       [
-        ...workerUrls.resolveRuntimeWorkerArgv(snapshotModule).slice(0, -1),
+        ...workerUrls.resolveRuntimeWorkerArgv(generationModule).slice(0, -1),
         "--input-type=module",
         "-e",
         `
       import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(snapshotModule.href)};
+      import { withRuntimeWorkerGeneration } from ${JSON.stringify(generationModule.href)};
       const controller = new AbortController();
       process.once("SIGTERM", () => controller.abort(new Error("snapshot interrupted by SIGTERM")));
-      try {
-        const snapshot = await prepareSqliteReadOnlyLocation(${JSON.stringify(source)}, {
-          preserveSourceArtifacts: true, signal: controller.signal,
-        });
-        await snapshot.cleanupAsync();
-        throw new Error("snapshot unexpectedly completed before cancellation");
-      } catch (error) {
-        if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
-        process.exitCode = 143;
-      }
+      await withRuntimeWorkerGeneration(async (bind) => {
+        bind((url) => url.href === ${JSON.stringify(copyWorker.href)}
+          ? new URL(${JSON.stringify(pathToFileURL(copyEntry).href)})
+          : url);
+        try {
+          const snapshot = await prepareSqliteReadOnlyLocation(${JSON.stringify(source)}, {
+            preserveSourceArtifacts: true, signal: controller.signal,
+          });
+          await snapshot.cleanupAsync();
+          throw new Error("snapshot unexpectedly completed before cancellation");
+        } catch (error) {
+          if (!controller.signal.aborted || error !== controller.signal.reason) throw error;
+          process.exitCode = 143;
+        }
+      }, async () => {});
     `,
       ],
       {
         env: {
           ...process.env,
           XDG_CACHE_HOME: root,
-          NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
         },
         stdio: ["ignore", "ignore", "pipe"],
       },
@@ -222,7 +217,11 @@ it.skipIf(process.platform === "win32")(
       expect(() => process.kill(snapshotPid, 0)).toThrow(
         expect.objectContaining({ code: "ESRCH" }),
       );
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(
+        fs.readdirSync(
+          resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: root }),
+        ),
+      ).toEqual([]);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
@@ -248,7 +247,7 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
     inspectionFinished = true;
   });
   expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 
 it.for([
@@ -301,7 +300,7 @@ it.for([
         await expect(operation).rejects.toThrow("scope closed");
       }
       expect(fs.existsSync(fs.readFileSync(ready, "utf8"))).toBe(false);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       controller.abort(reason);
       await Promise.allSettled([operation]);
@@ -342,7 +341,7 @@ it("reports failed owned cleanup and keeps it retryable", async () => {
     expect(prepared.cleanup()).toBe(true);
   }
   expect(fs.readFileSync(source)).toEqual(before);
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 it.each(["sync", "async", "scoped"] as const)(
   "bounds the %s child and removes its unpublished copy",
@@ -412,7 +411,7 @@ it.each(["sync", "async", "scoped"] as const)(
       expect(performance.now() - started).toBeLessThan(8_000);
       expect(fs.readFileSync(ready, "utf8")).toBe("ready");
       expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       await childClosed;
     }

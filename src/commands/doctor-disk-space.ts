@@ -56,7 +56,7 @@ function collectDiskSpaceWarnings(env: NodeJS.ProcessEnv) {
       : `Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
     details: critical
       ? [
-          "Config writes, session transcripts, and log rotation may fail silently.",
+          "Config writes, chat history, and log rotation may fail silently.",
           "Free up disk space immediately to avoid data loss.",
         ]
       : ["Consider freeing space to prevent future config/session write failures."],

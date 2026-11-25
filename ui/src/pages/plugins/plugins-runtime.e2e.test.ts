@@ -1,5 +1,9 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import * as fixtures from "./plugins.e2e.test-support.ts";
 
 fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
@@ -23,13 +27,15 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     const row = page.locator(".plugin-catalog-detail");
     const button = (name: string, within = row) =>
       within.getByRole("button", { name, exact: true });
+    const toggle = row.getByRole("switch", { name: "Calendar Plus", exact: true });
     const setEnabled = "plugins.setEnabled";
     const enableParams = { pluginId: "calendar-plus", enabled: true };
     const runtime = { operationId: "enable-calendar", generation: 2, pluginIds: ["calendar-plus"] };
     await row.waitFor({ state: "visible" });
+    expect(await toggle.isChecked()).toBe(false);
     const connects = (await gateway.getRequests("connect")).length;
     await gateway.deferNext(setEnabled);
-    await button("Enable Calendar Plus").click();
+    await toggle.click();
     expect((await gateway.waitForRequest(setEnabled)).params).toEqual(enableParams);
     await gateway.rejectDeferred(setEnabled, {
       code: "INVALID_REQUEST",
@@ -40,6 +46,20 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     const accept = button("Enable Calendar Plus", consent);
     await accept.waitFor({ state: "visible" });
     await expect.poll(() => accept.isEnabled()).toBe(true);
+    expect(await consent.textContent()).toContain("Modify prompts");
+    expect(await consent.textContent()).toContain("Only allow this for plugins you trust.");
+    expect(await consent.textContent()).toContain("Allowed (default)");
+    if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
+      const dir = createControlUiE2eArtifactDir("prompt-permission-consent");
+      for (const width of [1440, 393]) {
+        const frame = await takeControlUiScreenshotFrame(page, consent, [accept], {
+          animations: "disabled",
+          viewport: { width, height: 1000 },
+        });
+        writeFileSync(path.join(dir, `consent-${width}.png`), frame.png);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
     await gateway.deferNext(setEnabled);
     await accept.click();
     const retry = await gateway.waitForRequest(setEnabled, { after: 1 });
@@ -60,7 +80,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
       restartRequired: false,
       runtime,
     });
-    await expect.poll(() => button("Disable Calendar Plus").isEnabled()).toBe(true);
+    await expect.poll(() => toggle.isChecked()).toBe(true);
     expect(await row.locator('.plugins-row-message[role="status"]').count()).toBe(0);
     const { mobileViewport } = fixtures;
     await page.setViewportSize(mobileViewport);
@@ -72,8 +92,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
         ),
       )
       .toBeLessThanOrEqual(1);
-    for (const action of ["Disable Calendar Plus", "Uninstall Calendar Plus"]) {
-      const control = button(action);
+    for (const control of [toggle, button("Uninstall Calendar Plus")]) {
       await control.waitFor({ state: "visible" });
       // A resize can replace the control after a separate visibility check.
       await expect
@@ -85,7 +104,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     }
     const loadError = `SyntaxError in /synthetic/${"a".repeat(160)}/helper.ts:1:30\nGateway generation 2: replacement not applied.`;
     await gateway.deferNext(setEnabled);
-    await button("Disable Calendar Plus").click();
+    await toggle.click();
     await gateway.waitForRequest(setEnabled, { after: 2 });
     await gateway.rejectDeferred(setEnabled, {
       code: "UNAVAILABLE",
@@ -101,6 +120,7 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     });
     const failure = page.locator('.plugins-row-message[role="alert"]');
     await failure.getByText(`${loadError}\nRuntime phase: prepare.`, { exact: true }).waitFor();
+    await expect.poll(() => toggle.isChecked()).toBe(true);
     expect(
       await failure.evaluate((element) => element.scrollWidth - element.clientWidth),
     ).toBeLessThanOrEqual(1);

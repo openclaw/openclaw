@@ -246,7 +246,8 @@ a:hover { color: var(--oc-text-primary); text-decoration: underline; text-underl
 .brand-mark { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .site-links { display: flex; align-items: center; justify-content: flex-end; gap: var(--oc-space-1); overflow-x: auto; white-space: nowrap; }
-.site-links a { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); color: var(--oc-text-muted); font: 650 13px/1 var(--oc-font-body); }
+.site-links a { color: var(--oc-text-muted); }
+.site-links .oc-segmented-item { min-height: 32px; padding: var(--oc-space-2) var(--oc-space-3); font: 650 13px/1 var(--oc-font-body); }
 .site-links a:hover { color: var(--oc-text-primary); text-decoration: none; }
 .site-links a.is-active { color: var(--oc-text-primary); background: var(--oc-surface-interactive-hover); }
 .theme-toggle { flex: 0 0 auto; width: 34px; min-height: 34px; height: 34px; padding: 0; color: var(--oc-text-primary); cursor: pointer; }
@@ -293,8 +294,8 @@ blockquote { border-left: 2px solid var(--oc-border-strong); padding: var(--oc-s
 .oc-resource-list-link, .resource-row { display: flex; align-items: center; justify-content: space-between; gap: var(--oc-space-3); padding: var(--oc-space-2) var(--oc-space-3); }
 .oc-avatar { position: relative; display: inline-grid; flex: 0 0 auto; place-items: center; overflow: hidden; border: 1px solid var(--oc-border-subtle); border-radius: var(--oc-radius-surface); background: var(--oc-surface-secondary-soft); color: var(--oc-accent-secondary); font-weight: 650; line-height: 1; }
 .oc-avatar::before { content: attr(data-initials); }
-/* Transparent failed images leave the CSS initials beneath them visible. */
-.oc-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; color: transparent; font-size: 0; }
+/* The badge reserves the square. A missing photo with empty alt has no intrinsic height. */
+.oc-avatar img { position: absolute; top: 0; left: 0; width: 100%; height: auto; }
 .oc-avatar-xs { width: 20px; height: 20px; font-size: var(--oc-font-size-xs); }
 .oc-avatar-md { width: 40px; height: 40px; font-size: var(--oc-font-size-sm); }
 .oc-avatar-sm { width: 36px; height: 36px; font-size: var(--oc-font-size-sm); }
@@ -418,7 +419,8 @@ body[data-report-page="report"] h2 { margin: 0; color: var(--oc-text-primary); f
 body[data-report-page="report"] .shell > .oc-section { margin: 0; padding: var(--oc-space-5) var(--oc-space-4); border-top: 1px solid var(--oc-border-subtle); }
 body[data-report-page="report"] .oc-section-header { margin-bottom: var(--oc-space-4); }
 body[data-report-page="report"] .section-note { max-width: 46ch; margin: 0; color: var(--oc-text-muted); font-size: var(--oc-font-size-xs); line-height: 1.45; text-align: right; }
-body[data-report-page="report"] .summary-markdown { color: var(--oc-text-primary); font-size: 15px; line-height: 1.48; }
+/* Report prose keeps macOS stem darkening so it does not read thin; navigation, headers and metadata keep the body's antialiased smoothing. */
+body[data-report-page="report"] .summary-markdown { color: var(--oc-text-primary); font-size: 15px; line-height: 1.48; -webkit-font-smoothing: auto; }
 body[data-report-page="report"] .summary-markdown p { margin: 0 0 12px; }
 body[data-report-page="report"] .summary-markdown p:last-child { margin-bottom: 0; }
 body[data-report-page="report"] .summary-markdown ul { display: grid; gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
@@ -454,7 +456,7 @@ body[data-report-page="report"] .person-body { min-width: 0; display: grid; gap:
 body[data-report-page="report"] .chips { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px; }
 body[data-report-page="report"] .theme { margin: 0; color: var(--oc-text-primary); font-size: 13px; line-height: 1.42; }
 body[data-report-page="report"] .theme + .theme { color: var(--oc-text-muted); }
-body[data-report-page="report"] .focus { margin: 0; color: var(--oc-text-primary); font-size: 14px; line-height: 1.48; }
+body[data-report-page="report"] .focus { margin: 0; color: var(--oc-text-primary); font-size: 14px; line-height: 1.48; -webkit-font-smoothing: auto; }
 body[data-report-page="report"] .person-numbers { display: grid; gap: 8px; align-content: start; }
 body[data-report-page="report"] .number-line { display: flex; justify-content: space-between; gap: 8px; color: var(--oc-text-muted); font-size: 13px; border-bottom: 1px solid var(--oc-border-subtle); padding-bottom: 5px; }
 body[data-report-page="report"] .number-line strong { color: var(--oc-text-primary); }

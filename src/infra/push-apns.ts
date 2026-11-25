@@ -502,7 +502,6 @@ async function sendApnsPush(
     payload: object;
     pushType: ApnsPushType;
   },
-  // Approval notifications have no lifecycle controls, including extra JS input fields.
   controls?: ApnsLifecycleControls,
 ): Promise<ApnsPushResult> {
   const transport = params.transport;
@@ -630,37 +629,43 @@ async function sendApnsPush(
 }
 
 export async function sendApnsExecApprovalAlert(
-  params: ApnsApprovalParams,
+  params: ApnsApprovalParams & Pick<ApnsLifecycleControls, "isCurrent">,
 ): Promise<ApnsPushResult> {
-  return await sendApnsPush({
-    transport: params,
-    payload: createApnsApprovalAlertPayload({
-      kind: "exec",
-      approvalId: params.approvalId,
-      gatewayDeviceId: params.gatewayDeviceId,
-      title: "Exec approval required",
-      body: "Open OpenClaw to review this request.",
-      category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
-    }),
-    pushType: "alert",
-  });
+  return await sendApnsPush(
+    {
+      transport: params,
+      payload: createApnsApprovalAlertPayload({
+        kind: "exec",
+        approvalId: params.approvalId,
+        gatewayDeviceId: params.gatewayDeviceId,
+        title: "Exec approval required",
+        body: "Open OpenClaw to review this request.",
+        category: EXEC_APPROVAL_NOTIFICATION_CATEGORY,
+      }),
+      pushType: "alert",
+    },
+    { isCurrent: params.isCurrent },
+  );
 }
 
 export async function sendApnsPluginApprovalAlert(
-  params: ApnsPluginApprovalAlertParams,
+  params: ApnsPluginApprovalAlertParams & Pick<ApnsLifecycleControls, "isCurrent">,
 ): Promise<ApnsPushResult> {
-  return await sendApnsPush({
-    transport: params,
-    payload: createApnsApprovalAlertPayload({
-      kind: "plugin",
-      approvalId: params.approvalId,
-      gatewayDeviceId: params.gatewayDeviceId,
-      title: normalizeOptionalString(params.title) ?? "Approval required",
-      body: resolvePluginApprovalAlertBody(params.description),
-      category: PLUGIN_APPROVAL_NOTIFICATION_CATEGORY,
-    }),
-    pushType: "alert",
-  });
+  return await sendApnsPush(
+    {
+      transport: params,
+      payload: createApnsApprovalAlertPayload({
+        kind: "plugin",
+        approvalId: params.approvalId,
+        gatewayDeviceId: params.gatewayDeviceId,
+        title: normalizeOptionalString(params.title) ?? "Approval required",
+        body: resolvePluginApprovalAlertBody(params.description),
+        category: PLUGIN_APPROVAL_NOTIFICATION_CATEGORY,
+      }),
+      pushType: "alert",
+    },
+    { isCurrent: params.isCurrent },
+  );
 }
 
 async function sendApnsApprovalResolvedWake(params: {

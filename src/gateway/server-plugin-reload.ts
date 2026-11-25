@@ -4,6 +4,7 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -28,6 +29,7 @@ import {
   getGatewayRestartDrainSignal,
   waitForGatewayRestartFenceSettlement,
 } from "../process/gateway-work-admission.js";
+import { broadcastPluginRegistryChanged } from "./events.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { preparePluginNodeCapabilityPublication } from "./plugin-node-capability.js";
 import type * as PluginBootstrap from "./server-plugin-bootstrap.js";
@@ -107,6 +109,7 @@ export async function reloadGatewayPlugins(
   let previousStopStarted = false;
   let previousHooksStopped = false;
   let previousCleanupFailed = false;
+  let runtimeRestorationFailed = false;
   let overlap = false;
   let candidateServices: PluginServicesHandle | undefined;
   let loaded: Awaited<ReturnType<typeof PluginBootstrap.prepareGatewayPluginLoad>> | undefined;
@@ -230,7 +233,7 @@ export async function reloadGatewayPlugins(
           pluginLookUpTable: lookup,
           pluginMetadataSnapshot: nextMetadata,
           replacePluginIds,
-          expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,
+          pluginLifecycle: params.pluginLifecycle,
           prepareRegistrationFailureCleanup: prepareRegistrationFailureCleanup(params.nextConfig),
           env: params.env,
         };
@@ -246,14 +249,17 @@ export async function reloadGatewayPlugins(
           !params.changedPaths.some(
             (key) => key === "transcripts" || key.startsWith("transcripts."),
           );
-        for (const warning of recovery.capture(changedPluginIds)) {
+        for (const warning of await recovery.capture(changedPluginIds)) {
           log.warn(warning);
           recordWarning(warning);
         }
         await checkpoint();
         // Refuse self-reload before stopping the plugin whose callback must finish this request.
         if (!overlap) {
-          facts.releaseResourceHandoff = assertResourceHandoff(resourceHandoffIds);
+          facts.releaseResourceHandoff = assertResourceHandoff(
+            resourceHandoffIds,
+            !params.pluginLifecycle,
+          );
         }
         const configEffects = params.prepareConfigEffects({
           pluginIds: changedPluginIds,
@@ -422,11 +428,7 @@ export async function reloadGatewayPlugins(
             },
             afterCommit: () => {
               try {
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(nextRegistry) },
-                  { dropIfSlow: true },
-                );
+                broadcastPluginRegistryChanged(broadcast, getPluginRegistryVersion(nextRegistry));
               } catch (error) {
                 activationErrors.push(error);
               }
@@ -467,30 +469,22 @@ export async function reloadGatewayPlugins(
             ),
           );
         });
-        if (activationErrors.length > 0) {
-          throw activationErrors.length === 1
-            ? activationErrors[0]
-            : new AggregateError(
-                activationErrors,
-                activationErrors.map(formatErrorMessage).join("; "),
-              );
-        }
+        throwCollectedErrors(activationErrors, activationErrors.map(formatErrorMessage).join("; "));
         facts.phase = "dispose";
         recordCleanup(
           await waitForPluginRegistryRetirement(previousRegistry, { deferConsumers: true }),
         );
         recordCleanup(await kernel.pluginMetadata.waitForRetirement());
-        const receipt = createPluginRuntimeApplication({
-          operationId: lifecycle.operationId,
-          generation: getPluginRuntimeGeneration(),
-          registry: nextRegistry,
-          pluginIds: changedPluginIds,
-          reloadPluginIds: params.pluginLifecycle?.reason === "reload" ? requestedIds : undefined,
-          warnings: [...warnings],
-        });
         return {
           activeChannels: new Set(nextRegistry.channels.map((entry) => entry.plugin.id)),
-          runtime: receipt,
+          runtime: createPluginRuntimeApplication({
+            operationId: lifecycle.operationId,
+            generation: getPluginRuntimeGeneration(),
+            registry: nextRegistry,
+            pluginIds: changedPluginIds,
+            reloadPluginIds: params.pluginLifecycle?.reason === "reload" ? requestedIds : undefined,
+            warnings: [...warnings],
+          }),
         };
       } catch (error) {
         let failure = includeServiceStopFailure(error);
@@ -609,10 +603,9 @@ export async function reloadGatewayPlugins(
                 await attempt(recoveryErrors, () =>
                   services.resumeMemory(memoryReplacement, previousConfig),
                 );
-                broadcast(
-                  "plugins.changed",
-                  { generation: getPluginRegistryVersion(restoredRegistry) },
-                  { dropIfSlow: true },
+                broadcastPluginRegistryChanged(
+                  broadcast,
+                  getPluginRegistryVersion(restoredRegistry),
                 );
               } else {
                 // Restored preparation must be able to retain the still-callable instances.
@@ -693,6 +686,7 @@ export async function reloadGatewayPlugins(
             try {
               await rollbackConfigEffects?.();
             } catch (rollbackError) {
+              runtimeRestorationFailed = true;
               facts.restored = false;
               onCleanupFailure("Plugin runtime rollback could not republish the model runtime")(
                 rollbackError,
@@ -712,6 +706,7 @@ export async function reloadGatewayPlugins(
             pluginIds: [...changedPluginIds].toSorted(),
             phase: facts.phase,
             committed: facts.committed,
+            ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
           },
           { cause: failure },
         );

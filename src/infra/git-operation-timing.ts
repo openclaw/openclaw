@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { areDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
@@ -7,6 +8,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
+import { formatErrorMessage } from "./errors.js";
 import { createFixedWindowBudget } from "./fixed-window-rate-limit.js";
 
 const diagnosticNow = () => performance.now();
@@ -59,7 +61,15 @@ export function startGitOperationTiming(
     let removalStageStartedAt = 0;
     let removalDurations: Partial<Record<RemovalStage, number>> | undefined;
     let inventory: { tracked: number; untracked: number } | undefined;
+    let recovery: "head" | "capture" | "none" | undefined;
     return {
+      recordRecovery(snapshotRef?: string) {
+        recovery = snapshotRef?.startsWith("refs/openclaw/snapshots/clean-v1/")
+          ? "head"
+          : snapshotRef
+            ? "capture"
+            : "none";
+      },
       recordInventory(counts: { tracked: number; untracked: number }) {
         inventory = counts;
       },
@@ -92,7 +102,7 @@ export function startGitOperationTiming(
         removalStage = next;
         removalStageStartedAt = now;
       },
-      finish(outcome: "returned" | "threw") {
+      finish(outcome: "returned" | "threw", error?: unknown) {
         try {
           const endedAt = performance.now();
           const durationMs = endedAt - startedAt;
@@ -132,10 +142,27 @@ export function startGitOperationTiming(
             callbackEntered:
               (kind === "ref-mutation" ? secondPhaseEnd : firstPhaseEnd) !== undefined,
             outcome,
+            ...(kind === "worktree-removal" && outcome === "threw"
+              ? {
+                  errorType: (error instanceof Error ? error.constructor.name : typeof error).slice(
+                    0,
+                    80,
+                  ),
+                  error: redactSupportDiagnosticLine(
+                    formatErrorMessage(error),
+                    { env: {}, stateDir: "", redactRelativePaths: true },
+                    500,
+                  ),
+                }
+              : {}),
             omittedObservations: state.omitted,
             ...details?.(),
             ...(kind === "worktree-removal"
-              ? { tracked: inventory?.tracked ?? null, untracked: inventory?.untracked ?? null }
+              ? {
+                  tracked: inventory?.tracked ?? null,
+                  untracked: inventory?.untracked ?? null,
+                  ...(recovery ? { recovery } : {}),
+                }
               : {}),
           };
           runWithDiagnosticTraceContext(trace, () =>

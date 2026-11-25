@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner-run-params.js";

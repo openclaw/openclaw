@@ -24,7 +24,7 @@ sidebarTitle: "Incident response"
 
 ### Audit
 
-1. Check Gateway logs with `openclaw logs` (or `openclaw --profile <profile> logs` for a named profile). The default path is `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`, unless `logging.file` overrides it.
+1. Check Gateway logs with `openclaw logs` (or `openclaw --profile <profile> logs` for a named profile). Default files are under the selected state directory's `logs/` directory, unless `logging.file` overrides it; see [log locations](/logging#where-logs-live).
 2. Review the relevant transcript(s): `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
 3. Review recent config changes that could have widened access: `gateway.bind`, `gateway.auth`, DM/group policies, `tools.elevated`, plugin changes.
 4. Re-run `openclaw security audit --deep` and confirm critical findings are resolved.

@@ -26,7 +26,6 @@ import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { readTranscriptLibraryStatus } from "./status.js";
 import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { cursorScope, encodeCursor } from "./store-read.js";
@@ -34,6 +33,7 @@ import { readTranscriptSessionMatches } from "./store-sqlite-read.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {

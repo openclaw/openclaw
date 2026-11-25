@@ -50,6 +50,7 @@ export function captureProgressActions(context: ProgressActionContext, canWrite:
       }
       state.settings = patchSettings({ chatShowTaskProgress: false });
       showToast({
+        severity: "success",
         message: t("chat.sessionDetails.progressHidden"),
         actionLabel: t("common.undo"),
         onAction: () => {

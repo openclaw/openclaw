@@ -91,7 +91,6 @@ async function runLiveCopilotTurn(params: {
   prompt: string;
   runId: string;
   sessionId: string;
-  toolAuthorityFingerprint: string;
   workspaceDir: string;
 }) {
   const admission = prepareAgentRunAdmission({
@@ -161,7 +160,6 @@ async function runLiveCopilotTurn(params: {
       },
       thinkLevel: "low" as const,
       timeoutMs: 90_000,
-      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       userTurnTranscriptRecorder: makeUserTurnRecorder(message),
       workspaceDir: params.workspaceDir,
       ...params.policy,
@@ -179,7 +177,6 @@ describeLive("Copilot tool policy live handoff", () => {
     const workspaceDir = tempDirs.make("openclaw-copilot-policy-live-");
     const sessionId = "copilot-policy-live-session";
     const sessionKey = `agent:copilot-policy-live-proof:${sessionId}`;
-    const toolAuthorityFingerprint = "copilot-policy-live-authority";
     const bindings = new Map<string, CopilotSessionBindingForTest>();
     const sessionStore = {
       async delete(key: string) {
@@ -216,7 +213,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once. Ask 'Select the live proof mode' with choices Alpha and Beta and no freeform. After the answer, reply briefly. Do not use any other tool.",
       runId: "copilot-policy-live-allowed",
       sessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     const allowedResult = await allowedTurn;
@@ -256,7 +252,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once and ask 'This question must be blocked'. If no such tool is available, reply exactly RESTRICTED-NO-ASK-USER.",
       runId: "copilot-policy-live-disabled-create",
       sessionId: disabledCreateSessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     expect(disabledCreateResult.terminal).toEqual({ kind: "ok" });
@@ -281,7 +276,6 @@ describeLive("Copilot tool policy live handoff", () => {
         "Call ask_user exactly once and ask 'This question must be blocked'. If no such tool is available, reply exactly RESTRICTED-NO-ASK-USER.",
       runId: "copilot-policy-live-restricted-resume",
       sessionId,
-      toolAuthorityFingerprint,
       workspaceDir,
     });
     expect(restrictedResult.terminal).toEqual({ kind: "ok" });

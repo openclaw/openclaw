@@ -19,6 +19,8 @@ export {
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 
+export const openAiAuthor = { provider: "openai", model: "gpt-4.1" } as const;
+
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 // These suites track contexts and close them in their existing afterEach hook.
@@ -175,10 +177,14 @@ export async function chatThreadDistanceFromBottom(page: Page): Promise<number> 
 }
 
 export async function waitForChatScrollIdle(page: Page): Promise<void> {
+  await waitForTranscriptScrollIdle(page.locator(".chat-pane-cache__pane--active .chat-thread"));
+}
+
+export async function waitForTranscriptScrollIdle(locator: Locator): Promise<void> {
   await expect
     .poll(
       () =>
-        page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
+        locator.evaluate(async (element) => {
           const thread = element as HTMLElement;
           const readGeometry = () => [
             thread.clientHeight,

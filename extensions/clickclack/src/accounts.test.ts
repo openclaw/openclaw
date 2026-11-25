@@ -6,6 +6,7 @@ import {
   listClickClackAccountIds,
   listEnabledClickClackAccounts,
   resolveClickClackAccount,
+  resolveClickClackAccountAsync,
 } from "./accounts.js";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -100,9 +101,11 @@ describe("ClickClack account resolution", () => {
         ["inherited", missingRootFile, "channels.clickclack.tokenFile"],
         ["work", missingAccountFile, "channels.clickclack.accounts.work.tokenFile"],
       ] as const) {
-        const account = resolveClickClackAccount({ cfg, accountId, env });
-        expect(account.configured).toBe(true);
-        expectUnavailable(account, configPath, "not-found", filePath);
+        for (const read of [resolveClickClackAccount, resolveClickClackAccountAsync]) {
+          const account = await read({ cfg, accountId, env });
+          expect(account.configured).toBe(true);
+          expectUnavailable(account, configPath, "not-found", filePath);
+        }
       }
     });
   });
@@ -123,8 +126,12 @@ describe("ClickClack account resolution", () => {
       }
 
       for (const [selectedFile, reason] of invalidFiles) {
-        const account = resolve({ token: "lower-priority-token", tokenFile: selectedFile });
-        expectUnavailable(account, "channels.clickclack.tokenFile", reason, selectedFile);
+        for (const read of [resolveClickClackAccount, resolveClickClackAccountAsync]) {
+          const account = await read({
+            cfg: accountConfig({ token: "lower-priority-token", tokenFile: selectedFile }),
+          });
+          expectUnavailable(account, "channels.clickclack.tokenFile", reason, selectedFile);
+        }
       }
     });
   });

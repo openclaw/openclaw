@@ -23,7 +23,6 @@ import {
   createPluginRegistryOwner,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
-  listImportedRuntimePluginIds,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
   waitForPluginRegistryRetirement,
@@ -326,31 +325,6 @@ describe("setActivePluginRegistry", () => {
       });
     },
   );
-
-  it("does not treat bundle-only loaded entries as imported runtime plugins", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({
-        id: "bundle-only",
-        name: "Bundle Only",
-        source: "/tmp/bundle",
-        origin: "bundled",
-        format: "bundle",
-        configSchema: true,
-      }),
-      createPluginRecord({
-        id: "runtime-plugin",
-        name: "Runtime Plugin",
-        source: "/tmp/runtime",
-        format: "openclaw",
-        configSchema: true,
-      }),
-    );
-
-    setActivePluginRegistry(registry);
-
-    expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
-  });
 
   it.each([
     {

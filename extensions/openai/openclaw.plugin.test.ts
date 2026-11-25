@@ -7,6 +7,7 @@ import {
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createOpenAIProvider } from "./provider-contract-api.js";
+import discoveryProvider from "./provider-discovery.js";
 import { buildOpenAISetupProvider } from "./setup-api.js";
 
 const WIZARD_METADATA_KEYS = [
@@ -36,7 +37,7 @@ function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProv
   return {
     ...pick(provider, "id", "label", "hookAliases", "docsPath", "envVars"),
     auth: provider.auth.map((method) => ({
-      ...pick(method, "id", "kind", "label", "hint"),
+      ...pick(method, "id", "kind", "label", "hint", "credentialImport"),
       wizard: comparableWizardFields(method.wizard ?? {}),
     })),
   };
@@ -85,7 +86,7 @@ it("classifies regional API hosts as public OpenAI endpoints", () => {
 it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
   expect(manifest.mediaUnderstandingProviderMetadata?.openai).toMatchObject({
     capabilities: ["image", "audio"],
-    defaultModels: { image: "gpt-6-astra", audio: "gpt-4o-transcribe" },
+    defaultModels: { image: "gpt-6-astra", audio: "gpt-transcribe" },
     autoPriority: { image: 20, audio: 20 },
   });
 });
@@ -102,33 +103,25 @@ it.each([
 });
 
 it("labels and orders OpenAI authentication choices", () => {
-  expect(choice("openai")).not.toHaveProperty("deprecatedChoiceIds");
+  expect(choice("openai")?.deprecatedChoiceIds).toEqual(["openai-device-code"]);
   const group = {
     groupId: "openai",
     groupLabel: "OpenAI",
-    groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+    groupHint: "Codex login, Sign in with ChatGPT, or API key",
   };
   for (const [id, choiceLabel, choiceHint] of [
-    ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
-    [
-      "openai-device-code",
-      "Codex login (device code)",
-      "Use a browser code when OpenClaw runs on a remote VM",
-    ],
+    ["openai", "Codex login", "Sign in with your ChatGPT account using a one-time code"],
     ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
     [
       "openai-token-sharing",
-      "Sign in with ChatGPT (Beta)",
-      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+      "Sign in with ChatGPT",
+      "Use your ChatGPT plan for eligible Responses API requests",
     ],
   ] as const) {
     expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });
   }
-  for (const id of ["openai", "openai-device-code"]) {
-    expect(choice(id)).not.toHaveProperty("assistantVisibility");
-  }
-  expect(choice("openai-device-code")?.onboardingFeatured).toBe(true);
-  expect(choice("openai")?.onboardingFeatured).not.toBe(true);
+  expect(choice("openai")).not.toHaveProperty("assistantVisibility");
+  expect(choice("openai")?.onboardingFeatured).toBe(true);
   expect(choices.find((entry) => entry.provider === "openai" && entry.method === "api-key")).toBe(
     choice("openai-api-key"),
   );
@@ -136,7 +129,7 @@ it("labels and orders OpenAI authentication choices", () => {
     choices
       .toSorted((a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0))
       .map((entry) => entry.choiceId),
-  ).toEqual(["openai-device-code", "openai", "openai-token-sharing", "openai-api-key"]);
+  ).toEqual(["openai", "openai-token-sharing", "openai-api-key"]);
 });
 
 it("keeps Spark suppression conditional on direct OpenAI API rows", () => {
@@ -159,7 +152,7 @@ it("keeps the Azure transport alias and Spark suppression owned by the manifest"
 });
 
 it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
-  const provider = createOpenAIProvider();
+  const provider = discoveryProvider;
   for (const entry of choices) {
     const key = `${entry.provider}:${entry.method}`;
     const method = provider.auth.find((candidate) => candidate.id === entry.method);
@@ -171,6 +164,7 @@ it("keeps manifest auth choices aligned with the lightweight provider descriptor
 });
 
 it.each([
+  ["catalog discovery", () => discoveryProvider],
   ["setup", buildOpenAISetupProvider],
   ["full runtime", buildOpenAIProvider],
 ])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {
