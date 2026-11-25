@@ -74,6 +74,19 @@ impl Rect {
             && self.height >= 0.0
     }
 
+    #[cfg(target_os = "linux")]
+    fn gtk_logical(self, device_pixel_ratio: f64, window_scale: f64) -> Self {
+        // The dashboard's DPR includes GTK's device scale and WebKit's page
+        // scale. GTK widget allocations only account for the former.
+        let scale = device_pixel_ratio / window_scale;
+        Self {
+            x: self.x * scale,
+            y: self.y * scale,
+            width: self.width * scale,
+            height: self.height * scale,
+        }
+    }
+
     fn clipped(self, width: f64, height: f64) -> Option<Self> {
         let left = self.x.max(0.0).min(width);
         let top = self.y.max(0.0).min(height);
@@ -141,6 +154,8 @@ enum Request {
         tab_id: Option<String>,
         rect: Option<Rect>,
         visible: bool,
+        #[cfg(target_os = "linux")]
+        device_pixel_ratio: Option<f64>,
     },
     ReleaseScope {
         scope: String,
@@ -595,6 +610,8 @@ impl NativeBrowserState {
                 tab_id,
                 rect,
                 visible,
+                #[cfg(target_os = "linux")]
+                device_pixel_ratio,
             } => {
                 identifier(&scope)?;
                 if rect.is_some_and(|rect| !rect.valid()) {
@@ -602,6 +619,18 @@ impl NativeBrowserState {
                 }
                 if let (true, Some(tab_id), Some(rect)) = (visible, tab_id, rect) {
                     host.tab(&tab_id)?;
+                    #[cfg(target_os = "linux")]
+                    let rect = if let Some(dpr) =
+                        device_pixel_ratio.filter(|dpr| dpr.is_finite() && *dpr > 0.0)
+                    {
+                        let window = app
+                            .get_window("main")
+                            .ok_or_else(|| "The main window is unavailable.".to_string())?;
+                        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+                        rect.gtk_logical(dpr, scale)
+                    } else {
+                        rect
+                    };
                     host.order += 1;
                     let order = host.order;
                     host.presentations.insert(
@@ -815,6 +844,26 @@ mod tests {
         host.presentations.clear();
         assert!(host.presentation("one").is_none());
         assert_eq!(host.tabs.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gtk_browser_bounds_include_webkit_page_scale_and_exclude_monitor_scale() {
+        let rect = Rect {
+            x: 120.0,
+            y: 144.0,
+            width: 360.0,
+            height: 220.0,
+        };
+        for (dpr, monitor_scale, expected) in [
+            (1.0, 1.0, (120.0, 144.0, 360.0, 220.0)),
+            (1.25, 1.0, (150.0, 180.0, 450.0, 275.0)),
+            (2.0, 2.0, (120.0, 144.0, 360.0, 220.0)),
+            (2.5, 2.0, (150.0, 180.0, 450.0, 275.0)),
+        ] {
+            let bounds = rect.gtk_logical(dpr, monitor_scale);
+            assert_eq!((bounds.x, bounds.y, bounds.width, bounds.height), expected);
+        }
     }
 
     #[test]
