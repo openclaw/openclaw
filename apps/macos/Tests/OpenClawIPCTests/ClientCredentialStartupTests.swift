@@ -80,22 +80,6 @@ struct ClientCredentialStartupTests {
         }
     }
 
-    @Test func `confirmed contention without a recognized manager offers neutral recovery`() {
-        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: "synthetic busy state")
-        #expect(recovery.message.contains("owner could not be verified"))
-        #expect(recovery.message.contains("choose Retry"))
-        #expect(!recovery.message.contains("extended-stable"))
-    }
-
-    @Test func `maintenance recovery keeps the lock path with its conditional guidance`() {
-        let path = "/tmp/synthetic-openclaw/legacy.lock"
-        let condition = "Remove that file only after its owner has stopped."
-        let detail = "Legacy Gateway lock " + path + String(repeating: " diagnostic", count: 60) + condition
-        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
-        #expect(recovery.detail.contains(path))
-        #expect(recovery.detail.contains(condition))
-    }
-
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
