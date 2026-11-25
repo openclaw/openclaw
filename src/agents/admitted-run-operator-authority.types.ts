@@ -55,6 +55,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   requesterOwner?: boolean;
   /** The only answer to what this turn may do; scopes above are its operator ceiling. */
   grant: TurnGrant;
+  /** Live original-source restriction on a participant child or completion turn. */
+  participationCeiling?: import("./participation-ceiling.js").BoundParticipationCeiling;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   signal?: AbortSignal;
@@ -78,4 +80,13 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     }>;
   }>;
   modelPolicy?: PreparedOperatorModelPolicy;
+}>;
+
+/** Additional request lifetime; never replaces the authenticated access grant. */
+export type AdmittedRunInvocationAuthority = Readonly<{
+  participationAuthority?: AdmittedRunOperatorAuthority;
+  participationCeiling?: import("./participation-ceiling.js").BoundParticipationCeiling;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+  release?: () => void;
 }>;
