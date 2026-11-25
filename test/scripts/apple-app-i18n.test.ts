@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFailed, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
@@ -93,17 +93,45 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
 });
 
 it("checks both app catalogs through the public strict and obsolete-warning paths", async () => {
+  const stages: Array<{ stage: string; started: number; finished?: number }> = [];
+  const startStage = (stage: string) => {
+    const record: (typeof stages)[number] = { stage, started: performance.now() };
+    if (stages.length < 45) {
+      stages.push(record);
+    }
+    return () => {
+      record.finished = performance.now();
+    };
+  };
+  // Keep failure diagnostics bounded without wrapping or rescheduling the real checks.
+  onTestFailed(() => {
+    const observedAt = performance.now();
+    console.error(
+      "Apple catalog drift stages:",
+      JSON.stringify(
+        stages.map(({ stage, started, finished }) => ({
+          stage,
+          elapsedMs: Math.round((finished ?? observedAt) - started),
+          completed: finished !== undefined,
+        })),
+      ),
+    );
+  });
   try {
     // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
     probe.captureWrites = true;
+    const finishSync = startStage("sync");
     const { build, macosBuild } = await apple.syncAppleAppI18n();
-    for (const [filePath, catalog] of [
-      [path.resolve("apps/ios/Resources/Localizable.xcstrings"), build.catalog],
+    finishSync();
+    for (const [platform, filePath, catalog] of [
+      ["ios", path.resolve("apps/ios/Resources/Localizable.xcstrings"), build.catalog],
       [
+        "macos",
         path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
         macosBuild.catalog,
       ],
     ] as const) {
+      const finishPrepare = startStage(`${platform}:prepare`);
       probe.catalogs.set(
         filePath,
         apple.serializeAppleCatalog({
@@ -111,7 +139,11 @@ it("checks both app catalogs through the public strict and obsolete-warning path
           strings: { ...catalog.strings, "Retired empty title": {} },
         }),
       );
+      finishPrepare();
+      const finishStrict = startStage(`${platform}:strict-stale`);
       await expect(apple.checkAppleAppI18n()).rejects.toThrow("is stale");
+      finishStrict();
+      const finishWarning = startStage(`${platform}:obsolete-warning`);
       const warnings: string[] = [];
       await expect(
         apple.checkAppleAppI18n({ reportObsolete: (message) => warnings.push(message) }),
@@ -119,7 +151,10 @@ it("checks both app catalogs through the public strict and obsolete-warning path
       expect(warnings).toEqual([
         `Apple obsolete catalog rows: ${path.relative(process.cwd(), filePath).replaceAll("\\", "/")} (keys=1)`,
       ]);
+      finishWarning();
+      const finishRestore = startStage(`${platform}:restore`);
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
+      finishRestore();
     }
   } finally {
     probe.captureWrites = false;

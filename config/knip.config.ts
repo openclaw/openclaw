@@ -478,6 +478,7 @@ const repositoryScriptEntries = [
   // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
   "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",

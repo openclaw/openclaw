@@ -19,7 +19,10 @@ import {
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
-import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
+import type {
+  UserChannelAuthorizationReference,
+  UserChannelIdentity,
+} from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import {
   readGatewayDeviceSourceAuthority,
@@ -127,12 +130,13 @@ function prepareRunRolePolicy(
     : undefined;
 }
 
-/** Admits a linked channel requester once while retaining explicit lifecycle cancellation. */
+/** Admits a channel sender once while retaining explicit lifecycle cancellation. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
   canonicalIdentity: AdmittedRunOperatorAuthority["canonicalIdentity"];
   openclawIdAccountIds?: readonly string[];
   recoveryReference?: UserChannelAuthorizationReference;
+  channelOwner?: UserChannelIdentity;
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   assignedRole: string | null;
   githubLogin?: string | null;
@@ -167,6 +171,7 @@ export function captureChannelOperatorRunAuthority(input: {
     channelRecoverySource: params.recoveryReference
       ? { reference: params.recoveryReference, modelPolicy }
       : undefined,
+    channelOwner: params.channelOwner,
     scopes: params.scopes,
     grant: decideTurnGrant(params.scopes),
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),

@@ -191,6 +191,14 @@ unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
+The startup copy checks readability before budgeting or copying files. It skips
+unreadable optional files (such as old config backups or macOS `._*` metadata)
+and subdirectories (such as an ext4 volume's `lost+found`) with a warning, without
+changing their contents or permissions. An unreadable state root, other filesystem
+errors, or an uncopied required database still stops the upgrade. Unreadable
+required database files, including their WAL and rollback journals, are refused
+before copying; an optional SQLite family is skipped together rather than copied
+without its unreadable journal.
 
 A failed private preparation uses the existing configuration refusal (exit 78).
 There is no portable-export or in-place trial fallback; restore missing copy
@@ -264,6 +272,16 @@ checks the serving version, committed trial, schema, and seeded row counts
 and contents. Crash-after-migration enforcement is being added with the
 store-custody fix; it is not claimed by this lane yet. The fixture changes
 scratch source only, without changing the shipped schema or other platform cells.
+
+For schema-version or migration changes, CI additionally boots the tested
+merge build on a fixture created by the PR fork-point release, kills it
+before Gateway listen, and records committed schemas and reader floors from
+copies. Its rollback projection restores T's config preimage and raised-floor
+SQLite stores only; other databases stay byte-exact. The previous release must
+then serve its seeded cron, sessions, and message history. Lazy stores that
+did not advance are reported as untouched, not claimed migrated. The
+compatibility gate becomes required when the candidate includes the
+reader-floor contract; fixture, target-schema, and integrity errors always fail.
 
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
@@ -450,6 +468,18 @@ files. Chain failure retains the generic rebuild and pins the previous files;
 invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The private copy also retains the root config’s referenced `$include` files, including
+siblings of an external config root and files inside an excluded workspace. It does
+not copy the rest of that workspace. Include files stay separate, and invalid
+includes still prevent publication. If a protected release trial needs to rewrite
+an include outside the launcher’s recovery paths, run `openclaw doctor --fix`
+first. This includes external includes, deeply nested workspace files, and files
+below excluded recovery directories such as `tmp` or `logs`. Ordinary first-start
+upgrades publish changed includes with the existing backed-up file swap. Changed
+config files and their Doctor backups are staged beside their destinations before
+the swap plan is published, including when an included file is on a separately
+mounted workspace and the root config is inside the state directory.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on

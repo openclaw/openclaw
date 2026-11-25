@@ -16,7 +16,7 @@ import { registerIngressPrincipalRecovery } from "../../gateway/remote-ingress-p
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "../../gateway/session-operator-sources.js";
-import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "../../gateway/session-sharing-authorization-async.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../../plugins/gateway-ingress.types.js";
 import type { CronStoredJob } from "../types.js";
 
