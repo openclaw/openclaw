@@ -20,6 +20,7 @@ type ProviderLoginSessionAdoption =
         authProfileOverride: string;
         authProfileOverrideSource: "user";
         authProfileOverrideCompactionCount: undefined;
+        authProfileOverrideRequired: undefined;
       };
     }
   | { status: "rejected" };
@@ -118,6 +119,7 @@ export function decideProviderLoginSessionAdoption(params: {
           authProfileOverride: params.nextProfileId,
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: undefined,
+          authProfileOverrideRequired: undefined,
         },
       }
     : { status: "unchanged" };
@@ -131,6 +133,7 @@ export function isProviderLoginPatchPersisted(
   return (
     persisted.authProfileOverride === nextProfileId &&
     persisted.authProfileOverrideSource === "user" &&
-    persisted.authProfileOverrideCompactionCount === undefined
+    persisted.authProfileOverrideCompactionCount === undefined &&
+    persisted.authProfileOverrideRequired === undefined
   );
 }

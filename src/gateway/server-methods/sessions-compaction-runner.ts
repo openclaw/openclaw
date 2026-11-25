@@ -238,6 +238,9 @@ export async function runGatewaySessionCompaction(
       authProfileId:
         compactionCliTarget.cliSessionBinding?.authProfileId ?? params.entry.authProfileOverride,
       authProfileIdSource: resolveCollapsedSessionAuthPinSource(params.entry),
+      requiredAuthProfileId: params.entry.authProfileOverrideRequired
+        ? params.entry.authProfileOverride
+        : undefined,
       agentHarnessId: compactionCliTarget.agentHarnessId,
       cliSessionId: compactionCliTarget.cliSessionId,
       cliSessionBinding: compactionCliTarget.cliSessionBinding,

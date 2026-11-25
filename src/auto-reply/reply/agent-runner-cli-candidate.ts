@@ -300,7 +300,7 @@ export async function runCliFallbackCandidate(
         if (
           params.candidateRun.authProfileRequired &&
           params.candidateRun.authProfileId &&
-          authProfileId !== params.candidateRun.authProfileId
+          (!allowCliAuthProfileForwarding || authProfileId !== params.candidateRun.authProfileId)
         ) {
           throw createSelectedAuthProfileUnavailableError({
             profileId: params.candidateRun.authProfileId,

@@ -209,6 +209,7 @@ export async function resolveEmbeddedModelSelection(params: {
       applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        preserveAuthProfileOverride: entry.authProfileOverrideRequired,
       }).updated;
     let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
     const repaired = repairProviderWrappedModelOverride({

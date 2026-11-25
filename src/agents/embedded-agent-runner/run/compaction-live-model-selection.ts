@@ -7,6 +7,7 @@ export function resolveCompactionLiveModelSelection(params: {
     model: string;
     authProfileId?: string;
     authProfileIdSource: "auto" | "user";
+    requiredAuthProfileId?: string;
   };
   requested?: LiveSessionModelSelection;
 }): (typeof params)["current"] {
@@ -20,6 +21,7 @@ export function resolveCompactionLiveModelSelection(params: {
       ...selection,
       authProfileId: requested.authProfileId,
       authProfileIdSource: requested.authProfileIdSource ?? "auto",
+      ...(requested.authProfileRequired ? { requiredAuthProfileId: requested.authProfileId } : {}),
     };
   }
   if (normalizeProviderId(requested.provider) === normalizeProviderId(current.provider)) {

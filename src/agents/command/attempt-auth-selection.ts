@@ -84,7 +84,11 @@ export async function prepareCommandRuntimeAuthProfile(
   const required = params.sessionEntry?.authProfileOverrideRequired
     ? params.sessionEntry.authProfileOverride?.trim()
     : undefined;
-  if (options.useCliExecution && required && authProfileId !== required) {
+  if (
+    options.useCliExecution &&
+    required &&
+    (!options.allowCliAuthProfileForwarding || authProfileId !== required)
+  ) {
     throw createSelectedAuthProfileUnavailableError({
       profileId: required,
       provider: params.providerOverride,

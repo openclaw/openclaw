@@ -30,6 +30,7 @@ export async function readCompactionTranscriptBytes(params: {
     | "workspaceDir"
     | "authProfileId"
     | "authProfileIdSource"
+    | "requiredAuthProfileId"
     | "runtimeAuthPlan"
   >;
 }): Promise<number | undefined> {
@@ -67,6 +68,7 @@ export async function readCompactionTranscriptBytes(params: {
         authProfileStore: getPreparedRuntimeAuthProfileStoreSnapshot(runtime.agentDir),
         sessionAuthProfileId: runtime.authProfileId,
         sessionAuthProfileSource: runtime.authProfileIdSource,
+        requiredAuthProfileId: runtime.requiredAuthProfileId,
         harnessId: "openclaw",
       }).plan;
     const model = applyConfiguredProviderOverrides({

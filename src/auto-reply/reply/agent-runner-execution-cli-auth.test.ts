@@ -103,6 +103,17 @@ describe("executeAgentTurn: CLI credential selection", () => {
       expected: googleProfile,
     },
     {
+      name: "refuses a required profile on an unsupported custom CLI backend",
+      selected: customProfile,
+      source: "user",
+      required: true,
+      primary: "custom-cli",
+      provider: "custom-cli",
+      backend: "custom-cli",
+      profiles: [customProfile],
+      error: "is unavailable",
+    },
+    {
       name: "retains existing scoped forwarding for a custom CLI backend",
       selected: customProfile,
       source: "user",
@@ -124,6 +135,7 @@ describe("executeAgentTurn: CLI credential selection", () => {
     followupRun.run.model = model;
     followupRun.run.authProfileId = testCase.selected;
     followupRun.run.authProfileIdSource = testCase.source;
+    followupRun.run.authProfileRequired = "required" in testCase ? testCase.required : undefined;
     followupRun.run.thinkingCatalog = [{ provider: testCase.provider, id: model, input: ["text"] }];
     const profiles = Object.fromEntries(testCase.profiles.map((id) => [id, credentials[id]]));
     followupRun.run.config = {

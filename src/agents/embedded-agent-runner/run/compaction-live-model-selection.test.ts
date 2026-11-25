@@ -6,6 +6,7 @@ const current = {
   model: "claude-sonnet-4-6",
   authProfileId: "anthropic:default",
   authProfileIdSource: "user" as const,
+  requiredAuthProfileId: "anthropic:default",
 };
 
 describe("resolveCompactionLiveModelSelection", () => {

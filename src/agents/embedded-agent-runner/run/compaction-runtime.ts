@@ -192,6 +192,7 @@ async function executeRecoveryCompaction(
         modelCallUrgency: resolveModelCallUrgency(runParams),
         authProfileId: input.modelSelection.authProfileId,
         authProfileIdSource: input.modelSelection.authProfileIdSource,
+        requiredAuthProfileId: input.modelSelection.requiredAuthProfileId,
         runtimeAuthPlan: input.runtimeAuthPlan,
         workspaceDir: input.workspaceDir,
         agentDir: input.agentDir,

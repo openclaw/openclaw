@@ -303,3 +303,22 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     activePreparedAuthPlan: resolvedAuthPreparation.plan,
   };
 }
+
+/** Keep account provenance and the delegated requirement together at attempt handoff. */
+export function projectEmbeddedAttemptAuthSelection(
+  params: Pick<
+    RunEmbeddedAgentInternalParams,
+    "authProfileBinding" | "authProfileIdSource" | "requiredAuthProfileId"
+  >,
+  profileId: string | undefined,
+  explicitProfile: boolean,
+) {
+  const authProfileIdSource: RunEmbeddedAgentInternalParams["authProfileIdSource"] =
+    params.authProfileBinding ? params.authProfileIdSource : explicitProfile ? "user" : "auto";
+  return {
+    authProfileId: profileId,
+    authProfileIdSource,
+    authProfileBinding: params.authProfileBinding,
+    requiredAuthProfileId: params.requiredAuthProfileId,
+  };
+}

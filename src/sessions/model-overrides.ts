@@ -179,6 +179,7 @@ export function repairProviderWrappedModelOverride(params: {
   if (runtimeProvider && runtimeModel === wrappedModel && runtimeProvider !== overrideProvider) {
     return applyModelOverrideToSessionEntry({
       entry: params.entry,
+      preserveAuthProfileOverride: params.entry.authProfileOverrideRequired,
       selection: {
         provider: runtimeProvider,
         model: runtimeModel,
@@ -192,6 +193,7 @@ export function repairProviderWrappedModelOverride(params: {
   if (params.defaultProvider !== overrideProvider && params.defaultModel === wrappedModel) {
     return applyModelOverrideToSessionEntry({
       entry: params.entry,
+      preserveAuthProfileOverride: params.entry.authProfileOverrideRequired,
       selection: {
         provider: params.defaultProvider,
         model: params.defaultModel,
