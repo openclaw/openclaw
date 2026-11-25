@@ -7,7 +7,7 @@ export const APPEARANCE_SETTINGS = defineSettingsPage({
   settings: {
     "local.themeMode": { label: "Color mode" },
     "local.theme": { label: "Theme" },
-    "local.customTheme": { label: "Import from tweakcn" },
+    "local.customTheme": { label: "Import from tweakcn", within: "local.theme" },
     "local.accent": { label: "Accent color" },
     "local.tabIcon": { label: "Browser tab icon" },
     "local.locale": { label: "Language" },

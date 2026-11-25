@@ -149,6 +149,8 @@ suite.define(() => {
           settingRow(page, "agents.defaults.modelPolicy").getAttribute("data-settings-arrival"),
         )
         .toBe("");
+      await page.goto(placeUrl("local.customTheme"));
+      await expectArrival(page, settingRow(page, "local.customTheme"), "Import from tweakcn");
       // A key press ends the mark and edits nothing.
       await page.goto(placeUrl("gateway.publicOrigin"));
       const row = settingRow(page, "gateway.publicOrigin");
