@@ -21,22 +21,46 @@ export async function requestLogsTail(
   if (!follow) {
     return await callGatewayFromCliWithTransport("logs.tail", opts, params, extra);
   }
-  if (follow.request) {
+  // Each follow poll, including connecting for the first one, keeps the --timeout deadline.
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout ?? undefined, 30_000);
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const signal = extra.signal ? AbortSignal.any([extra.signal, deadline]) : deadline;
+  try {
+    if (follow.request) {
+      return await follow.request("logs.tail", params, { timeoutMs: null, signal });
+    }
+    return await openFollowConnection(opts, params, extra, follow, signal);
+  } catch (error) {
     // A failed poll retires the connection; the follow retry path reconnects.
-    return await follow
-      .request("logs.tail", params, {
-        timeoutMs: parseTimeoutMsWithFallback(opts.timeout ?? undefined, 30_000),
-        signal: extra.signal,
-      })
-      .catch((error: unknown) => {
-        follow.close?.();
-        throw error;
-      });
+    follow.close?.();
+    throw deadline.aborted && !extra.signal?.aborted
+      ? new Error(`gateway timeout after ${timeoutMs}ms`)
+      : error;
   }
+}
+
+async function openFollowConnection(
+  opts: LogsTailCall[1],
+  params: LogsTailCall[2],
+  extra: NonNullable<LogsTailCall[3]>,
+  follow: LogsFollowConnection,
+  pollSignal: AbortSignal,
+): Promise<unknown> {
   const firstResult = Promise.withResolvers<unknown>();
-  // Keep the connection after its first response; only connecting has a deadline.
+  // The poll deadline may end the connection only until its first response arrives.
+  const connectionAbort = new AbortController();
+  let admitted = false;
+  const abortUnadmitted = () => {
+    if (!admitted) {
+      connectionAbort.abort();
+    }
+  };
+  pollSignal.addEventListener("abort", abortUnadmitted, { once: true });
   const call = callGatewayFromCliWithTransport("logs.tail", opts, params, {
     ...extra,
+    signal: extra.signal
+      ? AbortSignal.any([extra.signal, connectionAbort.signal])
+      : connectionAbort.signal,
     timeoutMs: null,
     onResponse: (request, connectionSignal, result) => {
       const connection = Promise.withResolvers<void>();
@@ -44,6 +68,7 @@ export async function requestLogsTail(
         follow.request = undefined;
         connection.resolve();
       };
+      admitted = true;
       follow.request = request;
       follow.close = drop;
       connectionSignal.addEventListener("abort", drop, { once: true });

@@ -412,20 +412,26 @@ it("retries loopback close errors in --follow mode instead of tailing fallback f
   expect(stdout).not.toContain("local fallback line");
 });
 
-it("reuses one Gateway connection for --follow polls and reconnects after a poll timeout", async () => {
+it("reuses one Gateway connection for --follow polls and keeps the --timeout deadline", async () => {
+  const untilAborted = (signal: AbortSignal) => {
+    const pending = Promise.withResolvers<never>();
+    signal.addEventListener("abort", () => pending.reject(signal.reason));
+    return pending.promise;
+  };
   const request = vi
     .fn()
     .mockResolvedValueOnce(logPage(["second poll"], 2))
-    .mockRejectedValueOnce(new Error("gateway request timeout for logs.tail"));
+    .mockImplementationOnce((_method, _params, options) => untilAborted(options.signal));
   callGatewayFromCli
     .mockImplementationOnce(async (_method, _opts, _params, extra) => {
       await extra.onResponse(request, new AbortController().signal, logPage(["first poll"], 1));
     })
+    .mockImplementationOnce((_method, _opts, _params, extra) => untilAborted(extra.signal))
     .mockRejectedValueOnce(new Error("stop after reconnect"));
 
-  const { stdout, stderr } = await runFailure(follow);
+  const { stdout, stderr } = await runFailure([...follow, "--timeout", "5"]);
 
-  expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+  expect(callGatewayFromCli).toHaveBeenCalledTimes(3);
   expect(request).toHaveBeenNthCalledWith(
     1,
     "logs.tail",
@@ -433,7 +439,8 @@ it("reuses one Gateway connection for --follow polls and reconnects after a poll
     expect.any(Object),
   );
   expectText(stdout, ["first poll", "second poll"]);
-  expectText(stderr, ["gateway disconnected", "stop after reconnect"]);
+  expect(stderr.match(/gateway disconnected/g)).toHaveLength(2);
+  expectText(stderr, ["stop after reconnect"]);
 });
 
 it.each(["text", "json"])("redacts Gateway URLs in %s errors", async (mode) => {

@@ -161,11 +161,7 @@ function isLocalGatewayRpcUnavailableError(error: unknown): boolean {
 }
 
 function isPlainGatewayRequestUnavailableError(message: string): boolean {
-  return (
-    message.startsWith("gateway closed (") ||
-    message === "gateway request timeout for logs.tail" ||
-    /^gateway timeout after \d+ms\b/u.test(message)
-  );
+  return message.startsWith("gateway closed (") || /^gateway timeout after \d+ms\b/u.test(message);
 }
 
 async function readSystemdJournalFallback(params: {
