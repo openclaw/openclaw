@@ -151,7 +151,6 @@ const catalog = {
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
       configureCapability: "Configure",
       holdToRecordSetting: "Hold the mic button to dictate",
-      holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
@@ -175,7 +174,6 @@ const catalog = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
-      voiceGestureHint: "Tap for voice chat · Hold to dictate",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",

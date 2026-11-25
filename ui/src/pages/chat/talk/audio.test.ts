@@ -155,6 +155,31 @@ describe("RealtimeTalkMediaStreamMeter", () => {
     },
   );
 
+  it("resumes playback metering when the tab becomes visible after opening hidden", () => {
+    vi.useFakeTimers();
+    const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const sample = vi.fn((samples: Float32Array) => samples.fill(0.2));
+    const analyser = {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: sample,
+    };
+    const meter = new RealtimeTalkMediaStreamMeter(vi.fn());
+    meter.startAnalyser(analyser as unknown as AnalyserNode);
+    expect(sample).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+
+    hidden.mockReturnValue(false);
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(sample).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(100);
+    expect(sample).toHaveBeenCalledTimes(2);
+
+    meter.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("reclaims its interval when the initial level callback stops it", () => {
     vi.useFakeTimers();
     const close = vi.fn(async () => undefined);

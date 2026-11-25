@@ -1028,58 +1028,6 @@
   display: none;
 }
 
-.chat-send-btn--hold-enabled {
-  touch-action: none;
-  -webkit-touch-callout: none;
-  user-select: none;
-}
-
-@property --chat-dictation-hold-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-/* The hold threshold is functional feedback, not decoration: the ring fills
-   linearly until dictation latches, then the ordinary Stop state takes over. */
-.chat-send-btn--dictation-arming {
-  position: relative;
-}
-
-.chat-send-btn--dictation-arming::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  padding: 2px;
-  border-radius: inherit;
-  background: conic-gradient(
-    from -90deg,
-    var(--accent) 0deg var(--chat-dictation-hold-angle),
-    transparent var(--chat-dictation-hold-angle) 360deg
-  );
-  -webkit-mask:
-    linear-gradient(white 0 0) content-box,
-    linear-gradient(white 0 0);
-  mask-composite: exclude;
-  /* Keep the visible fill aligned with HOLD_PROGRESS_MS in composer-dictation.ts. */
-  animation: chat-dictation-hold-progress 350ms linear forwards;
-  pointer-events: none;
-}
-
-@keyframes chat-dictation-hold-progress {
-  to {
-    --chat-dictation-hold-angle: 360deg;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-send-btn--dictation-arming::after {
-    --chat-dictation-hold-angle: 360deg;
-    background: color-mix(in srgb, var(--accent) 52%, transparent);
-    animation: none;
-  }
-}
-
 .agent-chat__video-preview {
   position: absolute;
   left: 50%;

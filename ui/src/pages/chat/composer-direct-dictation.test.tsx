@@ -23,11 +23,6 @@ const dictationHarness = vi.hoisted(() => {
       return this.active;
     }
 
-    handleClick = vi.fn(() => {
-      if (this.active) {
-        void this.finishActive();
-      }
-    });
     startDirect = vi.fn(() => {
       this.active = true;
       this.dispatchEvent(new Event("change"));
@@ -63,9 +58,6 @@ const dictationHarness = vi.hoisted(() => {
     }
     dispose() {
       this.active = false;
-    }
-    handlePointerDown() {
-      this.active = true;
     }
   }
   const harness = {
@@ -184,14 +176,12 @@ describe("DirectDictationControl", () => {
     microphone?.click();
 
     expect(microphone).not.toBeNull();
-    expect(microphone?.classList.contains("chat-send-btn--hold-enabled")).toBe(false);
     expect(
       (microphone?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
         ?.content,
     ).toBe("Dictate");
     expect(captureSelection).toHaveBeenCalledOnce();
     expect(dictationHarness.controllers[0]?.startDirect).toHaveBeenCalledOnce();
-    expect(dictationHarness.controllers[0]?.handleClick).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
     control.dispose();
   });
@@ -299,7 +289,7 @@ describe("DirectDictationControl", () => {
 
     control.prepare("agent-a");
     const routeAController = dictationHarness.controllers[0];
-    routeAController?.handlePointerDown();
+    routeAController?.startDirect();
     const routeACommit = dictationHarness.options?.onCommit;
 
     control.prepare("agent-a");

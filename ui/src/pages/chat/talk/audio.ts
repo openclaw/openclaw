@@ -135,6 +135,8 @@ export class RealtimeTalkMediaStreamMeter {
     this.analyser = analyser;
     analyser.fftSize = this.samples.length;
     analyser.smoothingTimeConstant = 0;
+    // Playback meters have no media stream: a tab hidden at open must still resume sampling.
+    this.releaseVisibility ??= listen(document, "visibilitychange", () => this.updateSampling());
     this.updateSampling();
   }
 

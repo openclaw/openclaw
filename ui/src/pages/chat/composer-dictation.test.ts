@@ -119,21 +119,9 @@ function click(target: HTMLElement) {
   target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 }
 
-function pointer(type: string): Event {
-  const event = new MouseEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    clientX: 50,
-    clientY: 50,
-    button: 0,
-  });
-  Object.defineProperty(event, "pointerId", { value: 7 });
-  return event;
-}
-
 type ControllerOptions = ConstructorParameters<typeof ComposerDictationOwner>[0];
 function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
-  const callbacks = { onCommit: vi.fn(), onError: vi.fn(), onTap: vi.fn() };
+  const callbacks = { onCommit: vi.fn(), onError: vi.fn() };
   const options = {
     client: createClient(),
     connected: true,
@@ -146,19 +134,17 @@ function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client">
   controllers.push(controller);
   return { controller, options, ...callbacks };
 }
-function pointerTarget(target: HTMLElement) {
-  target.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 100 }) as DOMRect;
-  target.setPointerCapture = vi.fn();
-  target.releasePointerCapture = vi.fn();
-  return target;
-}
 function createHarness(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
   const harness = controllerFixture(overrides);
-  const target = pointerTarget(document.createElement("button"));
-  target.addEventListener("pointerdown", (event) =>
-    harness.controller.handlePointerDown(event as PointerEvent),
-  );
-  target.addEventListener("click", (event) => harness.controller.handleClick(event));
+  const target = document.createElement("button");
+  // Mirrors the microphone button: a tap starts dictation, the next tap stops and keeps it.
+  target.addEventListener("click", () => {
+    if (harness.controller.active) {
+      void harness.controller.finishActive();
+    } else {
+      harness.controller.startDirect();
+    }
+  });
   document.body.append(target);
   return { ...harness, target };
 }
@@ -182,7 +168,7 @@ function createButtonHarness() {
   );
   const target = container.querySelector("button");
   assert.isNotNull(target);
-  return { ...harness, target: pointerTarget(target) };
+  return { ...harness, target };
 }
 
 async function startDirect(controller: ComposerDictationOwner) {
@@ -194,16 +180,14 @@ async function startDirect(controller: ComposerDictationOwner) {
   await started.value;
 }
 async function startHold(target: HTMLElement): Promise<void> {
-  target.dispatchEvent(pointer("pointerdown"));
-  await vi.advanceTimersByTimeAsync(500);
+  click(target);
+  await vi.advanceTimersByTimeAsync(0);
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
   );
 }
 
-async function releaseLatched(target: HTMLElement): Promise<void> {
-  document.dispatchEvent(pointer("pointerup"));
-  click(target);
+async function settle(): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
@@ -578,23 +562,6 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it("consumes release after the pointer enters the visible hold state", async () => {
-    const { controller, onTap, target } = createHarness();
-
-    target.dispatchEvent(pointer("pointerdown"));
-    await vi.advanceTimersByTimeAsync(150);
-    expect(controller.arming).toBe(true);
-    document.dispatchEvent(pointer("pointerup"));
-    click(target);
-
-    expect(onTap).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-    expect(controller.locksComposer).toBe(false);
-
-    click(target);
-    expect(onTap).toHaveBeenCalledOnce();
-  });
-
   it.each([
     [
       new DOMException("blocked", "NotAllowedError"),
@@ -615,8 +582,7 @@ describe("ComposerDictationOwner", () => {
     getUserMedia.mockRejectedValueOnce(error);
     const { controller, onError, target } = createHarness();
     try {
-      target.dispatchEvent(pointer("pointerdown"));
-      await vi.advanceTimersByTimeAsync(500);
+      click(target);
       await waitForFast(() =>
         expect(onError).toHaveBeenCalledWith(message, { kind: "start", preservesText: false }),
       );
@@ -664,19 +630,7 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it("does not swallow the next click after a hold is cancelled by blur", async () => {
-    const { controller, onTap, target } = createHarness();
-
-    target.dispatchEvent(pointer("pointerdown"));
-    window.dispatchEvent(new Event("blur"));
-    await Promise.resolve();
-    click(target);
-
-    expect(onTap).toHaveBeenCalledOnce();
-    expect(controller.locksComposer).toBe(false);
-  });
-
-  it.each(["click", "blur", "visibilitychange"])("commits once after latched %s", async (type) => {
+  it.each(["blur", "visibilitychange"])("commits once after latched %s", async (type) => {
     const order = recordRequests();
     const stopTrack = vi.fn();
     getUserMedia.mockImplementation(async () => {
@@ -704,12 +658,10 @@ describe("ComposerDictationOwner", () => {
     expect(controller.transcript).toBe("hello wor");
     transcript("hello world");
     emit({ type: "partial", text: "next wor" });
-    await releaseLatched(target);
+    await settle();
     // A tab switch fires blur then visibilitychange; the second interruption keeps the commit.
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    (type === "click" ? target : type === "blur" ? window : document).dispatchEvent(
-      new Event(type),
-    );
+    (type === "blur" ? window : document).dispatchEvent(new Event(type));
     document.dispatchEvent(new Event("visibilitychange"));
     expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
     expect(stopTrack).toHaveBeenCalledOnce();
@@ -902,26 +854,20 @@ describe("ComposerDictationOwner", () => {
     expectClosed();
   });
 
-  it("disables hold while Talk owns the microphone and when the setting is off", async () => {
+  it("does not start dictation while Talk owns the microphone or when disabled", () => {
     const talk = createHarness({ realtimeTalkActive: true });
-    talk.target.dispatchEvent(pointer("pointerdown"));
-    await vi.advanceTimersByTimeAsync(300);
-    expect(request).not.toHaveBeenCalled();
-    expect(talk.onTap).not.toHaveBeenCalled();
+    expect(talk.controller.startDirect()).toBe(false);
     talk.controller.dispose();
 
-    const settingOff = createHarness({ enabled: false });
-    settingOff.target.dispatchEvent(pointer("pointerdown"));
-    settingOff.target.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(300);
-    expect(settingOff.onTap).toHaveBeenCalledOnce();
+    const disabled = createHarness({ enabled: false });
+    expect(disabled.controller.startDirect()).toBe(false);
     expect(request).not.toHaveBeenCalled();
   });
 });
 
 describe("composer microphone button", () => {
   it("starts dictation on one microphone tap and stops and keeps it on the next", async () => {
-    const { controller, onCommit, onTap, target } = createButtonHarness();
+    const { controller, onCommit, target } = createButtonHarness();
     click(target);
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
@@ -935,7 +881,6 @@ describe("composer microphone button", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep recording", true);
     expect(controller.active).toBe(false);
-    expect(onTap).not.toHaveBeenCalled();
   });
 });
 
