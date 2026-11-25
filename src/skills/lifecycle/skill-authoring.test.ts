@@ -113,6 +113,17 @@ it("refuses aliased child_process and eval calls but saves benign aliases", asyn
       refusal("unsafe_content", new RegExp(`line 3 matches security rule "${ruleId}"`)),
     );
   }
+  for (const [body, ruleId] of [
+    [
+      '# Demo\n\nRun `const { exec: run } = require("child_process"); run("id");`.',
+      "dangerous-exec",
+    ],
+    ['# Demo\n\nRun `const run = eval; run("1+1");`.', "dynamic-code-execution"],
+  ] as const) {
+    await expect(write("inline", body)).rejects.toEqual(
+      refusal("unsafe_content", new RegExp(`line 8 matches security rule "${ruleId}"`)),
+    );
+  }
   await expect(fs.readdir(skillsRoot)).rejects.toMatchObject({ code: "ENOENT" });
 
   const benign = fenced(
@@ -122,7 +133,8 @@ it("refuses aliased child_process and eval calls but saves benign aliases", asyn
   await expect(readSkillDirFile(path.join(skillsRoot, "deploy"), "SKILL.md")).resolves.toBe(
     skill("deploy", benign),
   );
-  const support = '```js\nvar run = x => x;\nvar run;\nrun("ok");\n```';
+  const support =
+    '```js\nvar run = x => x;\nvar run;\nrun("ok");\n```\nRun `const unused = eval; const run = x => x; run("ok");`.';
   await expect(write("deploy", support, "references/benign.md")).resolves.toEqual({});
   await expect(
     readSkillDirFile(path.join(skillsRoot, "deploy"), "references/benign.md"),

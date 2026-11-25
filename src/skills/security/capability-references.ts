@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import type { Binding, NodePath, Scope, Visitor } from "@babel/traverse";
 import type * as t from "@babel/types";
 import { markdownToIRWithMeta } from "../../../packages/markdown-core/src/ir.js";
+import { parseMarkdownOwnership } from "../../../packages/markdown-core/src/reasoning-tag-parser.js";
 
 const require = createRequire(import.meta.url);
 const PROCESS_METHODS = new Set([
@@ -86,6 +87,7 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
     startLine: number,
     startIndex: number,
     columnOffsets?: readonly number[],
+    originalOffsets?: readonly number[],
   ): boolean {
     let file: t.File | undefined;
     // Angle assertions are valid TypeScript but ambiguous with JSX. Accept either syntax.
@@ -364,12 +366,26 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
             return;
           }
           const callee = path.node.callee;
-          const location = path.isNewExpression()
-            ? path.node.loc?.start
-            : (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression"
-                ? callee.property
-                : callee
-              ).loc?.start;
+          const target = path.isNewExpression()
+            ? path.node
+            : callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression"
+              ? callee.property
+              : callee;
+          let location: { line: number; column: number } | undefined = target.loc?.start;
+          const original = originalOffsets?.[target.start ?? -1];
+          if (original !== undefined) {
+            let low = 0;
+            let high = starts.length;
+            while (low + 1 < high) {
+              const middle = Math.floor((low + high) / 2);
+              if (starts[middle]! <= original) {
+                low = middle;
+              } else {
+                high = middle;
+              }
+            }
+            location = { line: low + 1, column: original - starts[low]! };
+          }
           if (!location) {
             return;
           }
@@ -429,8 +445,22 @@ export function collectCapabilityCalls(source: string, filePath: string): CallMa
     });
     analyze(code, start + 1, starts[start] ?? source.length, columns);
   }
-  if (markdown && !hasCodeBlocks) {
-    analyze(source, 1, 0);
+  if (markdown) {
+    // Markdown Core owns inline delimiters and container stripping as well as blocks.
+    // Its raw-to-decoded offsets preserve call locations across multiline code spans.
+    for (const region of parseMarkdownOwnership(source, { includeSource: true }).regions) {
+      if (region.block || !region.source) {
+        continue;
+      }
+      const originalOffsets: number[] = [];
+      region.source.offsets.forEach((decoded, index) => {
+        originalOffsets[decoded] = region.start + index;
+      });
+      analyze(region.source.value, 1, 0, undefined, originalOffsets);
+    }
+    if (!hasCodeBlocks) {
+      analyze(source, 1, 0);
+    }
   }
   return matches;
 }

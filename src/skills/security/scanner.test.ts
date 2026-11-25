@@ -372,6 +372,23 @@ describe("scanSource", () => {
       ],
       ['```js\nconst run = eval;\nrun("1+1");\n```', "dynamic-code-execution", 3],
       [
+        '# Demo\n\nRun `const { exec: run } = require("child_process"); run("id");`.',
+        "dangerous-exec",
+        3,
+      ],
+      ['# Demo\n\nRun `const run = eval; run("1+1");`.', "dynamic-code-execution", 3],
+      ['> Run ``const run = eval;\n> run("1+1");``.', "dynamic-code-execution", 2],
+      [
+        '- Run `const { exec: run } = require("child_process");\n  run("id");`.',
+        "dangerous-exec",
+        2,
+      ],
+      [
+        'Run `const run = eval; run("1+1");`. Then `const run = x => x; run("ok");`.',
+        "dynamic-code-execution",
+        1,
+      ],
+      [
         '> ```js\n> const { exec: run } = require("child_process");\n> run("id");\n> ```',
         "dangerous-exec",
         3,
@@ -393,6 +410,9 @@ describe("scanSource", () => {
         expect.objectContaining({ ruleId, line }),
       ]);
     }
+    expect(
+      scanSource('Run `const unused = eval; const run = x => x; run("ok");`.', "SKILL.md"),
+    ).toEqual([]);
     expect(
       scanSource(
         '```js\nconst { exec: run } = require("child_process");\nrun("id");\n```',
