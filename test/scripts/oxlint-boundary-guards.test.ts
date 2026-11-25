@@ -52,10 +52,10 @@ const cases = [
 
 // Shrink only. When a file leaves a list, lower its ceiling in the same change; never raise one.
 const allowlists = [
-  ["no-operator-permission-read", "", ADMISSION_FILES, 59],
+  ["no-operator-permission-read", "", ADMISSION_FILES, 58],
   ["no-operator-refusal-construction", "", REFUSAL_FILES, 9],
-  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 22],
+  ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 18],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 18],
   ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
 ] as const;
 
