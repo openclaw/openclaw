@@ -277,6 +277,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
           runtimeBind: opts.bind,
           runtimePort: port,
           publishedPort: opts.publishedPort,
+          runtimeAuthMode: startupAuthOverride?.mode,
         }),
       );
   if (controlUiSeed.seededAllowedOrigins) {

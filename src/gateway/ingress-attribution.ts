@@ -140,8 +140,19 @@ export function resolveDirectIngressPublishedPort(
   req: IncomingMessage,
   publishedPort: number | undefined,
 ): number | undefined {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution) {
+    return attribution.kind === "direct-local" || attribution.kind === "direct-remote"
+      ? publishedPort
+      : undefined;
+  }
   const transport = readGatewayIngressTransport(req);
-  return !transport || transport.kind === "ordinary" ? publishedPort : undefined;
+  // Standalone HTTP handlers can run before attribution; forwarded evidence only denies.
+  return (!transport || transport.kind === "ordinary") &&
+    !hasForwardedRequestHeaders(req) &&
+    !hasTailscaleOwnedHeaders(req)
+    ? publishedPort
+    : undefined;
 }
 
 export function getRemoteControlUiIngressContext(

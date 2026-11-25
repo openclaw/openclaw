@@ -162,6 +162,38 @@ esac`,
       },
     );
 
+    it.each([{ origins: undefined }, { origins: [] }, { origins: ["https://authored.example"] }])(
+      "uses the canonical config reader for legacy JSON5 without merging authored policy (%j)",
+      ({ origins }) => {
+        const sandbox = fixture();
+        writeFileSync(sandbox.file, "// JSON5\n{gateway:{mode:'local',},}\n");
+        writeFileSync(join(sandbox.home, "dist", "index.js"), 'console.log("--port <port>");');
+        const gateway = JSON.stringify({ mode: "local", controlUi: { allowedOrigins: origins } });
+        writeFileSync(
+          join(sandbox.home, "bin", "openclaw"),
+          `#!/bin/bash
+if [[ "$1 $2 $3" == "config get gateway.bind" ]]; then echo lan;
+elif [[ "$1 $2" == "config get" ]]; then printf '%s\\n' '${gateway}';
+elif [[ "$1 $2" == "config set" ]]; then printf '%s\\n' "$@" > "$PODMAN_STUB_ARGS-config"; fi
+`,
+          { mode: 0o755 },
+        );
+        sandbox.run("scripts/run-openclaw-podman.sh", ["launch"]);
+        if (origins === undefined) {
+          expect(readFileSync(`${sandbox.log}-config`, "utf8").split("\n")).toEqual([
+            "config",
+            "set",
+            "gateway.controlUi.allowedOrigins",
+            '["http://localhost:19123", "http://127.0.0.1:19123"]',
+            "--strict-json",
+            "",
+          ]);
+        } else {
+          expect(existsSync(`${sandbox.log}-config`)).toBe(false);
+        }
+      },
+    );
+
     it.each(["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"])(
       "rejects a selected image missing the required gateway port option (%s)",
       (script) => {

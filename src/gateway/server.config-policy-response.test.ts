@@ -44,6 +44,27 @@ describe("mapped-port origin lifecycle", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
+  it("seeds from effective trusted-proxy launch authentication before startup validation", async () => {
+    await state.writeConfig({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { mode: "none" },
+        trustedProxies: ["127.0.0.1"],
+      },
+      logging: { level: "silent", consoleLevel: "silent" },
+    });
+    server = await startGatewayServerCore(await getFreePort(), {
+      bind: "lan",
+      publishedPort: 25432,
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: { userHeader: "x-auth-user", allowLoopback: true },
+      },
+    });
+    await server.startupSettled;
+  });
+
   it("keeps the mapped origin through public-origin rotation, then honors an explicit deny list", async () => {
     const token = "config-response-old-token";
     const origin = "https://writer.example.test";

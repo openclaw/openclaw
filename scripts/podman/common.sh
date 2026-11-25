@@ -182,7 +182,7 @@ try:
     with open(path, "r", encoding="utf-8") as fh:
         data = json.load(fh)
 except json.JSONDecodeError as exc:
-    print(f"Warning: unable to initialize gateway.mode in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.", file=sys.stderr)
+    print(f"Warning: unable to initialize gateway.mode in {path}: existing config is not strict JSON ({exc}). Skipping direct JSON rewrite.", file=sys.stderr)
     raise SystemExit(1)
 if not isinstance(data, dict):
     raise SystemExit(f"{path}: expected top-level object")
@@ -202,6 +202,7 @@ origins = control_ui.get("allowedOrigins") if isinstance(control_ui, dict) else 
 if published_port and isinstance(origins, list):
     desired = [f"http://localhost:{published_port}", f"http://127.0.0.1:{published_port}"]
     has_loopback = any(isinstance(value, str) and value.startswith(("http://localhost:", "http://127.0.0.1:")) for value in origins)
+    # Authored policy wins: warn before replacement, never invent a launch permission gate.
     if has_loopback and not any(value in origins for value in desired):
         print(f"Warning: published Gateway port {published_port} does not match the saved loopback gateway.controlUi.allowedOrigins. Dashboard access may be refused. Update that list explicitly, or remove the field to inherit current-image launch defaults. Existing policy is unchanged.", file=sys.stderr)
 if changed:
@@ -211,6 +212,25 @@ if changed:
 PYTHON
   then
     rm -f "$tmp"
+    # The canonical CLI reads valid JSON5. Only seed legacy omitted policy; never merge lists.
+    if [[ -n "$legacy_port" ]] && command -v openclaw >/dev/null 2>&1; then
+      local gateway_json="" seed_origins=""
+      if gateway_json="$(OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$(dirname "$file")" OPENCLAW_CONFIG_PATH="$file" openclaw config get gateway --json 2>/dev/null)"; then
+        if seed_origins="$(printf '%s' "$gateway_json" | python3 -c '
+import json, sys
+gateway = json.load(sys.stdin)
+control_ui = gateway.get("controlUi", {})
+if not gateway.get("publicOrigin") and isinstance(control_ui, dict) and "allowedOrigins" not in control_ui:
+    port = sys.argv[1]
+    print(json.dumps([f"http://localhost:{port}", f"http://127.0.0.1:{port}"]))
+' "$legacy_port")" && [[ -n "$seed_origins" ]]; then
+          OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$(dirname "$file")" OPENCLAW_CONFIG_PATH="$file" \
+            openclaw config set gateway.controlUi.allowedOrigins "$seed_origins" --strict-json >/dev/null
+        fi
+      else
+        echo "Warning: canonical config read failed; set gateway.controlUi.allowedOrigins explicitly for the selected legacy image." >&2
+      fi
+    fi
     return 0
   fi
   if [[ -s "$tmp" ]]; then

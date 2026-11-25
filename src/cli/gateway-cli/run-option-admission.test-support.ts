@@ -35,24 +35,31 @@ export function registerGatewayOptionAdmissionTests({
     );
   });
 
-  it("rejects a malformed published port before dev reset", async () => {
-    const config = { gateway: { mode: "local" } };
-    configState.snapshot = { config, sourceConfig: config, exists: true, valid: true };
-    await prepareGatewayReset();
-    await expect(
-      runGatewayCli([
-        "gateway",
-        "run",
-        "--allow-unconfigured",
-        "--dev",
-        "--reset",
-        "--published-port",
-        "0",
-      ]),
-    ).rejects.toThrow("__exit__:1");
-    expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
-    expect(startGatewayServer).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "rejects malformed selected published-port input before dev reset (%s)",
+    async (inherited) => {
+      const config = { gateway: { mode: "local" } };
+      configState.snapshot = { config, sourceConfig: config, exists: true, valid: true };
+      await prepareGatewayReset();
+      await withEnvAsync(
+        { OPENCLAW_CONTAINER_PUBLISHED_GATEWAY_PORT: inherited ? "0" : undefined },
+        async () => {
+          await expect(
+            runGatewayCli([
+              "gateway",
+              "run",
+              "--allow-unconfigured",
+              "--dev",
+              "--reset",
+              ...(inherited ? [] : ["--published-port", "0"]),
+            ]),
+          ).rejects.toThrow();
+        },
+      );
+      expect(ensureDevGatewayConfig).not.toHaveBeenCalled();
+      expect(startGatewayServer).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { args: ["gateway", "--published-port", "19123"] },

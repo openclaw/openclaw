@@ -152,37 +152,50 @@ describe("personal avatar HTTP authentication", () => {
     return fetch(origin + avatarPath, { ...init, headers });
   }
 
-  it("keeps mapped origins off ambient managed Serve image reads", async () => {
-    vi.spyOn(tailscale, "readTailscaleWhoisIdentity").mockResolvedValue({
-      login: "reader@example.test",
-    });
-    auth = { mode: "token", token: "test-shared-secret", allowTailscale: true };
-    cfg = {
-      gateway: {
-        auth: { mode: "token", token: auth.token, allowTailscale: true },
-        publicOrigin: "https://serve.example.ts.net",
-      },
-    };
-    publishedPort = 25432;
-    ingressTransport = { kind: "managed-tailscale", mode: "serve" };
-    const headers = {
-      host: "serve.example.ts.net",
-      "x-forwarded-for": "100.64.0.10",
-      "x-forwarded-proto": "https",
-      "x-forwarded-host": "serve.example.ts.net",
-      "tailscale-user-login": "reader@example.test",
-      origin: "https://serve.example.ts.net",
-    };
-    const accepted = await request(undefined, { headers });
-    expect(accepted.status).toBe(200);
-    expect(Buffer.from(await accepted.arrayBuffer())).toEqual(PNG);
-    const denied = await request(undefined, {
-      headers: { ...headers, origin: "http://localhost:25432" },
-    });
-    expect(denied.status).toBe(401);
-    expect(denied.headers.get("access-control-allow-origin")).toBeNull();
-    expect(await denied.text()).not.toContain(PNG.toString("base64"));
-  });
+  it.each([true, false])(
+    "keeps mapped origins off proxied image reads (managed Serve=%s)",
+    async (managed) => {
+      vi.spyOn(tailscale, "readTailscaleWhoisIdentity").mockResolvedValue({
+        login: "reader@example.test",
+      });
+      auth = { mode: "token", token: "test-shared-secret", allowTailscale: managed };
+      cfg = {
+        gateway: {
+          auth: { mode: "token", token: auth.token, allowTailscale: managed },
+          trustedProxies: managed ? undefined : ["127.0.0.1"],
+          publicOrigin: "https://serve.example.ts.net",
+        },
+      };
+      publishedPort = 25432;
+      ingressTransport = managed
+        ? { kind: "managed-tailscale", mode: "serve" }
+        : { kind: "ordinary" };
+      const headers = {
+        ...(managed ? {} : { authorization: `Bearer ${auth.token}` }),
+        host: "serve.example.ts.net",
+        "x-forwarded-for": "100.64.0.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "serve.example.ts.net",
+        "tailscale-user-login": "reader@example.test",
+        origin: "https://serve.example.ts.net",
+      };
+      const accepted = await request(undefined, { headers });
+      expect(accepted.status).toBe(200);
+      expect(Buffer.from(await accepted.arrayBuffer())).toEqual(PNG);
+      const denied = await request(undefined, {
+        headers: { ...headers, origin: "http://localhost:25432" },
+      });
+      // Explicit bearer credentials retain their ordinary HTTP read contract; the
+      // browser must not receive credentialed CORS. Ambient Serve identity is denied.
+      expect(denied.status).toBe(managed ? 401 : 200);
+      expect(denied.headers.get("access-control-allow-origin")).toBeNull();
+      if (managed) {
+        expect(await denied.text()).not.toContain(PNG.toString("base64"));
+      } else {
+        expect(Buffer.from(await denied.arrayBuffer())).toEqual(PNG);
+      }
+    },
+  );
 
   it("does not extend proxy-authenticated image access to mapped origins", async () => {
     const trustedProxy = { userHeader: "x-auth-user", allowLoopback: true };
