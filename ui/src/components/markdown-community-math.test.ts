@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { renderMarkdownMath } from "./markdown-math.runtime.ts";
-import { markdownTableCopyText } from "./markdown-tables.ts";
 import { markdownVisibleText } from "./markdown-visible-text.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -50,12 +49,14 @@ describe("LaTeX", () => {
   });
 
   it("preserves compact currency ranges and bare URL paths", () => {
-    const html = toSanitizedMarkdownHtml(
-      "Prices: $5-$10; docs: https://example.com/$schema$/query?$x$=1 and www.example.com/$path$/$next$/docs",
+    const fragment = mathFragment(
+      toSanitizedMarkdownHtml(
+        "Prices: $5-$10 and $.49–$.99; docs: https://example.com/$schema$/query?$x$=1 and www.example.com/$path$/$next$/docs",
+      ),
     );
-    expect(html).toContain("$5-$10");
-    expect(html).toContain("$schema$");
-    expect(html).not.toContain("katex");
+    expect(fragment.textContent).toContain("$5-$10 and $.49–$.99");
+    expect(fragment.textContent).toContain("$schema$");
+    expect(fragment.querySelector(".katex")).toBeNull();
   });
 
   it("keeps distant multiline display closers literal", () => {
@@ -151,25 +152,16 @@ describe("LaTeX", () => {
     expect(fragment.querySelector("progress")?.hasAttribute("style")).toBe(false);
   });
 
-  it("copies visible table math once without removing accessible MathML", () => {
-    const host = mathFragment(
-      toSanitizedMarkdownHtml("| Formula | Note |\n| --- | --- |\n| $x^2$ | Keep $y$ and `code` |"),
+  it("keeps math inside its link label and preserves separate dollar-prefixed labels", () => {
+    const fragment = mathFragment(
+      toSanitizedMarkdownHtml(
+        String.raw`[$HOME](https://example.com/home) and [$PATH](https://example.com/path) and [$(-\infty, 0]$](https://example.com/math)`,
+      ),
     );
-    const table = host.querySelector("table");
-    if (!table) {
-      throw new Error("Missing rendered table");
-    }
-    const before = table.outerHTML;
-
-    expect(markdownTableCopyText(table)).toBe("Formula\tNote\nx2\tKeep y and code");
-    expect(table.outerHTML).toBe(before);
-    expect(table.querySelectorAll("math")).toHaveLength(2);
-  });
-
-  it("supports math inside link labels during silent lookahead", () => {
-    const fragment = mathFragment(toSanitizedMarkdownHtml("[$x$](https://example.com)"));
-
-    expect(fragment.querySelector("a .katex")).not.toBeNull();
+    const [home, path, math] = fragment.querySelectorAll("a");
+    expect([home?.textContent, home?.pathname]).toEqual(["$HOME", "/home"]);
+    expect([path?.textContent, path?.pathname]).toEqual(["$PATH", "/path"]);
+    expect(math?.querySelector(".katex")).not.toBeNull();
   });
 });
 

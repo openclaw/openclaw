@@ -244,7 +244,7 @@ function scanStableStreamingMarkdown(
       continue;
     }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
-    if (openMath && index >= mathScanEnd) {
+    if (openMath && (index >= mathScanEnd || getFenceMarker(line))) {
       openMath = null;
     }
     const lineFence = openFence;

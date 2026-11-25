@@ -1,5 +1,6 @@
 import "./markdown-math-element.ts";
 import type { MarkdownIt, StateBlock, StateInline } from "markdown-it";
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/markdown-code-regions.js";
 import { isInsideCode } from "../../../packages/markdown-core/src/reasoning-tag-syntax.js";
 
@@ -131,6 +132,9 @@ function parseDisplayMath(state: StateBlock, startLine: number, endLine: number,
         break;
       }
       const current = state.src.slice(currentStart, state.eMarks[lineIndex]!);
+      if (state.sCount[lineIndex]! - state.blkIndent < 4 && scanFenceSpans(current).state.open) {
+        return false;
+      }
       const close = findUnescapedMathDelimiter(current, delimiter.close, 0);
       if (close >= 0 && currentStart + close < scanEnd) {
         if (current.slice(close + delimiter.close.length).trim()) {
@@ -161,7 +165,7 @@ function parseDisplayMath(state: StateBlock, startLine: number, endLine: number,
 }
 
 function parseInlineMath(state: StateInline, silent: boolean): boolean {
-  const source = state.src.slice(state.pos);
+  const source = state.src.slice(state.pos, state.posMax);
   const delimiter = INLINE_DELIMITERS.find(({ open }) => source.startsWith(open));
   if (!delimiter) {
     return false;
@@ -174,28 +178,44 @@ function parseInlineMath(state: StateInline, silent: boolean): boolean {
   if (close <= contentStart) {
     return false;
   }
+  const latex = source.slice(contentStart, close);
   if (
     delimiter.open === "$" &&
     (/\s/u.test(source.charAt(contentStart)) ||
       /\s/u.test(source.charAt(close - 1)) ||
-      /^(?:-\$?\d|\d)/u.test(source.slice(close + delimiter.close.length)) ||
+      /^(?:-\$?)?(?:\d|\.\d)/u.test(source.slice(close + delimiter.close.length)) ||
       /\d-$/u.test(state.src.slice(0, state.pos)))
   ) {
     return false;
   }
   if (
     isInsideBareUrl(state, state.pos + close) ||
-    (source.slice(contentStart, close).includes("`") && isInsideCodeSpan(state, state.pos + close))
+    (latex.includes("`") && isInsideCodeSpan(state, state.pos + close))
   ) {
     // Reject cheap currency shapes first. Only ambiguous candidates need code ownership.
     return false;
+  }
+  if (silent && latex.includes("]")) {
+    // Link-label lookahead must see its closing bracket before tokenizing the label.
+    let brackets = 0;
+    for (const { 0: character, index } of latex.matchAll(/\\[\s\S]|[[\]]/gu)) {
+      if (character === "[") {
+        brackets += 1;
+      } else if (character === "]") {
+        if (brackets > 0) {
+          brackets -= 1;
+        } else if (latex[index + 1] === "(" || latex[index + 1] === "[") {
+          return false;
+        }
+      }
+    }
   }
   state.pos += close + delimiter.close.length;
   if (silent) {
     return true;
   }
   const token = state.push("math_inline", "span", 0);
-  token.content = source.slice(contentStart, close);
+  token.content = latex;
   token.meta = { displayMode: delimiter.displayMode };
   return true;
 }

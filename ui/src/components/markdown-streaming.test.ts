@@ -325,6 +325,17 @@ describe("toStreamingMarkdownParts", () => {
 });
 
 describe("community LaTeX streaming regressions", () => {
+  it("keeps fenced code after an unmatched display-math opener", () => {
+    const partial = "Opening delimiter example:\n\n$$\n\n";
+    const code = "DO $$\nBEGIN\n  SELECT 1;\nEND $$;";
+    const completed = partial + "```postgresql\n" + code + "\n```\n\nEnd example.";
+    const key = "fence-after-unmatched-math";
+    toStreamingMarkdownParts(partial, {}, key);
+
+    const html = toStreamingMarkdownParts(completed, {}, key).join("");
+    expect(htmlFragment(html).querySelector("pre code")?.textContent?.trim()).toBe(code);
+  });
+
   it("rescans a backslash that becomes a display opener on the next chunk", () => {
     const partial = "before\n\n\\";
     const completed = partial + "[\nx^2\n\n+ y^2\n\\]";

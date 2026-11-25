@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
+import { markdownTableCopyText } from "./markdown-tables.ts";
 import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -59,6 +60,18 @@ describe("Control UI lazy LaTeX rendering", () => {
     await typeset(host);
     expect(getComputedStyle(host.querySelector(".katex")!).fontFamily).toContain("KaTeX_Main");
     expect(root.adoptedStyleSheets).toHaveLength(1);
+  });
+
+  it("copies table fractions as TeX after typesetting without removing MathML", async () => {
+    const host = mount(
+      "| Formula | Note |\n| --- | --- |\n| $\\frac{1}{2}$ | Keep $y$ and `code` |",
+    );
+    const table = host.querySelector("table")!;
+    const expected = "Formula\tNote\n$\\frac{1}{2}$\tKeep $y$ and code";
+    expect(markdownTableCopyText(table)).toBe(expected);
+    await typeset(host);
+    expect(markdownTableCopyText(table)).toBe(expected);
+    expect(table.querySelectorAll("math")).toHaveLength(2);
   });
 
   it("does not enqueue code, currency, URLs, or unfinished streamed math", () => {

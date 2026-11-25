@@ -1,6 +1,11 @@
 // This non-JSX utility module owns both typesetting and its stylesheet.
 // Share settled failures as well, so multiple leaves do not start retry storms.
 let runtime: ReturnType<typeof loadMath> | undefined;
+const renderedSources = new WeakMap<Node, { source: string; literal: string }>();
+
+export function getRenderedMarkdownMathSource(node: Node | null) {
+  return node ? renderedSources.get(node) : undefined;
+}
 
 async function loadMath() {
   try {
@@ -60,6 +65,7 @@ function defineMarkdownMathElement(): void {
             // Only sanitized generated nodes enter the light DOM. Source remains
             // readable on load/render failure; detached/replaced leaves never commit.
             this.replaceChildren(fragment);
+            renderedSources.set(this, { source, literal });
             this.rendered = true;
           }
         });

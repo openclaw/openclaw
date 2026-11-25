@@ -1,3 +1,4 @@
+import { getRenderedMarkdownMathSource } from "../../../components/markdown-math-element.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { phraseQueryPattern } from "../../../lib/text-match.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
@@ -5,10 +6,11 @@ import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 /** CSS name shared by the independent pane owners. */
 const CHAT_SEARCH_HIGHLIGHT = "openclaw-chat-search";
 
-type BlockText = { text: string; nodes: Text[]; starts: number[] };
+type SearchTarget = Text | HTMLElement;
+type BlockText = { text: string; nodes: SearchTarget[]; starts: number[]; ends: number[] };
 type Viewport = Pick<DOMRect, "top" | "right" | "bottom" | "left">;
 type Match = { from: number; to: number; range?: Range };
-type NodeMatches = { node: Text; matches: Match[]; clip: Element | null };
+type NodeMatches = { node: SearchTarget; matches: Match[]; clip: Element | null };
 type BlockHighlight = { content?: BlockText; ranges: Set<Range>; matches?: NodeMatches[] };
 type PaneHighlight = {
   query: string;
@@ -54,6 +56,9 @@ const IMAGE_SELECTOR = "img.markdown-inline-image, .markdown-inline-image-button
 const IMAGE_BARRIER = "￼";
 
 function readableNode(node: Node): number {
+  if (getRenderedMarkdownMathSource(node.parentNode)) {
+    return NodeFilter.FILTER_REJECT;
+  }
   if (!(node instanceof Element)) {
     return NodeFilter.FILTER_ACCEPT;
   }
@@ -65,7 +70,9 @@ function readableNode(node: Node): number {
   ) {
     return NodeFilter.FILTER_REJECT;
   }
-  return node.localName === "br" ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+  return node.localName === "br" || getRenderedMarkdownMathSource(node)
+    ? NodeFilter.FILTER_ACCEPT
+    : NodeFilter.FILTER_SKIP;
 }
 
 function readBlock(container: HTMLElement): BlockText {
@@ -74,8 +81,9 @@ function readBlock(container: HTMLElement): BlockText {
     NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
     { acceptNode: readableNode },
   );
-  const nodes: Text[] = [];
+  const nodes: SearchTarget[] = [];
   const starts: number[] = [];
+  const ends: number[] = [];
   const parts: string[] = [];
   let length = 0;
   let block: Element | null | undefined;
@@ -85,7 +93,16 @@ function readBlock(container: HTMLElement): BlockText {
   };
   while (walker.nextNode()) {
     const node = walker.currentNode;
-    if (!(node instanceof Text)) {
+    let target: SearchTarget;
+    let text: string;
+    const math = getRenderedMarkdownMathSource(node);
+    if (node instanceof Text) {
+      target = node;
+      text = node.data;
+    } else if (math && node instanceof HTMLElement) {
+      target = node;
+      text = math.source;
+    } else {
       append(node instanceof Element && node.localName === "br" ? "\n" : IMAGE_BARRIER);
       continue;
     }
@@ -94,14 +111,19 @@ function readBlock(container: HTMLElement): BlockText {
       append("\n");
     }
     block = nodeBlock;
-    nodes.push(node);
+    nodes.push(target);
     starts.push(length);
-    append(node.data);
+    append(text);
+    ends.push(length);
   }
-  return { text: parts.join(""), nodes, starts };
+  return { text: parts.join(""), nodes, starts, ends };
 }
 
-function textViewportBounds(node: Text, probe: Range, viewport: Viewport): [number, number] | null {
+function textViewportBounds(
+  node: SearchTarget,
+  probe: Range,
+  viewport: Viewport,
+): [number, number] | null {
   if (viewport.right <= viewport.left || viewport.bottom <= viewport.top) {
     return null;
   }
@@ -116,6 +138,9 @@ function textViewportBounds(node: Text, probe: Range, viewport: Viewport): [numb
   const rect = probe.getBoundingClientRect();
   if (!intersects(rect)) {
     return null;
+  }
+  if (!(node instanceof Text)) {
+    return [0, node.childNodes.length];
   }
   if (
     rect.top >= viewport.top &&
@@ -153,7 +178,7 @@ function textViewportBounds(node: Text, probe: Range, viewport: Viewport): [numb
 }
 
 function matchesFor(content: BlockText, pattern: RegExp): NodeMatches[] {
-  const { text, nodes, starts } = content;
+  const { text, nodes, starts, ends } = content;
   const normalized = text.normalize("NFC");
   // Normalize across inline nodes, then translate only matched boundaries back
   // to their original graphemes. Scrolling reuses the resulting node offsets.
@@ -182,18 +207,18 @@ function matchesFor(content: BlockText, pattern: RegExp): NodeMatches[] {
     }
     return segment.index + (offset === normalizedPart.length || end ? segment.segment.length : 0);
   };
-  const matched = new Map<Text, NodeMatches>();
+  const matched = new Map<SearchTarget, NodeMatches>();
   let first = 0;
   for (const match of normalized.matchAll(pattern)) {
     const start = sourceOffset(match.index, false);
     const end = sourceOffset(match.index + match[0].length, true);
-    while (first < nodes.length && starts[first]! + nodes[first]!.length <= start) {
+    while (first < nodes.length && ends[first]! <= start) {
       first++;
     }
     for (let index = first; index < nodes.length && starts[index]! < end; index++) {
       const node = nodes[index]!;
       const from = Math.max(start - starts[index]!, 0);
-      const to = Math.min(end - starts[index]!, node.length);
+      const to = Math.min(end, ends[index]!) - starts[index]!;
       if (from >= to) {
         continue;
       }
@@ -202,11 +227,20 @@ function matchesFor(content: BlockText, pattern: RegExp): NodeMatches[] {
         entry = {
           node,
           matches: [],
-          clip: node.parentElement?.closest(".code-block-viewport") ?? null,
+          clip:
+            node instanceof Text
+              ? (node.parentElement?.closest(".code-block-viewport") ?? null)
+              : node.dataset.display === "true"
+                ? node
+                : null,
         };
         matched.set(node, entry);
       }
-      entry.matches.push({ from, to });
+      if (node instanceof Text) {
+        entry.matches.push({ from, to });
+      } else if (!entry.matches.length) {
+        entry.matches.push({ from: 0, to: node.childNodes.length });
+      }
     }
   }
   return [...matched.values()];
