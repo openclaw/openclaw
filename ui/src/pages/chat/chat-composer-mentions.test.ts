@@ -360,6 +360,22 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   }
 });
 
+it.each(["𐐀ri", "Àri", "Ari"])(
+  "replaces the remaining name %s on Tab and keeps the caret after the mention",
+  async (word) => {
+    const view = composerFixture("chat", `🌱 ${word}🌿 later`);
+    const person = { profileId: "profile-iri", displayName: "𐐀ri", online: true };
+    view.request.mockResolvedValue({ users: [person], truncated: false });
+
+    await view.search(`🌱 @${word}🌿 later`, { start: 3, caret: 4, data: "@" });
+    expect(view.key("Tab").defaultPrevented).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    view.expectValue("🌱 @𐐀ri 🌿 later", [mention(person.profileId, 3, 8)]);
+    expect(view.query("textarea")).toMatchObject({ selectionStart: 9, selectionEnd: 9 });
+  },
+);
+
 it("blocks unsupported sends until editing removes the selected mention binding", () => {
   const view = composerFixture("chat", "@Alex", [mention("alex")]);
   view.setUnsupported();
