@@ -966,7 +966,7 @@ extension OpenClawSnapshotUITests {
             .firstMatch.waitForExistence(timeout: 5))
     }
 
-    func testAssistantReplySelectsInPlaceWithActionsBelow() throws {
+    func testAssistantReplyHoldOffersActionsInMenu() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
@@ -978,18 +978,21 @@ extension OpenClawSnapshotUITests {
             "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
         ]
         XCTAssertTrue(assistant.waitForExistence(timeout: 8))
-        // The reply's actions sit in the row under it instead of a long-press menu.
-        let row = app.descendants(matching: .any)["chat-message-actions-row"].firstMatch
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
-        XCTAssertTrue(row.buttons["Copy Message"].exists)
-        XCTAssertTrue(row.buttons["chat-add-reaction"].exists)
-        self.attachScreenshot(named: "assistant-message-actions")
+        // Under a reply: its reactions and time, no action buttons.
+        let footer = app.descendants(matching: .any)["chat-agent-message-footer"].firstMatch
+        XCTAssertTrue(footer.waitForExistence(timeout: 5))
+        for action in ["Copy Message", "Reply", "Listen", "chat-add-reaction"] {
+            XCTAssertFalse(footer.buttons[action].exists, action)
+        }
+        self.attachScreenshot(named: "assistant-message-footer")
 
+        // Holding the reply opens its menu instead of selecting a word.
         assistant.press(forDuration: 0.8)
-        XCTAssertTrue(assistant.exists)
-        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
-        XCTAssertFalse(app.buttons["Select Text"].waitForExistence(timeout: 1.5))
-        self.attachScreenshot(named: "assistant-select-in-place")
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        for action in ["chat-add-reaction", "Select Text", "Reply", "Listen"] {
+            XCTAssertTrue(app.buttons[action].exists, action)
+        }
+        self.attachScreenshot(named: "assistant-message-menu")
     }
 
     func testCodeBlockCopyButtonCopiesRawCode() throws {

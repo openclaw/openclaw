@@ -906,8 +906,7 @@ extension OpenClawChatView {
         let calls = self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : []
         return ChatRowPassInputs(
             contextWindowTokens: self.viewModel.contextUsage?.contextWindowTokens,
-            liveToolCalls: ChatRowPassInputs.liveToolCallsByRun(calls),
-            latestReplyID: ChatAgentFooterPlacement.latestReplyID(in: self.viewModel.transcriptMessages))
+            liveToolCalls: ChatRowPassInputs.liveToolCallsByRun(calls))
     }
 
     @ViewBuilder
@@ -967,16 +966,7 @@ extension OpenClawChatView {
                     ChatAgentMessageFooter(
                         viewModel: self.viewModel,
                         message: msg,
-                        actionMessage: actionMessage,
                         timestamp: metadata?.timestamp,
-                        showsActions: showsActions && (inputs.latestReplyID == nil || inputs.latestReplyID == msg.id),
-                        replySenderLabel: self.showsComposer ? self.replySenderLabel(forRole: "assistant") : nil,
-                        speech: self.isListenable(actionMessage) ? self.speech : nil,
-                        openFullMessage: {
-                            self.fullMessageRequest = ChatFullMessageReaderRequest(
-                                viewModel: self.viewModel,
-                                messageID: $0)
-                        },
                         openPicker: { self.reactionPickerMessage = actionMessage })
                 } else if !isUser {
                     ChatReactionPill(viewModel: self.viewModel, message: msg) {
@@ -1032,10 +1022,14 @@ extension OpenClawChatView {
             }
         }
         #if os(iOS)
-        // A user bubble carries its own menu; an agent reply has none, so its text selects in place
-        // and its actions live in the row under it.
-        if isUser || isAssistant {
+        // A user bubble carries its own menu. A held agent reply opens the same menu over its
+        // opening lines; a reply with no text lifts as it is.
+        if isUser {
             row
+        } else if isAssistant {
+            row.chatAgentReplyMenu(previewText: ChatMessageVisibleText.visibleText(in: actionMessage)) {
+                ChatDeferredContent { self.messageMenuActions(for: actionMessage) }
+            }
         } else {
             row.chatActionContextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
         }

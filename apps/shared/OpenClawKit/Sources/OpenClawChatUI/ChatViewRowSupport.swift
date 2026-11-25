@@ -5,8 +5,6 @@ struct ChatRowPassInputs {
     let contextWindowTokens: Int?
     /// Each row looks up its own run instead of filtering every live call.
     let liveToolCalls: [String: [OpenClawChatPendingToolCall]]
-    /// Set only while the agent row shows under the latest reply alone.
-    var latestReplyID: UUID?
 
     static func liveToolCallsByRun(_ calls: [OpenClawChatPendingToolCall]) -> [String: [OpenClawChatPendingToolCall]] {
         var byRun: [String: [OpenClawChatPendingToolCall]] = [:]

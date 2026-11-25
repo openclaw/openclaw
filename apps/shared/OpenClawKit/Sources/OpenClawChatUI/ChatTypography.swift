@@ -245,6 +245,17 @@ extension View {
                 .tint(.primary)
             #endif
     }
+
+    #if os(iOS)
+    /// The same menu over a custom preview instead of the lifted view.
+    func chatActionContextMenu(
+        @ViewBuilder items: () -> some View,
+        @ViewBuilder preview: () -> some View) -> some View
+    {
+        self.contextMenu(menuItems: items, preview: preview)
+            .tint(.primary)
+    }
+    #endif
 }
 
 #if os(iOS)
