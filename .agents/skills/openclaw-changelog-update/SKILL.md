@@ -130,7 +130,9 @@ of this skill; initial generation must never overwrite them.
    rewrites at the same target avoid repeated network discovery. Use
    `--refresh-github-snapshot` after suspect API data, `--github-snapshot
    <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
-   audit. GitHub release bodies are always read live.
+   audit. Within one audit, consecutive passes reuse a complete lookup of the
+   same issue and PR references. Missing references are queried again. GitHub
+   release bodies are always read live.
    Historical issue recovery ([incident and contract: PR #199961](https://github.com/openclaw/openclaw/pull/199961)):
    unavailable historical issues may be recovered only with explicit
    `--historical-issue-snapshot <path>` and

@@ -19,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import {
   findReleaseChangelog,
   loadChangelogCollection,
@@ -3446,8 +3447,17 @@ function main() {
       ),
     );
   }
+  let lastLookup;
   const resolveWithRecovery = (numbers) => {
-    const resolution = resolveReferences(numbers);
+    if (!lastLookup || !isDeepStrictEqual(lastLookup.numbers, numbers)) {
+      const live = resolveReferences(numbers);
+      // Missing nodes must be rechecked: a later live issue can invalidate historical evidence.
+      const complete = live.nodes.size === numbers.length && live.notFound.size === 0;
+      lastLookup = { numbers: complete ? [...numbers] : undefined, ...live };
+    }
+    // Recovery adds nodes using the current source evidence. Keep those additions
+    // separate from the live GitHub response, even when the lookup is unchanged.
+    const resolution = { nodes: new Map(lastLookup.nodes), notFound: lastLookup.notFound };
     recoverUnavailablePullRequests({
       numbers,
       nodes: resolution.nodes,
