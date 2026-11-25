@@ -78,12 +78,11 @@ extension OpenClawChatComposer {
                     .frame(
                         width: CleanChatComposerMetrics.glyphControlWidth,
                         height: CleanChatComposerMetrics.controlTouchSize)
-                    // A full touch target that reaches into the gap after it; the slot stays narrow.
+                    // A full touch target that takes the gap after it, so no neighbor's target overlaps it.
                     .frame(width: CleanChatComposerMetrics.controlTouchSize, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.trailing, CleanChatComposerMetrics.glyphControlWidth - CleanChatComposerMetrics.controlTouchSize)
             .accessibilityLabel("Session permissions")
             .accessibilityValue(mode?.displayName ?? String(localized: "Agent default"))
             .accessibilityIdentifier("chat-composer-inline-permissions")

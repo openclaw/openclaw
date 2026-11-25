@@ -403,6 +403,8 @@ extension OpenClawChatComposer {
             .foregroundStyle(CleanChatComposerMetrics.footerInk)
             .padding(.leading, 7)
             .padding(.trailing, 6)
+            // The gauge and chevron are 42.3 pt wide; the rest of a full target goes on the leading side.
+            .frame(minWidth: CleanChatComposerMetrics.controlTouchSize, alignment: .trailing)
             .frame(height: self.cleanControlHeight)
             .contentShape(Rectangle())
         }
@@ -565,7 +567,7 @@ private struct CleanComposerModelChipLabel<Chevron: View>: View {
     @ScaledMetric(relativeTo: .callout) private var minimumWidth: CGFloat = 72
 
     var body: some View {
-        CleanComposerWidthCap(cap: self.capped ? CleanChatComposerMetrics.regularModelMaxWidth : .infinity) {
+        CleanComposerWidthCap(cap: self.capped ? CleanChatComposerMetrics.phoneModelMaxWidth : .infinity) {
             HStack(spacing: 3) {
                 Text(self.name)
                     .font(OpenClawChatTypography.composerControlLabel)

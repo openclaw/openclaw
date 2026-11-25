@@ -76,6 +76,10 @@ enum CleanChatComposerMetrics {
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
     static let regularModelMaxWidth: CGFloat = 148
+    #if os(iOS)
+    /// The phone's cap gives the 10 pt that full 44 pt effort and mic targets take back to the row.
+    static let phoneModelMaxWidth: CGFloat = regularModelMaxWidth - 10
+    #endif
     static let compactModelWidth: CGFloat = controlTouchSize
 }
 
@@ -892,18 +896,6 @@ struct OpenClawChatMicButton: View {
     let onStartDictation: @MainActor () -> Void
 
     var body: some View {
-        self.control
-            // The hit area reaches past the visual slot toward the leading neighbor; the layout keeps the slot.
-                .padding(.leading, -self.hitAreaOverhang)
-    }
-
-    /// A slot narrower than the touch size still gets a full-size target.
-    private var hitAreaOverhang: CGFloat {
-        max(0, self.controlSize - (self.controlWidth ?? self.controlSize))
-    }
-
-    @ViewBuilder
-    private var control: some View {
         if let voiceNoteControl {
             if self.isDictationActionEnabled, let dictationControl {
                 Menu {
@@ -959,6 +951,8 @@ struct OpenClawChatMicButton: View {
             .offset(y: showsStop ? 0 : -1)
             #endif
             .frame(width: self.controlWidth ?? self.controlSize, height: self.controlSize)
+            // A full-size target in its own slot: the extra width sits on the leading side, so the glyph
+            // keeps its place next to the primary button.
             .frame(width: self.controlSize, height: self.controlSize, alignment: .trailing)
             .contentShape(Rectangle())
     }
