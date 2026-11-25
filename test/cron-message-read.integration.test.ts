@@ -123,78 +123,77 @@ const scenarios: Scenario[] = [
 // Only the model's decisions and Discord responses are synthetic. This child reads
 // the real CLI-generated MCP config and credentials; it creates no authority.
 const PROTOCOL_CHILD = String.raw`
+import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
 const argument = (name) => process.argv[process.argv.indexOf(name) + 1];
 const configPath = argument("--mcp-config");
-if (!process.argv.includes("--mcp-config") || !configPath) {
-  throw new Error("The real CLI runner did not generate an MCP config.");
-}
+assert(process.argv.includes("--mcp-config") && configPath, "Missing generated MCP config");
 const server = JSON.parse(readFileSync(configPath, "utf8")).mcpServers.openclaw;
 const url = new URL(server.url);
-if (url.hostname !== "127.0.0.1" || url.protocol !== "http:" || url.pathname !== "/mcp") {
-  throw new Error("Expected the task-owned loopback MCP endpoint.");
-}
-const headers = Object.fromEntries(Object.entries(server.headers).map(([name, value]) => [
-  name,
-  value.replace(/\$\{([^}]+)\}/g, (_, key) => {
-    if (!process.env[key]) throw new Error("Missing generated MCP credential: " + key);
-    return process.env[key];
-  }),
-]));
-let sequence = 0;
-const rpc = async (method, params) => {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { ...headers, "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params }),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!response.ok) throw new Error("MCP HTTP status " + response.status);
-  return await response.json();
+assert(url.hostname === "127.0.0.1" && url.protocol === "http:" && url.pathname === "/mcp",
+  "Expected the task-owned loopback MCP endpoint");
+const credential = (_, key) => {
+  assert(process.env[key], "Missing generated MCP credential");
+  return process.env[key];
 };
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const message = JSON.parse(line);
-  if (message.type === "control_request") {
-    send({ type: "control_response", response: {
-      subtype: "success", request_id: message.request_id, response: {},
-    } });
-  } else if (message.type === "user") {
-    void (async () => {
-      const sessionId = message.session_id || argument("--session-id");
-      send({ type: "system", subtype: "init", session_id: sessionId, tools: [] });
-      const createJob = process.env.OPENCLAW_SCHEDULED_CREATE_JOB;
-      if (!createJob) {
-        const gap = await fetch(process.env.OPENCLAW_SCHEDULED_READ_CLOCK_URL, { method: "POST" });
-        if (!gap.ok) throw new Error("Could not advance the scheduled-read fixture clock.");
-      }
-      const listed = await rpc("tools/list");
-      const reply = await rpc("tools/call", {
-        name: createJob ? "${AUTOMATIONS_TOOL_NAME}" : "message",
-        arguments: createJob
-          ? { action: "add", job: JSON.parse(createJob) }
-          : JSON.parse(process.env.OPENCLAW_SCHEDULED_READ_ARGUMENTS),
+const headers = Object.fromEntries(Object.entries(server.headers).map(([name, value]) =>
+  [name, value.replace(/\$\{([^}]+)\}/g, credential)]));
+let sequence = 0;
+createInterface({ input: process.stdin }).on("line", async (line) => {
+  let phase = "input";
+  try {
+    const message = JSON.parse(line);
+    if (message.type === "control_request") {
+      const response = { subtype: "success", request_id: message.request_id, response: {} };
+      return send({ type: "control_response", response });
+    }
+    if (message.type !== "user") return;
+    const sessionId = message.session_id || argument("--session-id");
+    send({ type: "system", subtype: "init", session_id: sessionId, tools: [] });
+    const rpc = async (method, params) => {
+      phase = method;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++sequence, method, params }),
+        signal: AbortSignal.timeout(30000),
       });
-      const followupArguments = createJob
-        ? undefined
-        : process.env.OPENCLAW_SCHEDULED_MESSAGE_FOLLOWUP_ARGUMENTS;
-      const followupReply = followupArguments
-        ? await rpc("tools/call", { name: "message", arguments: JSON.parse(followupArguments) })
-        : undefined;
-      const resultFile = createJob ? "./created-job.json" : "./mcp-result.json";
-      writeFileSync(new URL(resultFile, import.meta.url), JSON.stringify({ listed, reply, followupReply }));
-      send({ type: "result", subtype: "success", is_error: false,
-        result: JSON.stringify(reply), session_id: sessionId,
-        duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0,
-        usage: {}, modelUsage: {}, permission_denials: [],
-      });
-      if (createJob) process.stdin.destroy();
-    })().catch((error) => {
-      process.stderr.write(String(error) + "\n");
-      process.exitCode = 1;
-      process.stdin.destroy();
+      if (!response.ok) throw response;
+      return await response.json();
+    };
+    const createJob = process.env.OPENCLAW_SCHEDULED_CREATE_JOB;
+    if (!createJob) {
+      phase = "clock";
+      const gap = await fetch(process.env.OPENCLAW_SCHEDULED_READ_CLOCK_URL, { method: "POST" });
+      if (!gap.ok) throw gap;
+    }
+    const listed = await rpc("tools/list");
+    const callTool = (raw) => {
+      phase = "tool arguments";
+      const args = JSON.parse(raw);
+      return rpc("tools/call", createJob ? { name: "${AUTOMATIONS_TOOL_NAME}", arguments: { action: "add", job: args } }
+        : { name: "message", arguments: args });
+    };
+    const reply = await callTool(createJob || process.env.OPENCLAW_SCHEDULED_READ_ARGUMENTS);
+    const followup = !createJob && process.env.OPENCLAW_SCHEDULED_MESSAGE_FOLLOWUP_ARGUMENTS;
+    const followupReply = followup ? await callTool(followup) : undefined;
+    phase = "write result";
+    const resultFile = new URL(createJob ? "./created-job.json" : "./mcp-result.json", import.meta.url);
+    writeFileSync(resultFile, JSON.stringify({ listed, reply, followupReply }));
+    send({ type: "result", subtype: "success", is_error: false,
+      result: JSON.stringify(reply), session_id: sessionId,
+      duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0,
+      usage: {}, modelUsage: {}, permission_denials: [],
     });
+    if (createJob) process.stdin.destroy();
+  } catch (error) {
+    const reason = error instanceof Response ? "HTTP " + error.status : error instanceof SyntaxError ? "invalid JSON" :
+      error?.name === "TimeoutError" ? "timeout" : "I/O failure";
+    writeFileSync(new URL("./cli-error.txt", import.meta.url), "Scheduled CLI fixture " + phase + ": " + reason);
+    process.exitCode = 1;
+    process.stdin.destroy();
   }
 });
 `;
@@ -288,6 +287,8 @@ describe("scheduled message actions", () => {
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const childPath = path.join(root, "claude.mjs");
+    const cliError = () =>
+      readFile(path.join(root, "cli-error.txt"), "utf8").catch(() => undefined);
     const cleanup: Array<() => void | Promise<void>> = [];
     const requests: Array<{ method: string; path: string; authorizationMatches: boolean }> = [];
     const edits: unknown[] = [];
@@ -708,6 +709,7 @@ describe("scheduled message actions", () => {
             { OPENCLAW_SCHEDULED_CREATE_JOB: JSON.stringify(params) },
             () => getReplyFromConfig(creatorContext, { runId: "native-cron-creator" }),
           );
+          expect(await cliError()).toBeUndefined();
           for (const payload of Array.isArray(producerReply) ? producerReply : [producerReply]) {
             expect(payload?.isError).not.toBe(true);
           }
@@ -792,14 +794,12 @@ describe("scheduled message actions", () => {
         ).toMatchObject({ ok: true, enqueued: true });
         if (heldPatch) {
           try {
-            await waitFor(
-              Promise.race([
-                heldPatch.entered.promise,
-                finished.promise.then((completion) => {
-                  throw new Error(`Completed before PATCH: ${JSON.stringify(completion)}`);
-                }),
-              ]),
+            const early = await waitFor(
+              Promise.race([heldPatch.entered.promise, finished.promise]),
             );
+            if (early) {
+              throw new Error(`Completed before PATCH: ${(await cliError()) ?? "cause unknown"}`);
+            }
             expect(edits).toEqual([{ topic: providerTopic }]);
             await gateway.client.request("cron.update", {
               id: job.id,
@@ -837,9 +837,9 @@ describe("scheduled message actions", () => {
             heldPatch.release.resolve();
           }
         }
-        const completion = await waitFor(finished.promise);
+        const { status } = await waitFor(finished.promise);
         if (!disableBeforeResponse) {
-          expect(completion, JSON.stringify(completion)).toMatchObject({ status: "ok" });
+          expect(status, status === "ok" ? undefined : await cliError()).toBe("ok");
         }
         let text: string | undefined;
         if (runtime === "claude-cli") {
