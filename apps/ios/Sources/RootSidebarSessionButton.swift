@@ -46,18 +46,21 @@ struct RootSidebarSessionButton: View, Equatable {
                     }
                 }
 
-                HStack(spacing: 6) {
-                    if self.node.badges.runningCount > 0 {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .tint(OpenClawSidebarPalette.muted)
-                    }
-                    if session.unread == true {
-                        Circle()
-                            .fill(OpenClawSidebarPalette.accent)
-                            .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                    }
+                switch SessionRowActivityMark(
+                    isWorking: self.node.badges.runningCount > 0,
+                    isUnread: session.unread == true)
+                {
+                case .working:
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(OpenClawSidebarPalette.muted)
+                case .unread:
+                    Circle()
+                        .fill(OpenClawSidebarPalette.accent)
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
+                case .none:
+                    EmptyView()
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)

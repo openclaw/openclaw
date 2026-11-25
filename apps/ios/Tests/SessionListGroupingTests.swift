@@ -76,6 +76,16 @@ struct SessionListGroupingTests {
             .unread)
     }
 
+    @Test func `a row shows the spinner or the unread dot, never both`() {
+        #expect(SessionRowActivityMark(isWorking: true, isUnread: true) == .working)
+        #expect(SessionRowActivityMark(isWorking: false, isUnread: true) == .unread)
+        #expect(SessionRowActivityMark(isWorking: false, isUnread: false) == .none)
+        // The Gateway marks a session unread when its run starts; it shows no dot until the run stops.
+        let running = Self.session("r", at: 1, unread: true, running: true)
+        #expect(SessionListGrouping.mark(running, needsApproval: false, in: .recent) == .working)
+        #expect(SessionListGrouping.mark(running, needsApproval: false, in: .working) == .none)
+    }
+
     @Test func `a finger on the list holds moves until it lifts, while new rows still land`() {
         let before = [Self.session("a", at: 2, running: true), Self.session("b", at: 1)]
         let held = CommandSessionsScreen.placements(SessionListGrouping.sections(

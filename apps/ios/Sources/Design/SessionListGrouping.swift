@@ -45,6 +45,16 @@ struct SessionListSection: Identifiable, Equatable {
     let sessions: [OpenClawChatSessionEntry]
 }
 
+/// The one mark a session row has room for at its end (Victor, F45: "Ou é spinner ou é unread. Both não
+/// coexistem."). While a run is in progress the spinner wins; the unread dot shows once it stops.
+enum SessionRowActivityMark: Equatable {
+    case none, working, unread
+
+    init(isWorking: Bool, isUnread: Bool) {
+        self = isWorking ? .working : isUnread ? .unread : .none
+    }
+}
+
 enum SessionListGrouping {
     /// Runs that ended badly and are not yet read: `status` from the session row, cleared by `unread`.
     static func isUnseenFailure(_ session: OpenClawChatSessionEntry) -> Bool {
@@ -64,8 +74,11 @@ enum SessionListGrouping {
     {
         if needsApproval { return .needsApproval }
         if self.isUnseenFailure(session) { return .failed }
-        if session.hasActiveRun == true { return group == .working ? .none : .working }
-        return session.unread == true ? .unread : .none
+        switch SessionRowActivityMark(isWorking: session.hasActiveRun == true, isUnread: session.unread == true) {
+        case .working: return group == .working ? .none : .working
+        case .unread: return .unread
+        case .none: return .none
+        }
     }
 
     /// `held` keeps each listed key in the group it showed while a finger is on the list; new keys

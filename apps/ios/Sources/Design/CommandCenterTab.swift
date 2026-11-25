@@ -512,13 +512,15 @@ struct CommandSessionsScreen: View {
         let needsApproval = self.needsApproval(session)
         let mark = SessionListGrouping.mark(session, needsApproval: needsApproval, in: group)
         let isUnread = session.unread == true
+        // The bold title is part of the unread mark, so it follows the same one-mark rule.
+        let showsUnread = SessionRowActivityMark(isWorking: session.hasActiveRun == true, isUnread: isUnread) == .unread
         let mainSessionKey = self.resolvedMainSessionKey
         return Button {
             self.openSessionKey(session.key)
         } label: {
             HStack(spacing: 10) {
                 Text(verbatim: CommandCenterTab.sessionTitle(session))
-                    .font(isUnread ? OpenClawType.headline : OpenClawType.body)
+                    .font(showsUnread ? OpenClawType.headline : OpenClawType.body)
                     .foregroundStyle(OpenClawBrand.textStrong)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)

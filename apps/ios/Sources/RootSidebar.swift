@@ -404,15 +404,21 @@ struct RootSidebar: View {
                         .font(OpenClawType.subheadMedium)
                         .lineLimit(1)
                         .modifier(RootSidebarApprovalLabel(isVisible: needsApproval))
-                    if mainSession?.hasActiveRun == true {
+                    switch SessionRowActivityMark(
+                        isWorking: mainSession?.hasActiveRun == true,
+                        isUnread: mainSession?.unread == true)
+                    {
+                    case .working:
                         ProgressView()
                             .controlSize(.mini)
                             .tint(OpenClawSidebarPalette.muted)
-                    } else if mainSession?.unread == true {
+                    case .unread:
                         Circle()
                             .fill(OpenClawSidebarPalette.accent)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
+                    case .none:
+                        EmptyView()
                     }
                 }
                 .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
