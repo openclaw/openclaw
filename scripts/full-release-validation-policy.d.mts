@@ -1,34 +1,52 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
+export function validateReleaseManifestAdvisoryJobs(
+  manifest: unknown,
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
+): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
+export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
-export function classifyReleaseChangelogEvidenceComparison(
+export function classifyReleaseEvidenceComparison(
   comparison: unknown,
-  identity: { baseSha: string; version?: unknown },
+  identity: {
+    baseSha: string;
+    targetSha?: string;
+    rootManifest?: unknown;
+    targetCoveragePolicy?: string;
+    readSourceFiles?: (requests: Array<{ sha: string; path: string }>) => Map<string, string>;
+    version?: unknown;
+    readSourceFile?: (sha: string, path: string) => string;
+  },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
 export function buildReleaseValidationManifest(input: {
   plan: ReleaseRecord;
   drain?: ReleaseRecord;
   context: ReleaseRecord;
+  reusedManifest?: ReleaseRecord;
 }): ReleaseRecord;
 export function assertReleasePublicationKnownBudget(
   plan: ReleaseRecord,
   context: ReleaseRecord,
+  reusedManifest?: ReleaseRecord,
 ): void;
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
+export function resolveReleaseQualificationScope(input: ReleaseRecord): {
+  coveragePolicy: "npm-beta-v1" | "npm-stable-v1" | undefined;
+  ciReleaseScope: string;
+  skipPackageTelegramE2e: boolean;
+  npmDistTag: string;
+  releaseCandidateBranch: string;
+};
 export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
 ): void;
-export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
-export function releaseWaivedIntegrationChannels(input: ReleaseRecord): string[];
-export function validateReleaseTelegramWaiverBinding(
-  plan: ReleaseRecord | undefined,
-  validationInputs?: ReleaseRecord,
-): void;
-
 export interface ReleaseRecord {
   [key: string]: unknown;
 }
@@ -38,6 +56,15 @@ export interface ReleaseChild extends ReleaseRecord {
   runId: string;
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
+  sha256: string;
+  parentRunId: string;
+  parentRunAttempt: number;
+  workflowSha: string;
+  targetSha: string;
+  candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
+  qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
+  qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
+  publicationArtifactSource?: import("./full-release-publication-contract.mjs").PublicationSourceFact;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -67,8 +94,32 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function evidenceReadRetryDelay(
+  args: readonly string[],
+  error: unknown,
+  attempt: number,
+): number;
+export function isReleaseGhServerError(error: unknown): boolean;
+export function readReleaseJobListing<T>(
+  readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,
+): Promise<T>;
+export function releaseGhRateLimitRetryAt(
+  error: unknown,
+  now?: number,
+  failures?: number,
+): number | undefined;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
+export function releaseChildSpecs(): ReleaseChildSpec[];
+export function planReleaseChildRerun(input: {
+  childKey: string;
+  jobs: ReleaseRecord[];
+}):
+  | { failed: string[]; jobName: string; mode: "single-job" }
+  | { failed: string[]; mode: "receipt"; producer: string };
+export const INSTALL_SMOKE_JOB_NEEDS: Readonly<Record<string, readonly string[]>>;
+export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS: ReadonlySet<string>;
+export const INSTALL_SMOKE_CALLER_DEPENDENTS: ReadonlySet<string>;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,
@@ -90,10 +141,24 @@ export function validateReleaseExecutionPlanArtifact(
 ): ReleaseExecutionPlan;
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
+export function matchesReleaseChildAttemptEvidence(
+  sealed: ReleaseRecord,
+  live: ReleaseRecord,
+): boolean;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
+export function resolveReleaseAttemptJobs<T extends ReleaseRecord>(
+  jobs: T[],
+  runAttempt: number,
+  options?: { allowRunning?: boolean },
+): T[];
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,
-  expected: { effectiveRunAttempt: number; plannedRunAttempt: number },
+  expected: {
+    effectiveRunAttempt: number;
+    effectiveRunStatus?: string;
+    recordedJobs?: ReleaseRecord[];
+    plannedRunAttempt: number;
+  },
 ): {
   effectiveRunAttempt: number;
   jobs: ReleaseRecord[];
@@ -101,15 +166,19 @@ export function composeReleaseAttemptJobs(
   sha256: string;
 };
 export function composeReleaseChildAttemptEvidence(input: {
+  recordedJobs?: ReleaseRecord[];
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
   expected: ReleaseRecord;
   run: ReleaseRecord;
 }): ReleaseRecord;
 
+export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
 export function terminalPolicyPass(
   child: ReleaseRecord,
-  releaseProfile: string,
-  workflowRef: string,
+  targetVersion?: string,
+  targetSha?: string,
+  waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
+  requiredJobs?: string[],
 ): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
@@ -120,6 +189,7 @@ export function validateReleaseStateArtifact(
   expected?: Record<string, unknown>,
   expectedMode?: string,
 ): ReleaseStateArtifact;
+export function validateRetiredReleaseRetryFields(value: ReleaseRecord): void;
 export function verifyReleaseStateArtifacts(
   executionPlanPayload: unknown,
   decisionPayload: unknown,
@@ -140,20 +210,23 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],
   cancelledRunIds?: Set<string>,
 ): string[];
+
+export function resolveAdmittedQualificationScope(
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+): ReturnType<typeof resolveReleaseQualificationScope> & {
+  releaseProfile: string;
+  runReleaseSoak: boolean;
+};
+export function qualificationChildDispatchInputs(
+  role: string,
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+  binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
+  workflowSource: string,
+): Record<string, string>;

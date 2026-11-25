@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -171,17 +171,21 @@ function readImmutableManifest(repository, source) {
     throw new Error("GitHub returned invalid immutable Linux release identity.");
   }
   const proof = manifest.value.linuxPublication;
-  const expected = [
-    manifest.assetName,
-    `OpenClaw-${manifest.version}-amd64.deb`,
-    "SHA256SUMS.linux-app.txt",
-    ...(proof?.assets?.length === 6
+  const companionAssets =
+    proof?.assets?.length === 6
       ? [
           `OpenClaw-${manifest.version}-darwin-aarch64.dmg`,
           `OpenClaw-${manifest.version}-darwin-aarch64.app.tar.gz`,
           `OpenClaw-${manifest.version}-windows-x86_64.exe`,
         ]
-      : []),
+      : proof?.assets?.length === 4
+        ? [`OpenClaw-${manifest.version}-windows-x86_64.exe`]
+        : [];
+  const expected = [
+    manifest.assetName,
+    `OpenClaw-${manifest.version}-amd64.deb`,
+    "SHA256SUMS.linux-app.txt",
+    ...companionAssets,
   ];
   const metadata = current.assets.filter((entry) => entry.name === name);
   if (
@@ -205,6 +209,9 @@ function readImmutableManifest(repository, source) {
   ) {
     throw new Error("Immutable Linux publication identity or metadata digest is invalid.");
   }
+  // Linux updater assets are permanent. Non-Linux companions built by the same
+  // workflow may be withdrawn by deleting them; a present one must still match.
+  const withdrawnCompanionAssets = [];
   for (const entry of proof.assets) {
     const matches = current.assets.filter((asset) => asset.name === entry.name);
     if (
@@ -212,7 +219,15 @@ function readImmutableManifest(repository, source) {
       entry.id < 1 ||
       !Number.isSafeInteger(entry.size) ||
       entry.size < 1 ||
-      !/^[a-f0-9]{64}$/u.test(entry.sha256) ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256)
+    ) {
+      throw new Error("Immutable Linux publication differs from its public asset inventory.");
+    }
+    if (matches.length === 0 && companionAssets.includes(entry.name)) {
+      withdrawnCompanionAssets.push(entry.name);
+      continue;
+    }
+    if (
       matches.length !== 1 ||
       matches[0].id !== entry.id ||
       matches[0].state !== "uploaded" ||
@@ -229,7 +244,17 @@ function readImmutableManifest(repository, source) {
     throw new Error("Immutable Linux publication source changed.");
   }
   inspectLinuxSourceAssets(repository, source, manifest);
-  return manifest;
+  return { ...manifest, withdrawnCompanionAssets };
+}
+
+function immutableObservation(immutable) {
+  return {
+    name: `OpenClaw-${immutable.version}-linux.json`,
+    sha256: hash(immutable.bytes),
+    ...(immutable.withdrawnCompanionAssets.length > 0
+      ? { withdrawnCompanionAssets: immutable.withdrawnCompanionAssets }
+      : {}),
+  };
 }
 
 function verifyAuthority(options) {
@@ -453,15 +478,7 @@ export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
   const immutable = readImmutableManifest(repository, carrier);
   const manifest = readManifest(repository, carrier);
   if (!manifest) {
-    return immutable
-      ? {
-          carrierTag,
-          immutableManifest: {
-            name: `OpenClaw-${immutable.version}-linux.json`,
-            sha256: hash(immutable.bytes),
-          },
-        }
-      : null;
+    return immutable ? { carrierTag, immutableManifest: immutableObservation(immutable) } : null;
   }
   const source = readRelease(repository, manifest.sourceTag);
   const publication = inspectLinuxSourceAssets(repository, source, manifest);
@@ -483,14 +500,7 @@ export function inspectLinuxUpdaterManifest({ repository, carrierTag }) {
     carrierTag,
     manifestSha256,
     sourceVersion: manifest.version,
-    ...(immutable
-      ? {
-          immutableManifest: {
-            name: `OpenClaw-${immutable.version}-linux.json`,
-            sha256: hash(immutable.bytes),
-          },
-        }
-      : {}),
+    ...(immutable ? { immutableManifest: immutableObservation(immutable) } : {}),
   };
 }
 
@@ -540,14 +550,47 @@ function status(options, record) {
     throw new Error("Same-version canonical Linux metadata conflicts with immutable publication.");
   }
   const latest = readRelease(options.repository, undefined, true);
-  let needsUpdaterPublication = false;
-  if (publicStable(latest) && compareReleaseVersions(version, latest.tagName.slice(1)) <= 0) {
+  const latestVersion = publicStable(latest) && releaseVersion(latest.tagName);
+  let needsUpdaterPublication = true;
+  if (latestVersion && compareReleaseVersions(version, latestVersion.version) <= 0) {
     const current = readManifest(options.repository, latest);
     const selected = canonical ?? manifest;
     needsUpdaterPublication =
       !current ||
       compareReleaseVersions(current.version, selected.version) < 0 ||
       (current.version === selected.version && !current.bytes.equals(selected.bytes));
+    if (canonical && !needsChannelPublication && !needsUpdaterPublication) {
+      // The release API can return fresh bytes before either public URL converges.
+      const expectedHash = hash(canonical.bytes);
+      for (const path of [
+        `download/v${latestVersion.version}/latest.json`,
+        "latest/download/latest.json",
+      ]) {
+        const url = `https://github.com/${options.repository}/releases/${path}`;
+        const result = spawnSync(
+          "curl",
+          [
+            "--disable",
+            "--fail",
+            "--silent",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            url,
+          ],
+          { timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 },
+        );
+        if (result.status !== 0 || hash(result.stdout) !== expectedHash) {
+          console.error(
+            `Linux updater publication is pending: ${url} did not serve canonical ${canonical.version} (SHA-256 ${expectedHash}). Inspect the Linux builder or mirror readback before retrying.`,
+          );
+          needsUpdaterPublication = true;
+          break;
+        }
+      }
+    }
   }
   writeFileSync(join(options.output, "latest.json"), manifest.bytes, { flag: "wx" });
   writeFileSync(join(options.output, publication.checksumsName), publication.checksumBytes, {
@@ -560,6 +603,9 @@ function status(options, record) {
     manifestSha256: hash(manifest.bytes),
     needsUpdaterPublication,
     needsChannelPublication,
+    ...(immutable?.withdrawnCompanionAssets.length > 0
+      ? { withdrawnCompanionAssets: immutable.withdrawnCompanionAssets }
+      : {}),
   });
 }
 

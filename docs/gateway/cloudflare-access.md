@@ -29,10 +29,10 @@ stable public HTTPS URL and identity-provider SSO in front of the Control UI.
 browser / CLI / node  ->  Cloudflare Access (identity)  ->  Tunnel  ->  127.0.0.1:18789
 ```
 
-Access authenticates the request and injects identity headers. The Gateway does not
-re-authenticate the person or verify the Access JWT signature; it checks the trusted
-proxy source and configured header presence, then trusts the user header. Because
-`allowLoopback` also lets other local processes present those headers, keep the Gateway
+Access authenticates the request and injects identity headers. By default the Gateway
+checks the trusted proxy source and configured header presence, then trusts the user
+header. Because `allowLoopback` also lets other local processes present those headers,
+either turn on [Access JWT verification](#verify-the-access-jwt) or keep the Gateway
 port private to the host and run only trusted workloads there.
 
 ## Step 1: Route the tunnel to loopback
@@ -58,8 +58,17 @@ users. Note the two headers Access adds to authenticated requests, because the G
 consumes them in the next step:
 
 - `cf-access-authenticated-user-email` — the authenticated identity.
-- `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
-  header is present and non-blank; it does not verify the JWT signature.
+- `cf-access-jwt-assertion` — Access's signed assertion. By default OpenClaw checks only
+  that this header is present and non-blank. Turn on
+  [Access JWT verification](#verify-the-access-jwt) to check its signature.
+
+### Email-code sign-in
+
+Cloudflare Access one-time PIN sign-in resolves a person through the existing
+verified-email profile. OpenClaw requires a successful Access identity response
+with the `onetimepin` provider and an email matching the authenticated user header.
+It does not infer GitHub credit from this identity. Access policies and OpenClaw
+role and access checks still apply; keep the Access policy limited to intended users.
 
 ### OIDC sign-in and existing people
 
@@ -74,6 +83,12 @@ that email through the existing person profile. Using the same email retains the
 person's profile and role; a different email requires an existing linked alias to
 resolve to that person. GitHub sign-in continues to verify the immutable GitHub
 account ID. Failed identity verification does not fall back to email matching.
+
+Successful identity lookups are reused for the same signed assertion, matching
+principal, and OIDC configuration for at most five minutes, never beyond the
+assertion's expiration. Concurrent matching requests share the lookup. Failures
+are not cached. Proxy admission and current profile roles are still checked on
+each request; this cache does not grant access or retain a role assignment.
 
 Keep the identity provider responsible for verifying email ownership. Creating an
 OpenClaw person profile does not grant access through Cloudflare Access.
@@ -106,15 +121,33 @@ until you explicitly trust one Access issuer, identity-provider ID, and claim na
 The issuer is the Access team origin without a trailing slash. `providerId` is
 the selected integration's ID from Access, not its name or an OIDC user subject.
 The provider must verify ownership of the GitHub account and bind it to the
-verified sign-in email. Its ID token must contain a canonical positive
-decimal-string account ID, such as `"12345"`, within JavaScript's safe-integer
+verified sign-in email. Its ID token must contain a positive
+decimal-string account ID with no leading zeros, such as `"12345"`, within JavaScript's safe-integer
 range. Configure Access to forward that exact [custom OIDC claim](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/generic-oidc/#custom-oidc-claims).
-OpenClaw reads it from `oidc_fields` in the Access identity response and verifies
-the numeric account through GitHub to obtain its current public login.
+OpenClaw reads it from `oidc_fields` in the authenticated
+`/cdn-cgi/access/get-identity` response, or from `custom` when `oidc_fields` is
+absent, then verifies the numeric account through GitHub to obtain its current
+public login. A present `oidc_fields` container takes precedence: OpenClaw does
+not retry `custom` if the preferred container lacks the claim or its value is
+invalid. The identity-provider **Test** preview uses `oidc_fields`; inspect the
+authenticated identity endpoint after a fresh sign-in to verify the response
+OpenClaw consumes.
 
-A missing claim or an unselected issuer/provider keeps ordinary email-only
-resolution. A malformed trusted claim or failed identity verification fails
-identity enrichment instead of inventing credit. Existing email profiles retain
+A missing or malformed optional claim, or an unselected issuer/provider, keeps
+ordinary email-only resolution. Malformed claims are never sent to GitHub or
+used to create an association or public credit. If the optional GitHub account lookup fails, OpenClaw resolves the
+authenticated email through the normal profile and access-policy checks. An
+existing authorized profile or valid email invitation can still sign in. A
+GitHub-only access requirement is not satisfied by an email fallback.
+
+Lookup failure does not create a GitHub identity or public credit. An existing
+verified matching association and saved co-author preference remain intact;
+a later successful lookup can complete or refresh the link. This behavior
+applies to both `oidc_fields` and `custom`. Invalid Access authentication,
+mismatched principals, conflicting profile bindings for valid account claims,
+and expired or revoked access still fail their normal checks.
+
+Existing email profiles retain
 their identity, role, and saved co-author preference. A conflicting GitHub account
 does not automatically merge profiles or move the email; an administrator must
 resolve it through the existing `users.linkEmail` operation. This also applies
@@ -133,6 +166,7 @@ otherwise expects a non-loopback proxy.
 {
   gateway: {
     bind: "loopback",
+    publicOrigin: "https://gateway.example",
     trustedProxies: ["127.0.0.1", "::1"],
     auth: {
       mode: "trusted-proxy",
@@ -148,9 +182,63 @@ otherwise expects a non-loopback proxy.
 
 Requiring `cf-access-jwt-assertion` adds a second presence check, not cryptographic
 verification. A local process that can connect to the Gateway can submit both headers,
-so do not treat this setting as a defense against untrusted local code. The security
+so do not treat this setting alone as a defense against untrusted local code. The security
 boundary is the locked-down loopback port plus Cloudflare Access and the tunnel being
-the only path for external traffic.
+the only path for external traffic, unless you also verify the Access JWT.
+
+### Verify the Access JWT
+
+Add `cloudflareAccessJwt` to check every request's assertion against your Access team's
+signing keys. This is off by default and existing configurations keep working unchanged.
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        allowLoopback: true,
+        cloudflareAccessJwt: {
+          issuer: "https://example.cloudflareaccess.com",
+          audience: "your-application-aud-tag",
+        },
+      },
+    },
+  },
+}
+```
+
+- `issuer` is your team domain without a trailing slash. OpenClaw fetches the signing keys
+  from `<issuer>/cdn-cgi/access/certs` when it first needs them. It fetches them again on the
+  first request after they are ten minutes old, or when an assertion names a key it has not
+  seen, but at most once every 30 seconds. A successful response with usable RSA keys
+  (2048-bit or larger, the minimum RS256 permits per RFC 7518) replaces the previous set.
+  If a fetch fails or returns no usable RSA keys, the last good
+  set remains usable for up to 24 hours from its last successful fetch. The Gateway logs
+  a warning the first time it uses that set at least one hour after fetching it.
+- `audience` is the Application Audience (AUD) tag from the Access application's overview page.
+
+With verification on, OpenClaw admits a request only when the assertion is signed by the team
+key (RS256), was issued by `issuer` for `audience`, and has not expired. Expiry and `nbf`
+allow 60 seconds of clock skew between the Gateway host and Cloudflare. The user comes from the
+signed `email` claim, and the user header must match it. Forged, expired, or other-application
+assertions are rejected with `trusted_proxy_access_invalid`, a header that disagrees with the claim
+with `trusted_proxy_access_user_mismatch`. When a refresh fails and the Gateway has no
+usable cached set, it returns `trusted_proxy_access_keys_unavailable`.
+
+Verification does not combine with [enterprise browser delegation](/gateway/trusted-proxy-auth):
+delegated identities are not Access emails, so they are refused while it is on.
+
+Service-token requests from nodes are unaffected: their assertion carries no email, Access sends
+no user header for them, and the node authenticates with its own credentials as before.
+
+`publicOrigin` supplies external session links, agent link instructions, and the
+browser-origin default when `controlUi.allowedOrigins` is omitted. You only need
+an explicit allowlist for a different browser policy; that list replaces the
+default rather than adding to it. For profile, role, GitHub, and operations setup,
+see [Multiplayer: production deployment](/start/multiplayer#production-deployment).
 
 ## Step 4: Decide how nodes and workers get in
 

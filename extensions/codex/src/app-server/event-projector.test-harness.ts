@@ -21,16 +21,25 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
+import {
+  assistantMessage,
+  createCodexTestModel,
+  createCodexTestToolTerminalObserver,
+} from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
 export {
   CodexAppServerEventProjector,
-  createCodexTestModel,
   createCodexTestToolTerminalObserver,
   createMockPluginRegistry,
   describe,
@@ -68,33 +77,13 @@ export function flushDiagnosticEvents() {
   });
 }
 
-function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
-}
-
 export async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
-    assistantMessage("history", Date.now()),
-  );
+  await openFileBackedSessionManagerForTest(sessionFile, {
+    sessionId: "session-1",
+  }).appendMessageAsync(assistantMessage("history", Date.now()));
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -118,18 +107,6 @@ export async function createProjector(
   return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID, options);
 }
 
-export async function createProjectorWithAssistantHooks() {
-  const onAssistantMessageStart = vi.fn();
-  const onPartialReply = vi.fn();
-  const params = await createParams();
-  const projector = await createProjector({
-    ...params,
-    onAssistantMessageStart,
-    onPartialReply,
-  });
-  return { onAssistantMessageStart, onPartialReply, projector };
-}
-
 export function registerCodexEventProjectorTestLifecycle(): void {
   beforeEach(() => {
     resetAgentEventsForTest();
@@ -137,12 +114,16 @@ export function registerCodexEventProjectorTestLifecycle(): void {
   });
 
   afterEach(async () => {
+    // Drain projected setImmediate hooks before a later test replaces their registry.
+    await flushDiagnosticEvents();
     resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const tempDir of tempDirs) {
+      await closeOpenClawAgentDatabasesAsync(tempDir);
+      closeOpenClawAgentDatabasesForTest(tempDir);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
     tempDirs.clear();
@@ -272,10 +253,10 @@ export function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotification {
@@ -298,7 +279,7 @@ export function appServerError(params: {
 }
 
 export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method: "account/rateLimits/updated",
     params: {
       rateLimits: {
@@ -311,7 +292,7 @@ export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
         rateLimitReachedType: "rate_limit_reached",
       },
     },
-  } as ProjectorNotification;
+  });
 }
 
 export function turnCompleted(items: unknown[] = []): ProjectorNotification {
@@ -319,13 +300,13 @@ export function turnCompleted(items: unknown[] = []): ProjectorNotification {
 }
 
 export function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
       turn: { id: TURN_ID, status, items },
     },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 export function pendingCommandStarted(id: string): ProjectorNotification {

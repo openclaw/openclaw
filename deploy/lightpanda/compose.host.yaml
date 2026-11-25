@@ -1,0 +1,4 @@
+services:
+  lightpanda:
+    ports:
+      - "127.0.0.1:${LIGHTPANDA_PORT:-9222}:9222"

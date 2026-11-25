@@ -26,9 +26,12 @@ export function registrationIncludesHostRestrictedConversationReadTool(
   // Fall back to declaredNames only when the registration has no produced names
   // yet, preserving the fail-closed contract for unnamed registrations.
   const producibleNames = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
-  return producibleNames.some((toolName) =>
-    isHostRestrictedConversationReadTool({ pluginId: entry.pluginId, toolName }),
-  );
+  for (const toolName of producibleNames) {
+    if (isHostRestrictedConversationReadTool({ pluginId: entry.pluginId, toolName })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isBundledConversationReadToolRegistration(params: {

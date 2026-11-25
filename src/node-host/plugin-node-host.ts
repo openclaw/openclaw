@@ -1,8 +1,12 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { assertCurrentUsageAuthorization } from "../infra/exec-approvals-authorization.kernel.js";
+import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
+import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import { logDebug } from "../logger.js";
 import {
   parseComputerUseCapabilityDescriptor,
@@ -20,15 +24,10 @@ import type {
   PluginLogger,
 } from "../plugins/types.js";
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
-
-/**
- * Plugin node-host command registry bridge.
- *
- * Node hosts load the active plugin registry, expose registered capabilities
- * and commands, and dispatch incoming node-host commands by exact command id.
- */
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { resolveNodeExecConfigPolicy } from "./exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
   () => import("../plugins/loader.js"),
@@ -76,13 +75,8 @@ export async function ensureNodeHostPluginRegistry(params: {
 /** List registered node-host capabilities and command ids in deterministic order. */
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
-  options: { includeDuplex?: boolean; commandAllowlist?: ReadonlySet<string> } = {},
-): {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  nodePluginTools: NodePluginToolDescriptor[];
-} {
+  options: { commandAllowlist?: ReadonlySet<string> } = {},
+) {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();
@@ -91,9 +85,6 @@ export function listRegisteredNodeHostCapsAndCommands(
     const nodePluginTools = new Map<string, NodePluginToolDescriptor>();
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (options.commandAllowlist && !options.commandAllowlist.has(entry.command.command)) {
-        continue;
-      }
-      if (entry.command.duplex === true && options.includeDuplex === false) {
         continue;
       }
       // Availability belongs to the node-local plugin. Gateway policy still keeps
@@ -130,28 +121,44 @@ export function watchRegisteredNodeHostCommandAvailability(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
   onChange: () => void,
   commandAllowlist?: ReadonlySet<string>,
-): () => void {
+): () => Promise<void> {
   const registry = resolveNodeHostPluginRegistry();
-  const cleanups: Array<() => void> = [];
+  let cleanups: Array<() => void | Promise<void>> = [];
+  let stopped = false;
+  let stopping: Promise<void> | undefined;
   withPluginRuntimeRegistryScope(registry, () => {
     for (const entry of registry?.nodeHostCommands ?? []) {
       if (commandAllowlist && !commandAllowlist.has(entry.command.command)) {
         continue;
       }
-      const cleanup = entry.command.watchAvailability?.(context, () =>
-        withPluginRuntimeRegistryScope(registry, onChange),
-      );
+      const cleanup = entry.command.watchAvailability?.(context, () => {
+        if (!stopped) {
+          withPluginRuntimeRegistryScope(registry, onChange);
+        }
+      });
       if (cleanup) {
         cleanups.push(cleanup);
       }
     }
   });
-  return () =>
-    withPluginRuntimeRegistryScope(registry, () => {
-      for (const cleanup of cleanups.splice(0)) {
-        cleanup();
-      }
-    });
+  return () => {
+    stopped = true;
+    return (stopping ??= Promise.resolve()
+      .then(async () => {
+        const results = await Promise.allSettled(
+          cleanups.map(async (cleanup) =>
+            withPluginRuntimeRegistryScope(registry, () => cleanup()),
+          ),
+        );
+        // Retry only unfinished owners; successful cleanup must not run twice.
+        cleanups = cleanups.filter((_cleanup, index) => results[index]?.status === "rejected");
+        throwIfSettledRejected(results, "node-host watcher cleanup failed");
+      })
+      .catch((error: unknown) => {
+        stopping = undefined;
+        throw error;
+      }));
+  };
 }
 
 /** Release plugin command state before a reconnected Gateway can invoke it again. */
@@ -204,10 +211,6 @@ export function hasRegisteredNodeHostCommandActiveWork(): boolean {
   });
 }
 
-function isProviderSafeToolName(value: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
-}
-
 function buildNodePluginToolDescriptor(
   entry: PluginNodeHostCommandRegistration,
 ): NodePluginToolDescriptor | null {
@@ -217,7 +220,7 @@ function buildNodePluginToolDescriptor(
   }
   const name = normalizeOptionalString(agentTool.name) ?? "";
   const description = normalizeOptionalString(agentTool.description) ?? "";
-  if (!isProviderSafeToolName(name) || !description) {
+  if (!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) || !description) {
     return null;
   }
   const mcpServer = normalizeOptionalString(agentTool.mcp?.server) ?? "";
@@ -269,20 +272,70 @@ export async function invokeRegisteredNodeHostCommand(
       throw new Error("node plugin invocation authority is closed");
     }
   };
-  const invokeContext = context
-    ? {
-        ...context,
-        prepareExecAuthorization: (source: "human-approved" | "session-full") =>
-          preparePluginExecAuthorization({
-            source,
-            command,
-            sessionKey: context.sessionKey,
-            assertActive,
-          }),
-      }
-    : undefined;
   try {
+    const readCurrent = context
+      ? await prepareExecApprovalsCurrentRead(captureOpenClawStateWorkerContext()).catch(
+          (error: unknown) => () => {
+            // Non-exec commands can proceed; using their optional exec guard fails closed.
+            throw error;
+          },
+        )
+      : undefined;
+    const invokeContext =
+      context && readCurrent
+        ? {
+            ...context,
+            prepareExecAuthorization: (source: "human-approved" | "session-full") => {
+              // Local policy stays on the executor; Gateway approval never overrides a local deny.
+              assertActive();
+              const agentId = parseAgentSessionKey(context.sessionKey)?.agentId;
+              const resolvePolicy = () =>
+                resolveNodeExecConfigPolicy({ cfg: getRuntimeConfig(), agentId });
+              const policy = resolvePolicy();
+              const approvals = readCurrent();
+              const policySnapshot = createExecApprovalPolicySnapshot({
+                file: approvals,
+                agentId,
+              });
+              const assertCurrent = () => {
+                const current = resolvePolicy();
+                if (
+                  current.security === "deny" ||
+                  current.security !== policy.security ||
+                  current.ask !== policy.ask ||
+                  current.autoReview !== policy.autoReview ||
+                  (source === "session-full" &&
+                    (current.security !== "full" || current.ask !== "off"))
+                ) {
+                  throw new Error(
+                    "SYSTEM_RUN_DENIED: node-local exec policy does not authorize this launch",
+                  );
+                }
+                // Committed in-process policy facts remain current through awaited plugin setup.
+                assertCurrentUsageAuthorization({
+                  file: readCurrent(),
+                  agentId,
+                  command,
+                  matchKeys: new Set(),
+                  authorization: {
+                    source: source === "human-approved" ? "explicit-approval" : "current-policy",
+                    security: current.security,
+                    ask: current.ask,
+                    allowlistSatisfied: false,
+                    policySnapshot,
+                  },
+                });
+                assertActive();
+              };
+              assertCurrent();
+              return assertCurrent;
+            },
+          }
+        : undefined;
     return await withPluginRuntimeRegistryScope(registry, async () => {
+      if (context) {
+        assertActive();
+      }
       if (match.command.duplex === true || match.command.duplex === "optional") {
         if (match.command.duplex === true && !io) {
           throw new Error(`node command requires duplex transport: ${command}`);
@@ -314,7 +367,6 @@ function resetNodeHostPluginRegistry(): void {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostPluginTestApi")] = {
-    getNodeHostPluginRegistry: () => nodeHostPluginRegistry,
     resetNodeHostPluginRegistry,
   };
 }

@@ -2,15 +2,17 @@
 
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
+  failGuard,
   finishGuard,
   openGuard,
+  securityReviewContracts,
   withApprovalRequest,
 } from "./guard-review.mjs";
 import { createIssueMutationHelpers, sanitizeGuardDisplayValue } from "./guard-shared.mjs";
 import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
-const marker = "<!-- openclaw:security-sensitive-guard -->";
+const marker = securityReviewContracts.sensitive.commentMarker;
 const changedLabel = "security-sensitive-changed";
 const reviewLabel = "security-review-required";
 
@@ -44,7 +46,9 @@ function renderComment({ changes, pullRequest, approval }) {
   const lines = [marker, "", `### ${heading}`, ""];
   if (changes.length > 0 && approval?.kind === "author") {
     lines.push(
-      "This maintainer PR changes sensitive security components. This comment is informational because the PR author has repository Maintain or Admin access.",
+      "This maintainer PR changes sensitive security components.",
+      "",
+      "**No secops approval is required. This comment is informational because the PR author has Maintain or Admin access.**",
       "",
       `- Current SHA: ${code(pullRequest.head.sha)}`,
       `- Maintainer: @${sanitizeGuardDisplayValue(approval.login)}`,
@@ -99,23 +103,18 @@ function renderComment({ changes, pullRequest, approval }) {
   return lines.join("\n");
 }
 
+let currentGuard;
+
 export async function reviewSecuritySensitiveChanges(prepared) {
-  const guard = await openGuard(
-    {
-      context: "openclaw/security-sensitive-review",
-      commentMarker: marker,
-      approvalCommand: "/allow-security-sensitive-change",
-    },
-    prepared,
-  );
+  const guard = await openGuard(securityReviewContracts.sensitive, prepared);
+  currentGuard = guard;
   if (!guard) {
     return true;
   }
   const { api, owner, repo, issuePath, files, pullRequest } = guard;
   const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
   const changes = collectSecuritySensitiveChanges(files);
-  const comments = await api.paginate(`${issuePath}/comments`);
-  const labels = await api.paginate(`${issuePath}/labels`);
+  const { comments, labelNames } = await guard.readIssueNotices();
   const existing = comments.find(
     (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker),
   );
@@ -124,15 +123,13 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     owner,
     repo,
     issuePath,
-    labelNames: new Set(labels.map((label) => label.name)),
+    labelNames,
+    recoverCommentWrites: true,
   });
-  const allowed = await finishGuard(guard, {
-    requiresApproval: changes.length > 0,
-    description:
-      changes.length > 0
-        ? "Sensitive changes have maintainer authority"
-        : "No sensitive product changes",
-  });
+  const allowed = await finishGuard(
+    guard,
+    securityReviewContracts.sensitive.success[changes.length > 0 ? "approved" : "clear"],
+  );
   if (changes.length > 0) {
     await addLabelIfMissing(changedLabel);
   } else {
@@ -165,8 +162,11 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
-    /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+    /** @param {unknown} error */ async (error) => {
+      if (currentGuard) {
+        await failGuard(currentGuard, error, { terminal: true });
+      }
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

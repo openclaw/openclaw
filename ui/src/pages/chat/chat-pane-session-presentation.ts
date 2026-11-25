@@ -1,11 +1,48 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isArchiveHeld, subscribeHeldArchives } from "../../components/session-archive-hold.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
+
+export function chatSessionPresentationTitle(
+  state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,
+  row?: GatewaySessionRow,
+  sessionKey = "",
+  pending = false,
+  createdTitle?: string,
+): string {
+  const key = state
+    ? resolveSessionKey(state.sessionKey, state.hello) || state.sessionKey
+    : sessionKey;
+  const presentation = state?.sessions.presentation.result?.sessions.find((candidate) =>
+    areUiSessionKeysEquivalent(candidate.key, key),
+  );
+  // The roster owns accepted titles; pane metadata fills absent cross-agent rows.
+  const source = presentation ?? row;
+  if (!source && createdTitle) {
+    return createdTitle;
+  }
+  if (!source && pending) {
+    return "";
+  }
+  return presentation
+    ? resolveSessionDisplayName(key, presentation)
+    : resolveSessionDisplayName(row?.key ?? key, row);
+}
+
+/** The presentation key changes with the roster and when a held archive starts sending. */
+export function watchPresentation(
+  sessions: Pick<ApplicationContext["sessions"], "subscribe">,
+  notify: () => void,
+): () => void {
+  const stops = [sessions.subscribe(notify), subscribeHeldArchives(notify)];
+  return () => stops.forEach((stop) => stop());
+}
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */
 export function chatSessionPresentationKey(
@@ -29,6 +66,7 @@ export function chatSessionPresentationKey(
     state.sessionsLoading,
     state.sessionsError,
     selected,
+    chatSessionPresentationTitle(state),
     resolveChatPaneParentSession(selected, rows),
     result?.defaults,
     result?.owners,
@@ -39,6 +77,7 @@ export function chatSessionPresentationKey(
       scopedAgentParamsForSession(state, state.sessionKey).agentId,
     ),
     state.sessions.archiveVisibility(selected?.key ?? state.sessionKey),
+    isArchiveHeld(selected?.key ?? state.sessionKey),
     collectKnownSessionGroups(publication.groups, publication.result?.sessions ?? []),
     publication.groupSettings,
     [...approvalSources].map((key) => rows.find((row) => areUiSessionKeysEquivalent(row.key, key))),

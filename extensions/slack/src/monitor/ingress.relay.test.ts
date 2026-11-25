@@ -1,43 +1,8 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackDurableIngress } from "./ingress.js";
-
-type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
-type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
-
-async function withQueue(
-  fn: (queue: ChannelIngressQueue<SlackIngressPayload>) => Promise<void>,
-): Promise<void> {
-  const rawRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), `openclaw-slack-relay-ingress-${crypto.randomUUID()}-`),
-  );
-  const stateDir = await fs.realpath(rawRoot);
-  const queue = createChannelIngressQueueForTests<SlackIngressPayload>({
-    channelId: "slack",
-    accountId: "default",
-    stateDir,
-  });
-  try {
-    await fn(queue);
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
+import { withQueue } from "./ingress.test-support.js";
 
 describe("Slack relay durable ingress", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
   const relayMessage = {
     type: "message",
     channel: "C_RELAY",

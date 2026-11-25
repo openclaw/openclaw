@@ -1,4 +1,5 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import {
   createEnvironmentComputerTransportOwner,
   createWorkerComputerTransportOwner,
@@ -110,12 +111,7 @@ export function createWorkerComputerService(
             (await prepared.catch(() => undefined))?.close("environment-stopped"),
           ),
       );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Attached computer cleanup failed");
-      }
+      throwSettledAggregate(results, "Attached computer cleanup failed");
     },
     prepare: (claim: WorkerSessionTurnClaim) => {
       if (stopped || !options.placements.validateTurnClaim(claim)) {
@@ -137,9 +133,12 @@ export function createWorkerComputerService(
         };
         return {
           ...computer,
-          bind(run: OperationalRunInstanceRef) {
+          bind(
+            run: OperationalRunInstanceRef,
+            workerSource?: Parameters<PreparedWorkerComputer["bind"]>[1],
+          ) {
             assertOwner();
-            const transport = computer.bind(run);
+            const transport = computer.bind(run, workerSource);
             const bound: WorkerComputerTransport = {
               computerUse: transport.computerUse,
               async resolveNode(query, signal) {
@@ -219,13 +218,7 @@ export function createWorkerComputerService(
           (await prepared.catch(() => undefined))?.close("gateway-stop"),
         ),
       ]);
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length) {
-        throw new AggregateError(
-          failures.map((failure) => failure.reason),
-          "Session computer cleanup failed",
-        );
-      }
+      throwSettledAggregate(results, "Session computer cleanup failed");
     },
   };
 }

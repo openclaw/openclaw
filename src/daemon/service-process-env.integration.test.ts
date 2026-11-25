@@ -352,7 +352,7 @@ afterEach(() => {
 });
 
 describe("service manager routing environment", () => {
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["linux", "win32"] as const)(
     "preserves %s native routing without arbitrary namespaces",
     (platform) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);

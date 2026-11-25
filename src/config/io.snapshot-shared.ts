@@ -1,33 +1,30 @@
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { setDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { observeConfigSnapshot } from "./io.observe.js";
-import type { NormalizedConfigIoDeps, ReadConfigFileSnapshotInternalResult } from "./io.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { ReadConfigFileSnapshotInternalResult } from "./io.types.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "./materialize.js";
 import { setConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
-import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
-export function createConfigFileSnapshot(params: {
-  path: string;
-  includedPaths?: readonly string[];
-  includeProvenance?: ConfigFileSnapshot["includeProvenance"];
-  agentRosterIncludeOwned?: boolean;
-  bindingsIncludeOwned?: boolean;
-  exists: boolean;
-  raw: string | null;
-  parsed: unknown;
-  authoredConfig?: OpenClawConfig;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
-  sourceConfig: OpenClawConfig;
-  valid: boolean;
-  runtimeConfig: OpenClawConfig;
-  hash?: string;
-  readError?: { code: string | null };
-  issues: ConfigFileSnapshot["issues"];
-  warnings: ConfigFileSnapshot["warnings"];
-  legacyIssues: LegacyConfigIssue[];
-  resolutionFacts?: ConfigResolutionFacts;
-  deferredPluginMigrations?: readonly DeferredPluginMigration[];
-}): ConfigFileSnapshot {
+export function createConfigFileSnapshot(
+  params: Omit<
+    ConfigFileSnapshot,
+    | "includedPaths"
+    | "sourceConfigBeforeMigrations"
+    | "sourceConfig"
+    | "resolved"
+    | "runtimeConfig"
+    | "config"
+  > & {
+    includedPaths?: readonly string[];
+    sourceConfigBeforeMigrations?: OpenClawConfig;
+    sourceConfig: OpenClawConfig;
+    runtimeConfig: OpenClawConfig;
+    resolutionFacts?: ConfigResolutionFacts;
+    deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  },
+): ConfigFileSnapshot {
   const sourceConfigBeforeMigrations = params.sourceConfigBeforeMigrations
     ? asResolvedSourceConfig(params.sourceConfigBeforeMigrations)
     : undefined;
@@ -44,11 +41,7 @@ export function createConfigFileSnapshot(params: {
     includedPaths: [...(params.includedPaths ?? [])],
     ...(params.includeProvenance
       ? {
-          includeProvenance: params.includeProvenance.map((entry) => ({
-            ...entry,
-            path: [...entry.path],
-            ...(entry.targetPaths ? { targetPaths: [...entry.targetPaths] } : {}),
-          })),
+          includeProvenance: params.includeProvenance,
         }
       : {}),
     ...(params.agentRosterIncludeOwned !== undefined
@@ -84,16 +77,4 @@ export async function finalizeReadConfigSnapshotInternalResult(
     await observeConfigSnapshot(deps, result.snapshot);
   }
   return result;
-}
-
-export async function collectInvalidConfigLegacyIssues(
-  raw: unknown,
-  sourceRaw: unknown,
-): Promise<LegacyConfigIssue[]> {
-  if (!raw || typeof raw !== "object") {
-    return [];
-  }
-  const { findDoctorLegacyConfigIssues } =
-    await import("../commands/doctor/shared/legacy-config-issues.js");
-  return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }

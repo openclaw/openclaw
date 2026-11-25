@@ -1,12 +1,17 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
 import ai.openclaw.app.chat.chatOutboxDisplayError
+import ai.openclaw.app.chat.imageLoadKey
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.gateway.GatewayLoadedImage
+import ai.openclaw.app.gateway.GatewayLoadedMedia
+import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.isInboundMediaSource
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
@@ -14,6 +19,7 @@ import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,8 +42,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -46,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,6 +69,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -69,7 +78,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -241,7 +251,31 @@ private fun ChatLinkPreview(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).then(metadataAnchor?.modifier ?: Modifier),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = domain,
+            style = ClawTheme.type.captionSmall,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Surface(
+            onClick = { expanded = false },
+            shape = CircleShape,
+            color = Color.Transparent,
+          ) {
+            Icon(
+              imageVector = Icons.Default.ExpandLess,
+              contentDescription = nativeString("Collapse link preview"),
+              tint = ClawTheme.colors.textMuted,
+            )
+          }
+        }
         when (val preview = result) {
           null -> {
             Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
@@ -324,6 +358,7 @@ fun ChatTypingIndicatorBubble(
 fun ChatOutboxBubble(
   item: ChatOutboxItem,
   retryEnabled: Boolean = true,
+  loadImagePreview: suspend (ChatOutboxAttachment) -> ByteArray? = { null },
   onRetry: () -> Unit,
   onDelete: () -> Unit,
 ) {
@@ -363,16 +398,48 @@ fun ChatOutboxBubble(
     user = true,
     speaker = nativeString("You"),
   ) {
-    if (item.text.isNotBlank()) {
-      ChatMarkdown(text = item.text, textColor = ClawTheme.colors.text)
+    // Same shape as the sent bubble: photo, the author's text (no "See attached."), voice row.
+    val parts = remember(item.text, item.attachments) { chatOutboxBubbleParts(item.text, item.attachments) }
+    // Page queued photos like the sent bubble so only one window of stored previews is decoded at once.
+    val imageCount = parts.count { it.attachment != null && it.content.type == "image" }
+    var imagePage by rememberSaveable(item.id) { mutableIntStateOf(0) }
+    val lastImagePage = ((imageCount - 1) / CHAT_MESSAGE_IMAGE_WINDOW).coerceAtLeast(0)
+    val currentImagePage = imagePage.coerceIn(0, lastImagePage)
+    var imageIndex = 0
+    parts.forEach { part ->
+      val content = part.content
+      val attachment = part.attachment
+      if (attachment != null && content.type == "image" && imageIndex++ / CHAT_MESSAGE_IMAGE_WINDOW != currentImagePage) {
+        return@forEach
+      }
+      when {
+        content.type == "text" -> {
+          ChatMarkdown(text = content.text.orEmpty(), textColor = ClawTheme.colors.text)
+        }
+
+        attachment != null && content.type == "image" -> {
+          ChatOutboxImage(attachment = attachment, loadImagePreview = loadImagePreview)
+        }
+
+        content.isAudioAttachment() || content.isVideoAttachment() -> {
+          ChatMediaAttachmentLabel(content = content)
+        }
+
+        else -> {
+          Text(
+            text = nativeString("📎 \${attachment.fileName}", content.fileName.orEmpty()),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
     }
-    item.attachments.forEach { attachment ->
-      Text(
-        text = nativeString("📎 \${attachment.fileName}", attachment.fileName),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
-    }
+    ChatImagePageControls(
+      imageCount = imageCount,
+      currentPage = currentImagePage,
+      lastPage = lastImagePage,
+      onPageChange = { imagePage = it },
+    )
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -392,6 +459,47 @@ fun ChatOutboxBubble(
         ChatOutboxAction(label = nativeString("Delete"), borderColor = ClawTheme.colors.textMuted, onClick = onDelete)
       }
     }
+  }
+}
+
+/** Queued photo: a thumbnail from the stored outbox bytes when available, otherwise a "Photo" row. */
+@Composable
+private fun ChatOutboxImage(
+  attachment: ChatOutboxAttachment,
+  loadImagePreview: suspend (ChatOutboxAttachment) -> ByteArray?,
+) {
+  var image by remember(attachment.id) { mutableStateOf<ImageBitmap?>(null) }
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
+  LaunchedEffect(attachment.id, decodeDispatcher) {
+    // Reassembling stored chunks can copy several MiB per photo, so it stays off Main with the decode.
+    val loaded =
+      withContext(decodeDispatcher) {
+        val bytes = runCatching { loadImagePreview(attachment) }.getOrNull() ?: return@withContext null
+        decodeImageBytes(bytes)?.asImageBitmap()
+      } ?: return@LaunchedEffect
+    image = loaded
+  }
+  val loaded = image
+  if (loaded != null) {
+    ChatImagePreview(image = loaded, description = nativeString("Photo"), stateKey = "outbox:${attachment.id}", compact = false)
+  } else {
+    ChatOutboxPhotoRow()
+  }
+}
+
+@Composable
+private fun ChatOutboxPhotoRow() {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Default.Image,
+      contentDescription = null,
+      modifier = Modifier.size(16.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
+    Text(text = nativeString("Photo"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
   }
 }
 
@@ -438,7 +546,9 @@ internal fun ChatMessageAttachmentGroup(
   firstImageIndex: Int,
   imagePage: Int,
   resolverReady: Boolean,
+  inboundMediaBasePath: String?,
   loadImage: suspend (String) -> GatewayLoadedImage?,
+  loadMedia: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
 ) {
   val compact = parts.count { it.type == "image" } > 1
   var imageIndex = firstImageIndex
@@ -450,21 +560,27 @@ internal fun ChatMessageAttachmentGroup(
     parts.forEachIndexed { index, part ->
       val visible = part.type != "image" || imageIndex++ / CHAT_MESSAGE_IMAGE_WINDOW == imagePage
       if (visible) {
-        key(index, part.artifactId, part.base64) {
+        val imageLoadKey = part.imageLoadKey().takeIf { part.type == "image" }
+        key(index, imageLoadKey, part.base64) {
           Box(Modifier.widthIn(max = if (compact && part.type == "image") 136.dp else 360.dp)) {
             when {
               part.type == "image" && !part.base64.isNullOrBlank() -> {
                 ChatBase64Image(part.base64, part.mimeType, compact = compact)
               }
 
-              part.type == "image" && !part.artifactId.isNullOrBlank() -> {
+              imageLoadKey != null -> {
                 ChatManagedImage(
-                  artifactId = part.artifactId,
+                  artifactId = imageLoadKey,
                   label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
                   resolverReady = resolverReady,
+                  inboundMediaBasePath = inboundMediaBasePath,
                   loadImage = loadImage,
                   compact = compact,
                 )
+              }
+
+              part.type == "file" -> {
+                ChatFileAttachment(content = part, resolverReady = resolverReady, loadMedia = loadMedia)
               }
 
               else -> {
@@ -500,14 +616,17 @@ internal fun ChatManagedImage(
   artifactId: String,
   label: String,
   resolverReady: Boolean,
+  inboundMediaBasePath: String? = null,
   compact: Boolean = false,
   loadImage: suspend (String) -> GatewayLoadedImage?,
 ) {
   var image by remember(artifactId) { mutableStateOf<ImageBitmap?>(null) }
   var failed by remember(artifactId) { mutableStateOf(false) }
   var retryGeneration by rememberSaveable(artifactId) { mutableStateOf(0) }
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
+  val reloadPath = if (isInboundMediaSource(artifactId)) inboundMediaBasePath else null
 
-  LaunchedEffect(artifactId, resolverReady, retryGeneration) {
+  LaunchedEffect(artifactId, resolverReady, retryGeneration, decodeDispatcher, reloadPath) {
     if (!resolverReady) {
       failed = true
       image = null
@@ -516,9 +635,11 @@ internal fun ChatManagedImage(
     failed = false
     image = null
     val loaded = runCatching { loadImage(artifactId) }.getOrNull()
+    // A path change cancels the previous load; its late result must not replace the new image.
+    currentCoroutineContext().ensureActive()
     image =
       loaded?.let { value ->
-        withContext(Dispatchers.Default) { decodeImageBytes(value.bytes)?.asImageBitmap() }
+        withContext(decodeDispatcher) { decodeImageBytes(value.bytes)?.asImageBitmap() }
       }
     failed = image == null
   }
@@ -536,24 +657,19 @@ internal fun ChatManagedImage(
         color = ClawTheme.colors.surfaceRaised,
         modifier = Modifier.fillMaxWidth(),
       ) {
-        Text(
-          nativeString("Image unavailable · Tap to retry"),
-          modifier = Modifier.padding(12.dp),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
+        ChatImageStatus(nativeString("Image unavailable · Tap to retry"))
       }
     }
 
     else -> {
-      Text(
-        nativeString("Loading image…"),
-        modifier = Modifier.padding(12.dp),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+      ChatImageStatus(nativeString("Loading image…"))
     }
   }
+}
+
+@Composable
+private fun ChatImageStatus(text: String) {
+  Text(text, modifier = Modifier.padding(12.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
 }
 
 @Composable
@@ -566,7 +682,6 @@ private fun ChatImagePreview(
   val anchor = rememberChatReaderAnchor(stateKey)
   var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
   Surface(
-    onClick = { previewVisible = true },
     shape = RoundedCornerShape(10.dp),
     border = BorderStroke(1.dp, ClawTheme.colors.border),
     color = ClawTheme.colors.surfaceRaised,
@@ -582,7 +697,7 @@ private fun ChatImagePreview(
           val height = (image.height * scale).roundToInt().coerceIn(constraints.minHeight, constraints.maxHeight)
           val placeable = measurable.measure(constraints.copy(minWidth = width, maxWidth = width, minHeight = height, maxHeight = height))
           layout(width, height) { placeable.placeRelative(0, 0) }
-        },
+        }.clickable(role = Role.Button, onClickLabel = nativeString("Open image preview")) { previewVisible = true },
   ) {
     Box {
       Image(
@@ -591,20 +706,6 @@ private fun ChatImagePreview(
         contentScale = ContentScale.Fit,
         modifier = Modifier.matchParentSize().then(anchor?.modifier ?: Modifier),
       )
-      Surface(
-        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
-        shape = CircleShape,
-        color = Color.Black.copy(alpha = 0.62f),
-        contentColor = Color.White,
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Icon(
-            imageVector = Icons.Default.OpenInFull,
-            contentDescription = nativeString("Open image preview"),
-            modifier = Modifier.size(17.dp),
-          )
-        }
-      }
     }
   }
   if (previewVisible) {

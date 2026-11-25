@@ -53,6 +53,15 @@ resource is missing.
 
 Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenClaw reads this before provider runtime loads. Provider setup lists use these manifest choices, descriptor-derived setup choices, and install-catalog metadata without loading provider runtime.
 
+For an installed and enabled provider plugin with a guided sign-in available in
+Models, **Sign in** under **Accounts** in the plugin's settings opens that
+plugin's choices in Models.
+After saving a connection, users can choose an available model for a new chat.
+Their default model stays the same. Use `groupLabel` for the picker heading and
+`choiceLabel` for the method and its default action text. Set
+`appGuidedActionLabel` when you need different text for the native sign-in
+button or the local model setup button.
+
 When a manifest choice is selected, setup resolves its `provider` and `method` in the owning installed plugin. The runtime auth method does not need to repeat `choiceId` in its wizard metadata. A different plugin or auth method cannot satisfy that declared choice. Explicit `provider-plugin:<provider>:<method>` choices retain their encoded target.
 
 | Field                  | Required | Type                                                                  | What it means                                                                                                                                              |
@@ -61,10 +70,11 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `method`               | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                                                                             |
 | `choiceId`             | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                                                                    |
 | `platforms`            | No       | `string[]`                                                            | Supported Gateway host platforms, such as `["darwin"]`. Omission allows every platform; an empty or invalid restriction offers the choice on none.         |
-| `choiceLabel`          | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                                                                          |
+| `choiceLabel`          | No       | `string`                                                              | Method label and default guided action text. If omitted, OpenClaw falls back to `choiceId`.                                                                |
 | `choiceHint`           | No       | `string`                                                              | Short helper text for the picker.                                                                                                                          |
 | `icon`                 | No       | HTTPS URL                                                             | Artwork shown beside this choice in supported onboarding clients.                                                                                          |
 | `website`              | No       | HTTPS URL                                                             | Product, sign-in, or installation page shown by supported onboarding clients.                                                                              |
+| `docsUrl`              | No       | HTTPS URL                                                             | Guide comparing the provider's connection methods, linked from the provider connection dialog.                                                             |
 | `assistantPriority`    | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                                                                         |
 | `assistantVisibility`  | No       | `"visible"` \| `"manual-only"` \| `"detected-only"`                   | Control picker visibility. `manual-only` permits manual selection; `detected-only` requires successful provider-owned discovery before offering the model. |
 | `deprecatedChoiceIds`  | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                                                                   |
@@ -78,7 +88,7 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `cliDescription`       | No       | `string`                                                              | Description used in CLI help.                                                                                                                              |
 | `personalAccount`      | No       | `boolean`                                                             | Offer this method in Connected accounts; it must stage one inline credential without importing host logins or writing shared state.                        |
 | `appGuidedSecret`      | No       | `boolean`                                                             | One pasted secret plus provider defaults is sufficient for app-guided setup.                                                                               |
-| `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                                                                   |
+| `appGuidedActionLabel` | No       | `string`                                                              | Explicit override for the native sign-in button or the local model setup button. Omit it to use `choiceLabel`.                                             |
 | `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                                                                  |
 | `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                                         |
 | `credentialOnly`       | No       | `boolean`                                                             | The method supports saving credentials without starter-model discovery or activation. Omitted means setup only.                                            |
@@ -94,8 +104,8 @@ availability when the selected setup method runs.
 `assistantVisibility: "detected-only"` keeps the choice out of metadata-only
 setup, sign-in, enable, and install rows, including manual pickers. App-guided
 setup offers it only as a candidate returned by the provider's current
-`appGuidedSetup.detect` probe. Classic setup includes the provider choice only
-after `detectAvailability` succeeds. Both probes must apply the provider's
+`appGuidedSetup.detect` check. Classic setup includes the provider choice only
+after `detectAvailability` succeeds. Both checks must apply the provider's
 actual model eligibility rules. Explicit CLI auth-choice selection remains
 supported and the setup method still rechecks availability before activation.
 
@@ -136,7 +146,7 @@ for retry; a replacement remains inactive until the user accepts activation.
 A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
-The availability probe is also read-only.
+The availability check is also read-only.
 
 ### Login choices
 
@@ -234,9 +244,9 @@ OpenClaw can also derive simple setup choices from `setup.providers[].authMethod
 
 Set `requiresRuntime: false` only when those descriptors are sufficient for the setup surface. OpenClaw treats explicit `false` as a descriptor-only contract and will not execute `setup-api` or `openclaw.setupEntry` for setup lookup. If a descriptor-only plugin still ships one of those setup runtime entries, OpenClaw reports an additive diagnostic and continues ignoring it. Omitted `requiresRuntime` keeps legacy fallback behavior so existing plugins that added descriptors without the flag do not break.
 
-Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership fails closed instead of picking a winner from discovery order.
+Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership blocks setup lookup instead of picking a winner from discovery order.
 
-When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, probes, or selected provider runtimes.
+When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, checks, or selected provider runtimes.
 
 ### setup fields
 
@@ -256,7 +266,7 @@ When setup runtime executes, setup registry diagnostics report providers or CLI 
 | `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
 | `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
 
-`authEvidence` is for provider-owned local credential markers that can be verified without loading runtime code. These checks must stay cheap and local: no network calls, no keychain or secret-manager reads, no shell commands, and no provider API probes.
+`authEvidence` is for provider-owned local credential markers that can be verified without loading runtime code. These checks must stay cheap and local: no network calls, no keychain or secret-manager reads, no shell commands, and no provider API checks.
 
 Supported evidence entries:
 
@@ -330,6 +340,7 @@ Each field hint can include:
 | `advanced`     | `boolean`        | Marks the field as advanced.                                                                                      |
 | `sensitive`    | `boolean`        | Marks the field as secret or sensitive.                                                                           |
 | `placeholder`  | `string`         | Placeholder text for form inputs.                                                                                 |
+| `multiline`    | `boolean`        | Render a non-sensitive string as a vertically resizable textarea. Omitted or false keeps the single-line input.   |
 | `presentation` | `"phone-number"` | Display-only localized phone formatting for parseable international (`+...`) values; raw values remain unchanged. |
 
 Channel config sections inherit `help` for the leaves every channel shares

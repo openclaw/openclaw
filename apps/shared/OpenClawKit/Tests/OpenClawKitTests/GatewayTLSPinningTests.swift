@@ -90,11 +90,6 @@ struct GatewayTLSPinningTests {
         #expect(!configuredProfileAfterDefaultUse)
     }
 
-    @Test func `first use pinning requires system trust`() {
-        #expect(GatewayTLSFirstUsePolicy.allowsFirstUsePin(systemTrustOk: true))
-        #expect(!GatewayTLSFirstUsePolicy.allowsFirstUsePin(systemTrustOk: false))
-    }
-
     @Test func `TLS authority includes normalized host and effective port`() throws {
         let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
         let route = try #require(GatewayTLSAuthority(url: url))

@@ -1,16 +1,14 @@
-// Connects Chrome MCP transports and bounds handshake/readiness waits.
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { toErrorObject } from "../infra/errors.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
   type ChromeMcpSession,
-  type ChromeMcpSessionFactory,
   type ChromeMcpSessionOwner,
   type NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
@@ -24,39 +22,16 @@ import { refreshChromeMcpCleanupProcess } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
 const log = createSubsystemLogger("browser").child("chrome-mcp");
-let sessionFactory: ChromeMcpSessionFactory | null = null;
-
-export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
-  sessionFactory = factory;
-}
-
-async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      task,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error("Chrome MCP handshake timed out"));
-        }, CHROME_MCP_HANDSHAKE_TIMEOUT_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-async function createRealSession(
+// Publish the handle synchronously; only the owned transport's handshake is asynchronous.
+export function createChromeMcpSession(
   owner: ChromeMcpSessionOwner,
   profileName: string,
   options: NormalizedChromeMcpProfileOptions,
-): Promise<ChromeMcpSession> {
+): ChromeMcpSession {
   const transport = new StdioClientTransport({
     command: options.command,
     args: options.args,
+    env: options.env,
     stderr: "pipe",
   });
   const client = new Client(
@@ -64,7 +39,7 @@ async function createRealSession(
       name: "openclaw-browser",
       version: "0.0.0",
     },
-    {},
+    { versionNegotiation: { mode: "legacy" } },
   );
   // Capture before connect starts the subprocess so failed handshakes retain stderr.
   const getStderr = drainStderr(transport);
@@ -88,15 +63,23 @@ async function createRealSession(
   client.close = transport.close = () => owner.close(session);
   const ready = (async () => {
     try {
-      await withChromeMcpHandshakeTimeout(
+      await waitForChromeMcpOperation(
         (async () => {
           await client.connect(transport);
-          const tools = await client.listTools();
+          // V1 reads one page; v2's listTools() would aggregate every cursor.
+          const tools = await client.request({ method: "tools/list" });
+          session.tools = tools.tools;
           if (!tools.tools.some((tool) => tool.name === "list_pages")) {
             throw new Error("Chrome MCP server did not expose the expected navigation tools.");
           }
           await refreshChromeMcpCleanupProcess(session);
         })(),
+        undefined,
+        {
+          ms: CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
+          error: () => new Error("Chrome MCP handshake timed out"),
+          unref: true,
+        },
       );
     } catch (err) {
       try {
@@ -142,113 +125,46 @@ export async function waitForChromeMcpReady(
   timeoutMs?: number,
   signal?: AbortSignal,
 ): Promise<void> {
+  await waitForChromeMcpOperation(
+    session.ready,
+    signal,
+    timeoutMs && timeoutMs > 0
+      ? {
+          ms: timeoutMs,
+          error: () =>
+            new BrowserProfileUnavailableError(
+              `Chrome MCP existing-session attach for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" timed out after ${timeoutMs}ms.`,
+            ),
+        }
+      : undefined,
+  );
+}
+
+async function waitForChromeMcpOperation<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+  timeout?: { ms: number; error: () => Error; unref?: boolean },
+): Promise<T> {
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
-  if ((!timeoutMs || timeoutMs <= 0) && !signal) {
-    await session.ready;
-    return;
+  const abortError = (aborted: AbortSignal) =>
+    toErrorObject(aborted.reason ?? new Error("aborted"), "Non-Error rejection");
+  if (!timeout) {
+    return await racePromiseWithAbortSignal(pending, signal, abortError);
   }
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let abortListener: (() => void) | undefined;
-  try {
-    const racers: Array<Promise<void> | Promise<never>> = [session.ready];
-    if (timeoutMs && timeoutMs > 0) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(
-              new BrowserProfileUnavailableError(
-                `Chrome MCP existing-session attach for profile "${redactChromeMcpProfileLabelForDiagnostic(profileName)}" timed out after ${timeoutMs}ms.`,
-              ),
-            );
-          }, timeoutMs);
-        }),
-      );
-    }
-    if (signal) {
-      racers.push(
-        new Promise<never>((_, reject) => {
-          abortListener = () =>
-            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-          signal.addEventListener("abort", abortListener, { once: true });
-        }),
-      );
-    }
-    await Promise.race(racers);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
-}
-
-export async function waitForChromeMcpPendingSession(
-  pending: Promise<ChromeMcpSession>,
-  signal?: AbortSignal,
-): Promise<ChromeMcpSession> {
-  if (signal?.aborted) {
-    throw signal.reason ?? new Error("aborted");
-  }
-  if (!signal) {
-    return await pending;
-  }
-
-  let abortListener: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_, reject) => {
-        abortListener = () =>
-          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
-        signal.addEventListener("abort", abortListener, { once: true });
-      }),
-    ]);
-  } finally {
-    if (abortListener) {
-      signal.removeEventListener("abort", abortListener);
-    }
-  }
-}
-
-export function createChromeMcpSession(
-  owner: ChromeMcpSessionOwner,
-  profileName: string,
-  options: NormalizedChromeMcpProfileOptions,
-  signal?: AbortSignal,
-): { promise: Promise<ChromeMcpSession>; cleanup: Promise<void> } {
-  const created = sessionFactory
-    ? sessionFactory(profileName, options)
-    : createRealSession(owner, profileName, options);
-  let adopted = false;
-  let closePromise: Promise<void> | undefined;
-  const closeCreated = async (session: ChromeMcpSession) => {
-    closePromise ??= owner.close(session);
-    await closePromise;
-  };
-  const promise = (async () => {
-    const session = await waitForChromeMcpPendingSession(created, signal);
-    if (signal?.aborted) {
-      await closeCreated(session);
-      throw signal.reason ?? new Error("aborted");
-    }
-    adopted = true;
-    return session;
-  })();
-  const cleanup = (async () => {
-    await promise.catch(() => {});
-    if (adopted) {
-      return;
-    }
-    const session = await created.catch(() => null);
-    if (session) {
-      await closeCreated(session);
-    }
-  })();
-  void cleanup.catch(() => {});
-  return { promise, cleanup };
+  return await raceWithTimeout(
+    pending,
+    timeout.ms,
+    () => {
+      throw timeout.error();
+    },
+    {
+      ref: !timeout.unref,
+      signal,
+      onAbort: (aborted) => {
+        throw abortError(aborted);
+      },
+    },
+  );
 }

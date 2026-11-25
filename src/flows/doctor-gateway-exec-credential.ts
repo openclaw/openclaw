@@ -11,6 +11,8 @@ export async function hasActiveGatewayExecCredential(params: {
       import("../gateway/credentials-secret-inputs.js"),
       import("../gateway/secret-input-paths.js"),
     ]);
+  const isExecRef = (value: unknown) =>
+    resolveSecretInputRef({ value, defaults: params.cfg.secrets?.defaults }).ref?.source === "exec";
   const mode = params.cfg.gateway?.mode === "remote" ? "remote" : "local";
   const hasExecCredential = secretPaths.ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
     if (
@@ -23,11 +25,7 @@ export async function hasActiveGatewayExecCredential(params: {
     ) {
       return false;
     }
-    const ref = resolveSecretInputRef({
-      value: secretPaths.readGatewaySecretInputValue(params.cfg, path),
-      defaults: params.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
+    return isExecRef(secretPaths.readGatewaySecretInputValue(params.cfg, path));
   });
   if (hasExecCredential || !params.cfg.gateway?.remote?.edgeAuth) {
     return hasExecCredential;
@@ -43,9 +41,5 @@ export async function hasActiveGatewayExecCredential(params: {
   const headers = normalizeEdgeAuthHeadersConfig(
     gatewayEdgeAuthValueForTarget({ config: params.cfg, targetUrl }),
   );
-  return Object.values(headers ?? {}).some(
-    (value) =>
-      resolveSecretInputRef({ value, defaults: params.cfg.secrets?.defaults }).ref?.source ===
-      "exec",
-  );
+  return Object.values(headers ?? {}).some(isExecRef);
 }

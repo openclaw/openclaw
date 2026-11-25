@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -54,6 +63,45 @@ function fakeNpmEnvironment(
 }
 
 describe("npm pack inventory", () => {
+  it("reads the toolchain npm manifest without booting npm for version diagnostics", () => {
+    const { packageRoot, root } = createPackageFixture();
+    const nodeDir = join(root, "toolchain");
+    const npmRoot = join(nodeDir, "node_modules", "npm");
+    mkdirSync(join(npmRoot, "bin"), { recursive: true });
+    const execPath = join(nodeDir, process.platform === "win32" ? "node.exe" : "node");
+    // Preserve loader-relative libraries on POSIX without requiring Windows symlink privileges.
+    if (process.platform === "win32") {
+      copyFileSync(process.execPath, execPath);
+    } else {
+      symlinkSync(process.execPath, execPath);
+    }
+    writeFileSync(
+      join(npmRoot, "package.json"),
+      JSON.stringify({ name: "npm", version: "11.12.1" }),
+    );
+    const capturePath = join(root, "capture.json");
+    writeFileSync(
+      join(npmRoot, "bin", "npm-cli.js"),
+      [
+        "const fs = require('node:fs');",
+        "if (process.argv.includes('--version')) { throw new Error('npm version subprocess unavailable'); }",
+        "fs.writeFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify(process.argv.slice(2)));",
+        "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));",
+      ].join("\n"),
+    );
+
+    const result = collectNpmPackInventory(packageRoot, {
+      runnerParams: { execPath, platform: process.platform },
+      sourceEnv: { ...process.env, OPENCLAW_TEST_CAPTURE: capturePath },
+      timeoutMs: 2_000,
+    });
+
+    expect(result).toMatchObject({ files: ["package.json"], npmVersion: "11.12.1" });
+    expect(JSON.parse(readFileSync(capturePath, "utf8"))).toEqual(
+      expect.arrayContaining(["pack", packageRoot, "--dry-run", "--ignore-scripts", "--offline"]),
+    );
+  });
+
   it("packs the package root from an isolated npm sandbox", () => {
     const { packageRoot, root } = createPackageFixture();
     const capturePath = join(root, "capture.json");

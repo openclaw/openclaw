@@ -104,8 +104,10 @@ if [[ -z "$GENERATE_APPCAST" ]]; then
   exit 1
 fi
 
+# Sparkle 2.10 otherwise names the feed after the app's SUFeedURL basename (appcast-arm64.xml).
 "$GENERATE_APPCAST" \
   --ed-key-file "$PRIVATE_KEY_FILE" \
+  -o "$TMP_DIR/appcast.xml" \
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
   --link "$FEED_URL" \
   "${APPCAST_ARGS[@]}" \

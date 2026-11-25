@@ -1,206 +1,90 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import {
-  configureExecutionIdentityAdmissionSink,
-  enqueueExecutionIdentityContextAtAdmission,
-  type ExecutionIdentityAdmissionEnvelope,
-  type ExecutionIdentityAdmissionFacts,
-} from "./execution-identity-admission.js";
-import { processExecutionIdentityAdmissionWorkInDatabase } from "./execution-identity-context.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
+import {
+  executionIdentityFacts,
+  prepareExecutionIdentityContextAtAdmission,
+} from "./execution-identity.test-support.js";
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
-
+afterEach(closeOpenClawStateDatabaseForTest);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function facts(
-  runId: string,
-  overrides: Partial<ExecutionIdentityAdmissionFacts> & {
-    spawnLineage?: Record<string, unknown>;
-    spawnMissingEvidence?: string[];
-  } = {},
-): ExecutionIdentityAdmissionFacts {
-  const { spawnLineage, spawnMissingEvidence, ...admissionOverrides } = overrides;
-  return executionIdentitySpawnAdmission({
-    operation: "attach",
-    value: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      runtime: { kind: "embedded" },
-      ...admissionOverrides,
-    },
-    extra:
-      spawnLineage || spawnMissingEvidence
-        ? executionIdentitySpawnAdmission({
-            operation: "serialize",
-            value: spawnLineage,
-            extra: spawnMissingEvidence ?? [],
-          })
-        : undefined,
-  });
-}
-
-function prepareContext(
-  admissionFacts: ExecutionIdentityAdmissionFacts,
-  ids: { contextId: string; executionId: string; now?: number },
-) {
-  let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
-  const clear = configureExecutionIdentityAdmissionSink((captured) => {
-    if (captured.kind === "capture") {
-      envelope = captured.envelope;
-    }
-    return true;
-  });
-  try {
-    enqueueExecutionIdentityContextAtAdmission(admissionFacts, {
-      enabled: true,
-      contextId: ids.contextId,
-      executionId: ids.executionId,
-      ...(ids.now !== undefined ? { now: ids.now } : {}),
-    });
-  } finally {
-    clear();
-  }
-  if (!envelope) {
-    throw new Error("expected admission envelope");
-  }
-  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-lineage-") } };
-  return processExecutionIdentityAdmissionWorkInDatabase(
-    { kind: "capture", envelope },
-    {
-      ...options,
-      database: openOpenClawStateDatabase(options),
-      ...(ids.now !== undefined ? { now: ids.now } : {}),
-    },
-  );
-}
+const parent = {
+  parentContextId: "parent-context",
+  parentExecutionId: "parent-execution",
+  parentRunId: "parent-run",
+};
+const missing = [
+  "acp.native-action-callback",
+  "invoker.principal",
+  "lineage.parent-context",
+  "lineage.parent-execution",
+  "lineage.parent-run",
+];
 
 describe("execution identity child lineage", () => {
-  it("preserves private spawn facts across the prepared-admission copy", () => {
-    const context = prepareContext(
-      {
-        ...facts("copied-child-run", {
-          spawnLineage: {
-            parentContextId: "copied-parent-context",
-            parentExecutionId: "copied-parent-execution",
-            parentRunId: "copied-parent-run",
+  it.each(["subagent", "acp"] as const)(
+    "projects %s lineage without raw refs and deduplicates missing evidence",
+    (kind) => {
+      const complete = kind === "subagent";
+      const facts = executionIdentityFacts("child-run", {
+        ingress: { kind, boundary: `sessions_spawn.${kind}`, state: "present" },
+        representedSubject: { state: "present", kind: "person", rawPrincipalRef: "subject" },
+        applicableGrants: [{ rawGrantRef: "private-grant", state: "present" }],
+        ...(complete
+          ? {
+              invoker: {
+                state: "present" as const,
+                kind: "agent" as const,
+                rawPrincipalRef: "parent-agent",
+              },
+            }
+          : {}),
+      });
+      const admission = executionIdentitySpawnAdmission({
+        operation: "attach",
+        value: facts,
+        extra: executionIdentitySpawnAdmission({
+          operation: "serialize",
+          value: {
+            ...(complete ? parent : {}),
             parentAgentId: "parent-agent",
             relation: "sessions_spawn",
-            rawRequesterRef: "requester",
-            rawControllerRef: "controller",
-            depth: 1,
-            localPolicyRefs: [],
-            targetPolicyRefs: [],
+            rawRequesterRef: "agent:main:private-requester",
+            rawControllerRef: "agent:main:private-controller",
+            depth: complete ? 2 : 1,
+            localPolicyRefs: complete ? ["local-policy-secret"] : [],
+            targetPolicyRefs: complete ? ["target-policy-secret"] : [],
           },
+          extra: complete ? [] : missing.toReversed(),
         }),
-      },
-      { contextId: "copied-child-context", executionId: "copied-child-execution", now: 100 },
-    );
-
-    expect(context.lineage).toMatchObject({
-      parentContextId: "copied-parent-context",
-      parentExecutionId: "copied-parent-execution",
-      parentRunId: "copied-parent-run",
-      depth: 1,
-    });
-  });
-
-  it("projects bounded narrowing inputs without retaining raw owner refs", () => {
-    const context = prepareContext(
-      facts("child-run", {
-        ingress: { kind: "subagent", boundary: "sessions_spawn.subagent", state: "present" },
-        invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
-        applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" }],
-        assurance: [
-          {
-            kind: "spawn-lineage",
-            rawEvidenceRef: "native-spawn-proof",
-            strength: "boundary-verified",
-          },
-        ],
-        spawnLineage: {
-          parentContextId: "parent-context",
-          parentExecutionId: "parent-execution",
-          parentRunId: "parent-run",
-          parentAgentId: "parent-agent",
-          relation: "sessions_spawn",
-          rawRequesterRef: "agent:main:private-requester",
-          rawControllerRef: "agent:main:private-controller",
-          depth: 2,
-          localPolicyRefs: ["local-policy-secret"],
-          targetPolicyRefs: ["target-policy-secret"],
+      });
+      const context = prepareExecutionIdentityContextAtAdmission(admission, {
+        env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-lineage-") },
+      });
+      expect(context.coverageState).toBe("attribution-only");
+      expect(context.representedSubject?.state).toBe("present");
+      expect(context.representedSubject?.principal.kind).toBe("person");
+      expect(context.representedSubject?.principal.domainRef).toBe(context.trustDomain.domainRef);
+      expect(context.representedSubject?.principal.principalRef).toMatch(/^hmac-sha256:v1:/u);
+      expect(context.applicableGrants).toHaveLength(1);
+      if (complete) {
+        expect(context.invoker.principal?.kind).toBe("agent");
+      }
+      expect(context.lineage).toEqual({
+        ...(complete ? parent : {}),
+        parentAgentPrincipal: {
+          kind: "agent",
+          domainRef: context.trustDomain.domainRef,
+          principalRef: "parent-agent",
         },
-      }),
-      { contextId: "child-context", executionId: "child-execution", now: 100 },
-    );
-
-    expect(context.coverageState).toBe("attribution-only");
-    expect(context.lineage).toMatchObject({
-      parentContextId: "parent-context",
-      parentExecutionId: "parent-execution",
-      parentRunId: "parent-run",
-      parentAgentPrincipal: { kind: "agent", principalRef: "parent-agent" },
-      depth: 2,
-      delegationRef: expect.any(String),
-    });
-    expect(context.applicableGrants).toHaveLength(1);
-    expect(context.assurance).toHaveLength(1);
-    expect(context.missingEvidence).toEqual([]);
-    expect(JSON.stringify(context)).not.toMatch(
-      /private-requester|private-controller|local-policy-secret|target-policy-secret|native-spawn-proof|tool:sessions_spawn/,
-    );
-  });
-
-  it("keeps attribution visible when parent evidence and ACP callbacks are unavailable", () => {
-    const context = prepareContext(
-      facts("acp-child", {
-        ingress: { kind: "acp", boundary: "sessions_spawn.acp", state: "present" },
-        invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
-        spawnLineage: {
-          parentAgentId: "parent-agent",
-          relation: "sessions_spawn",
-          rawRequesterRef: "requester",
-          rawControllerRef: "controller",
-          depth: 1,
-          localPolicyRefs: [],
-          targetPolicyRefs: [],
-        },
-        spawnMissingEvidence: [
-          "lineage.parent-context",
-          "lineage.parent-execution",
-          "lineage.parent-run",
-          "acp.native-action-callback",
-        ],
-      }),
-      { contextId: "acp-context", executionId: "acp-execution" },
-    );
-
-    expect(context.coverageState).toBe("attribution-only");
-    expect(context.lineage).toMatchObject({ depth: 1 });
-    expect(context.lineage).not.toHaveProperty("parentContextId");
-    expect(context.missingEvidence).toEqual([
-      "acp.native-action-callback",
-      "lineage.parent-context",
-      "lineage.parent-execution",
-      "lineage.parent-run",
-    ]);
-  });
-
-  it("deduplicates sorted missing invoker evidence across admission and spawn lineage", () => {
-    const context = prepareContext(
-      facts("missing-invoker", {
-        spawnMissingEvidence: ["invoker.principal", "acp.native-action-callback"],
-      }),
-      { contextId: "missing-invoker-context", executionId: "missing-invoker-execution" },
-    );
-
-    expect(context.missingEvidence).toEqual(["acp.native-action-callback", "invoker.principal"]);
-  });
+        depth: complete ? 2 : 1,
+        delegationRef: expect.any(String),
+      });
+      expect(context.missingEvidence).toEqual(complete ? [] : missing);
+      expect(JSON.stringify(context)).not.toMatch(
+        /subject|private-grant|private-requester|private-controller|local-policy-secret|target-policy-secret/,
+      );
+    },
+  );
 });

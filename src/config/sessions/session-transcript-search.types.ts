@@ -8,6 +8,9 @@ type SessionTranscriptSearchHit = {
   score: number;
 };
 
+/** The host applies current visibility before the worker fills its result window. */
+export type SessionTranscriptSearchFilter = (sessionKeys: string[]) => Promise<boolean[]>;
+
 export type SessionTranscriptSearchResult = {
   hits: SessionTranscriptSearchHit[];
   indexing: boolean;
@@ -15,15 +18,23 @@ export type SessionTranscriptSearchResult = {
   archivedTranscriptsExcluded?: number;
 };
 
+export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResult, "indexing"> & {
+  found: boolean;
+};
+
 export type SessionTranscriptSearchParams = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   limit?: number;
   query: string;
+  /** Interactive search completes the final word; tool queries retain exact terms. */
+  match?: "prefix";
   role?: "assistant" | "user";
   sessionId?: string;
   sessionKeys?: string[];
   order?: "relevance" | "recent";
   storePath?: string;
   sessionKey?: string;
+  /** Internal host-filtered recall; never enumerate the session inventory. */
+  filterCandidates?: boolean;
 };

@@ -1,7 +1,5 @@
-// Mattermost plugin module maps reaction transport events into system events.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostMonitorInboundAccess } from "./monitor-auth.js";
-import { resolveMattermostReactionChannelId } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
@@ -35,7 +33,9 @@ export function createMattermostReactionHandler(monitor: MattermostMonitorContex
 
     const action = payload.event === "reaction_removed" ? "removed" : "added";
     const senderName = normalizeOptionalString((await resolveUserInfo(userId))?.username) ?? userId;
-    const channelId = resolveMattermostReactionChannelId(payload);
+    const channelId =
+      normalizeOptionalString(payload.broadcast?.channel_id) ??
+      normalizeOptionalString(payload.data?.channel_id);
     if (!channelId) {
       // Without a channel id we cannot verify DM/group policies — drop to be safe.
       monitor.logVerboseMessage(

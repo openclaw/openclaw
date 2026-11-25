@@ -6,7 +6,7 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -14,67 +14,141 @@ import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
   createResumeHarness,
+  createStartedThreadHarness as createFreshThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
-import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
+import {
+  createContextEngine,
+  createStartedThreadHarness,
+  writeCodexAppServerBinding,
+} from "./run-attempt.context-engine.test-support.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
+async function mediaParams(name: string) {
+  const sessionId = `session-${name}`;
+  const workspaceDir = path.join(tempDir, name);
+  await fs.mkdir(workspaceDir, { recursive: true });
+  const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: params.sessionKey!,
+    storePath: params.sessionTarget!.storePath!,
+  };
+  return {
+    params,
+    target,
+    async append<T extends { timestamp: number }>(this: void, message: T) {
+      await appendSessionTranscriptMessageByIdentity({
+        ...target,
+        message,
+        now: message.timestamp,
+      });
+      return message;
+    },
+  };
+}
+
 describe("Codex attachment continuity", () => {
-  it.each([
-    { scenario: "managed text", source: "managed", mime: "text/plain", name: "notes.txt" },
-    { scenario: "workspace JSON", source: "path", mime: "application/json", name: "data.json" },
-    {
-      scenario: "captionless markdown",
-      source: "managed",
-      mime: "text/markdown",
-      name: "notes.md",
-      blank: true,
-    },
-    {
-      scenario: "mixed files",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      mixed: true,
-    },
-    {
-      scenario: "MIME policy",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "mime",
-    },
-    {
-      scenario: "byte limit",
-      source: "managed",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "bytes",
-    },
-    {
-      scenario: "URL policy",
-      source: "url",
-      mime: "text/plain",
-      name: "notes.txt",
-      blocked: "url",
-    },
-  ] as const)("restores saved $scenario through native resume", async (scenario) => {
+  it("rejects real restored-document overage before native effects instead of clipping it", async () => {
+    const { params, append } = await mediaParams("selected-document");
+    params.authoredContextTokenCap = 8_192;
+    params.contextTokenBudget = 8_192;
+    params.contextWindowInfo = {
+      tokens: 8_192,
+      referenceTokens: 8_192,
+      source: "agentContextTokens",
+    };
+    params.model = { ...params.model, maxTokens: 256 };
+    const saved = await saveMediaBuffer(
+      Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
+      "text/plain",
+      "inbound",
+      undefined,
+      "oversized.txt",
+    );
+    const timestamp = Date.now();
+    const sourceMessage = await append({
+      role: "user" as const,
+      content: "",
+      timestamp,
+      idempotencyKey: "selected-document:user",
+      __openclaw: {
+        media: [
+          {
+            url: `media://inbound/${saved.id}`,
+            contentType: "text/plain",
+            fileName: "oversized.txt",
+            hydrationSuppressed: true,
+          },
+        ],
+      },
+    });
+    params.contextEngine = createContextEngine({
+      assemble: async ({ messages }) => ({
+        messages: messages.filter(
+          (message) => asOptionalRecord(message)?.idempotencyKey === sourceMessage.idempotencyKey,
+        ),
+        estimatedTokens: 42,
+      }),
+    });
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    vi.useFakeTimers();
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const run = runCodexAppServerAttempt(params);
+    let started = false;
+    try {
+      const outcome = await Promise.race([
+        run.then(
+          () => ({ kind: "completed" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        harness.waitForMethod("turn/start").then(() => ({ kind: "started" as const })),
+      ]);
+      started = outcome.kind === "started";
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(String(outcome.error)).toMatch(/budget|allowance|exceed|restor|attachment/i);
+        expect(String(outcome.error)).toMatch(/new conversation.*smaller attachment/i);
+      }
+      expect(
+        harness.requests.filter(({ method }) =>
+          ["thread/start", "thread/inject_items", "turn/start"].includes(method),
+        ),
+      ).toEqual([]);
+    } finally {
+      if (started) {
+        await run.waitForTurnAccepted();
+        await harness.completeTurn();
+      }
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
+
+  it("restores captionless managed documents in order without changing their transcript", async () => {
     const sessionId = "session-continuity-attachments";
-    const sessionFile = `agent:main:${sessionId}`;
-    const storePath = path.join(tempDir, "attachment-continuity.sqlite");
-    const workspaceDir = path.join(tempDir, "attachment-workspace");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const params = createParams(sessionFile, workspaceDir);
-    await attachSqliteSessionTarget(params, storePath, sessionId);
-    const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
+    const params = createParams(`agent:main:${sessionId}`, path.join(tempDir, "workspace"));
+    await attachSqliteSessionTarget(params, path.join(tempDir, "attachments.sqlite"), sessionId);
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: params.sessionTarget!.storePath!,
+    };
     const cutoff = Date.now();
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeCodexAppServerBinding(params.sessionFile, {
       threadId: "thread-existing",
-      cwd: workspaceDir,
+      cwd: params.workspaceDir,
       model: params.modelId,
       modelProvider: "openai",
       historyCoveredThrough: new Date(cutoff).toISOString(),
@@ -84,60 +158,27 @@ describe("Codex attachment continuity", () => {
         web_search: "disabled",
       }),
     });
-    const token = "CONTINUITY_FILE_BYTES_94d80b";
-    const secondToken = "CONTINUITY_SECOND_FILE_BYTES_153c72";
-    const media: Array<{
-      path?: string;
-      url?: string;
-      contentType: string;
-      fileName: string;
-      hydrationSuppressed: boolean;
-    }> = [];
-    const files = [
-      {
-        name: scenario.name,
-        mime: scenario.mime,
-        text: scenario.mime === "application/json" ? JSON.stringify({ token }) : token,
-      },
-      ...("mixed" in scenario
-        ? [
-            {
-              name: "second.json",
-              mime: "application/json",
-              text: JSON.stringify({ token: secondToken }),
-            },
-          ]
-        : []),
-    ];
-    for (const file of files) {
-      let source: { path: string } | { url: string };
-      if (scenario.source === "path") {
-        const filePath = path.join(workspaceDir, file.name);
-        await fs.writeFile(filePath, file.text);
-        source = { path: filePath };
-      } else if (scenario.source === "url") {
-        source = { url: "https://example.invalid/attachment.txt" };
-      } else {
+    const tokens = ["CONTINUITY_FILE_BYTES_94d80b", "CONTINUITY_SECOND_FILE_BYTES_153c72"];
+    const media = await Promise.all(
+      tokens.map(async (token, index) => {
         const saved = await saveMediaBuffer(
-          Buffer.from(file.text),
-          file.mime,
+          Buffer.from(token),
+          "text/plain",
           "inbound",
           undefined,
-          file.name,
+          `notes-${index}.txt`,
         );
-        source = { url: `media://inbound/${saved.id}` };
-      }
-      media.push({
-        ...source,
-        contentType: file.mime,
-        fileName: file.name,
-        hydrationSuppressed: true,
-      });
-    }
-    const caption = "blank" in scenario ? "" : "Read the attached document and use its value.";
+        return {
+          url: `media://inbound/${saved.id}`,
+          contentType: "text/plain",
+          fileName: `notes-${index}.txt`,
+          hydrationSuppressed: true,
+        };
+      }),
+    );
     const sourceMessage = {
       role: "user" as const,
-      content: scenario.source === "path" ? [{ type: "text" as const, text: caption }] : caption,
+      content: "",
       timestamp: cutoff + 1,
       idempotencyKey: "saved-attachment-input:user",
       __openclaw: { media },
@@ -147,31 +188,7 @@ describe("Codex attachment continuity", () => {
       message: sourceMessage,
       now: cutoff + 1,
     });
-    if ("blocked" in scenario) {
-      params.config = {
-        ...params.config,
-        gateway: {
-          http: {
-            endpoints: {
-              responses: {
-                files: {
-                  ...(scenario.blocked === "mime" ? { allowedMimes: ["application/pdf"] } : {}),
-                  ...(scenario.blocked === "bytes" ? { maxBytes: 4 } : {}),
-                  ...(scenario.blocked === "url" ? { allowUrl: false } : {}),
-                },
-              },
-            },
-          },
-        },
-      };
-    }
     params.prompt = "Continue the saved request.";
-    const started = createDeferred<void>();
-    params.onAgentEvent = (event) => {
-      if (event.stream === "lifecycle" && event.data.phase === "start") {
-        started.resolve();
-      }
-    };
     const abort = new AbortController();
     params.abortSignal = abort.signal;
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
@@ -179,37 +196,17 @@ describe("Codex attachment continuity", () => {
     const harness = createResumeHarness();
     const run = runCodexAppServerAttempt(params);
     try {
-      await started.promise;
+      await run.waitForTurnAccepted();
       await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
       expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
       const request = harness.requests.find((entry) => entry.method === "turn/start");
-      const input = asOptionalRecord(request?.params)?.input;
-      const prompt = Array.isArray(input)
-        ? input
-            .flatMap((part) => {
-              const text = asOptionalRecord(part)?.text;
-              return typeof text === "string" ? [text] : [];
-            })
-            .join("\n")
-        : "";
+      const prompt = JSON.stringify(request?.params);
       expect(harness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
-      expect(prompt).toContain("Continue the saved request.");
-      if ("blocked" in scenario) {
-        expect(prompt).not.toContain(token);
-        expect(prompt).toContain(
-          scenario.blocked === "mime"
-            ? "[Attachment type not allowed: text/plain]"
-            : scenario.blocked === "url"
-              ? "[Attachment skipped: URL file sources are disabled]"
-              : "[Attachment could not be read]",
-        );
-      } else {
+      expect(prompt).toContain(params.prompt);
+      for (const token of tokens) {
         expect(prompt).toContain(token);
-        if ("mixed" in scenario) {
-          expect(prompt).toContain(secondToken);
-          expect(prompt.indexOf(token)).toBeLessThan(prompt.indexOf(secondToken));
-        }
       }
+      expect(prompt.indexOf(tokens[0]!)).toBeLessThan(prompt.indexOf(tokens[1]!));
       const saved = (await readSessionTranscriptEvents(target)).flatMap((event) => {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
         return message?.idempotencyKey === sourceMessage.idempotencyKey ? [message] : [];
@@ -221,130 +218,217 @@ describe("Codex attachment continuity", () => {
       closeHost();
     }
   });
-  it.each(["inline", "offloaded", "current", "closed"] as const)(
-    "restores real image bytes with exact source ownership (%s)",
-    async (mode) => {
-      const sessionId = "session-continuity-images";
-      const sessionFile = `agent:main:${sessionId}`;
-      const storePath = path.join(tempDir, "image-continuity.sqlite");
-      const workspaceDir = path.join(tempDir, "image-workspace");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      const params = createParams(sessionFile, workspaceDir);
-      params.model = { ...params.model, input: ["text", "image"] };
-      await attachSqliteSessionTarget(params, storePath, sessionId);
-      const target = { agentId: "main", sessionId, sessionKey: params.sessionKey!, storePath };
-      const cutoff = Date.now();
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-existing",
-        cwd: workspaceDir,
-        model: params.modelId,
-        modelProvider: "openai",
-        historyCoveredThrough: new Date(cutoff).toISOString(),
-        dynamicToolsFingerprint: "[]",
-        webSearchThreadConfigFingerprint: JSON.stringify({
-          "features.standalone_web_search": false,
-          web_search: "disabled",
-        }),
+  it.each([
+    "current",
+    "closed",
+    "telegram-current",
+    "telegram-current-omitted",
+    "telegram-current-omitted-mixed",
+    "telegram-engine",
+    "telegram-history",
+    "telegram-path",
+    "telegram-sticker",
+    "telegram-mixed",
+    "telegram-missing",
+  ] as const)("restores real image bytes with exact source ownership (%s)", async (mode) => {
+    const { params, target, append } = await mediaParams("continuity-images");
+    params.model = { ...params.model, input: ["text", "image"] };
+    const telegram = mode.startsWith("telegram-");
+    if (telegram) {
+      params.messageChannel = "telegram";
+    }
+    if (mode === "telegram-engine") {
+      params.contextEngine = createContextEngine({
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 42 }),
       });
-      const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
-      const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
-      const image = {
-        type: "image" as const,
-        mimeType: "image/png",
-        data: blue.toString("base64"),
-      };
-      const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
-      const historical = {
+    }
+    const currentPixelsOmitted = mode.startsWith("telegram-current-omitted");
+    const hasCurrentImage =
+      !currentPixelsOmitted &&
+      mode !== "closed" &&
+      mode !== "telegram-history" &&
+      mode !== "telegram-missing";
+    const hasCurrentPhoto = hasCurrentImage || currentPixelsOmitted;
+    const cutoff = Date.now();
+    await writeCodexAppServerBinding(params.sessionFile, {
+      threadId: "thread-existing",
+      cwd: params.workspaceDir,
+      model: params.modelId,
+      modelProvider: "openai",
+      historyCoveredThrough: new Date(cutoff).toISOString(),
+      dynamicToolsFingerprint: "[]",
+    });
+    const blue = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const green = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    const red = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const saved = await saveMediaBuffer(blue, "image/png", "inbound", undefined, "blue.png");
+    const historical = await append({
+      role: "user" as const,
+      timestamp: cutoff + 1,
+      idempotencyKey: "historical-image:user",
+      content: "Read this image.",
+      __openclaw: {
+        media: [
+          mode === "telegram-path"
+            ? { path: saved.path }
+            : {
+                url: `media://inbound/${saved.id}`,
+                contentType: "image/png",
+                fileName: "blue.png",
+                ...(mode === "telegram-sticker" ? { kind: "sticker" } : {}),
+              },
+          ...(mode === "telegram-mixed"
+            ? [
+                {
+                  url: `media://inbound/${(await saveMediaBuffer(Buffer.from("retained document"), "text/plain", "inbound", undefined, "note.txt")).id}`,
+                  contentType: "text/plain",
+                  fileName: "note.txt",
+                },
+              ]
+            : []),
+        ],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    const album = [green, red].map((png) => ({
+      type: "image" as const,
+      mimeType: "image/png",
+      data: png.toString("base64"),
+    }));
+    params.prompt = hasCurrentPhoto ? "Read this image." : "Can you hear me?";
+    if (mode === "telegram-history" || mode === "telegram-missing") {
+      await append({
         role: "user" as const,
-        timestamp: cutoff + 1,
-        idempotencyKey: "historical-image:user",
+        timestamp: cutoff + 2,
+        idempotencyKey: "latest-album:user",
         content:
-          mode === "inline"
-            ? [{ type: "text" as const, text: "Read this image." }, image]
-            : "Read this image.",
-        __openclaw: {
-          media: [
-            { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
-          ],
-          mediaImageLayout: {
-            slots: [{ kind: mode === "inline" ? "inline" : "offloaded", factIndex: 0 }],
-          },
-          ...(mode === "inline" ? { mediaImageBlockFactIndexes: [0] } : {}),
+          mode === "telegram-history"
+            ? [{ type: "text" as const, text: "Latest album caption." }, ...album]
+            : "Latest unavailable photo.",
+        __openclaw:
+          mode === "telegram-missing"
+            ? { media: [{ url: "media://inbound/missing.png", contentType: "image/png" }] }
+            : {},
+      });
+      await append({ role: "user" as const, content: "Text after album.", timestamp: cutoff + 3 });
+    }
+    if (hasCurrentPhoto) {
+      const currentImages = currentPixelsOmitted ? [] : telegram ? album : album.slice(0, 1);
+      params.images = currentImages;
+      const current = await append({
+        role: "user" as const,
+        timestamp: cutoff + 2,
+        idempotencyKey: "current-image:user",
+        content: [{ type: "text" as const, text: params.prompt }, ...currentImages],
+        ...(currentPixelsOmitted
+          ? {
+              __openclaw: {
+                media: [
+                  {
+                    url: `media://inbound/${(await saveMediaBuffer(green, "image/png", "inbound", undefined, "current.png")).id}`,
+                    contentType: "image/png",
+                    hydrationSuppressed: true,
+                  },
+                  ...(mode === "telegram-current-omitted-mixed"
+                    ? [
+                        {
+                          url: `media://inbound/${(await saveMediaBuffer(Buffer.from("current document"), "text/plain", "inbound", undefined, "current.txt")).id}`,
+                          contentType: "text/plain",
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            }
+          : {}),
+      });
+      // Model an already committed current source with no read fence, so both
+      // rows enter projection and only exact current-source identity removes it.
+      params.userTurnTranscriptRecorder = {
+        // Deferred media resolution can leave the original input snapshot text-only.
+        message: mode === "telegram-current-omitted" ? { ...current, __openclaw: {} } : current,
+        resolveMessage: async () => current,
+        getAdmissionReceipt: () => undefined,
+        markRuntimePersistencePending: () => {},
+        markRuntimePersisted: () => {},
+        markBlocked: () => {},
+        hasPersisted: () => true,
+        isBlocked: () => false,
+        hasRuntimePersistencePending: () => false,
+        waitForRuntimePersistence: async () => {},
+        persistApproved: async () => undefined,
+        persistBlocked: async () => undefined,
+        persistFallback: async () => undefined,
+      };
+    }
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const started = createDeferred<void>();
+    params.onAgentEvent = (event) => {
+      if (event.stream === "lifecycle" && event.data.phase === "start") {
+        started.resolve();
+      }
+    };
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    if (mode === "closed") {
+      const prepare = params.hostCapabilities.prepareContextMedia!;
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareContextMedia: async (request) => {
+          const prepared = await prepare(request);
+          expect(prepared.images).toHaveLength(1);
+          closeHost();
+          return prepared;
         },
       };
-      await appendSessionTranscriptMessageByIdentity({
-        ...target,
-        message: historical,
-        now: cutoff + 1,
-      });
-      params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
-      if (mode === "current") {
-        const currentImage = { ...image, data: green.toString("base64") };
-        params.images = [currentImage];
-        const current = {
-          role: "user" as const,
-          timestamp: cutoff + 2,
-          idempotencyKey: "current-image:user",
-          content: [{ type: "text" as const, text: params.prompt }, currentImage],
-        };
-        await appendSessionTranscriptMessageByIdentity({
-          ...target,
-          message: current,
-          now: cutoff + 2,
-        });
-        // Model an already committed current source with no read fence, so both
-        // rows enter projection and only exact current-source identity removes it.
-        params.userTurnTranscriptRecorder = {
-          message: current,
-          resolveMessage: async () => current,
-          getAdmissionReceipt: () => undefined,
-          markRuntimePersistencePending: () => {},
-          markRuntimePersisted: () => {},
-          markBlocked: () => {},
-          hasPersisted: () => true,
-          isBlocked: () => false,
-          hasRuntimePersistencePending: () => false,
-          waitForRuntimePersistence: async () => {},
-          persistApproved: async () => undefined,
-          persistBlocked: async () => undefined,
-          persistFallback: async () => undefined,
-        };
-      }
-      const abort = new AbortController();
-      params.abortSignal = abort.signal;
-      const started = createDeferred<void>();
-      params.onAgentEvent = (event) => {
-        if (event.stream === "lifecycle" && event.data.phase === "start") {
-          started.resolve();
-        }
-      };
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    }
+    vi.useFakeTimers();
+    const threadId = mode === "telegram-engine" ? "thread-new" : "thread-existing";
+    const harness =
+      mode === "telegram-engine"
+        ? createFreshThreadHarness(async (method) =>
+            method === "thread/start"
+              ? threadStartResult(threadId, { cwd: params.workspaceDir })
+              : undefined,
+          )
+        : createResumeHarness();
+    const run = runCodexAppServerAttempt(params);
+    try {
       if (mode === "closed") {
-        const prepare = params.hostCapabilities.prepareContextMedia!;
-        params.hostCapabilities = {
-          ...params.hostCapabilities,
-          prepareContextMedia: async (request) => {
-            const prepared = await prepare(request);
-            expect(prepared.images).toHaveLength(1);
-            closeHost();
-            return prepared;
-          },
-        };
-      }
-      vi.useFakeTimers();
-      const harness = createResumeHarness();
-      const run = runCodexAppServerAttempt(params);
-      try {
-        if (mode === "closed") {
-          await expect(run).rejects.toThrow(/active|closed|authority/i);
-          expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+        await expect(run).rejects.toThrow(/active|closed|authority/i);
+        expect(harness.requests.filter((request) => request.method === "turn/start")).toEqual([]);
+      } else {
+        await Promise.race([started.promise, run]);
+        await harness.completeTurn({ threadId, turnId: "turn-1" });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        const request = harness.requests.find((entry) => entry.method === "turn/start");
+        const input = asOptionalRecord(request?.params)?.input;
+        expect(Array.isArray(input)).toBe(true);
+        if (telegram) {
+          const parts = Array.isArray(input) ? input.map(asOptionalRecord) : [];
+          expect(parts.filter((part) => part?.type === "image")).toEqual([
+            ...(mode === "telegram-mixed"
+              ? [{ type: "image", url: `data:image/png;base64,${blue.toString("base64")}` }]
+              : []),
+            ...(mode === "telegram-missing" || currentPixelsOmitted
+              ? []
+              : [green, red].map((png) => ({
+                  type: "image",
+                  url: `data:image/png;base64,${png.toString("base64")}`,
+                }))),
+          ]);
+          const text = parts.map((part) => readStringValue(part?.text) ?? "").join("\n");
+          expect(text).toContain("Read this image.");
+          expect(text).toContain(saved.id);
+          expect(text).toContain("Current user request:");
+          if (mode === "telegram-history") {
+            expect(text).toContain("Latest album caption.");
+            expect(text).toContain("Text after album.");
+          }
+          if (mode === "telegram-mixed") {
+            expect(text).toContain("retained document");
+          }
         } else {
-          await started.promise;
-          await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-          const request = harness.requests.find((entry) => entry.method === "turn/start");
-          const input = asOptionalRecord(request?.params)?.input;
-          expect(Array.isArray(input)).toBe(true);
           expect(input).toEqual([
             expect.objectContaining({
               type: "text",
@@ -358,21 +442,19 @@ describe("Codex attachment continuity", () => {
               ),
               text_elements: [],
             },
-            ...(mode === "current"
-              ? [{ type: "image", url: `data:image/png;base64,${green.toString("base64")}` }]
-              : []),
+            { type: "image", url: `data:image/png;base64,${green.toString("base64")}` },
           ]);
         }
-        const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
-          const message = asOptionalRecord(asOptionalRecord(event)?.message);
-          return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
-        });
-        expect(rows).toEqual([historical]);
-      } finally {
-        abort.abort("test cleanup");
-        await run.catch(() => undefined);
-        closeHost();
       }
-    },
-  );
+      const rows = (await readSessionTranscriptEvents(target)).flatMap((event) => {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        return message?.idempotencyKey === historical.idempotencyKey ? [message] : [];
+      });
+      expect(rows).toEqual([historical]);
+    } finally {
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
 });

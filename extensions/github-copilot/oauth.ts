@@ -8,33 +8,21 @@ import type {
 import {
   isSupportedGithubCopilotDomain,
   normalizeGithubCopilotDomain,
+  normalizeGithubCopilotOAuthScope,
   PUBLIC_GITHUB_COPILOT_DOMAIN,
 } from "./domain.js";
 import { runGitHubCopilotDeviceFlow } from "./login.js";
 
 const LEGACY_OAUTH_KEY_PREFIX = "openclaw-github-copilot-oauth:v1:";
 
-function parseLegacyEnterpriseInput(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const parsed = trimmed.includes("://") ? new URL(trimmed) : new URL(`https://${trimmed}`);
-    return parsed.hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
 function requireSupportedEnterpriseDomain(raw: string): string {
-  const domain = parseLegacyEnterpriseInput(raw);
-  if (!domain || !isSupportedGithubCopilotDomain(domain)) {
+  const domain = raw.trim() ? normalizeGithubCopilotOAuthScope(raw) : undefined;
+  if (!domain) {
     throw new Error(
       `Unsupported GitHub Enterprise domain "${raw.trim()}". Use github.com or a *.ghe.com data-residency tenant.`,
     );
   }
-  return normalizeGithubCopilotDomain(domain);
+  return domain;
 }
 
 export async function loginGithubCopilotOAuth(
@@ -51,7 +39,7 @@ export async function loginGithubCopilotOAuth(
   const enterpriseUrl = input.trim() ? requireSupportedEnterpriseDomain(input) : undefined;
   const domain = enterpriseUrl ?? PUBLIC_GITHUB_COPILOT_DOMAIN;
   callbacks.onProgress?.("Waiting for GitHub authorization...");
-  const result = await runGitHubCopilotDeviceFlow(
+  const accessToken = await runGitHubCopilotDeviceFlow(
     {
       showCode: async ({ verificationUrl, userCode }) => {
         callbacks.onAuth({ url: verificationUrl, instructions: `Enter code: ${userCode}` });
@@ -60,15 +48,9 @@ export async function loginGithubCopilotOAuth(
     },
     domain,
   );
-  if (result.status === "access_denied") {
-    throw new Error("GitHub Copilot login cancelled");
-  }
-  if (result.status === "expired") {
-    throw new Error("GitHub Copilot device code expired; retry login");
-  }
   return {
-    refresh: result.accessToken,
-    access: result.accessToken,
+    refresh: accessToken,
+    access: accessToken,
     expires: MAX_DATE_TIMESTAMP_MS,
     ...(enterpriseUrl ? { enterpriseUrl } : {}),
   };
@@ -146,5 +128,5 @@ export function buildGithubCopilotAuthDoctorHint(
   if (!unsupported) {
     return undefined;
   }
-  return "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Remove the legacy profile before re-authenticating with a supported host (github.com or a *.ghe.com tenant): openclaw models auth login --provider github-copilot --force.";
+  return "This GitHub Copilot OAuth profile has an unsupported enterprise domain and can no longer refresh. Remove the legacy profile, then sign in again with github.com or a *.ghe.com tenant.";
 }

@@ -1,4 +1,3 @@
-// Install service observations before loading the real native stop owner.
 import "./update-command-service-maintenance.test-support.js";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -17,10 +16,11 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { stopLaunchAgent } from "../../daemon/launchd-stop.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
-import * as ports from "../../infra/ports-inspect.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as bootReader from "../../infra/update-managed-service-handoff-boot.js";
 import {
   createManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -28,286 +28,227 @@ import {
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as exec from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import {
+  gatewayCommand,
+  nativeResult,
+  writeHandoffMeta,
+} from "./update-command-service-fixtures.test-support.js";
 
-const { mocks, withServiceHome } =
-  await import("./update-command-service-maintenance.test-support.js");
+const { withServiceHome } = await import("./update-command-service-maintenance.test-support.js");
 
+type StopScenario = {
+  tuple?: true;
+  revoke?: "unrecorded" | "inspection" | "disable" | "cleanup";
+};
 it
   .runIf(process.platform === "darwin" || process.platform === "linux")
-  .each([
-    "direct helper",
-    "activation helper",
-    "ordinary nested caller",
-    "tuple-only caller",
-    "ordinary external Stop",
-    "unrecorded helper",
-    "revoked at native stop",
-    "revoked after inspection",
-    "revoked after inspection with disable",
-    "revoked after disable",
-    "revoked before port cleanup",
-  ] as const)("enforces live handoff authority in the real LaunchAgent stop: %s", (scenario) =>
-  withServiceHome(async (home) => {
-    const root = await fs.realpath(process.cwd());
-    const runId = randomUUID();
-    const label = "ai.openclaw.native-stop-test";
-    // Each case needs its own process: successful bootout must prove actual exit,
-    // while refusal cases must leave that same serving identity alive.
-    // The child imports no OpenClaw code and never opens a handoff database.
-    const child = spawn(
-      process.execPath,
-      ["-e", "process.stdout.write('ready\\n'); process.stdin.resume()"],
-      {
-        env: { HOME: home },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-    const closed = once(child, "close");
-    const output = new PassThrough();
-    try {
-      await once(child.stdout!, "data");
-      const gatewayPid = child.pid!;
-      const metaPath = path.join(home, "handoff-meta.json");
-      const store = createManagedHandoffLeaseStore({
-        databasePath: resolveManagedUpdateLeaseDatabasePath(),
-        serviceManagerEnv: process.env,
-      });
-      const claim = store.acquire(root, "native-stop-handoff", { kind: "update" });
-      if (claim.kind !== "acquired") {
-        throw new Error("fixture could not acquire its handoff lease");
-      }
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({ version: 1, meta: { root, runId, handoffId: claim.lease.owner } }),
+  .each<[string, StopScenario]>([
+    ["tuple-only caller", { tuple: true }],
+    ["unrecorded helper", { revoke: "unrecorded" }],
+    ["revoked after inspection with disable", { revoke: "inspection" }],
+    ["revoked after disable", { revoke: "disable" }],
+    ["revoked before port cleanup", { revoke: "cleanup" }],
+  ])(
+  "enforces live handoff authority in the real LaunchAgent stop: %s",
+  (_name, { tuple, revoke }) =>
+    withServiceHome(async (home) => {
+      const root = await fs.realpath(process.cwd());
+      const runId = randomUUID();
+      const label = "ai.openclaw.native-stop-test";
+      // Bootout must kill a real process; refused authority must leave it serving.
+      const child = spawn(
+        process.execPath,
+        ["-e", "process.stdout.write('ready\\n'); process.stdin.resume()"],
+        { env: { HOME: home }, stdio: ["pipe", "pipe", "pipe"] },
       );
-      if (scenario === "ordinary nested caller" || scenario === "unrecorded helper") {
-        expect(store.release(claim.lease)).toBe(true);
-      }
-      mockProcessPlatform("darwin");
-      // Keep effective command parsing real; adapt only the native plist transport.
-      vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
-        if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
-          throw new Error(`Unexpected fixture subprocess: ${command}`);
+      const closed = once(child, "close");
+      const output = new PassThrough();
+      try {
+        await once(child.stdout!, "data");
+        const gatewayPid = child.pid!;
+        const store = createManagedHandoffLeaseStore({
+          databasePath: resolveManagedUpdateLeaseDatabasePath(),
+          serviceManagerEnv: process.env,
+        });
+        const claim = store.acquire(root, "native-stop-handoff", { kind: "update" });
+        if (claim.kind !== "acquired") {
+          throw new Error("fixture could not acquire its handoff lease");
         }
-        return decodeLaunchAgentPlistFixture(options.input, args[1]);
-      });
-      const effectiveEnv = {
-        HOME: home,
-        OPENCLAW_LAUNCHD_LABEL: label,
-        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
-      };
-      await fs.writeFile(effectiveEnv.OPENCLAW_CONFIG_PATH, "{}");
-      const plist = resolveLaunchAgentPlistPath(effectiveEnv);
-      await fs.mkdir(path.dirname(plist), { recursive: true });
-      await fs.writeFile(
-        plist,
-        buildLaunchAgentPlist({
-          label,
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          stdoutPath: path.join(home, "stdout.log"),
-          stderrPath: path.join(home, "stderr.log"),
-          environment: effectiveEnv,
-        }),
-      );
-      const startedAt = pidAlive.getFileLockProcessStartTime(gatewayPid);
-      expect(startedAt).not.toBeNull();
-      const db = openOpenClawStateDatabase({ env: effectiveEnv }).db;
-      const now = Date.now();
-      db.prepare(`INSERT INTO state_leases
+        const revokeAt = (point: StopScenario["revoke"]) => {
+          if (revoke === point) {
+            expect(store.release(claim.lease)).toBe(true);
+          }
+        };
+        createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
+        const metaPath = await writeHandoffMeta(home, root, runId, claim.lease.owner);
+        revokeAt("unrecorded");
+        vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
+          platform: "darwin",
+          identity: "01234567-89ab-cdef-0123-456789abcdef",
+        }));
+        mockProcessPlatform("darwin");
+        vi.spyOn(exec, "runExec").mockImplementation(async (command, args, options) => {
+          if (command !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
+            throw new Error(`Unexpected fixture subprocess: ${command}`);
+          }
+          return decodeLaunchAgentPlistFixture(options.input, args[1]);
+        });
+        const effectiveEnv = {
+          HOME: home,
+          OPENCLAW_LAUNCHD_LABEL: label,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        };
+        await fs.writeFile(effectiveEnv.OPENCLAW_CONFIG_PATH, "{}");
+        const plist = resolveLaunchAgentPlistPath(effectiveEnv);
+        await fs.mkdir(path.dirname(plist), { recursive: true });
+        await fs.writeFile(
+          plist,
+          buildLaunchAgentPlist({
+            label,
+            programArguments: gatewayCommand(home, root).programArguments,
+            stdoutPath: path.join(home, "stdout.log"),
+            stderrPath: path.join(home, "stderr.log"),
+            environment: effectiveEnv,
+          }),
+        );
+        const startedAt = pidAlive.getFileLockProcessStartTime(gatewayPid);
+        expect(startedAt).not.toBeNull();
+        const db = openOpenClawStateDatabase({ env: effectiveEnv }).db;
+        const now = Date.now();
+        db.prepare(`INSERT INTO state_leases
       (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
       VALUES ('gateway-owner', 'global', 'native-caller-owner', ?, ?, ?, ?, ?)`).run(
-        now + 300000,
-        now,
-        JSON.stringify({
-          owner: { pid: gatewayPid, host: hostname(), startedAt },
-          port: 43210,
-          mode: "supervised",
-          supervisor: { kind: "launchd", name: label },
-        }),
-        now,
-        now,
-      );
-      expect(readGatewayOwnerLease({ env: effectiveEnv, current: true })).toMatchObject({
-        pid: gatewayPid,
-        startedAt,
-        state: "live",
-      });
-      const intent = () => db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
-      let atBootout: ReturnType<typeof intent>;
-      vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(
-        new Set(
-          scenario === "ordinary external Stop"
-            ? [process.pid, process.ppid, 1]
-            : [process.pid, process.ppid, gatewayPid],
-        ),
-      );
-      // The native manager and port are the external boundaries; stopLaunchAgent stays real.
-      const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcessesSync").mockReturnValue([]);
-      vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
-        port: 43210,
-        status: "free",
-        listeners: [],
-        hints: [],
-      });
-      vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(async () => {
-        if (scenario === "revoked before port cleanup") {
-          expect(store.release(claim.lease)).toBe(true);
-        }
-        return {
-          env: {},
-          port: scenario === "revoked before port cleanup" ? 43210 : null,
-          probeHosts: [],
-        };
-      });
-      let loaded = true;
-      const nativeCalls: string[][] = [];
-      let inspections = 0;
-      vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
-        nativeCalls.push(args);
-        if (args[0] === "print-disabled") {
-          return { code: 0, termination: "exit", stdout: `"${label}" => enabled`, stderr: "" };
-        }
-        if (args[0] === "print" && args[1]?.startsWith("system/")) {
-          return { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
-        }
-        if (args[0] === "print") {
-          inspections += 1;
-          if (
-            inspections === 2 &&
-            (scenario === "revoked after inspection" ||
-              scenario === "revoked after inspection with disable")
-          ) {
-            expect(store.release(claim.lease)).toBe(true);
+          now + 300000,
+          now,
+          JSON.stringify({
+            owner: {
+              pid: gatewayPid,
+              host: hostname(),
+              startedAt,
+              processNamespace: readGatewayLockProcessNamespace(),
+            },
+            port: 43210,
+            mode: "supervised",
+            supervisor: { kind: "launchd", name: label },
+          }),
+          now,
+          now,
+        );
+        expect(readGatewayOwnerLease({ env: effectiveEnv, current: true })).toMatchObject({
+          pid: gatewayPid,
+          startedAt,
+          state: "live",
+        });
+        const intent = () => db.prepare("SELECT pid, reason FROM gateway_restart_intent").get();
+        let atBootout: ReturnType<typeof intent>;
+        const callerPids = new Set([process.pid, process.ppid, gatewayPid]);
+        vi.spyOn(ancestry, "getSelfAndAncestorPidsSync").mockReturnValue(callerPids);
+        vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+          pids: callerPids,
+          complete: true,
+        });
+        const cleanup = vi.spyOn(ancestry, "cleanStaleGatewayProcesses").mockResolvedValue([]);
+        vi.spyOn(launchdRuntime, "resolveLaunchAgentGatewayContext").mockImplementation(
+          async () => {
+            revokeAt("cleanup");
+            return {
+              env: {},
+              port: revoke === "cleanup" ? 43210 : null,
+              probeHosts: [],
+            };
+          },
+        );
+        let loaded = true;
+        const nativeCalls: string[][] = [];
+        let inspections = 0;
+        vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
+          nativeCalls.push(args);
+          if (args[0] === "print-disabled") {
+            return nativeResult(`"${label}" => enabled`);
           }
-          return loaded
-            ? {
-                code: 0,
-                termination: "exit",
-                stdout: `state = running\npid = ${gatewayPid}`,
-                stderr: "",
-              }
-            : { code: 113, termination: "exit", stdout: "", stderr: "Could not find service" };
-        }
-        if (args[0] === "disable") {
-          if (scenario === "revoked after disable") {
-            expect(store.release(claim.lease)).toBe(true);
+          if (args[0] === "print" && args[1]?.startsWith("system/")) {
+            return nativeResult("", 113, "Could not find service");
           }
-          return { code: 0, termination: "exit", stdout: "", stderr: "" };
-        }
-        expect(args[0]).toBe("bootout");
-        atBootout = intent();
-        await stopChildProcess(child, 5000);
-        await closed;
-        loaded = false;
-        return { code: 0, termination: "exit", stdout: "", stderr: "" };
-      });
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: scenario === "ordinary nested caller" ? undefined : "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-          OPENCLAW_LAUNCHD_LABEL: label,
-          OPENCLAW_SERVICE_MARKER: undefined,
-          OPENCLAW_SERVICE_KIND: undefined,
-          LAUNCH_JOB_LABEL: undefined,
-          LAUNCH_JOB_NAME: undefined,
-          XPC_SERVICE_NAME: undefined,
-        },
-        async () => {
-          // Use the real adapter: its nested scope must inherit (not manufacture) update ownership.
-          const { resolveGatewayService } =
-            await vi.importActual<typeof import("../../daemon/service.js")>(
-              "../../daemon/service.js",
-            );
-          const service = resolveGatewayService();
-          if (scenario === "revoked at native stop") {
-            const nativeStop = service.stop;
-            vi.spyOn(service, "stop").mockImplementation(async (args) => {
-              // Revoke after caller inspection, immediately before the real guarded adapter.
-              expect(store.release(claim.lease)).toBe(true);
-              await nativeStop(args);
-            });
+          if (args[0] === "print") {
+            inspections += 1;
+            if (inspections === 2) {
+              revokeAt("inspection");
+            }
+            return loaded
+              ? nativeResult(`${args[1]} = {\n\tstate = running\n\tpid = ${gatewayPid}\n}`)
+              : nativeResult("", 113, "Could not find service");
           }
-          mocks.service.mockReturnValue(service);
-          const nativeArgs = {
-            env: process.env,
-            stdout: output,
-            disable:
-              scenario === "revoked after inspection with disable" ||
-              scenario === "revoked after disable",
-            ...(scenario === "ordinary nested caller" ? {} : { updateHandoff: { root, runId } }),
-          };
-          const invoke = () =>
-            scenario === "activation helper" || scenario === "revoked at native stop"
-              ? maybeStopManagedServiceBeforeMutableUpdate({
-                  root,
-                  updateInstallKind: "package",
-                  shouldRestart: true,
-                  jsonMode: true,
-                  phase: "prepare",
-                  updateRun: { runId, env: process.env },
-                }).then((result) =>
-                  expect(result, JSON.stringify(result)).toMatchObject({ stopped: true }),
-                )
-              : stopLaunchAgent(nativeArgs);
-          const stop = () =>
-            scenario === "ordinary nested caller" ||
-            scenario === "tuple-only caller" ||
-            scenario === "ordinary external Stop"
+          if (args[0] === "disable") {
+            revokeAt("disable");
+            return nativeResult();
+          }
+          expect(args[0]).toBe("bootout");
+          atBootout = intent();
+          await stopChildProcess(child, 5000);
+          await closed;
+          loaded = false;
+          return nativeResult();
+        });
+        await withEnvAsync(
+          {
+            OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+            [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+            OPENCLAW_LAUNCHD_LABEL: label,
+            LAUNCH_JOB_LABEL: undefined,
+            LAUNCH_JOB_NAME: undefined,
+            XPC_SERVICE_NAME: undefined,
+          },
+          async () => {
+            const { resolveGatewayService } =
+              await vi.importActual<typeof import("../../daemon/service.js")>(
+                "../../daemon/service.js",
+              );
+            const service = resolveGatewayService();
+            const nativeArgs = {
+              env: process.env,
+              stdout: output,
+              disable: revoke === "inspection" || revoke === "disable",
+              updateHandoff: { root, runId },
+            };
+            const pending = tuple
               ? service.stop(nativeArgs)
               : withGatewayServiceOperationLock(process.env, (assertCurrent) =>
-                  withGatewayServiceUpdateAuthority(assertCurrent, invoke, { originalRoot: root }),
+                  withGatewayServiceUpdateAuthority(
+                    assertCurrent,
+                    () => stopLaunchAgent(nativeArgs),
+                    { originalRoot: root },
+                  ),
                 );
-          const authorized =
-            scenario === "direct helper" ||
-            scenario === "activation helper" ||
-            scenario === "ordinary external Stop";
-          if (authorized) {
-            await stop();
-          } else {
-            await expect(stop()).rejects.toThrow(
+            await expect(pending).rejects.toThrow(
               `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
             );
-          }
-          const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
-          const bootedOut = authorized || scenario === "revoked before port cleanup";
-          expect(
-            nativeCalls.filter(([command]) => command !== "print" && command !== "print-disabled"),
-          ).toEqual(
-            bootedOut
-              ? [["bootout", target]]
-              : scenario === "revoked after disable"
-                ? [["disable", target]]
-                : [],
-          );
-          expect(loaded).toBe(!bootedOut);
-          expect(pidAlive.isPidAlive(gatewayPid)).toBe(!bootedOut);
-          expect(atBootout).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
+            const target = `${launchdRuntime.resolveLaunchAgentGuiDomain()}/${label}`;
+            const bootedOut = revoke === "cleanup";
+            expect(
+              nativeCalls.filter(
+                ([command]) => command !== "print" && command !== "print-disabled",
+              ),
+            ).toEqual(
+              bootedOut ? [["bootout", target]] : revoke === "disable" ? [["disable", target]] : [],
+            );
+            const expectedIntent = bootedOut
               ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
-          );
-          expect(intent()).toEqual(
-            bootedOut && scenario !== "ordinary external Stop"
-              ? { pid: gatewayPid, reason: "update.run" }
-              : undefined,
-          );
-          expect(cleanup).not.toHaveBeenCalled();
-        },
-      );
-    } finally {
-      await stopChildProcess(child, 5000);
-      await closed;
-      output.destroy();
-      closeOpenClawStateDatabaseForTest();
-    }
-  }),
+              : undefined;
+            expect([loaded, pidAlive.isPidAlive(gatewayPid)]).toEqual([!bootedOut, !bootedOut]);
+            expect([atBootout, intent()]).toEqual([expectedIntent, expectedIntent]);
+            expect(cleanup).not.toHaveBeenCalled();
+          },
+        );
+      } finally {
+        await stopChildProcess(child, 5000);
+        await closed;
+        output.destroy();
+        await closeStateDatabaseForTest();
+      }
+    }),
 );

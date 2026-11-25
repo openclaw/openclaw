@@ -1,6 +1,6 @@
 // Shared User-Agent for xAI sidecar HTTP/WS requests; mirrors `formatOpenClawUserAgent`.
 
-import { OPENCLAW_VERSION as PACKAGE_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { OPENCLAW_VERSION as PACKAGE_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const ORIGINATOR = "openclaw";
@@ -24,21 +24,12 @@ export function xaiUserAgent(): string {
   return `${ORIGINATOR}/${resolveXaiUserAgentVersion()}`;
 }
 
-const XAI_NATIVE_API_HOSTS = new Set(["api.x.ai"]);
-
 // Returns a `User-Agent` header entry only when the resolved baseUrl points
 // at a verified xAI-native API host. User-configured proxy baseUrls produce
 // an empty record so the openclaw identity is not forwarded to the proxy.
 export function xaiUserAgentHeaderFor(baseUrl: string | undefined): Record<string, string> {
-  if (!baseUrl) {
-    return {};
-  }
-  try {
-    if (XAI_NATIVE_API_HOSTS.has(new URL(baseUrl).hostname)) {
-      return { "User-Agent": xaiUserAgent() };
-    }
-  } catch {
-    return {};
+  if (baseUrl && URL.parse(baseUrl)?.hostname === "api.x.ai") {
+    return { "User-Agent": xaiUserAgent() };
   }
   return {};
 }

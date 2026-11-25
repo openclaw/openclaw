@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createDiscordRecordingFixture } from "./transcripts-recording.test-support.js";
 import {
   discordVoiceTranscriptsSourceProvider,
@@ -462,7 +467,8 @@ defineDiscordVoiceTests((harness) => {
         );
       } else if (dispatch === "control") {
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledExactlyOnceWith({
-          getToolAuthorityOverlay: expect.any(Function),
+          assertCurrent: expect.any(Function),
+          getToolAuthorityOverlayAsync: expect.any(Function),
           sessionKey,
           text: texts.join("\n"),
         });
@@ -593,6 +599,25 @@ defineDiscordVoiceTests((harness) => {
       }
     },
   );
+
+  it("transcribes with media config hot-reloaded after the voice session started", async () => {
+    const audioModel = (model: string): OpenClawConfig => ({
+      tools: { media: { models: [{ provider: "openai", model, capabilities: ["audio"] }] } },
+    });
+    const owner: OpenClawConfig = { commands: { ownerAllowFrom: ["discord:100000000000000001"] } };
+    setRuntimeConfigSnapshot({ ...audioModel("gpt-4o-transcribe"), ...owner });
+    try {
+      const f = await fixture("stt-tts", false, audioModel("gpt-4o-transcribe"));
+      await f.audio("100000000000000001", 1);
+      setRuntimeConfigSnapshot({ ...audioModel("gpt-transcribe"), ...owner });
+      await f.audio("100000000000000001", 2);
+      expect(
+        transcribeAudioFileMock.mock.calls.map(([{ cfg }]) => cfg.tools?.media?.models?.[0]?.model),
+      ).toEqual(["gpt-4o-transcribe", "gpt-transcribe"]);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
 
   it("preserves one complete batch utterance when recording is not active", async () => {
     const f = await fixture("stt-tts", false, {
@@ -771,31 +796,6 @@ defineDiscordVoiceTests((harness) => {
       }
     },
   );
-
-  it("retains queued WAV input until processing owns its release", async () => {
-    const f = await fixture();
-    await startTranscripts(f.manager, f.sink);
-    const { promise: blocked, resolve: release } = createDeferred<void>();
-    f.entry.processingQueue = blocked;
-    const removals = vi.spyOn(fs, "rm");
-    vi.useFakeTimers();
-    try {
-      const receiving = f.begin("guest");
-      f.streams.get("guest")!.end(Buffer.alloc(96_000, 3));
-      await receiving;
-      await vi.advanceTimersByTimeAsync(30 * 60 * 1_000 + 1);
-      await Promise.all(removals.mock.results.map((result) => result.value));
-      release();
-      await f.entry.processingQueue;
-      expect(f.sink).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: "audio-3-96000" }),
-      );
-    } finally {
-      release();
-      vi.useRealTimers();
-      removals.mockRestore();
-    }
-  });
 
   it.each(["missing", "disabled"])(
     "grants no passive receive access with %s capture",

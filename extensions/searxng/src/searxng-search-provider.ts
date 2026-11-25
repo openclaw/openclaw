@@ -1,8 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Searxng provider module implements model/runtime integration.
 import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   createWebSearchProviderContractFields,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
@@ -13,13 +13,7 @@ const loadSearxngClientModule = createLazyRuntimeModule(() => import("./searxng-
 const SearxngSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     categories: {
       type: "string",
       description: "Optional comma-separated search categories such as general, news, or science.",

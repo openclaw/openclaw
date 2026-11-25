@@ -1,16 +1,23 @@
 import { linkReaderHovercardBootstrap as bootstrap } from "./link-reader-hovercard-registration.ts";
-import { isPreviewAnchor, resolveLinkReaderTarget } from "./link-reader-target.ts";
+import {
+  isPreviewAnchor,
+  resolveLinkReaderTarget,
+  type HoverPreviewOwner,
+} from "./link-reader-target.ts";
 
-export function previewTargetForAnchor(anchor: HTMLAnchorElement) {
-  if (!isPreviewAnchor(anchor)) {
-    return null;
-  }
-  const provider = bootstrap.providerFor(anchor);
-  const target =
-    provider?.client && provider.readers
-      ? resolveLinkReaderTarget(anchor.href, provider.readers)
-      : null;
+export function resolveLinkReaderPreviewClaim(href: string, readers: HoverPreviewOwner["readers"]) {
+  const target = resolveLinkReaderTarget(href, readers);
   return target?.reader.linkReader.previewMethod ? target : null;
+}
+
+export function previewTargetForAnchor(
+  anchor: HTMLAnchorElement,
+  provider = bootstrap.providerFor(anchor),
+  resolveClaim = resolveLinkReaderPreviewClaim,
+) {
+  const target =
+    provider?.client && provider.readers ? resolveClaim(anchor.href, provider.readers) : null;
+  return target && isPreviewAnchor(anchor) ? target : null;
 }
 
 export async function prefetchLinkReader(
@@ -22,7 +29,7 @@ export async function prefetchLinkReader(
   if (!target || !owner?.client?.connected || signal.aborted) {
     return;
   }
-  const { client, agentId, readers } = owner;
+  const { client, agentId, sessionKey, readers } = owner;
   await bootstrap.define();
   const provider = bootstrap.providerFor(anchor);
   await provider?.updateComplete;
@@ -34,6 +41,7 @@ export async function prefetchLinkReader(
     provider !== owner ||
     provider.client !== client ||
     provider.agentId !== agentId ||
+    provider.sessionKey !== sessionKey ||
     provider.readers !== readers
   ) {
     return;

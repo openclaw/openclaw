@@ -1,32 +1,35 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 
-describe("node SQLite backup completion", () => {
-  const dirs = useAutoCleanupTempDirTracker(afterEach);
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("settles idle native backups and releases completion work after success or failure", async ({
-    signal,
-  }) => {
-    const root = dirs.make("sqlite-backup-completion-");
-    const target = path.join(root, "backup.sqlite");
-    const owner = path.join(root, "sqlite-backup.mjs");
-    // Loader/cache I/O would supply the unrelated callback this regression must exclude.
-    await build({
-      entryPoints: [fileURLToPath(new URL("./sqlite-backup.ts", import.meta.url))],
-      outfile: owner,
-      bundle: true,
-      format: "esm",
-      platform: "node",
-      logLevel: "silent",
-    });
-    const result = await runNodeScript(
-      createNodeEvalArgs(
-        `import assert from "node:assert/strict";
+it("settles idle native backups and releases completion work after success or failure", async ({
+  signal,
+}) => {
+  const root = dirs.make("sqlite-backup-completion-");
+  const target = path.join(root, "backup.sqlite");
+  const owner = path.join(root, "sqlite-backup.mjs");
+  for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
+    await fs.copyFile(new URL(`../state/${schema}`, import.meta.url), path.join(root, schema));
+  }
+  // Loader/cache I/O would supply the unrelated callback this regression must exclude.
+  await build({
+    entryPoints: [fileURLToPath(new URL("./sqlite-backup.ts", import.meta.url))],
+    outfile: owner,
+    bundle: true,
+    format: "esm",
+    platform: "node",
+    logLevel: "silent",
+  });
+  const result = await runNodeScript(
+    createNodeEvalArgs(
+      `import assert from "node:assert/strict";
          import fs from "node:fs";
          import { createRequire } from "node:module";
          import { backupNodeSqliteDatabase } from ${JSON.stringify(pathToFileURL(owner).href)};
@@ -50,9 +53,15 @@ describe("node SQLite backup completion", () => {
              assert.equal(copy.prepare("SELECT SUM(length(payload)) AS bytes FROM records").get().bytes, 1048576);
            }
            finally { copy.close(); }
+           const progress = [];
+           const expectedPages = database.prepare("PRAGMA page_count").get().page_count;
+           assert.equal(await backupNodeSqliteDatabase(database, ${JSON.stringify(`${target}.progress`)}, info => progress.push(info)), expectedPages);
+           assert.deepEqual(progress.at(-1), { totalPages: expectedPages, remainingPages: 0 });
            database.exec("ROLLBACK;");
            database.close();
-           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}), { code: "ERR_INVALID_STATE" });
+           const failureProgress = [];
+           await assert.rejects(backupNodeSqliteDatabase(database, ${JSON.stringify(target)}, info => failureProgress.push(info)), { code: "ERR_INVALID_STATE" });
+           assert.deepEqual(failureProgress, []);
 
            let nativeFailure;
            sqlite.backup = async (...args) => {
@@ -78,13 +87,10 @@ describe("node SQLite backup completion", () => {
            if (database.isOpen) database.close();
            writer.close();
          }`,
-      ),
-      process.env,
-      20_000,
-      { signal, maxBuffer: 16_384 },
-    );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("complete");
-  });
+    ),
+    process.env,
+    20_000,
+    { signal, maxBuffer: 16_384 },
+  );
+  expect(result, result.stderr).toMatchObject({ error: undefined, status: 0, stdout: "complete" });
 });

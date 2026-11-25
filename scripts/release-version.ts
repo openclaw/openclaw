@@ -1,93 +1,61 @@
-// Release Version keeps the core and explicitly selected native release trains aligned.
+// Release Version keeps the core and macOS release metadata aligned.
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
-import { planMobileRelease } from "./mobile-release-version.ts";
+import { versionValueFlag } from "./lib/version-script-args.ts";
 
 const MACOS_INFO_PLIST = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 
 type ReleaseVersionMode = "check" | "write";
 
 type ReleaseVersionArgs = {
-  android: boolean;
   help: boolean;
   mode: ReleaseVersionMode;
   rootDir: string;
   version: string | null;
 };
 
-type ReleaseVersionChange = {
-  currentContent: string;
-  nextContent: string;
-  path: string;
-};
-
-type ReleaseVersionPlan = {
-  changes: ReleaseVersionChange[];
-  version: string;
-};
+type ReleaseVersionPlan = ReturnType<typeof planReleaseVersion>;
 
 export function parseReleaseVersionArgs(argv: string[]): ReleaseVersionArgs {
-  let android = false;
-  let help = false;
-  let mode: ReleaseVersionMode = "check";
-  let rootDir = path.resolve(".");
-  let version: string | null = null;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--": {
-        break;
-      }
-      case "--android": {
-        android = true;
-        break;
-      }
-      case "--check": {
-        mode = "check";
-        break;
-      }
-      case "--root": {
-        rootDir = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      }
-      case "--version": {
-        version = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      }
-      case "--write": {
-        mode = "write";
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
+  const args: ReleaseVersionArgs = {
+    help: false,
+    mode: "check",
+    rootDir: path.resolve("."),
+    version: null,
+  };
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      booleanFlag("--check", "mode", "check", { repeatable: true }),
+      booleanFlag("--write", "mode", "write", { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      versionValueFlag("--root", "rootDir", path.resolve),
+      versionValueFlag("--version", "version"),
+    ],
+    {
+      onUnhandledArg(arg) {
         throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { android, help, mode, rootDir, version };
+      },
+    },
+  );
 }
 
-export function planReleaseVersion(params: {
-  android?: boolean;
-  rootDir?: string;
-  version: string;
-}): ReleaseVersionPlan {
+export function planReleaseVersion(params: { rootDir?: string; version: string }) {
   const rootDir = path.resolve(params.rootDir ?? ".");
   const parsedVersion = parseReleaseVersion(params.version);
   if (!parsedVersion) {
     throw new Error(
-      `Invalid release version '${params.version}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
+      `Invalid release version '${params.version}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
+  }
+
+  if (parsedVersion.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
 
   const packageVersion =
@@ -98,15 +66,6 @@ export function planReleaseVersion(params: {
     planPackageJson(rootDir, packageVersion),
     planMacosInfoPlist(rootDir, parsedVersion),
   ];
-  if (params.android) {
-    changes.push(
-      ...planMobileRelease({
-        gatewayVersion: parsedVersion.baseVersion,
-        phase: "prepare",
-        rootDir,
-      }).changes,
-    );
-  }
 
   return {
     changes: changes.filter((change) => change.currentContent !== change.nextContent),
@@ -146,7 +105,6 @@ export function main(argv = process.argv.slice(2)): number {
   }
 
   const plan = planReleaseVersion({
-    android: args.android,
     rootDir: args.rootDir,
     version: args.version,
   });
@@ -170,7 +128,7 @@ export function main(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-function planPackageJson(rootDir: string, version: string): ReleaseVersionChange {
+function planPackageJson(rootDir: string, version: string) {
   const filePath = path.join(rootDir, "package.json");
   const currentContent = fs.readFileSync(filePath, "utf8");
   const packageJson = JSON.parse(currentContent) as Record<string, unknown>;
@@ -188,7 +146,7 @@ function planPackageJson(rootDir: string, version: string): ReleaseVersionChange
 function planMacosInfoPlist(
   rootDir: string,
   releaseVersion: NonNullable<ReturnType<typeof parseReleaseVersion>>,
-): ReleaseVersionChange {
+) {
   const filePath = path.join(rootDir, MACOS_INFO_PLIST);
   const currentContent = fs.readFileSync(filePath, "utf8");
   const buildVersion = [
@@ -225,22 +183,13 @@ function replacePlistString(content: string, key: string, value: string, filePat
   return content.replace(pattern, `$1${value}$3`);
 }
 
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
-}
-
 function printUsage(): void {
   process.stdout.write(
     [
-      "Usage: node --import tsx scripts/release-version.ts --version <version> [--check|--write] [--android] [--root dir]",
+      "Usage: node --import tsx scripts/release-version.ts --version <version> [--check|--write] [--root dir]",
       "",
       "  --check    report release version drift without writing (default)",
       "  --write    update all selected version files after validating them",
-      "  --android  also prepare shared mobile and Android release metadata",
       "",
     ].join("\n"),
   );

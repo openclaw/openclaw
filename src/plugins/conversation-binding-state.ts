@@ -1,5 +1,6 @@
 import { createDedupeCache, type DedupeCache } from "../infra/dedupe.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -62,10 +63,7 @@ export async function withPluginBindingApprovalOperation<T>(
     }
   };
   assertCurrent();
-  let release!: () => void;
-  const retained = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: retained, resolve: release } = createDeferredCore();
   state.operations.add(retained);
   try {
     return await run(assertCurrent);

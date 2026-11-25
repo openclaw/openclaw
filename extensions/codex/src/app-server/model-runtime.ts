@@ -2,11 +2,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 
 const CODEX_APP_SERVER_RUNTIME_MODEL_PARAM = "codexAppServerRuntimeModel";
 
-type CodexRuntimeModel = {
-  id: string;
-  params?: Record<string, unknown>;
-};
-
 export function buildCodexRuntimeModelParams(catalogId: string, runtimeModelId: string) {
   return catalogId === runtimeModelId
     ? undefined
@@ -14,7 +9,7 @@ export function buildCodexRuntimeModelParams(catalogId: string, runtimeModelId: 
 }
 
 export function readCodexRuntimeModelId(
-  model: CodexRuntimeModel | undefined,
+  model: { id: string; params?: Record<string, unknown> } | undefined,
   fallbackId: string,
 ): string {
   return (

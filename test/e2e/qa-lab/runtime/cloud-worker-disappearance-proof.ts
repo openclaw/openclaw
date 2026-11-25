@@ -15,10 +15,8 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createWorkerSessionPlacementStore } from "../../../../src/gateway/worker-environments/placement-store.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../../src/state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../../src/test-utils/database-cleanup.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -119,26 +117,26 @@ async function createQaSession(
   return { agentId: session.agentId, sessionId: session.sessionId, sessionKey: session.key };
 }
 
-function seedPlacement(
+async function seedPlacement(
   store: ReturnType<typeof createWorkerSessionPlacementStore>,
   session: SessionIdentity,
 ) {
-  let placement = store.startDispatch(session);
-  placement = store.transition({
+  let placement = await store.startDispatch(session);
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId: ENVIRONMENT_ID },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash: BUNDLE_HASH },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: session.sessionId,
     from: "syncing",
     to: "starting",
@@ -154,7 +152,7 @@ function seedPlacement(
   });
 }
 
-function seedUnknownWorkerState(
+async function seedUnknownWorkerState(
   stateDir: string,
   lost: SessionIdentity,
   isolated: SessionIdentity,
@@ -194,27 +192,27 @@ function seedUnknownWorkerState(
         "UPDATE worker_environments SET state = 'attached', attached_session_ids_json = ? WHERE environment_id = ?",
       )
       .run(JSON.stringify([lost.sessionId]), ENVIRONMENT_ID);
-    seedPlacement(store, lost);
+    await seedPlacement(store, lost);
     database.db
       .prepare(
         "UPDATE worker_environments SET state = 'orphaned', attached_session_ids_json = '[]' WHERE environment_id = ?",
       )
       .run(ENVIRONMENT_ID);
-    let other = store.startDispatch(isolated);
-    other = store.transition({
+    let other = await store.startDispatch(isolated);
+    other = await store.transition({
       sessionId: isolated.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: other.generation,
       patch: { environmentId: INDEPENDENT_ENVIRONMENT_ID },
     });
-    store.fail({
+    await store.fail({
       sessionId: isolated.sessionId,
       expectedGeneration: other.generation,
       recoveryError: INDEPENDENT_REASON,
     });
   } finally {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
   }
 }
 
@@ -292,7 +290,7 @@ async function runProof(options: ProducerOptions) {
     }
 
     await gateway.restartAfterStateMutation(async ({ stateDir }) => {
-      seedUnknownWorkerState(stateDir, lost, isolated);
+      await seedUnknownWorkerState(stateDir, lost, isolated);
     });
     const first = await waitForFailedPlacement(gateway, lost);
     const independent = await waitForFailedPlacement(gateway, isolated);

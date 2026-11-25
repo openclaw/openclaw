@@ -1,29 +1,33 @@
-import { render } from "lit";
-import { expect, vi } from "vitest";
+import { flush } from "solid-js";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-render.ts";
+import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import type { BoardCommandEvent, BoardProvider } from "../../lib/board/provider.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
-  createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
+import {
+  openNativeMenu,
+  renderPaneHeaderInto,
+} from "./components/chat-pane-header.test-support.ts";
 import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  fullscreenBoardWidgetMenu: (
-    layout: SidebarLayout,
-    board?: ResolvedBoardView,
-  ) => BoardWidgetPageMenu | undefined;
+  dashboardControls: ChatPaneRuntime["dashboardControls"];
+  configureHeaderPanelPresentation: ChatPaneRuntime["configureHeaderPanelPresentation"];
+  pageBoardWidgetMenu: (layout: SidebarLayout) => BoardWidgetPageMenu | undefined;
   boardProvider: BoardProvider;
   routeFace: "chat" | "dashboard" | undefined;
   dashboardExpanded: boolean;
@@ -36,7 +40,6 @@ type DashboardPane = TestChatPane & {
   handleBoardCommand: (event: BoardCommandEvent) => void;
   saveDashboardDefault: (row: GatewaySessionRow, agentId: string | undefined) => Promise<void>;
 };
-type HeaderMenu = HTMLElement & { updateComplete: Promise<boolean> };
 
 export const key = "agent:main:dashboard-defaults";
 
@@ -51,6 +54,12 @@ export function session(overrides: Partial<GatewaySessionRow> = {}): GatewaySess
     boardPresentation: "split",
     ...overrides,
   };
+}
+
+async function settleDashboardMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
 }
 
 export function createDashboardHarness(
@@ -93,24 +102,20 @@ export function createDashboardHarness(
   const client = createGatewayBrowserClientFixture({ request });
   const harness = createTestChatPane({ client });
   const pane = harness.pane as DashboardPane;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   patchSettings({
     sessionKey: current.key,
     sidebarSessionLayouts: options.savedLayout ? { [current.key]: options.savedLayout } : {},
   });
-  const state = createPageState(
-    pane.context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    pane,
-  );
+  const state = createPageState(pane.context, { afterCommit: () => () => {} }, pane);
   pane.state = state;
   pane.sessionKey = current.key;
   pane.routeFace = "dashboard";
   pane.dashboardExpanded = options.expandedLink ?? false;
   pane.paneWidth = 1400;
   pane.boardProvider = createMockBoardProvider(current.key);
-  // The detached pane exposes real controller methods without running unrelated
+  // The detached pane exposes real runtime methods without running unrelated
   // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => {});
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.patch"],
     options.scopes ?? ["operator.write", "operator.read"],
@@ -121,7 +126,9 @@ export function createDashboardHarness(
   state.hello = pane.context.gateway.snapshot.hello;
   state.sessionKey = current.key;
   state.sessionsResult = options.metadataPending ? null : sessionsResult([current], 10);
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const mount = document.body.appendChild(document.createElement("div"));
+  let dashboard: ReturnType<typeof mountSolid> | undefined;
   const publishRow = (row: GatewaySessionRow) => {
     current = row;
     state.sessionsResult = sessionsResult([row], row.updatedAt ?? 0);
@@ -143,25 +150,46 @@ export function createDashboardHarness(
     pane.commitSidebarPanelResize(state.sidebarLayout, column!.id, 620);
   };
   const header = async () => {
-    render(
-      pane.renderPaneHeader(
-        createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
-        state.sessionsResult?.sessions[0],
-        false,
-        undefined,
-        false,
-        null,
-        state.sidebarLayout,
-      ),
-      mount,
+    const presentation = pane.renderPaneHeader(
+      createPaneHeaderWorkspaceFixture(state),
+      state.sessionsResult?.sessions[0],
+      false,
+      undefined,
+      false,
+      null,
+      state.sidebarLayout,
     );
-    const menu = mount.querySelector<HeaderMenu>("openclaw-chat-header-session-menu");
+    pane.configureHeaderPanelPresentation({
+      nativeHeader: presentation.header,
+      headerDetails: undefined,
+      state,
+      currentAgentId: "main",
+      sidebarLayout: state.sidebarLayout,
+      panelDefinitions: presentation.header.panelDefinitions ?? [],
+      catalog: false,
+      externalPanelsToggle: true,
+    });
+    renderPaneHeaderInto(presentation, mount);
+    await settleDashboardMenu();
+    if (!dashboard) {
+      // The board renderer is mocked here; host the actual retained control
+      // produced by the header, as the Dashboard view does.
+      dashboard = mountSolid(() => pane.dashboardControls);
+      onTestFinished(dashboard.unmount);
+    }
+    const menu = dashboard.container.querySelector<HTMLElement>(".chat-dashboard-menu");
     expect(menu).not.toBeNull();
-    await menu!.updateComplete;
-    if (pane.narrow) {
-      select(menu!, "compact:open-layout");
-      await menu!.updateComplete;
+    if (
+      state.sidebarLayout.columns.some((column) =>
+        column.panels.some((panel) => panel.slot === "dashboard"),
+      )
+    ) {
+      await openNativeMenu(menu!);
+    } else {
+      expect(
+        presentation.header.layoutMenuActions?.find((action) => action.id === "dashboard-default"),
+      ).toBeUndefined();
+      expect(menu!.querySelector(".oc-menu")?.matches(":popover-open")).toBe(false);
     }
     return menu!;
   };
@@ -184,21 +212,16 @@ export function createDashboardHarness(
   };
 }
 
-export function select(menu: ParentNode, value: string) {
-  const dropdown = menu.querySelector("wa-dropdown");
-  expect(dropdown).not.toBeNull();
-  dropdown!.dispatchEvent(
-    new CustomEvent("wa-select", {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      detail: { item: { value } },
-    }),
-  );
-}
-
 export function expectPresentation(layout: SidebarLayout, expanded: boolean) {
   expect(isSidebarSlotVisible(layout, "dashboard")).toBe(true);
   expect(layout.expanded).toBe(expanded);
   expect(isSidebarSlotVisible(layout, "conversation")).toBe(!expanded);
+}
+
+export async function select(menu: HTMLElement, value: string) {
+  await openNativeMenu(menu);
+  const item = menu.querySelector<HTMLElement>(`[data-value="${value}"]`);
+  expect(item, "Expected Dashboard action: " + value).not.toBeNull();
+  item!.click();
+  await settleDashboardMenu();
 }

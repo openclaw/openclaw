@@ -79,7 +79,7 @@ export type MarkdownListItemMarker = {
   end?: number;
 };
 
-export type MarkdownListItemMetadata = {
+type MarkdownListItemMetadata = {
   /** Rendered content owned by this item after its native marker. */
   contentStart?: number;
   contentEnd?: number;
@@ -111,29 +111,44 @@ export type MarkdownBlockSpan = {
   sourceEndLine?: number;
 };
 
-export type MarkdownIRWithMetadata = MarkdownIR & {
+export type MarkdownIRWithMetadata = Omit<MarkdownIR, "listItems"> & {
   /** Parser-owned block metadata, attached without changing legacy serialization. */
   blocks?: MarkdownBlockSpan[];
+  listItems?: MarkdownListItemWithMetadata[];
 };
 
-export function attachListItemMetadata(
-  item: MarkdownListItemMarker,
-  metadata: MarkdownListItemMetadata,
+/** Preserve the serialized marker shape while projecting rendered coordinates. */
+export function copyMarkdownListItem(
+  item: MarkdownListItemWithMetadata,
+  projected: Pick<
+    MarkdownListItemWithMetadata,
+    "listMarker" | "taskMarker" | "start" | "end" | "contentStart" | "contentEnd" | "markerOnly"
+  >,
 ): MarkdownListItemWithMetadata {
-  const itemWithMetadata: MarkdownListItemWithMetadata = item;
+  const copy: MarkdownListItemWithMetadata = {
+    kind: item.kind,
+    ...(projected.listMarker ? { listMarker: projected.listMarker } : {}),
+    ...(item.task ? { task: true as const } : {}),
+    ...(projected.taskMarker ? { taskMarker: projected.taskMarker } : {}),
+    ...(item.listId !== undefined ? { listId: item.listId } : {}),
+    ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
+    ...(item.depth !== undefined ? { depth: item.depth } : {}),
+    ...(projected.start !== undefined ? { start: projected.start } : {}),
+    ...(projected.end !== undefined ? { end: projected.end } : {}),
+  };
+  defineMetadata(copy, "contentStart", projected.contentStart);
+  defineMetadata(copy, "contentEnd", projected.contentEnd);
+  defineMetadata(copy, "markerOnly", projected.markerOnly ? true : undefined);
   for (const key of [
-    "contentStart",
-    "contentEnd",
-    "markerOnly",
     "sourceMarker",
     "sourceContent",
     "sourceIndent",
     "sourceStartLine",
     "sourceEndLine",
   ] as const) {
-    defineMetadata(itemWithMetadata, key, metadata[key]);
+    defineMetadata(copy, key, item[key]);
   }
-  return itemWithMetadata;
+  return copy;
 }
 
 export function attachBlockMetadata(ir: MarkdownIR, blocks: MarkdownBlockSpan[]): MarkdownIR {

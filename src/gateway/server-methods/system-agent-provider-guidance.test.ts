@@ -8,15 +8,15 @@ import {
   useSystemAgentGatewayTestFixture,
 } from "./system-agent.test-support.js";
 
-const { requireVerifiedInferenceFixture, requireVerifiedInferenceDeps, seededSession } =
+const { requireVerifiedInferenceFixture, installVerifiedConfigReader, seededSession } =
   useSystemAgentGatewayTestFixture();
 
 describe("openclaw.chat provider setup guidance", () => {
   it("returns protected Models guidance without applying a pending change or a handoff", async () => {
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
     });
     engine.propose({ kind: "gateway-stop" });
     const sessions = new Map<string, SystemAgentChatSession>([

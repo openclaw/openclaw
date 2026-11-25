@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, expect, it } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
@@ -5,209 +6,172 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
 import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type AdmittedRunOperatorAuthority,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+  captureExecRequestCustodySelection,
+  captureExecRequestOwners,
+  withExecRequestTurn,
+} from "../../infra/exec-request-context.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
+import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
-const admissions: PreparedAgentRunAdmission[] = [];
-const hosts: Array<ReturnType<typeof createAgentHarnessHostCapabilities>> = [];
+const cleanup: Array<() => void> = [];
 
 async function createSourceHost(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   abortSignal?: AbortSignal,
+  nativeModelPolicySupport?: "exact",
+  attempt: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
 ) {
-  const runId = "retained-source";
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    operatorAuthority,
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  const host = createAgentHarnessHostCapabilities({
-    attempt: { runId, admittedRunContext, abortSignal },
-    pluginId: "codex",
-  });
-  hosts.push(host);
-  return { admission, host };
+  const host = await createAdmittedHostCapabilityTestFixture(
+    { runId: "retained-source", abortSignal, ...attempt },
+    { operatorAuthority, nativeModelPolicySupport },
+  );
+  cleanup.push(host.closeAdmission, host.closeHost);
+  return host;
+}
+
+function retain(host: Awaited<ReturnType<typeof createSourceHost>>) {
+  const retained = host.hostCapabilities.retainSourceAuthority?.();
+  assert(retained, "expected retained source authority");
+  cleanup.push(retained.release);
+  return retained;
+}
+
+function bindModel(retained: ReturnType<typeof retain>) {
+  const binding = retained.bindModelExecution?.({ provider: "fixture", model: "a" });
+  assert(binding, "expected retained model execution authority");
+  cleanup.push(binding.release);
+  return binding;
 }
 
 afterEach(() => {
-  for (const host of hosts.splice(0)) {
-    host.close();
-  }
-  for (const admission of admissions.splice(0)) {
-    admission.close();
+  for (const release of cleanup.splice(0).toReversed()) {
+    release();
   }
   resetAgentRunRegistryForTest();
 });
 
 it("returns no retained source authority without an operator", async () => {
-  const { host } = await createSourceHost();
-
-  expect(host.capabilities.retainSourceAuthority?.()).toBeUndefined();
-  host.close();
-  expect(() => host.capabilities.retainSourceAuthority?.()).toThrow("no longer active");
+  const host = await createSourceHost();
+  expect(host.hostCapabilities.retainSourceAuthority?.()).toBeUndefined();
+  host.closeHost();
+  expect(() => host.hostCapabilities.retainSourceAuthority?.()).toThrow("no longer active");
 });
 
-it("keeps retained source authority until independent native work releases it", async () => {
+it.each([
+  "lifecycle rotation",
+  "gateway rotation",
+  "synchronous signal",
+  "synchronous lifecycle",
+] as const)(
+  "fences retained source authority after foreground completion on %s",
+  async (revocation) => {
+    const synchronous = revocation.startsWith("synchronous");
+    const foreground = new AbortController();
+    const controller = new AbortController();
+    const source = createTestOperatorAuthority({
+      profileId: "guest-source",
+      scopes: ["operator.write"],
+      ...(synchronous ? { signal: controller.signal } : {}),
+    });
+    const foregroundAbort = !synchronous && revocation !== "gateway rotation";
+    const host = await createSourceHost(
+      source,
+      foregroundAbort ? foreground.signal : undefined,
+      revocation === "synchronous lifecycle" ? undefined : "exact",
+    );
+    const retained = retain(host);
+    if (foregroundAbort) {
+      expect(retained.signal?.aborted).toBe(false);
+    }
+    host.closeHost();
+    host.closeAdmission();
+    if (synchronous) {
+      if (revocation === "synchronous signal") {
+        controller.abort(new Error("source stopped"));
+      } else {
+        rotateAgentRunRegistryLifecycleGeneration();
+      }
+      expect(() => retained.assertCurrent()).toThrow();
+      if (revocation === "synchronous signal") {
+        expect(retained.signal?.aborted).toBe(true);
+      }
+      return;
+    }
+    if (foregroundAbort) {
+      foreground.abort();
+      expect(() => retained.assertCurrent()).not.toThrow();
+    }
+    const modelBinding = bindModel(retained);
+    if (revocation === "gateway rotation") {
+      rotateAgentEventLifecycleGeneration();
+      expect(retained.signal?.aborted).toBe(true);
+      expect(modelBinding.signal.aborted).toBe(true);
+    } else {
+      rotateAgentRunRegistryLifecycleGeneration();
+    }
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
+    expect(modelBinding.assertCurrent).toThrow(
+      revocation === "gateway rotation" ? "no longer active" : undefined,
+    );
+    expect(() => retained.assertCurrent()).toThrow("no longer active");
+  },
+);
+
+it("releases model authority when its retained work closes during acquisition", async () => {
   let sourceHolds = 0;
-  const source = createAdmittedRunOperatorAuthority({
+  const acquisition: { close?: () => void } = {};
+  const source = createTestOperatorAuthority({
     profileId: "guest-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {
-      if (sourceHolds === 0) {
-        throw new Error("original source was released");
-      }
-    },
     retain: () => {
       sourceHolds += 1;
+      acquisition.close?.();
       return () => {
         sourceHolds -= 1;
       };
     },
   });
-  const { host, admission } = await createSourceHost(source);
-  const first = host.capabilities.retainSourceAuthority?.();
-  const second = host.capabilities.retainSourceAuthority?.();
-  try {
-    if (!first || !second) {
-      throw new Error("expected independently retained source authority");
-    }
-    expect(sourceHolds).toBe(3);
-    host.close();
-    expect(() => host.capabilities.retainSourceAuthority?.()).toThrow("no longer active");
-    admission.close();
-    expect(sourceHolds).toBe(2);
-    expect(() => first.assertCurrent()).not.toThrow();
-    expect(() => second.assertCurrent()).not.toThrow();
-
-    first.release();
-    first.release();
-    expect(sourceHolds).toBe(1);
-    expect(() => first.assertCurrent()).toThrow("no longer active");
-    expect(() => second.assertCurrent()).not.toThrow();
-  } finally {
-    first?.release();
-    second?.release();
-    second?.release();
-  }
+  const host = await createSourceHost(source, undefined, "exact");
+  const retained = retain(host);
+  host.closeHost();
+  host.closeAdmission();
+  expect(sourceHolds).toBe(1);
+  acquisition.close = retained.release;
+  expect(() => retained.bindModelExecution?.({ provider: "fixture", model: "a" })).toThrow(
+    "no longer active",
+  );
   expect(sourceHolds).toBe(0);
 });
 
-it.each(["source assertion", "source signal", "lifecycle rotation"] as const)(
-  "fences retained source authority after foreground completion on %s",
-  async (revocation) => {
-    let current = true;
-    const originalSource = new AbortController();
-    const foreground = new AbortController();
-    const revoked = new Error("operator access revoked");
-    const source = createAdmittedRunOperatorAuthority({
-      profileId: "guest-source",
-      scopes: ["operator.write"],
-      ...(revocation === "source signal" ? { signal: originalSource.signal } : {}),
-      assertCurrent: () => {
-        if (!current) {
-          throw revoked;
-        }
-      },
-    });
-    const { host, admission } = await createSourceHost(source, foreground.signal);
-    const retained = host.capabilities.retainSourceAuthority?.();
-    try {
-      if (!retained) {
-        throw new Error("expected retained source authority");
-      }
-      expect(retained.signal?.aborted).toBe(false);
-      host.close();
-      admission.close();
-      foreground.abort();
-      expect(() => retained.assertCurrent()).not.toThrow();
-
-      if (revocation === "source signal") {
-        originalSource.abort(revoked);
-        expect(retained.signal?.aborted).toBe(true);
-      } else if (revocation === "source assertion") {
-        current = false;
-      } else {
-        rotateAgentRunRegistryLifecycleGeneration();
-        expect(() => source.assertCurrent()).not.toThrow();
-      }
-      expect(() => retained.assertCurrent()).toThrow(
-        revocation === "lifecycle rotation" ? "no longer active" : revoked,
-      );
-      current = true;
-      expect(() => retained.assertCurrent()).toThrow(
-        revocation === "source signal" ? revoked : "no longer active",
-      );
-    } finally {
-      retained?.release();
-    }
-  },
-);
-
-it("signals retained work on gateway lifecycle rotation after its foreground closes", async () => {
-  const source = createAdmittedRunOperatorAuthority({
-    profileId: "guest-source",
-    scopes: ["operator.write"],
-    assertCurrent: () => {},
+it("captures request custody before plugin handoff and retains continuation ancestry", async () => {
+  const identity = {
+    runId: "retained-source",
+    sessionKey: "agent:main:request-custody",
+    sessionId: "physical-session",
+    ownerConnId: "request-owner",
+  };
+  const captured = await withExecRequestTurn({ identity }, async () => {
+    const host = await createSourceHost(undefined, undefined, undefined, identity);
+    return { host, owners: captureExecRequestOwners(identity) };
   });
-  const { host, admission } = await createSourceHost(source);
-  const retained = host.capabilities.retainSourceAuthority?.();
-  try {
-    if (!retained) {
-      throw new Error("expected retained source authority");
-    }
-    host.close();
-    admission.close();
-    rotateAgentEventLifecycleGeneration();
-    expect(retained.signal?.aborted).toBe(true);
-    expect(() => retained.assertCurrent()).toThrow("no longer active");
-  } finally {
-    retained?.release();
-  }
+  const host = captured.host.hostCapabilities;
+  const custody = host.captureRequestCustody?.();
+  expect(custody).toBeDefined();
+  expect(captureExecRequestCustodySelection(captured.owners ?? [])(custody)).toBe(true);
+  await withExecRequestTurn(
+    { identity: { ...identity, runId: "continuation" }, owners: captured.owners },
+    async () => {
+      const owners = captureExecRequestOwners({ ...identity, runId: "continuation" });
+      expect(captureExecRequestCustodySelection(owners ?? [])(custody)).toBe(true);
+    },
+  );
+  await withExecRequestTurn({ identity }, async () => {
+    const replacement = captureExecRequestOwners(identity);
+    expect(host.captureRequestCustody?.()).toBe(custody);
+    expect(captureExecRequestCustodySelection(replacement ?? [])(custody)).toBe(false);
+  });
+  captured.host.closeHost();
+  expect(() => host.captureRequestCustody?.()).toThrow();
+  expect(captureExecRequestCustodySelection(captured.owners ?? [])(custody)).toBe(true);
 });
-
-it.each(["signal", "lifecycle"] as const)(
-  "rechecks retained source authority when its assertion revokes %s synchronously",
-  async (revocation) => {
-    const controller = new AbortController();
-    let revoke = false;
-    const source = createAdmittedRunOperatorAuthority({
-      profileId: "guest-source",
-      scopes: ["operator.write"],
-      signal: controller.signal,
-      assertCurrent: () => {
-        if (revoke) {
-          if (revocation === "signal") {
-            controller.abort(new Error("source revoked during validation"));
-          } else {
-            rotateAgentRunRegistryLifecycleGeneration();
-          }
-        }
-      },
-    });
-    const { host, admission } = await createSourceHost(source);
-    const retained = host.capabilities.retainSourceAuthority?.();
-    try {
-      if (!retained) {
-        throw new Error("expected retained source authority");
-      }
-      host.close();
-      admission.close();
-      revoke = true;
-      expect(() => retained.assertCurrent()).toThrow();
-    } finally {
-      retained?.release();
-    }
-  },
-);

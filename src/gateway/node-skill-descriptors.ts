@@ -13,12 +13,7 @@ const log = createSubsystemLogger("gateway/node-skills");
 export function normalizeNodeSkillDescriptors(params: {
   nodeId: string;
   skills?: readonly NodeSkillDescriptor[];
-  enabled?: boolean;
 }): NodeSkillDescriptor[] {
-  if (params.enabled === false) {
-    return [];
-  }
-
   const normalized: NodeSkillDescriptor[] = [];
   const seen = new Set<string>();
   let totalBytes = 0;

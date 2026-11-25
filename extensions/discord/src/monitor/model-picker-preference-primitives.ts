@@ -1,38 +1,24 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/model-ref-parse";
 
-export function normalizeModelRef(raw?: string): string | null {
-  const value = raw?.trim();
-  if (!value) {
+export function splitDiscordModelRef(modelRef: string): { provider: string; model: string } | null {
+  const trimmed = modelRef.trim();
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) {
     return null;
   }
-  const slashIndex = value.indexOf("/");
-  if (slashIndex <= 0 || slashIndex >= value.length - 1) {
+  const provider = trimmed.slice(0, slashIndex).trim();
+  const model = trimmed.slice(slashIndex + 1).trim();
+  if (!provider || !model) {
     return null;
   }
-  const provider = normalizeProviderId(value.slice(0, slashIndex));
-  const model = value.slice(slashIndex + 1).trim();
-  return provider && model ? `${provider}/${model}` : null;
+  return { provider, model };
 }
 
-export function sanitizeRecentModels(models: unknown, limit: number): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  if (!Array.isArray(models)) {
-    return deduped;
-  }
-  for (const item of models) {
-    const normalized = normalizeModelRef(typeof item === "string" ? item : undefined);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    deduped.push(normalized);
-    if (deduped.length >= limit) {
-      break;
-    }
-  }
-  return deduped;
+export function normalizeModelRef(raw?: string): string | null {
+  const parsed = splitDiscordModelRef(raw ?? "");
+  const provider = parsed ? normalizeProviderId(parsed.provider) : "";
+  return parsed && provider ? `${provider}/${parsed.model}` : null;
 }
 
 function hashSegment(value: string, length: number): string {

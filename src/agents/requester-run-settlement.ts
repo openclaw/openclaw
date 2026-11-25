@@ -1,3 +1,4 @@
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { getActiveAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -7,6 +8,7 @@ import {
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { recordModelFallbackStop } from "./failover-error.js";
+import { isSchedulerOwnedRequesterYield } from "./openclaw-tools.requester-yield.js";
 import { createSessionPlacementSettlementClosedAbortError } from "./run-termination.js";
 import {
   markRequesterTurnYielded,
@@ -25,11 +27,11 @@ type RequesterRunParams = Pick<
 >;
 
 /** Failure cleanup belongs to the whole fallback chain, while its admission is still live. */
-export function settleFailedRequesterRun(
+export async function settleFailedRequesterRun(
   params: RequesterRunParams,
   error: unknown,
   assertCurrent?: () => void,
-): unknown {
+): Promise<unknown> {
   const instance =
     params.admittedRunContext?.operationalRunInstance ??
     params.preparedRunAdmission?.operationalRunInstance;
@@ -49,14 +51,11 @@ export function settleFailedRequesterRun(
   } catch {
     return error;
   }
-  if (
-    params.abortSignal?.aborted ||
-    getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
-  ) {
-    return error;
-  }
   try {
-    settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {});
+    await settleRequesterRun(params, { meta: { durationMs: 0 } }, () => {
+      assertCurrent?.();
+      params.preparedRunAdmission?.assertSourceCurrent();
+    });
   } catch (settlementError) {
     const failure = new AggregateError(
       [error, settlementError],
@@ -71,11 +70,11 @@ export function settleFailedRequesterRun(
 }
 
 /** Transfers the complete logical run's children only after retries have finished. */
-export function settleRequesterRun(
+export async function settleRequesterRun(
   params: RequesterRunParams,
   result: EmbeddedAgentRunResult,
   assertCurrent: () => void,
-): void {
+): Promise<void> {
   const instance =
     params.admittedRunContext?.operationalRunInstance ??
     params.preparedRunAdmission?.operationalRunInstance;
@@ -98,29 +97,39 @@ export function settleRequesterRun(
     requesterSessionKey: params.sessionKey,
     requesterAgentId: params.agentId,
     requesterTurnRunId: params.runId,
+    assertCurrent: () => {
+      assertCurrent();
+      params.abortSignal?.throwIfAborted();
+      if (
+        instance &&
+        getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
+      ) {
+        throw createSessionPlacementSettlementClosedAbortError();
+      }
+    },
   };
-  assertCurrent();
-  params.abortSignal?.throwIfAborted();
-  if (
-    instance &&
-    getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance !== instance
-  ) {
-    throw createSessionPlacementSettlementClosedAbortError();
-  }
+  requester.assertCurrent();
+  // An automation yield records no requester claim, so it settles as an ordinary turn end.
+  const requesterYielded =
+    result.meta.yielded === true &&
+    !isSchedulerOwnedRequesterYield({
+      requesterSessionKey: params.sessionKey,
+      scheduledToolTargets: readScheduledToolTargets({ operationalRunInstance: instance }),
+    });
   try {
     if (result.meta.continuationPending) {
       // The outbox transfers this batch only after its waiting status is delivered.
-      if (markRequesterTurnYielded(requester) === 0) {
+      if ((await markRequesterTurnYielded(requester)) === 0) {
         throw new Error("accepted continuation children were not durably registered");
       }
       return;
     }
-    const settled = settleRequesterAfterSessionSpawns({
+    const settled = await settleRequesterAfterSessionSpawns({
       ...requester,
-      requesterYielded: result.meta.yielded === true,
+      requesterYielded,
       acceptedSessionSpawns: result.acceptedSessionSpawns ?? [],
     });
-    if (result.meta.yielded) {
+    if (requesterYielded) {
       if (!settled) {
         throw new Error("accepted continuation children could not transfer terminal delivery");
       }

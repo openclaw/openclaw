@@ -3,7 +3,7 @@ import Foundation
 import Swabble
 
 @MainActor
-struct TestHookCommand: ParsableCommand {
+struct TestHookCommand: CLICommand {
     @Argument(help: "Text to send to hook") var text: String
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
 

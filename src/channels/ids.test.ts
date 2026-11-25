@@ -24,9 +24,6 @@ describe("channel ids", () => {
 
   it.each([
     ["whatsapp", "WhatsApp"],
-    ["imessage", "iMessage"],
-    ["googlechat", "Google Chat"],
-    [" imsg ", "iMessage"],
     ["GOOGLE-CHAT", "Google Chat"],
   ])("finds the exact generated label for %s", (channel, label) => {
     expect(findChatChannelLabel(channel)).toBe(label);

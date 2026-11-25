@@ -16,7 +16,7 @@ export function requireRecord(value: unknown, label: string): Record<string, unk
   return value;
 }
 
-export function requireArray(value: unknown, label: string): unknown[] {
+function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), `${label} should be an array`).toBe(true);
   if (!Array.isArray(value)) {
     throw new Error(`${label} should be an array`);
@@ -69,9 +69,15 @@ export function expectChangedBroadcast(
   const [event, payload, connIds, options] = broadcastToConnIds.mock.calls[0] ?? [];
   expect(event).toBe("sessions.changed");
   expect(connIds).toEqual(new Set(["conn-1"]));
+  const agentId = typeof expected.agentId === "string" ? expected.agentId : "main";
   expect(options).toEqual({
-    agentId: typeof expected.agentId === "string" ? expected.agentId : "main",
+    agentId,
     dropIfSlow: true,
+    prepareSessionProjection: expect.any(Function),
+    sessionEventSubscriptionKeys:
+      typeof expected.sessionKey === "string"
+        ? [expected.sessionKey === "global" ? `agent:${agentId}:global` : expected.sessionKey]
+        : [],
     ...(typeof expected.sessionKey === "string" ? { sessionKeys: [expected.sessionKey] } : {}),
   });
   const payloadRecord = requireRecord(payload, "broadcast payload");

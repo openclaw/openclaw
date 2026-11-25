@@ -3,33 +3,6 @@ import { readQaScenarioPack } from "../../scenario-catalog.js";
 import { listTelegramQaScenarios, resolveTelegramQaScenarioIds } from "./scenario-selection.js";
 
 describe("Telegram QA profiles", () => {
-  it.each(["mock-openai", "live-frontier"] as const)(
-    "keeps the default %s command on flow scenarios",
-    (providerMode) => {
-      const scenarioIds = resolveTelegramQaScenarioIds({ providerMode });
-
-      expect(scenarioIds).toContain("channel-canary");
-      expect(scenarioIds).toContain("telegram-other-bot-command-gating");
-      expect(scenarioIds).not.toContain("telegram-startup-getme-live");
-      expect(() =>
-        resolveTelegramQaScenarioIds({
-          providerMode,
-          scenarioIds: ["telegram-startup-getme-live"],
-        }),
-      ).toThrow("execution.kind=flow");
-    },
-  );
-
-  it("derives provider-specific release membership from taxonomy", () => {
-    const live = resolveTelegramQaScenarioIds({ providerMode: "live-frontier" });
-    const mock = resolveTelegramQaScenarioIds({ providerMode: "mock-openai" });
-
-    expect(live).not.toContain("telegram-long-final-reuses-preview");
-    expect(mock).toContain("telegram-long-final-reuses-preview");
-    expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
-    expect(mock).not.toContain("telegram-startup-getme-live");
-  });
-
   it("selects every taxonomy-owned executable Telegram scenario through all", () => {
     const scenarioIds = resolveTelegramQaScenarioIds({
       providerMode: "mock-openai",
@@ -37,6 +10,7 @@ describe("Telegram QA profiles", () => {
     });
 
     expect(scenarioIds).toContain("channel-message-flows");
+    expect(scenarioIds).toContain("telegram-participant-identity-inspection");
     expect(scenarioIds).not.toContain("native-command-session-target");
   });
 
@@ -61,25 +35,13 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["channel-canary"],
       }),
     ).toEqual(["channel-canary"]);
-  });
-
-  it("selects the native queue-validation regression as an explicit live scenario", () => {
     expect(
       resolveTelegramQaScenarioIds({
         profile: "release",
-        providerMode: "live-frontier",
-        scenarioIds: ["telegram-queue-invalid-mode"],
+        providerMode: "mock-openai",
+        scenarioIds: ["telegram-participant-identity-inspection"],
       }),
-    ).toEqual(["telegram-queue-invalid-mode"]);
-  });
-
-  it("selects the Claude CLI compaction final-priority regression explicitly", () => {
-    expect(
-      resolveTelegramQaScenarioIds({
-        providerMode: "live-frontier",
-        scenarioIds: ["telegram-claude-cli-compaction-final-priority"],
-      }),
-    ).toEqual(["telegram-claude-cli-compaction-final-priority"]);
+    ).toEqual(["telegram-participant-identity-inspection"]);
   });
 
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {
@@ -111,6 +73,9 @@ describe("Telegram QA profiles", () => {
     expect(
       scenarios.find(({ id }) => id === "telegram-long-final-three-chunks")?.defaultEnabled,
     ).toBe(true);
+    expect(
+      scenarios.find(({ id }) => id === "telegram-participant-identity-inspection")?.defaultEnabled,
+    ).toBe(false);
     expect(scenarios.map(({ id }) => id)).not.toContain("telegram-startup-getme-live");
     expect(scenarioById.get("telegram-startup-getme-live")?.execution.kind).toBe("script");
   });

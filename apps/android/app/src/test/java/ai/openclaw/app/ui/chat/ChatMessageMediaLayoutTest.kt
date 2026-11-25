@@ -23,10 +23,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -37,6 +43,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -54,6 +62,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatMessageMediaLayoutTest {
   @get:Rule val composeRule = createComposeRule()
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
 
   @Test
   fun userGalleryPrecedesCaptionAndKeepsImagesOutsideTheTextSurface() {
@@ -84,7 +93,7 @@ class ChatMessageMediaLayoutTest {
     awaitImages(1)
     composeRule.onNodeWithContentDescription("Garden 5", useUnmergedTree = true).assertIsDisplayed()
     capture("five-images-next-page")
-    composeRule.onNodeWithContentDescription("Open image preview").performClick()
+    composeRule.onNodeWithContentDescription("Garden 5", useUnmergedTree = true).performTouchInput { click(center) }
     composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed().performClick()
     composeRule.onNodeWithText("Previous images").performClick()
     awaitImages(4)
@@ -213,6 +222,18 @@ class ChatMessageMediaLayoutTest {
     val managed = bounds("Garden 2")
     assertEquals(inline.top.value, managed.top.value, 1f)
     assertEquals((inline.right - inline.left).value, (managed.right - managed.left).value, 1f)
+    composeRule.onAllNodesWithContentDescription("Open image preview").assertCountEquals(0)
+    for (label in listOf("image/png", "Garden 2")) {
+      val preview = composeRule.onNodeWithContentDescription(label)
+      preview.assert(hasClickAction())
+      preview.assert(
+        SemanticsMatcher("preview click action has a label") { node ->
+          node.config.getOrNull(SemanticsActions.OnClick)?.label == "Open image preview"
+        },
+      )
+      composeRule.onNodeWithContentDescription(label, useUnmergedTree = true).performTouchInput { click(center) }
+      composeRule.onNodeWithContentDescription("Close image preview").assertIsDisplayed().performClick()
+    }
   }
 
   @Test
@@ -321,30 +342,40 @@ class ChatMessageMediaLayoutTest {
     role: String,
     bytes: (String) -> ByteArray,
   ) {
-    ChatBubble(
-      messageId = "media-$role",
-      entryId = "entry-$role",
-      role = role,
-      live = false,
-      content = content,
-      timestampMs = null,
-      onReplyMessage = {},
-      sessionActionsEnabled = true,
-      onRewindMessage = {},
-      onForkMessage = {},
-      speechState = null,
-      onToggleListen = { _, _ -> },
-      inlineMediaPlaybackBlocked = false,
-      inlineWidgetResolverReady = true,
-      resolveInlineWidgetResource = { _, _ -> null },
-      loadImageArtifact = { GatewayLoadedImage(bytes(it), "image/png") },
-      loadMediaArtifact = { _, _, _ -> null },
-    )
+    CompositionLocalProvider(LocalChatImageDecodeDispatcher provides imageDecodeDispatcher) {
+      ChatBubble(
+        messageId = "media-$role",
+        entryId = "entry-$role",
+        role = role,
+        live = false,
+        content = content,
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = true,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = true,
+        resolveInlineWidgetResource = { _, _ -> null },
+        loadImageArtifact = { GatewayLoadedImage(bytes(it), "image/png") },
+        loadMediaArtifact = { _, _, _ -> null },
+      )
+    }
   }
 
+  // Compose idleness does not include the decoder's background work. Drain it
+  // separately so image readiness never depends on wall time.
   private fun awaitImages(count: Int) {
-    composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("Open image preview").fetchSemanticsNodes().size == count }
-    composeRule.onAllNodesWithContentDescription("Open image preview").assertCountEquals(count)
+    fun visibleImages(): Int =
+      composeRule.onAllNodesWithContentDescription("Garden", substring = true, useUnmergedTree = true).fetchSemanticsNodes().size +
+        composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).fetchSemanticsNodes().size
+    composeRule.waitForIdle()
+    assertTrue("Decoded images appear only after the decode drain", visibleImages() < count)
+    imageDecodeDispatcher.scheduler.advanceUntilIdle()
+    composeRule.waitForIdle()
+    assertEquals(count, visibleImages())
   }
 
   private fun bounds(label: String) = composeRule.onNodeWithContentDescription(label, useUnmergedTree = true).getUnclippedBoundsInRoot()

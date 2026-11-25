@@ -1,23 +1,49 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import type {
+  CapturedSessionEntryReadSource,
+  SessionEntryReadSource,
+} from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
+import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
+
+export type GatewaySessionStorePlan<T> = {
+  reads: GatewaySessionStoreRead[];
+  resolve: () => T;
+};
 
 export type GatewaySessionStoreLookup = {
   storePath: string;
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
+  capturedReadSource?: CapturedSessionEntryReadSource;
+  capturedReadSources?: CapturedSessionEntryReadSource[];
   match: { entry: SessionEntry; key: string } | undefined;
   canonicalValidationError?: Error;
 };
 
-export function findCanonicalStoreMatch(
+/** Ordinary Gateway lookups exclude rows reserved for suppressed run effects. */
+export function omitInternalSessionEffectsEntries(
   store: Record<string, SessionEntry>,
+  storeKeys: readonly string[],
+): void {
+  for (const storeKey of storeKeys) {
+    if (isInternalSessionEffectsKey(storeKey)) {
+      delete store[storeKey];
+    }
+  }
+}
+
+export function findCanonicalStoreMatch<Entry extends SessionEntry>(
+  store: Record<string, Entry>,
   candidates: readonly string[],
   onCanonicalError?: (error: Error) => void,
-): { entry: SessionEntry; key: string } | undefined {
-  const matches = new Map<string, { entry: SessionEntry; key: string }>();
+): { entry: Entry; key: string } | undefined {
+  const matches = new Map<string, { entry: Entry; key: string }>();
   for (const candidate of candidates) {
     const trimmed = normalizeOptionalString(candidate) ?? "";
     if (!trimmed) {
@@ -56,7 +82,11 @@ export function findCanonicalStoreMatch(
 
 /** Selects canonical rows in read order; callers own acquisition or admitted reads. */
 export function resolveGatewaySessionStoreReadResults<
-  Read extends { storePath: string; readSource?: SessionEntryReadSource },
+  Read extends {
+    storePath: string;
+    readSource?: SessionEntryReadSource;
+    capturedReadSource?: CapturedSessionEntryReadSource;
+  },
 >(params: {
   reads: readonly Read[];
   readStore: (read: Read) => Record<string, SessionEntry>;
@@ -68,6 +98,7 @@ export function resolveGatewaySessionStoreReadResults<
   let selectedStorePath = first.storePath;
   let selectedStore = params.readStore(first);
   let selectedReadSource = first.readSource;
+  let selectedCapturedReadSource = first.capturedReadSource;
   let canonicalValidationError: Error | undefined;
   const recordCanonicalError = params.deferCanonicalValidation
     ? (error: Error) => {
@@ -100,13 +131,75 @@ export function resolveGatewaySessionStoreReadResults<
     selectedStorePath = candidate.storePath;
     selectedStore = store;
     selectedReadSource = candidate.readSource;
+    selectedCapturedReadSource = candidate.capturedReadSource;
     selectedMatch = match;
   }
   return {
     storePath: selectedStorePath,
     store: selectedStore,
     ...(selectedReadSource ? { readSource: selectedReadSource } : {}),
+    ...(selectedCapturedReadSource ? { capturedReadSource: selectedCapturedReadSource } : {}),
+    capturedReadSources: params.reads.flatMap((read) =>
+      read.capturedReadSource ? [read.capturedReadSource] : [],
+    ),
     match: selectedMatch,
     ...(canonicalValidationError ? { canonicalValidationError } : {}),
+  };
+}
+
+/** Retain scanned stages without planning a replacement before legacy selection finishes. */
+export async function prepareGatewaySessionStoreReadPlan(params: {
+  legacy: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore | null> | null;
+  prepareCurrent: () => GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>;
+  onSelected?: (target: GatewaySessionStoreTargetWithStore) => void;
+}): Promise<{
+  target: GatewaySessionStoreTargetWithStore;
+  plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+}> {
+  const resolve = async <T extends GatewaySessionStoreTargetWithStore | null>(
+    plan: GatewaySessionStorePlan<T>,
+  ) =>
+    await params.prepareReads(plan.reads, () => {
+      if (plan.reads.some((read) => read.result === undefined)) {
+        throw new Error("Session lookup facts were not prepared");
+      }
+      const target = plan.resolve();
+      if (target && params.onSelected) {
+        const result = params.onSelected(target);
+        if (isPromiseLike(result)) {
+          void Promise.resolve(result).catch(() => {});
+          throw new Error("Session selection consumers must remain synchronous");
+        }
+      }
+      return target;
+    });
+  const deletedMain = params.legacy;
+  if (deletedMain) {
+    const target = await resolve(deletedMain);
+    if (target) {
+      return {
+        target,
+        plan: {
+          reads: deletedMain.reads,
+          resolve() {
+            const current = deletedMain.resolve();
+            if (!current) {
+              throw new Error("Prepared legacy session target changed");
+            }
+            return current;
+          },
+        },
+      };
+    }
+  }
+  const current = params.prepareCurrent();
+  const target = await resolve(current);
+  return {
+    target,
+    plan: {
+      reads: [...(deletedMain?.reads ?? []), ...current.reads],
+      resolve: () => deletedMain?.resolve() ?? current.resolve(),
+    },
   };
 }

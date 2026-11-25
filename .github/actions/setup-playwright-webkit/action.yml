@@ -1,0 +1,63 @@
+name: Setup Playwright WebKit
+description: Install the selected target's WebKit with bounded system-package downloads and mirror recovery.
+runs:
+  using: composite
+  steps:
+    - name: Install Playwright WebKit
+      shell: bash
+      run: |
+        # Hosted images rank one archive mirror first and apt leaves it only on errors,
+        # so a mirror that trickles packages can outlast the job. Download under a
+        # deadline (stopping a download is safe, stopping dpkg is not), retry once
+        # without that mirror, then install from the downloaded archives.
+        set -euo pipefail
+        as_root=()
+        [[ "$(id -u)" == 0 ]] || as_root=(sudo -n)
+        download_only=/etc/apt/apt.conf.d/99openclaw-webkit-download-only
+        mirrors=
+        mirrors_backup=
+        restore_apt() {
+          "${as_root[@]}" rm -f "$download_only"
+          if [[ -n "$mirrors_backup" ]]; then
+            "${as_root[@]}" tee "$mirrors" < "$mirrors_backup" > /dev/null
+            mirrors_backup=
+          fi
+        }
+        trap restore_apt EXIT
+        # Run the deadline as root: Playwright's own sudo does not pass it on, so a
+        # deadline outside sudo would leave apt-get downloading with its lock held.
+        # Resolve the CLI as the runner user so pnpm (a Corepack shim) never runs as root.
+        playwright="$(pnpm --dir ui exec which playwright)"
+        download_webkit_deps() {
+          "${as_root[@]}" env "PATH=$PATH" timeout --kill-after=10s "$1" \
+            "$playwright" install-deps webkit
+        }
+        printf 'APT::Get::Download-Only "true";\n' | "${as_root[@]}" tee "$download_only" > /dev/null
+        status=0
+        download_webkit_deps 120s || status=$?
+        if [[ "$status" == 124 || "$status" == 137 ]]; then
+          # APT owns the active list; provider images need not use apt-mirrors.txt.
+          # Only edit the single plain-text list used by these runner images.
+          mirrors="$(apt-get indextargets --no-release-info --format '$(REPO_URI)' |
+            sed -n 's|^mirror+file:\(/.*\.txt\)/*$|\1|p' | sort -u)" || mirrors=
+          if [[ "$mirrors" != *$'\n'* && -f "$mirrors" ]] && (( $(grep -c . "$mirrors") > 1 )); then
+            echo "::warning::WebKit system packages did not download in 120s from $(head -n 1 "$mirrors" | cut -f 1); retrying with the image's other archive mirrors."
+            mirrors_backup="$(mktemp)"
+            cp "$mirrors" "$mirrors_backup"
+            sed 1d "$mirrors_backup" | "${as_root[@]}" tee "$mirrors" > /dev/null
+            status=0
+            download_webkit_deps 300s || status=$?
+            if [[ "$status" != 0 ]]; then
+              echo "::error::WebKit system packages did not download from the fallback archive mirrors (exit $status)."
+              exit "$status"
+            fi
+          else
+            echo "::warning::WebKit system packages did not download in 120s and no single local text mirror list with alternatives was found; continuing without a deadline."
+          fi
+        elif [[ "$status" != 0 ]]; then
+          exit "$status"
+        fi
+        "${as_root[@]}" rm -f "$download_only"
+        pnpm --dir ui exec playwright install-deps webkit
+        restore_apt
+        pnpm --dir ui exec playwright install webkit

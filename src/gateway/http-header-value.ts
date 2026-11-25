@@ -4,15 +4,12 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
+export function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export function getHeader(req: IncomingMessage, name: string): string | undefined {
-  const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Array.isArray(raw)) {
-    return raw[0];
-  }
-  return undefined;
+  return firstHeaderValue(req.headers[normalizeLowercaseStringOrEmpty(name)]);
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
-import { setPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
@@ -55,10 +55,12 @@ export function createModelRuntimeChoiceOwnerFixture(
     },
     ...facts,
   };
-  setPreparedModelRuntimeAuthStore(owner, {
-    version: 1,
-    profiles: {
-      "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-credential" },
+  bindPreparedModelRuntimeAuth(owner, {
+    store: {
+      version: 1,
+      profiles: {
+        "fixture:account": { type: "api_key", provider: "fixture", key: "synthetic-credential" },
+      },
     },
   });
   return owner;

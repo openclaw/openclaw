@@ -15,7 +15,10 @@ import {
 } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-type RuntimeRouteModel = {
+// Routed configless calls recompute enablement rather than using captured index state.
+const emptyRoutedConfig: OpenClawConfig = {};
+
+export type RuntimeRouteModel = {
   provider?: string;
   id?: string;
   api?: string | null;
@@ -77,17 +80,25 @@ export function validatePreparedRuntimeModel<Model extends RuntimeRouteModel>(
   params: PreparedRuntimeModelTarget & { model: Model },
 ): Model {
   validatePreparedTarget(params);
-  const { model, route } = params;
+  const { route } = params;
   if (route && !modelMatchesPreparedTarget({ ...params, route })) {
     throw new Error(
       `Caller-provided ${params.provider}/${params.modelId} metadata does not match its prepared ${route.authRequirement} route.`,
     );
   }
+  return validateModelRetirement(params);
+}
+
+function validateModelRetirement<Model extends RuntimeRouteModel>(
+  params: PreparedRuntimeModelTarget & { model: Model },
+): Model {
+  const { model, route } = params;
   const suppression = resolveBuiltInModelSuppressionFromManifest({
     provider: model.provider ?? params.provider,
     id: model.id ?? params.modelId,
     baseUrl: model.baseUrl,
-    config: params.config,
+    api: route?.api,
+    config: params.config ?? (route ? emptyRoutedConfig : undefined),
     workspaceDir: params.workspaceDir,
     metadataSnapshot: params.metadataSnapshot,
   });
@@ -118,12 +129,9 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   ): Promise<{ model?: Model | null; error?: string }>;
 }): Promise<Model | undefined> {
   const route = params.plan.modelRoute;
-  const config = route
-    ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
-    : params.config;
-  const target = { ...params, route, config };
+  const target = { ...params, route };
   const validateFinalModel = (model: Model | undefined): Model | undefined =>
-    model ? validatePreparedRuntimeModel({ ...target, model }) : undefined;
+    model ? validateModelRetirement({ ...target, model }) : undefined;
   if (!route && !params.forceResolve) {
     return validateFinalModel(params.model);
   }
@@ -142,7 +150,9 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
   }
 
   const resolved = await params.resolveModel({
-    config: config ?? {},
+    config: route
+      ? projectProviderModelRouteConfig({ provider: params.provider, config: params.config, route })
+      : (params.config ?? {}),
     authProfileId: params.plan.forwardedAuthProfileId,
     authProfileMode: route
       ? resolveProviderModelRouteMaterializationAuthMode({
@@ -159,6 +169,8 @@ export async function materializePreparedRuntimeModel<Model extends RuntimeRoute
           : `Unable to rematerialize ${params.provider}/${params.modelId} for its resolved auth profile.`),
     );
   }
+  // Resolution may await a provider; the shared route must still name this target.
+  validatePreparedTarget(target);
   // Validate only the final route: an API credential may replace retired subscription metadata.
   return validateFinalModel(resolved.model);
 }

@@ -5,14 +5,13 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  SQLITE_WORKER_MAX_QUEUED_BYTES,
-  SQLITE_WORKER_MAX_REQUESTS,
-} from "./sqlite-worker-broker.js";
+import { SQLITE_WORKER_MAX_REQUESTS_PER_WORKER } from "./sqlite-worker-broker.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 type PendingOperation = { context: OpenClawStateWorkerContext; settled: Promise<void> };
+
+const MAX_WEB_PUSH_RETAINED_BYTES = 64 * 1024 * 1024;
 
 const leases = createKeyedFifoLeaseRegistry(Symbol.for("openclaw.webPushStoreLeases"));
 const admissions = resolveGlobalSingleton(Symbol.for("openclaw.webPushStoreAdmissions"), () => {
@@ -40,8 +39,8 @@ async function runAdmittedScope<T>(
   const bytes = serialize(input).byteLength;
   if (
     bytes > SQLITE_WORKER_MAX_MESSAGE_BYTES ||
-    admissions.count >= SQLITE_WORKER_MAX_REQUESTS ||
-    admissions.bytes + bytes > SQLITE_WORKER_MAX_QUEUED_BYTES
+    admissions.count >= SQLITE_WORKER_MAX_REQUESTS_PER_WORKER ||
+    admissions.bytes + bytes > MAX_WEB_PUSH_RETAINED_BYTES
   ) {
     throw new SqliteWorkerError("Web Push storage admission capacity reached", "overloaded");
   }

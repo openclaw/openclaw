@@ -1,9 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isChannelAccountExplicitlyDisabled } from "../../channels/account-config-enabled.js";
+import {
+  channelHasConfiguredState,
+  resolveChannelAccount,
+} from "../../channels/account-resolution.js";
 import { resolveChannelAccountEnabled } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -20,37 +24,17 @@ export type MessageBroadcastAccountPlan = {
   secretChannels: ChannelId[];
 };
 
-function resolveListedAccountId(params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): string | undefined {
-  const listedAccountId = params.plugin.config
-    .listAccountIds(params.cfg)
-    .find((candidate) => normalizeOptionalAccountId(candidate) === params.accountId);
-  if (listedAccountId) {
-    return listedAccountId;
-  }
-  const defaultAccountId = resolveChannelDefaultAccountId({
-    plugin: params.plugin,
-    cfg: params.cfg,
-  });
-  return normalizeOptionalAccountId(defaultAccountId) === params.accountId
-    ? defaultAccountId
-    : undefined;
-}
-
 /**
  * Binds a caller-supplied message account to one listed channel account.
  * Host-derived defaults and binding accounts bypass this helper by design.
  */
-export function validateExplicitMessageAccountSelection(params: {
+export async function validateExplicitMessageAccountSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: unknown;
   plugin?: ChannelPlugin;
   checkResolvedAccount?: boolean;
-}): string | undefined {
+}): Promise<string | undefined> {
   const rawAccountId = normalizeOptionalString(params.accountId);
   if (!rawAccountId) {
     return undefined;
@@ -77,7 +61,15 @@ export function validateExplicitMessageAccountSelection(params: {
   if (!plugin) {
     return accountId;
   }
-  const listedAccountId = resolveListedAccountId({ plugin, cfg: params.cfg, accountId });
+  let listedAccountId = plugin.config
+    .listAccountIds(params.cfg)
+    .find((candidate) => normalizeOptionalAccountId(candidate) === accountId);
+  if (!listedAccountId) {
+    const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg: params.cfg });
+    if (normalizeOptionalAccountId(defaultAccountId) === accountId) {
+      listedAccountId = defaultAccountId;
+    }
+  }
   if (!listedAccountId) {
     throw new MessageActionDeniedError(
       `Unknown account "${rawAccountId}" for channel ${channel}.`,
@@ -85,47 +77,41 @@ export function validateExplicitMessageAccountSelection(params: {
       "message-account:known",
     );
   }
-  if (
-    isChannelAccountExplicitlyDisabled({
-      cfg: params.cfg,
-      channel: plugin.id,
-      accountId: listedAccountId,
-    })
-  ) {
-    throw new MessageActionDeniedError(
-      `Account "${listedAccountId}" for channel ${channel} is disabled.`,
-      "message_account_disabled",
-      "message-account:enabled",
-    );
-  }
-  if (params.checkResolvedAccount !== false) {
-    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
-    const account = plugin.config.resolveAccount(params.cfg, accountId);
-    if (!resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg })) {
+  const assertAccountEnabled = (isResolvedEnabled?: () => boolean) => {
+    if (
+      isChannelAccountExplicitlyDisabled({
+        cfg: params.cfg,
+        channel: plugin.id,
+        accountId: listedAccountId,
+      }) ||
+      (isResolvedEnabled && !isResolvedEnabled())
+    ) {
       throw new MessageActionDeniedError(
         `Account "${listedAccountId}" for channel ${channel} is disabled.`,
         "message_account_disabled",
         "message-account:enabled",
       );
     }
+  };
+  assertAccountEnabled();
+  if (params.checkResolvedAccount !== false) {
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    const account = await resolveChannelAccount({ plugin, cfg: params.cfg, accountId });
+    assertSecretOwnerAvailable("account", `${plugin.id}:${accountId}`);
+    assertAccountEnabled(() => resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg }));
   }
   return accountId;
 }
 
 /** Checks configured and enabled state after channel availability is resolved. */
-export function isPotentialConfiguredMessageChannel(params: {
+export async function isPotentialConfiguredMessageChannel(params: {
   cfg: OpenClawConfig;
   plugin: ChannelPlugin;
-}): params is { cfg: OpenClawConfig; plugin: ChannelPlugin & { id: ChannelId } } {
+}): Promise<boolean> {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.plugin.id
   ];
-  if (
-    channelConfig &&
-    typeof channelConfig === "object" &&
-    !Array.isArray(channelConfig) &&
-    (channelConfig as { enabled?: unknown }).enabled === false
-  ) {
+  if (!Array.isArray(channelConfig) && !isAccountEnabled(channelConfig)) {
     return false;
   }
   if (isConfiguredChannel(params.cfg, params.plugin.id)) {
@@ -133,7 +119,11 @@ export function isPotentialConfiguredMessageChannel(params: {
   }
   try {
     return (
-      params.plugin.config.hasConfiguredState?.({ cfg: params.cfg, env: process.env }) === true
+      (await channelHasConfiguredState({
+        plugin: params.plugin,
+        cfg: params.cfg,
+        env: process.env,
+      })) === true
     );
   } catch {
     return false;
@@ -145,11 +135,11 @@ export function isPotentialConfiguredMessageChannel(params: {
  * stay in candidateChannels for per-channel errors but cannot expose secrets.
  * Host-derived binding/default accounts do not use this explicit-account plan.
  */
-export function resolveMessageBroadcastAccountPlan(params: {
+export async function resolveMessageBroadcastAccountPlan(params: {
   cfg: OpenClawConfig;
   accountId: unknown;
-}): MessageBroadcastAccountPlan | undefined {
-  const accountId = validateExplicitMessageAccountSelection({
+}): Promise<MessageBroadcastAccountPlan | undefined> {
+  const accountId = await validateExplicitMessageAccountSelection({
     cfg: params.cfg,
     accountId: params.accountId,
     checkResolvedAccount: false,
@@ -158,14 +148,19 @@ export function resolveMessageBroadcastAccountPlan(params: {
     return undefined;
   }
 
-  const candidatePlugins = listRuntimeVisibleChannelPlugins().filter(
-    (plugin) =>
-      Boolean(resolveOutboundChannelPlugin({ channel: plugin.id, cfg: params.cfg })) &&
-      isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }),
-  );
-  const secretChannels = candidatePlugins.flatMap((plugin) => {
+  const candidatePlugins: ChannelPlugin[] = [];
+  for (const plugin of listRuntimeVisibleChannelPlugins()) {
+    if (
+      resolveOutboundChannelPlugin({ channel: plugin.id, cfg: params.cfg }) &&
+      (await isPotentialConfiguredMessageChannel({ cfg: params.cfg, plugin }))
+    ) {
+      candidatePlugins.push(plugin);
+    }
+  }
+  const secretChannels: ChannelId[] = [];
+  for (const plugin of candidatePlugins) {
     try {
-      validateExplicitMessageAccountSelection({
+      await validateExplicitMessageAccountSelection({
         cfg: params.cfg,
         channel: plugin.id,
         accountId,
@@ -175,17 +170,20 @@ export function resolveMessageBroadcastAccountPlan(params: {
       // Prefer the SecretRef-safe metadata view. Legacy plugins without it keep
       // their existing resolver contract; a resolver that cannot read refs fails closed.
       const inspection = plugin.config.inspectAccount?.(params.cfg, accountId);
-      const account = inspection ?? plugin.config.resolveAccount(params.cfg, accountId);
+      const account =
+        inspection ?? (await resolveChannelAccount({ plugin, cfg: params.cfg, accountId }));
       const enabled =
         account !== undefined &&
         (inspection != null
           ? isAccountEnabled(inspection)
           : resolveChannelAccountEnabled({ plugin, account, cfg: params.cfg }));
-      return enabled ? [plugin.id] : [];
+      if (enabled) {
+        secretChannels.push(plugin.id);
+      }
     } catch {
-      return [];
+      // Accounts whose runtime state cannot be resolved are excluded from secret redemption.
     }
-  });
+  }
 
   return {
     accountId,

@@ -1,12 +1,8 @@
-import type { TalkVoiceChangeEvent, TalkVoiceSelection } from "@openclaw/gateway-protocol";
-import { describe, expect, it, vi } from "vitest";
+import type { TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
-import {
-  RealtimeTalkVoiceSelection,
-  type RealtimeVoiceCall,
-  type RealtimeVoiceSelectionState,
-} from "./voice-selection.ts";
+import { RealtimeTalkVoiceSelection, type RealtimeVoiceCall } from "./voice-selection.ts";
 
 const change: TalkVoiceChangeEvent = {
   changeId: "change-1",
@@ -14,15 +10,6 @@ const change: TalkVoiceChangeEvent = {
   voiceSessionId: "old-call",
   voice: "spruce",
   phase: "requested",
-};
-const selection: TalkVoiceSelection = {
-  voiceSessionId: "old-call",
-  sessionKey: change.sessionKey,
-  provider: "openai",
-  model: "gpt-live-1-codex",
-  voice: "cove",
-  voices: ["cove", "spruce"],
-  canChange: true,
 };
 
 function fixture() {
@@ -32,13 +19,9 @@ function fixture() {
   let current: RealtimeVoiceCall | null = previous;
   let currentOwner = true;
   const started = createDeferred<RealtimeVoiceCall | undefined>();
-  const request = vi.fn(
-    async (method: string, _params?: unknown, _options?: unknown): Promise<unknown> =>
-      method === "talk.voice.get"
-        ? { ...selection, voiceSessionId: current?.getVoiceSessionId() }
-        : { ok: true },
-  );
-  const updates: RealtimeVoiceSelectionState[] = [];
+  const request = vi.fn(async (_method: string, _params?: unknown, _options?: unknown) => ({
+    ok: true,
+  }));
   const cancel = vi.fn(() => {
     current = null;
     controller.dispose();
@@ -63,7 +46,6 @@ function fixture() {
     isCurrent: () => currentOwner,
     restart,
     cancel,
-    update: (state) => updates.push(state),
   });
   return {
     controller,
@@ -71,7 +53,6 @@ function fixture() {
     previous,
     started,
     request,
-    updates,
     restart,
     cancel,
     listeners,
@@ -88,37 +69,32 @@ function fixture() {
 }
 
 describe("active Talk voice selection", () => {
+  let f: ReturnType<typeof fixture>;
+  beforeEach(() => {
+    f = fixture();
+  });
+  afterEach(() => f.controller.dispose());
   it.each(["ready-first", "start-first"])(
     "acknowledges a fresh call only after readiness and startup: %s",
     async (order) => {
-      const f = fixture();
-      try {
-        f.emit(change);
-        f.controller.ready(f.previous);
-        if (order === "ready-first") {
-          f.controller.ready(f.candidate);
-        } else {
-          f.started.resolve(f.candidate);
-        }
-        await Promise.resolve();
-        expect(f.completions()).toEqual([]);
-        if (order === "ready-first") {
-          f.started.resolve(f.candidate);
-        } else {
-          f.controller.ready(f.candidate);
-        }
-        await vi.waitFor(() => expect(f.completions()).toHaveLength(1));
-        expect(f.completions()[0]).toEqual([
-          "talk.voice.complete",
-          { changeId: change.changeId, voiceSessionId: "new-call", outcome: "ready" },
-          { timeoutMs: 70_000 },
-        ]);
-        f.controller.ready(f.candidate);
-        await Promise.resolve();
-        expect(f.completions()).toHaveLength(1);
-      } finally {
-        f.controller.dispose();
-      }
+      f.emit(change);
+      f.controller.ready(f.previous);
+      const ready = () => f.controller.ready(f.candidate);
+      const start = () => f.started.resolve(f.candidate);
+      const [first, second] = order === "ready-first" ? [ready, start] : [start, ready];
+      first();
+      await Promise.resolve();
+      expect(f.completions()).toEqual([]);
+      second();
+      await vi.waitFor(() => expect(f.completions()).toHaveLength(1));
+      expect(f.completions()[0]).toEqual([
+        "talk.voice.complete",
+        { changeId: change.changeId, voiceSessionId: "new-call", outcome: "ready" },
+        { timeoutMs: 70_000 },
+      ]);
+      f.controller.ready(f.candidate);
+      await Promise.resolve();
+      expect(f.completions()).toHaveLength(1);
     },
   );
 
@@ -129,26 +105,18 @@ describe("active Talk voice selection", () => {
   ])(
     "ignores an event outside its exact call contract: $sessionKey/$voiceSessionId/$phase",
     (payload) => {
-      const f = fixture();
-      try {
-        f.emit(payload);
-        expect(f.restart).not.toHaveBeenCalled();
-      } finally {
-        f.controller.dispose();
-      }
+      f.emit(payload);
+      expect(f.restart).not.toHaveBeenCalled();
     },
   );
 
   it("ignores matching IDs after the owning client or chat has changed", () => {
-    const f = fixture();
     f.loseOwner();
     f.emit(change);
     expect(f.restart).not.toHaveBeenCalled();
-    f.controller.dispose();
   });
 
   it("cancels only its matching operation and rejects late startup/readiness", async () => {
-    const f = fixture();
     f.emit(change);
     f.emit({ ...change, phase: "cancelled", changeId: "other-change" });
     expect(f.cancel).not.toHaveBeenCalled();
@@ -162,7 +130,6 @@ describe("active Talk voice selection", () => {
   });
 
   it("reports failure on Stop without accepting a late ready event", async () => {
-    const f = fixture();
     f.emit(change);
     f.controller.dispose();
     f.started.resolve(f.candidate);
@@ -174,7 +141,6 @@ describe("active Talk voice selection", () => {
   });
 
   it("propagates replacement audio failure before readiness", async () => {
-    const f = fixture();
     f.emit(change);
     f.controller.failed(f.candidate);
     f.started.resolve(f.candidate);
@@ -186,42 +152,5 @@ describe("active Talk voice selection", () => {
       outcome: "failed",
       voiceSessionId: "new-call",
     });
-  });
-
-  it("uses the Gateway selection without inventing a default and gives set the full operation budget", async () => {
-    const f = fixture();
-    try {
-      f.request.mockResolvedValueOnce({ ...selection, voice: undefined });
-      await f.controller.refresh();
-      expect(f.updates.at(-1)?.selection?.voice).toBeUndefined();
-      await f.controller.set("unsupported");
-      expect(f.request.mock.calls.some(([method]) => method === "talk.voice.set")).toBe(false);
-      f.request.mockResolvedValueOnce({ ...selection, voice: "spruce", status: "applied" });
-      await f.controller.set("spruce");
-      expect(f.request).toHaveBeenLastCalledWith(
-        "talk.voice.set",
-        {
-          sessionKey: change.sessionKey,
-          voiceSessionId: "old-call",
-          voice: "spruce",
-        },
-        { timeoutMs: 70_000 },
-      );
-      expect(f.updates.at(-1)?.selection?.voice).toBe("spruce");
-    } finally {
-      f.controller.dispose();
-    }
-  });
-
-  it("drops a catalog result after losing its owning client", async () => {
-    const f = fixture();
-    const result = createDeferred<TalkVoiceSelection>();
-    f.request.mockReturnValueOnce(result.promise);
-    const loading = f.controller.refresh();
-    f.loseOwner();
-    result.resolve(selection);
-    await loading;
-    expect(f.updates).toEqual([]);
-    f.controller.dispose();
   });
 });

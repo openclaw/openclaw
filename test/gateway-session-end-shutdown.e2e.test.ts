@@ -1,85 +1,59 @@
-// A real Gateway process must finish reset-started plugin work before SIGTERM exit.
+import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { afterEach, expect, it, vi } from "vitest";
 import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
+  writeRestartPlugin,
+  readRestartTrace as readTrace,
+} from "./gateway-restart.test-support.js";
+import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const PLUGIN_ID = "session-end-shutdown-proof";
 const SESSION_KEY = "agent:main:dashboard:session-end-shutdown-proof";
-const HOOK_DELAY_MS = 10_000;
-const TEST_TIMEOUT_MS = 120_000;
 const WAIT_OPTIONS = { timeout: 10_000, interval: 25 } as const;
 
-const instances: OpenClawTestInstance[] = [];
-const fixtureDirs: string[] = [];
+const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map(async (instance) => await instance.cleanup()));
-  await Promise.all(
-    fixtureDirs.splice(0).map(async (dir) => await rm(dir, { recursive: true, force: true })),
-  );
-});
-
-async function writeSessionEndPlugin(pluginDir: string, tracePath: string): Promise<void> {
-  await mkdir(pluginDir, { recursive: true });
-  await writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify({
+it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {
+  const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
+  const pluginDir = path.join(fixtureDir, "plugin");
+  const tracePath = path.join(fixtureDir, "session-end.trace");
+  const releasePath = path.join(fixtureDir, "release-hook");
+  await writeRestartPlugin(
+    pluginDir,
+    {
       id: PLUGIN_ID,
       name: "Session End Shutdown Proof",
       activation: { onStartup: true },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
-    })}\n`,
+    },
+    `import { appendFileSync, watch } from "node:fs";
+export default {
+  id: ${JSON.stringify(PLUGIN_ID)},
+  register(api) {
+    api.on("session_end", async (event) => {
+      if (event.sessionKey !== ${JSON.stringify(SESSION_KEY)} || event.reason !== "reset") return;
+      await new Promise((resolve) => {
+        const watcher = watch(${JSON.stringify(fixtureDir)}, (_event, filename) => {
+          if (filename !== "release-hook") return;
+          watcher.close();
+          resolve();
+        });
+        appendFileSync(${JSON.stringify(tracePath)}, "started\\n");
+      });
+      appendFileSync(${JSON.stringify(tracePath)}, "completed\\n");
+    });
+  },
+};
+`,
   );
-  await writeFile(
-    path.join(pluginDir, "index.mjs"),
-    [
-      'import { appendFileSync } from "node:fs";',
-      "export default {",
-      `  id: ${JSON.stringify(PLUGIN_ID)},`,
-      "  register(api) {",
-      '    api.on("session_end", async (event) => {',
-      `      if (event.sessionKey !== ${JSON.stringify(SESSION_KEY)} || event.reason !== "reset") return;`,
-      `      appendFileSync(${JSON.stringify(tracePath)}, "started\\n");`,
-      `      await new Promise((resolve) => setTimeout(resolve, ${HOOK_DELAY_MS}));`,
-      `      appendFileSync(${JSON.stringify(tracePath)}, "completed\\n");`,
-      "    });",
-      "  },",
-      "};",
-      "",
-    ].join("\n"),
-  );
-}
-
-async function readTrace(tracePath: string): Promise<string[]> {
-  try {
-    return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-}
-
-describe("Gateway session-end shutdown", () => {
-  it(
-    "finishes a real reset-started session_end hook after an operating-system SIGTERM",
-    async () => {
-      const fixtureDir = await mkdtemp(path.join(tmpdir(), "openclaw-session-end-shutdown-"));
-      fixtureDirs.push(fixtureDir);
-      const pluginDir = path.join(fixtureDir, "plugin");
-      const tracePath = path.join(fixtureDir, "session-end.trace");
-      await writeSessionEndPlugin(pluginDir, tracePath);
-
-      const config = {
+  await withBuiltGateway(
+    {
+      name: "session-end-shutdown",
+      config: {
         plugins: {
           enabled: true,
           allow: [PLUGIN_ID],
@@ -87,53 +61,35 @@ describe("Gateway session-end shutdown", () => {
           entries: { [PLUGIN_ID]: { enabled: true } },
           slots: { memory: "none" },
         },
-      } satisfies OpenClawConfig;
-      const instance = await createOpenClawTestInstance({
-        name: "session-end-shutdown",
-        config,
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
-        stopTimeoutMs: 10_000,
-      });
-      instances.push(instance);
-      await instance.startGateway();
-
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
-
-      try {
-        await vi.waitFor(async () => {
-          const created = await client.request<{ key: string; sessionId: string }>(
-            "sessions.create",
-            { agentId: "main", key: SESSION_KEY },
-          );
-          expect(created.key).toBe(SESSION_KEY);
-          expect(created.sessionId).toBeTruthy();
-        }, WAIT_OPTIONS);
-
-        await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
-        await vi.waitFor(async () => {
-          expect(await readTrace(tracePath), instance.logs()).toEqual(["started"]);
-        }, WAIT_OPTIONS);
-
-        const child = instance.child;
-        if (!child) {
-          throw new Error("Gateway process exited before its session-end hook was signaled");
-        }
-        const exited = once(child, "exit") as Promise<
-          [code: number | null, signal: NodeJS.Signals | null]
-        >;
-        expect(child.kill("SIGTERM")).toBe(true);
-
-        await expect(exited).resolves.toEqual([0, null]);
-        await expect(readTrace(tracePath)).resolves.toEqual(["started", "completed"]);
-      } finally {
-        await disconnectGatewayClient(client).catch(() => undefined);
-      }
+      },
+      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      stopTimeoutMs: 10_000,
+      // Signal the Gateway itself before the custody owner cancels its worker tree.
+      gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
     },
-    TEST_TIMEOUT_MS,
+    async (client, instance) => {
+      await vi.waitFor(
+        () => client.request("sessions.create", { agentId: "main", key: SESSION_KEY }),
+        WAIT_OPTIONS,
+      );
+
+      await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
+      await vi.waitFor(async () => {
+        expect(await readTrace(tracePath), instance.logs()).toEqual(["started"]);
+      }, WAIT_OPTIONS);
+
+      const child = instance.child;
+      assert(child, "Gateway process exited before its session-end hook was signaled");
+      const exited = once(child, "exit");
+      expect(child.kill("SIGTERM")).toBe(true);
+      await vi.waitFor(() => {
+        expect(instance.logs()).toContain("received SIGTERM; shutting down");
+      }, WAIT_OPTIONS);
+      await fs.writeFile(releasePath, "release");
+
+      await expect(exited).resolves.toEqual([0, null]);
+      await expect(readTrace(tracePath)).resolves.toEqual(["started", "completed"]);
+    },
+    { role: "operator", scopes: ["operator.admin", "operator.read", "operator.write"] },
   );
-});
+}, 120_000);

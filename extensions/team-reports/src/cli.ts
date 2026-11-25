@@ -9,8 +9,8 @@ import { periodSchema } from "./periods.js";
 
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
 
-async function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
-  return await callGatewayFromCli(`team-reports.${method}`, options, params, {
+function request(method: string, options: GatewayRpcOpts, params: unknown): Promise<unknown> {
+  return callGatewayFromCli(`team-reports.${method}`, options, params, {
     mode: "cli",
     scopes: method === "generate" ? ["operator.admin"] : ["operator.read"],
   });
@@ -18,6 +18,14 @@ async function request(method: string, options: GatewayRpcOpts, params: unknown)
 
 function writeResult(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function parseCliValue<T>(schema: z.ZodType<T>, value: string, message: string): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new Error(message);
+  }
+  return result.data;
 }
 
 export function registerTeamReportsCli({ program }: Pick<CliContext, "program">): void {
@@ -43,7 +51,15 @@ export function registerTeamReportsCli({ program }: Pick<CliContext, "program">)
       await request(
         "list",
         options,
-        options.period ? { period: periodSchema.parse(options.period) } : {},
+        options.period
+          ? {
+              period: parseCliValue(
+                periodSchema,
+                options.period,
+                "--period must be day, week, or month.",
+              ),
+            }
+          : {},
       ),
     );
   });
@@ -59,7 +75,7 @@ export function registerTeamReportsCli({ program }: Pick<CliContext, "program">)
     async (period: string, key: string, options: GatewayRpcOpts & { markdown?: boolean }) => {
       const format = options.json && !options.markdown ? "json" : "markdown";
       const result = await request("get", options, {
-        period: periodSchema.parse(period),
+        period: parseCliValue(periodSchema, period, "<period> must be day, week, or month."),
         key,
         format,
       });
@@ -82,7 +98,15 @@ export function registerTeamReportsCli({ program }: Pick<CliContext, "program">)
     writeResult(
       await request("generate", options, {
         period: "day",
-        ...(options.date ? { date: z.iso.date().parse(options.date) } : {}),
+        ...(options.date
+          ? {
+              date: parseCliValue(
+                z.iso.date(),
+                options.date,
+                "--date must be a UTC day in YYYY-MM-DD form.",
+              ),
+            }
+          : {}),
         ...(options.intraday ? { intraday: true } : {}),
       }),
     );

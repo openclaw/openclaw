@@ -44,6 +44,11 @@ instead of repeating `/new`. See
 [Codex harness troubleshooting](/plugins/codex-harness/troubleshooting).
 </Note>
 
+Known provider failures include recovery guidance even when the harness returns
+no assistant reply. Unrecognized failures keep a generic message; raw provider
+diagnostics stay in the logs. If a warning says tool actions may have already
+run, check their results before retrying.
+
 ## Oversized harness messages
 
 The acpx backend limits each incoming ACP message from a harness to 64 MiB of

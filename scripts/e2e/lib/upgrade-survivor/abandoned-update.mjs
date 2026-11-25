@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { readDatabase } from "./observations.mjs";
 
 const runId = "f9bdb286-8f8a-4b72-a792-3ca83ad07605";
 const postCoreRunId = "2ff0cdf2-7fcb-4070-a901-4c4c520253bb";
@@ -223,6 +224,7 @@ function installed(packageRoot, artifactRoot) {
 
 function recovered(stateDir, artifactRoot, postCore = false) {
   const prefix = postCore ? "full-repair" : "repair";
+  const outputPrefix = postCore ? "recovery-update" : "repair";
   const statusPrefix = postCore ? "full-repair-status" : "update-status";
   const selectedRunId = postCore ? postCoreRunId : runId;
   const before = readJson(path.join(artifactRoot, `${prefix}-service-before.json`));
@@ -231,8 +233,8 @@ function recovered(stateDir, artifactRoot, postCore = false) {
   const statusExit = Number(
     fs.readFileSync(path.join(artifactRoot, `${statusPrefix}.exit`), "utf8"),
   );
-  const repairOutput = fs.readFileSync(path.join(artifactRoot, `${prefix}.json`), "utf8");
-  const repairError = fs.readFileSync(path.join(artifactRoot, `${prefix}.err`), "utf8");
+  const repairOutput = fs.readFileSync(path.join(artifactRoot, `${outputPrefix}.json`), "utf8");
+  const repairError = fs.readFileSync(path.join(artifactRoot, `${outputPrefix}.err`), "utf8");
   const row = withDatabase(stateDir, false, (db) => readRun(db, selectedRunId));
   const operations = after.operations.slice(before.operations.length);
   const callers = after.callers.slice(before.callers.length);
@@ -338,22 +340,27 @@ function createDeadlineHook(packageRoot, artifactRoot) {
     .readdirSync(dist)
     .filter((file) => /\.[cm]?js$/u.test(file))
     .map((file) => ({
+      name: file,
       url: pathToFileURL(path.join(dist, file)).href,
       source: fs.readFileSync(path.join(dist, file), "utf8"),
     }));
-  const marker = "async function updatePluginsAfterCoreUpdate(params) {";
-  const plugins = modules.filter((module) => module.source.includes(marker));
+  const declaration = /async function updatePluginsAfterCoreUpdate\((\w+)\)\s*\{/u;
+  const plugins = modules.filter(
+    (module) =>
+      module.name.startsWith("update-command-plugins-") && declaration.test(module.source),
+  );
   const mutations = modules.filter((module) =>
     /mutateConfigFileWithRetry as \w+/u.test(module.source),
   );
   assert.equal(plugins.length, 1, "one built plugin-convergence owner must be injectable");
   assert.equal(mutations.length, 1, "one built config mutation owner must be exported");
+  const [marker, params] = declaration.exec(plugins[0].source);
   const mutationExport = /mutateConfigFileWithRetry as (\w+)/u.exec(mutations[0].source)[1];
   const output = path.join(artifactRoot, "repair-deadline-hook.mjs");
   fs.writeFileSync(
     output,
     `
-import { registerHooks } from 'node:module';
+import nodeModule from 'node:module';
 import fs from 'node:fs';
 const update = process.argv.indexOf('update');
 if (update >= 2 && process.argv[update + 1] === 'repair') {
@@ -375,12 +382,12 @@ if (update >= 2 && process.argv[update + 1] === 'repair') {
       throw error;
     }
   };
-  registerHooks({ load(url, context, nextLoad) {
+  nodeModule.registerHooks({ load(url, context, nextLoad) {
     const loaded = nextLoad(url, context);
     if (url !== ${JSON.stringify(plugins[0].url)}) return loaded;
     const source = typeof loaded.source === 'string' ? loaded.source : Buffer.from(loaded.source).toString('utf8');
     if (!source.includes(${JSON.stringify(marker)})) throw new Error('Plugin deadline injection target changed');
-    return { ...loaded, source: source.replace(${JSON.stringify(marker)}, ${JSON.stringify(`${marker}\n  await globalThis[Symbol.for('openclaw.e2e.repair-deadline')](params);`)}) };
+    return { ...loaded, source: source.replace(${JSON.stringify(marker)}, ${JSON.stringify(`${marker}\n  await globalThis[Symbol.for('openclaw.e2e.repair-deadline')](${params});`)}) };
   }});
 }
 `,
@@ -411,9 +418,8 @@ function verifyDeadlineRecovery(stateDir, artifacts) {
     assert(roles.includes("update"));
     assert(!roles.includes("doctor"));
   }
-  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
   let warning;
-  try {
+  readDatabase(path.join(stateDir, "state", "openclaw.sqlite"), (db) => {
     const run = db
       .prepare(
         "SELECT status, reason, steps_json FROM update_runs ORDER BY created_at_ms DESC LIMIT 1",
@@ -436,9 +442,7 @@ function verifyDeadlineRecovery(stateDir, artifacts) {
         .get().n,
       0,
     );
-  } finally {
-    db.close();
-  }
+  });
   const stderr = fs.readFileSync(path.join(artifacts, "deadline-repair.err"), "utf8");
   assert(stderr.includes("Gateway restarted and verified after Doctor repair."));
   for (const line of stderr.split("\n")) {

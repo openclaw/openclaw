@@ -1,5 +1,10 @@
+import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
+import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
+  UPDATE_REPAIR_TEXT_MAX_CHARS,
   updateRepairParentMessageSchema,
   type UpdateRepairWorkerMessage,
 } from "./update-repair-protocol.js";
@@ -8,31 +13,80 @@ import {
 // wire contract, but leave inference and operator state to post-failure triage.
 const deferredReason =
   "Inference repair is deferred until after the update has failed. Updates do not require inference.";
-let finished = false;
+const controller = new AbortController();
+const work = new AsyncWorkScope();
+// Capture authority admission before a rehearsal target can project different state paths.
+const admissionEnv = { ...process.env };
+const pendingSends = new Set<Promise<void>>();
+let started = false;
+let closing = false;
+let finalExitCode = 0;
+let execution = Promise.resolve();
 
-function send(message: UpdateRepairWorkerMessage, complete?: () => void): void {
-  if (
-    !process.connected ||
-    !process.send ||
-    Buffer.byteLength(JSON.stringify(message)) > UPDATE_REPAIR_IPC_MAX_BYTES
-  ) {
-    process.exit(1);
-  }
-  process.send(message, (error) => {
-    if (error) {
-      process.exit(1);
+function send(message: UpdateRepairWorkerMessage): Promise<void> {
+  const sending = new Promise<void>((resolve, reject) => {
+    if (
+      !process.connected ||
+      !process.send ||
+      Buffer.byteLength(JSON.stringify(message)) > UPDATE_REPAIR_IPC_MAX_BYTES
+    ) {
+      reject(new Error("Repair orchestrator disconnected."));
+      return;
     }
-    complete?.();
+    process.send(message, (error) => (error ? reject(error) : resolve()));
+  });
+  pendingSends.add(sending);
+  void sending.then(
+    () => pendingSends.delete(sending),
+    (error: unknown) => {
+      pendingSends.delete(sending);
+      stop(1, error);
+    },
+  );
+  return sending;
+}
+
+function stop(code: number, reason?: unknown, messages: UpdateRepairWorkerMessage[] = []): void {
+  if (code !== 0) {
+    finalExitCode = code;
+  }
+  if (closing) {
+    return;
+  }
+  closing = true;
+  controller.abort(reason ?? new Error("Repair worker finished."));
+  work.beginClose(controller.signal.reason);
+  // Fence input now; settle an accepted turn before releasing its native owners.
+  process.off("message", onMessage);
+  void runOutsideAsyncWorkScope(async () => {
+    try {
+      await startup.catch(() => undefined);
+      await execution;
+      await work.drain();
+      await drainGlobalSingletonLifecycleState();
+      for (const message of messages) {
+        await send(message);
+      }
+    } catch {
+      finalExitCode = 1;
+      process.stderr.write("Update repair worker failed while settling execution or cleanup.\n");
+    } finally {
+      await Promise.allSettled(pendingSends);
+      process.off("disconnect", onDisconnect);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      process.stdin.destroy();
+      if (process.connected) {
+        process.disconnect?.();
+      }
+      process.exitCode = finalExitCode;
+    }
   });
 }
 
-function finish(status: "unavailable" | "aborted", reason: string): void {
-  if (finished) {
-    return;
-  }
-  finished = true;
-  send({ type: "event", event: { type: "stopped", status, reason } });
-  send(
+function finish(status: "unavailable" | "aborted", reason: string, exitCode = 0): void {
+  stop(exitCode, exitCode !== 0 ? new Error(reason) : undefined, [
+    { type: "event", event: { type: "stopped", status, reason } },
     {
       type: "result",
       result: {
@@ -42,29 +96,98 @@ function finish(status: "unavailable" | "aborted", reason: string): void {
         reason,
       },
     },
-    () => process.exit(0),
-  );
+  ]);
 }
 
-process.once("disconnect", () => process.exit(0));
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => finish("aborted", "Repair worker cancelled."));
+// Error termination paths route through finish(...) so the orchestrator receives
+// a stopped event and a result message carrying the failure reason, matching the
+// worker's other exit paths, while still surfacing a non-zero exit code.
+// The reason is bounded to the protocol's text limit so the released response
+// parser never rejects the diagnostic (e.g. multi-field Zod parse errors).
+function fail(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = truncateUtf8Prefix(message, UPDATE_REPAIR_TEXT_MAX_CHARS);
+  finish("aborted", reason, 1);
 }
-process.on("message", (raw: unknown) => {
+
+function onDisconnect(): void {
+  stop(started ? 1 : 0, new Error("Repair orchestrator disconnected."));
+}
+function onSignal(): void {
+  const error = new Error("Repair worker cancelled.");
+  controller.abort(error);
+  if (!started) {
+    finish("aborted", error.message);
+  }
+}
+function onMessage(raw: unknown): void {
+  if (closing) {
+    return;
+  }
   try {
     if (Buffer.byteLength(JSON.stringify(raw)) > UPDATE_REPAIR_IPC_MAX_BYTES) {
       throw new Error("Repair request exceeded its bounded diagnostic budget.");
     }
     const message = updateRepairParentMessageSchema.parse(raw);
     if (message.type === "cancel") {
-      finish("aborted", message.reason);
-    } else if (message.type === "start") {
-      finish("unavailable", deferredReason);
-    } else {
+      controller.abort(new Error(message.reason));
+      if (!started) {
+        finish("aborted", message.reason);
+      }
+      return;
+    }
+    if (message.type === "validation-result" || message.type === "validation-error") {
       throw new Error("Repair worker did not request validation.");
     }
-  } catch {
-    process.exit(1);
+    if (started) {
+      throw new Error("Repair worker already owns an execution.");
+    }
+    started = true;
+    if (message.type === "start") {
+      finish("unavailable", deferredReason);
+      return;
+    }
+    execution = startup
+      .then(() =>
+        work.track(async () => {
+          controller.signal.throwIfAborted();
+          const { runDelegatedUpdateRepairTurn } = await import("./update-repair-turn-worker.js");
+          controller.signal.throwIfAborted();
+          const result = await runDelegatedUpdateRepairTurn(
+            message,
+            admissionEnv,
+            controller.signal,
+            (route) => {
+              void send({ type: "event", event: { type: "route-selected", ...route } }).catch(
+                () => {},
+              );
+            },
+          );
+          if (!closing) {
+            stop(0, undefined, [{ type: "turn-result", result }]);
+          }
+        }),
+      )
+      .catch((error: unknown) => fail(error));
+  } catch (error) {
+    fail(error);
   }
-});
-send({ type: "ready", candidateRehearsal: true });
+}
+process.once("disconnect", onDisconnect);
+process.on("SIGINT", onSignal);
+process.on("SIGTERM", onSignal);
+process.on("message", onMessage);
+const startup = Promise.resolve().then(() => withCliProcessScope(retainCliProcessJobUntilExit));
+void startup.then(
+  () => {
+    if (!closing) {
+      void send({
+        type: "ready",
+        candidateRehearsal: true,
+        repairTurns: true,
+        executorDelegation: "pid-start-v1",
+      }).catch(() => {});
+    }
+  },
+  (error: unknown) => fail(error),
+);

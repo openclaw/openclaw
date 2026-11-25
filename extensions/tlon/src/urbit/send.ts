@@ -1,24 +1,13 @@
-// Tlon plugin module implements send behavior.
 import { scot, da } from "@urbit/aura";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { UrbitSSEClient } from "./sse-client.js";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
-type TlonPokeApi = {
-  poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
-};
-
-type SendTextParams = {
-  api: TlonPokeApi;
-  fromShip: string;
-  toShip: string;
-  text: string;
-};
-
 type SendStoryParams = {
-  api: TlonPokeApi;
+  api: { poke: (...args: Parameters<UrbitSSEClient["poke"]>) => Promise<unknown> };
   fromShip: string;
   toShip: string;
   story: Story;
@@ -43,18 +32,39 @@ function createTlonSendReceipt(params: {
   });
 }
 
-export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
-  const story: Story = markdownToStory(text);
-  return sendDmWithStory({ api, fromShip, toShip, story, kind: "text" });
+export async function sendDm({
+  text,
+  ...params
+}: Omit<SendStoryParams, "story" | "kind"> & { text: string }) {
+  return sendDmWithStory({ ...params, story: markdownToStory(text), kind: "text" });
 }
 
-export async function sendDmWithStory({
+export async function sendDmWithStory({ toShip, ...params }: SendStoryParams) {
+  return sendChatWithStory({ ...params, target: { kind: "dm", ship: toShip } });
+}
+
+type SendClubStoryParams = Omit<SendStoryParams, "toShip"> & { clubId: string };
+
+export async function sendClubMessage({
+  text,
+  ...params
+}: Omit<SendClubStoryParams, "story" | "kind"> & { text: string }) {
+  return sendClubMessageWithStory({ ...params, story: markdownToStory(text), kind: "text" });
+}
+
+export async function sendClubMessageWithStory({ clubId, ...params }: SendClubStoryParams) {
+  return sendChatWithStory({ ...params, target: { kind: "club", clubId } });
+}
+
+async function sendChatWithStory({
   api,
   fromShip,
-  toShip,
+  target,
   story,
   kind = "unknown",
-}: SendStoryParams) {
+}: Omit<SendStoryParams, "toShip"> & {
+  target: { kind: "dm"; ship: string } | { kind: "club"; clubId: string };
+}) {
   const sentAt = Date.now();
   const idUd = scot("ud", da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -71,61 +81,36 @@ export async function sendDmWithStory({
     },
   };
 
-  const action = {
-    ship: toShip,
-    diff: { id, delta },
-  };
+  const diff = { id, delta };
+  const conversationId = target.kind === "dm" ? target.ship : `club:${target.clubId}`;
 
   await api.poke({
     app: "chat",
-    mark: "chat-dm-action",
-    json: action,
+    mark: target.kind === "dm" ? "chat-dm-action" : "chat-club-action",
+    json:
+      target.kind === "dm"
+        ? { ship: target.ship, diff }
+        : { id: target.clubId, diff: { uid: "0v0", delta: { writ: diff } } },
   });
 
   return {
     channel: "tlon",
     messageId: id,
-    receipt: createTlonSendReceipt({ messageId: id, conversationId: toShip, kind }),
+    receipt: createTlonSendReceipt({ messageId: id, conversationId, kind }),
   };
 }
 
-type SendGroupParams = {
-  api: TlonPokeApi;
-  fromShip: string;
+type SendGroupStoryParams = Omit<SendStoryParams, "toShip"> & {
   hostShip: string;
   channelName: string;
-  text: string;
   replyToId?: string | null;
-};
-
-type SendGroupStoryParams = {
-  api: TlonPokeApi;
-  fromShip: string;
-  hostShip: string;
-  channelName: string;
-  story: Story;
-  replyToId?: string | null;
-  kind?: MessageReceiptPartKind;
 };
 
 export async function sendGroupMessage({
-  api,
-  fromShip,
-  hostShip,
-  channelName,
   text,
-  replyToId,
-}: SendGroupParams) {
-  const story: Story = markdownToStory(text);
-  return sendGroupMessageWithStory({
-    api,
-    fromShip,
-    hostShip,
-    channelName,
-    story,
-    replyToId,
-    kind: "text",
-  });
+  ...params
+}: Omit<SendGroupStoryParams, "story" | "kind"> & { text: string }) {
+  return sendGroupMessageWithStory({ ...params, story: markdownToStory(text), kind: "text" });
 }
 
 export async function sendGroupMessageWithStory({
@@ -142,47 +127,18 @@ export async function sendGroupMessageWithStory({
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
-    try {
-      // scot('ud', n) formats a number as @ud with dots
-      formattedReplyId = scot("ud", BigInt(replyToId));
-    } catch {
-      // Fall back to raw ID if formatting fails
-    }
+    formattedReplyId = scot("ud", BigInt(replyToId));
   }
 
+  const memo = { content: story, author: fromShip, sent: sentAt };
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: formattedReplyId
-        ? {
-            // Thread reply - needs post wrapper around reply action
-            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
-            post: {
-              reply: {
-                id: formattedReplyId,
-                action: {
-                  add: {
-                    content: story,
-                    author: fromShip,
-                    sent: sentAt,
-                  },
-                },
-              },
-            },
-          }
-        : {
-            // Regular post
-            post: {
-              add: {
-                content: story,
-                author: fromShip,
-                sent: sentAt,
-                kind: "/chat",
-                blob: null,
-                meta: null,
-              },
-            },
-          },
+      action: {
+        post: formattedReplyId
+          ? { reply: { id: formattedReplyId, action: { add: memo } } }
+          : { add: { ...memo, kind: "/chat", blob: null, meta: null } },
+      },
     },
   };
 
@@ -204,24 +160,18 @@ export async function sendGroupMessageWithStory({
   };
 }
 
-/**
- * Build a story with text and optional media (image)
- */
 export function buildMediaStory(text: string | undefined, mediaUrl: string | undefined): Story {
   const story: Story = [];
   const cleanText = text?.trim() ?? "";
   const cleanUrl = mediaUrl?.trim() ?? "";
 
-  // Add text content if present
   if (cleanText) {
     story.push(...markdownToStory(cleanText));
   }
 
-  // Add image block if URL looks like an image
   if (cleanUrl && isImageUrl(cleanUrl)) {
     story.push(createImageBlock(cleanUrl, ""));
   } else if (cleanUrl) {
-    // For non-image URLs, add as a link
     story.push({ inline: [{ link: { href: cleanUrl, content: cleanUrl } }] });
   }
 

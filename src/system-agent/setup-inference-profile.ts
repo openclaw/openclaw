@@ -1,21 +1,18 @@
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 
 /** A pinned profile must exist and belong to the route before any request leaves the host. */
-export function resolveSetupInferenceProfileError(
+export async function resolveSetupInferenceProfileError(
   route: SystemAgentConfiguredRoute,
   workspaceDir: string,
-  deps: ActivateSetupInferenceDeps,
-): string | undefined {
+): Promise<string | undefined> {
   const profileId = route.authProfileId?.trim();
   if (!profileId) {
     return undefined;
   }
-  const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-  const store = loadStore(route.agentDir, {
+  const store = await loadAuthProfileStoreForRuntimeAsync(route.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     config: route.runConfig,

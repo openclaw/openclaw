@@ -2,9 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -40,48 +43,94 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([
-    { workdir: undefined, directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: false },
-    { workdir: ".", directory: "workspace", pty: true },
-    { workdir: "nested", directory: "workspace/nested", pty: false },
-    { workdir: "~", directory: "workspace/~", pty: false },
-    { workdir: "../sibling", directory: "sibling", pty: false },
-    { workdir: "absolute", directory: "sibling", pty: false },
-  ])("executes in $directory for workdir=$workdir (PTY=$pty)", async (testCase) => {
-    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
-    const tools = createCoreCodingTools({
+  function createExecTool(
+    sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"],
+    participation = false,
+    defaults: Partial<ExecToolDefaults> = {},
+  ) {
+    return createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
       includeBaseCodingTools: false,
       shellTools: "full",
       workspaceOnly: false,
       readOnly: false,
+      sandbox,
       applyPatchEnabled: false,
       applyPatchWorkspaceOnly: true,
       execDefaults: {
-        host: "gateway",
+        host: sandbox ? "sandbox" : "gateway",
+        participation,
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
         config: { plugins: { enabled: false } },
+        ...defaults,
       },
       processDefaults: {},
-    });
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("Expected the coding exec tool");
-    }
-    const workdir = testCase.workdir === "absolute" ? path.join(root, "sibling") : testCase.workdir;
-    const result = await exec.execute("coding-workdir", {
+    }).find((tool) => tool.name === "exec")!;
+  }
+
+  it.each([
+    [undefined, "workspace", false],
+    [".", "workspace", true],
+    ["nested", "workspace/nested", false],
+    ["~", "workspace/~", false],
+    ["../sibling", "sibling", false],
+    ["absolute", "sibling", false],
+  ] as const)("executes for workdir=%s in %s (PTY=%s)", async (input, directory, pty) => {
+    expect(fs.realpathSync(process.cwd())).not.toBe(codingRoot);
+    const workdir = input === "absolute" ? path.join(root, "sibling") : input;
+    const result = await createExecTool().execute("coding-workdir", {
       command: process.platform === "win32" ? "(Get-Location).Path" : "pwd -P",
       workdir,
-      pty: testCase.pty,
+      pty,
     });
-    const expectedCwd = fs.realpathSync(path.join(root, testCase.directory));
+    const expectedCwd = fs.realpathSync(path.join(root, directory));
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0, cwd: expectedCwd });
     const output = result.content.find((content) => content.type === "text")?.text;
     expect(output?.trim()).toBe(expectedCwd);
+  });
+
+  it("confines participant process starts before auto-review, including symlink escapes", async () => {
+    const reviewer = vi.fn(
+      () => ({ decision: "allow-once", risk: "low", rationale: "fixture" }) as const,
+    );
+    const tool = createExecTool(undefined, true, { mode: "auto", autoReviewer: reviewer });
+    fs.symlinkSync(path.join(root, "sibling"), path.join(codingRoot, "escape"), "dir");
+    for (const workdir of [path.join(root, "sibling"), "../sibling", "escape"]) {
+      await expect(tool.execute("outside", { command: "pwd -P", workdir })).rejects.toThrow(
+        /participation root/,
+      );
+    }
+    expect(reviewer).not.toHaveBeenCalled();
+    await expect(
+      tool.prepareBeforeToolCallParams?.({ command: "pwd -P", workdir: "escape" }, {}),
+    ).rejects.toThrow(/participation root/);
+    for (const workdir of [undefined, "nested", path.join(codingRoot, "nested")]) {
+      const result = await tool.execute("inside", { command: "pwd -P", workdir });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        cwd: fs.realpathSync(workdir ? path.join(codingRoot, "nested") : codingRoot),
+      });
+    }
+  });
+
+  it("keeps temporary files in the checkout scratch root when exec changes directory", async () => {
+    const result = await createExecTool().execute("coding-scratch", {
+      command: nodeCommand(
+        'const fs=require("node:fs"),os=require("node:os"),path=require("node:path");const file=path.join(fs.mkdtempSync(path.join(os.tmpdir(),"validation-")),"proof");fs.writeFileSync(file,"scratch");console.log(JSON.stringify({file,tmp:process.env.TMP,temp:process.env.TEMP}));',
+      ),
+      workdir: "nested",
+    });
+    expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+    const output = result.content.find((entry) => entry.type === "text")?.text;
+    const created = JSON.parse(output!);
+    const scratch = path.join(fs.realpathSync(codingRoot), ".openclaw", "tmp");
+    expect(path.dirname(path.dirname(created.file))).toBe(scratch);
+    expect(created).toMatchObject({ tmp: scratch, temp: scratch });
+    expect(fs.readFileSync(created.file, "utf8")).toBe("scratch");
   });
 
   it("forwards sandbox cleanup custody through the builtin exec tool", async () => {
@@ -100,11 +149,7 @@ describe("coding-tool exec working directory", () => {
         };
       },
       buildExecSpec: async ({ env }) => ({
-        argv: [
-          process.execPath,
-          "-e",
-          "process.stdout.write(process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing')",
-        ],
+        argv: [process.execPath, "-p", "process.env.CODEX_SANDBOX_EXEC_ID ?? 'missing'"],
         env,
         cwd: codingRoot,
         stdinMode: "pipe-closed",
@@ -120,30 +165,18 @@ describe("coding-tool exec working directory", () => {
         fsBridge: createHostSandboxFsBridge(codingRoot),
       },
     });
-    const tools = createCoreCodingTools({
-      codingRoot,
-      containmentRoot: codingRoot,
-      includeBaseCodingTools: false,
-      shellTools: "full",
-      workspaceOnly: false,
-      readOnly: false,
-      sandbox,
-      applyPatchEnabled: false,
-      applyPatchWorkspaceOnly: true,
-      execDefaults: {
-        host: "sandbox",
-        mode: "full",
-        allowBackground: false,
-        notifyOnExit: false,
-        config: { plugins: { enabled: false } },
-      },
-      processDefaults: {},
-    });
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("Expected the builtin exec tool");
+    sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
+    let tool: ReturnType<typeof createExecTool>;
+    {
+      using lstat = vi.spyOn(fs, "lstatSync");
+      using exists = vi.spyOn(fs, "existsSync");
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      tool = createExecTool(sandbox);
+      expect(lstat).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
     }
-    const result = await exec.execute("coding-cleanup", { command: "fixture" });
+    const result = await tool.execute("coding-cleanup", { command: "fixture" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
       "coding-cleanup",

@@ -39,11 +39,11 @@ Gateway command allowlisting remains required. Launch needs per-attempt
 allow-once approval or exact admitted session Full access with node-local
 full/off policy. Full access never overrides local deny, ask, or allowlist
 restrictions, pairing, hosting consent, command authorization, or tool policy.
-The node rechecks local policy immediately before spawning the pinned binary;
-a stale launch is refused. Each attempt owns an isolated Gateway app-server client so its
+The node reads its exec approvals when the attempt starts and rechecks its exec
+config immediately before spawning the pinned binary. Each attempt owns an isolated Gateway app-server client so its
 remote environment registration retires with that attempt. Disconnect ends the
 active attempt and its remote processes; reconnect allows only a fresh
-attempt. Normal Codex turns work, but `/btw` side questions fail closed because
+attempt. Normal Codex turns work, but `/btw` side questions are blocked because
 they are not placement-bound. The placement workspace does not confine
 execution: process and filesystem access remain bounded only by the node's
 operating system account.

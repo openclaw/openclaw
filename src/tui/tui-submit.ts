@@ -1,4 +1,3 @@
-// Handles TUI input submission and command dispatch.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   TuiChatSubmitAdmission,
@@ -47,12 +46,12 @@ export function createEditorSubmitHandler(params: {
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
-  handleCommand: (value: string) => Promise<void> | void;
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
-  onBlockedMessageSubmit?: (value: string, admission: TuiChatSubmitBlock) => void;
+  onBlockedMessageSubmit?: (admission: TuiChatSubmitBlock) => void;
 }) {
   const clearSubmittedEditor = () => {
     // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
@@ -74,7 +73,6 @@ export function createEditorSubmitHandler(params: {
     const action = resolveEditorSubmitAction(raw);
     const trimChangesAction = resolveEditorSubmitAction(value) !== action;
 
-    // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
       clearSubmittedEditor();
       return;
@@ -83,11 +81,17 @@ export function createEditorSubmitHandler(params: {
     if (action !== "message") {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
-      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
       if (!isBrowserSetupInput(command)) {
         params.editor.addToHistory(command);
       }
-      runSubmitAction(action, () => handle(command), params.onSubmitError);
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
       return;
     }
 
@@ -96,7 +100,7 @@ export function createEditorSubmitHandler(params: {
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
       restoreBlockedEditor(trimChangesAction ? raw : value);
-      params.onBlockedMessageSubmit?.(value, admission);
+      params.onBlockedMessageSubmit?.(admission);
       return;
     }
 
@@ -109,29 +113,21 @@ export function createEditorSubmitHandler(params: {
   };
 }
 
-export function shouldEnableWindowsGitBashPasteFallback(params?: {
-  platform?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const platform = params?.platform ?? process.platform;
-  const env = params?.env ?? process.env;
-  const termProgram = normalizeLowercaseStringOrEmpty(env.TERM_PROGRAM);
+export function shouldEnableWindowsGitBashPasteFallback(): boolean {
+  const termProgram = normalizeLowercaseStringOrEmpty(process.env.TERM_PROGRAM);
 
   // Some macOS terminals emit multiline paste as rapid single-line submits.
   // Enable burst coalescing so pasted blocks stay as one user message.
-  if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
-      return true;
-    }
+  if (process.platform === "darwin") {
+    return termProgram.includes("iterm") || termProgram.includes("apple_terminal");
+  }
+
+  if (process.platform !== "win32") {
     return false;
   }
 
-  if (platform !== "win32") {
-    return false;
-  }
-
-  const msystem = (env.MSYSTEM ?? "").toUpperCase();
-  const shell = env.SHELL ?? "";
+  const msystem = (process.env.MSYSTEM ?? "").toUpperCase();
+  const shell = process.env.SHELL ?? "";
   if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
     return true;
   }
@@ -146,25 +142,16 @@ export function createSubmitBurstCoalescer(params: {
   captureSnapshot?: () => TuiChatSubmitSnapshot;
   enabled: boolean;
   burstWindowMs?: number;
-  now?: () => number;
-  setTimer?: typeof setTimeout;
-  clearTimer?: typeof clearTimeout;
   onCapture?: (value: string, snapshot?: TuiChatSubmitSnapshot) => void;
 }) {
   const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
-  const setTimer = params.setTimer ?? setTimeout;
-  const clearTimer = params.clearTimer ?? clearTimeout;
   let pending: { value: string; snapshot?: TuiChatSubmitSnapshot } | null = null;
   let pendingAt = 0;
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
 
   const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimer(flushTimer);
+    clearTimeout(flushTimer ?? undefined);
     flushTimer = null;
   };
 
@@ -187,13 +174,6 @@ export function createSubmitBurstCoalescer(params: {
     submit(value, snapshot);
   };
 
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimer(() => {
-      flushPending();
-    }, windowMs);
-  };
-
   const submitBurst = (value: string) => {
     if (disposed) {
       return;
@@ -207,28 +187,21 @@ export function createSubmitBurstCoalescer(params: {
       submit(value, params.captureSnapshot?.());
       return;
     }
-    const ts = now();
+    const ts = Date.now();
     const snapshot = params.captureSnapshot?.();
     params.onCapture?.(value, snapshot);
-    if (!pending) {
-      pending = { value, ...(snapshot ? { snapshot } : {}) };
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    if (ts - pendingAt <= windowMs) {
+    if (pending && ts - pendingAt <= windowMs) {
       pending = {
         value: `${pending.value}\n${value}`,
         ...(pending.snapshot || snapshot ? { snapshot: pending.snapshot ?? snapshot } : {}),
       };
-      pendingAt = ts;
-      scheduleFlush();
-      return;
+    } else {
+      flushPending();
+      pending = { value, ...(snapshot ? { snapshot } : {}) };
     }
-    flushPending();
-    pending = { value, ...(snapshot ? { snapshot } : {}) };
     pendingAt = ts;
-    scheduleFlush();
+    clearFlushTimer();
+    flushTimer = setTimeout(flushPending, windowMs);
   };
 
   const dispose = () => {

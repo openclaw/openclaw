@@ -1,8 +1,7 @@
-/**
- * Browser CLI observation commands for console, PDF, and response bodies.
- */
 import type { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   parseBrowserPositiveIntegerOption,
@@ -10,7 +9,6 @@ import {
   withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 const BROWSER_CONSOLE_LEVELS = ["error", "warn", "info"] as const;
 
@@ -24,7 +22,6 @@ function parseBrowserConsoleLevel(value: string): (typeof BROWSER_CONSOLE_LEVELS
   return level;
 }
 
-/** Registers Browser commands that observe current page state without direct input. */
 export function registerBrowserActionObserveCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -78,8 +75,7 @@ export function registerBrowserActionObserveCommands(
       parseBrowserPositiveIntegerOption(v, "--max-chars"),
     )
     .action(async (url: string, opts, cmd) => {
-      const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
-      const maxChars = Number.isFinite(opts.maxChars) ? opts.maxChars : undefined;
+      const timeoutMs = opts.timeoutMs;
       await runBrowserCliRequest<{
         response: { body: string; truncated?: boolean };
       }>({
@@ -89,7 +85,7 @@ export function registerBrowserActionObserveCommands(
           url,
           targetId: normalizeOptionalString(opts.targetId),
           timeoutMs,
-          maxChars,
+          maxChars: opts.maxChars,
         },
         timeoutMs: withBrowserActionTimeoutSlack(timeoutMs),
         print: (result) => {

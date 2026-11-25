@@ -1,6 +1,5 @@
 // Media read capability tests cover allowed roots and blocked file access.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +8,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
-import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
+import {
+  resolveAgentScopedHostOutboundMediaAccess,
+  resolveAgentScopedOutboundMediaAccess,
+} from "./read-capability.js";
 import { loadWebMediaRaw } from "./web-media.js";
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -38,6 +40,16 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
 
+  it("keeps the native media opener exclusive to host access", () => {
+    const params = {
+      cfg: { tools: { allow: ["read"] } } satisfies OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-home/workspace-main",
+    };
+    const result = resolveAgentScopedOutboundMediaAccess(params);
+    expect(result).not.toHaveProperty("openFile");
+    expect(resolveAgentScopedHostOutboundMediaAccess(params).openFile).toBeTypeOf("function");
+  });
+
   it.each([false, true])("reads from the selected workspace (explicit=%s)", async (explicit) => {
     const base = tempDirs.make("media-workspace-selection-");
     const provided = path.join(base, "provided");
@@ -63,6 +75,33 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         },
       ),
     ).rejects.toThrow(/not under an allowed directory/i);
+  });
+
+  it("carries the configured hostname deny list into plugin media downloads", async () => {
+    const cfg = {
+      tools: { web: { fetch: { ssrfPolicy: { blockedHostnames: ["blocked.example"] } } } },
+    } as OpenClawConfig;
+    const fetchMock = vi.fn(async () => new Response("bytes"));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      for (const allowHostWorkspace of [true, false]) {
+        const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+          cfg,
+          allowHostWorkspace,
+          mediaSources: ["https://blocked.example/pic.png"],
+        });
+        expect(mediaAccess.blockedHostnames).toEqual(["blocked.example"]);
+        await expect(
+          loadWebMediaRaw(
+            "https://blocked.example/pic.png",
+            buildOutboundMediaLoadOptions({ maxBytes: 1024, mediaAccess }),
+          ),
+        ).rejects.toThrow(/configured blocklist/);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps explicit workspaceDir in localRoots when agent id is unavailable", () => {
@@ -130,15 +169,14 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
       cfg: {
         tools: { allow: ["read"] },
         agents: {
-          list: [
-            {
-              id: "restricted",
+          entries: {
+            restricted: {
               workspace: "/tmp/restricted-workspace",
               tools: {
                 toolsBySender: { "username:blocked-user": { deny: ["read"] } },
               },
             },
-          ],
+          },
         },
       } as OpenClawConfig,
       identity: {
@@ -198,13 +236,12 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         toolsBySender: { "*": { deny: ["read"] } },
       },
       agents: {
-        list: [
-          {
-            id: "trusted",
+        entries: {
+          trusted: {
             workspace: "/tmp/trusted-workspace",
             tools: { toolsBySender: { "id:trusted-user": {} } },
           },
-        ],
+        },
       },
     };
 
@@ -236,7 +273,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         allow: ["read"],
         toolsBySender: { "id:attacker": { deny: ["read"] } },
       },
-      agents: { list: [{ id: "restricted", workspace: workspaceDir }] },
+      agents: { entries: { restricted: { workspace: workspaceDir } } },
     };
 
     const workspaceReadFile = vi.fn(async () => Buffer.from("private"));
@@ -368,7 +405,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const access = resolveAgentScopedOutboundMediaAccess({
       cfg: {
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
         tools: { fs: { workspaceOnly: true } },
       } as OpenClawConfig,
       agentId: "main",
@@ -397,7 +434,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const source = path.join(aliasDir, "secret.txt");
     const access = resolveAgentScopedOutboundMediaAccess({
-      cfg: { agents: { list: [{ id: "main", workspace: workspaceDir }] } },
+      cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       agentId: "main",
       workspaceDir,
       sessionWorkspaceDir,
@@ -422,7 +459,7 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
 
     const access = resolveAgentScopedOutboundMediaAccess({
       cfg: {
-        agents: { list: [{ id: "main", workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
         tools: { fs: { workspaceOnly: true } },
       } as OpenClawConfig,
       agentId: "main",
@@ -501,46 +538,28 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result.localRoots).toContain("/Users/peter/Pictures");
   });
 
-  it("keeps host reads enabled when no group policy applies", () => {
+  it("enforces the caller byte cap before buffering host media", async () => {
+    const workspaceDir = tempDirs.make("openclaw-media-cap-");
+    const filePath = path.join(workspaceDir, "oversized.bin");
+    await fs.writeFile(filePath, Buffer.alloc(2));
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg: {
         tools: {
           allow: ["read"],
         },
       } as OpenClawConfig,
-      messageProvider: "requestchat",
-      requesterSenderId: "trusted-user",
+      workspaceDir,
     });
 
-    expect(result.readFile).toBeTypeOf("function");
-  });
-
-  it("enforces the caller byte cap before buffering host media", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cap-"));
-    try {
-      const filePath = path.join(workspaceDir, "oversized.bin");
-      await fs.writeFile(filePath, Buffer.alloc(2));
-      const result = resolveAgentScopedOutboundMediaAccess({
-        cfg: {
-          tools: {
-            allow: ["read"],
-          },
-        } as OpenClawConfig,
-        workspaceDir,
-      });
-
-      await expect(
-        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
-      ).rejects.toThrow(/exceeds.*1 byte/i);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    await expect(
+      readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1 }),
+    ).rejects.toThrow(/exceeds.*1 byte/i);
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects owned host reads when an allowed ancestor symlink retargets before open",
     async () => {
-      const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-media-race-"));
+      const base = tempDirs.make("openclaw-host-media-race-");
       const workspaceDir = path.join(base, "workspace");
       const insideDir = path.join(workspaceDir, "inside");
       const outsideDir = path.join(base, "outside");
@@ -566,14 +585,10 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
         },
       });
 
-      try {
-        await expect(
-          readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
-          // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
-        ).rejects.toMatchObject({ code: "path-mismatch" });
-      } finally {
-        await fs.rm(base, { recursive: true, force: true });
-      }
+      await expect(
+        readOutboundMediaFile(result.readFile!, filePath, { maxBytes: 1024 }),
+        // fs-safe 0.5.2 reports pre-open identity drift as path-mismatch.
+      ).rejects.toMatchObject({ code: "path-mismatch" });
     },
   );
 

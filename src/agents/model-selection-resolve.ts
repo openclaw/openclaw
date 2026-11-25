@@ -68,28 +68,9 @@ export function resolveConfiguredModelFallbacks(params: {
 export function resolveAllowedModelRefCore(
   params: Omit<Parameters<typeof getModelRefStatus>[0], "ref"> & { raw: string },
 ): ReturnType<typeof resolveAllowedModelRefFromAliasIndex> {
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-    agentId: params.agentId,
-    manifestPlugins: params.manifestPlugins,
-  });
   return resolveAllowedModelRefFromAliasIndex({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: params.defaultProvider,
-    agentId: params.agentId,
-    aliasIndex,
-    manifestPlugins: params.manifestPlugins,
-    getStatus: (ref) =>
-      getModelRefStatus({
-        cfg: params.cfg,
-        catalog: params.catalog,
-        ref,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-        agentId: params.agentId,
-        manifestPlugins: params.manifestPlugins,
-      }),
+    ...params,
+    aliasIndex: buildModelAliasIndex(params),
+    getStatus: (ref) => getModelRefStatus({ ...params, ref }),
   });
 }

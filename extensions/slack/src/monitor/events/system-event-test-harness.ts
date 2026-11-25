@@ -25,12 +25,17 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
   const handlers: Record<string, SlackSystemEventHandler> = {};
   const channelType = overrides?.channelType ?? "im";
   const app = {
+    action: () => {},
+    shortcut: () => {},
+    view: () => {},
     event: (name: string, handler: SlackSystemEventHandler) => {
       handlers[name] = handler;
     },
   };
   const ctx = {
     app,
+    cfg: {},
+    accountId: "default",
     runtime: { error: () => {} },
     botUserId: "U_BOT",
     botId: "B_BOT",
@@ -63,7 +68,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
     resolveUserName: async (userId: string) => ({
       name: overrides?.userNames?.[userId] ?? "alice",
     }),
-    resolveSlackSystemEventRoute: () => ({ agentId: "main", sessionKey: "agent:main:main" }),
+    resolveSlackSystemEventRoute: async () => ({ agentId: "main", sessionKey: "agent:main:main" }),
     getSlackAssistantThreadContext: () => undefined,
     isSlackManagedViewThread: async () => false,
     isSlackAgentView: async () => true,

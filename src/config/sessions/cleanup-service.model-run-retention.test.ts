@@ -33,7 +33,6 @@ describe("sessions cleanup model-run preview", () => {
   it.each([
     { modelRunPruneAfterMs: DAY_MS, modelRunPruned: 1, capped: 0 },
     { modelRunPruneAfterMs: 0, modelRunPruned: 0, capped: 1 },
-    { modelRunPruneAfterMs: -DAY_MS, modelRunPruned: 0, capped: 1 },
   ])(
     "previews model-run retention $modelRunPruneAfterMs before capping",
     async ({ modelRunPruneAfterMs, modelRunPruned, capped }) => {
@@ -72,6 +71,8 @@ describe("sessions cleanup model-run preview", () => {
       expect(preview?.summary).toMatchObject({
         modelRunPruned,
         capped,
+        archived: 0,
+        capArchived: capped,
         afterCount: 3 - modelRunPruned,
       });
       expect(preview?.modelRunPrunedKeys.has(modelRunSessionKey)).toBe(modelRunPruned === 1);

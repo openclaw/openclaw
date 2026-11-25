@@ -9,12 +9,18 @@ import {
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 
 describe("normalizeAgentToolResultMiddlewareRuntimes", () => {
-  it("defaults omitted runtimes to every supported runtime", () => {
-    expect(normalizeAgentToolResultMiddlewareRuntimes()).toEqual(["openclaw", "codex"]);
-  });
+  it.each([
+    { declared: ["openclaw", "codex", "agentsapi"], expected: ["openclaw", "codex", "agentsapi"] },
+    { declared: ["codex"], expected: ["codex"] },
+  ])(
+    "defaults omitted runtimes to the manifest declaration $declared",
+    ({ declared, expected }) => {
+      expect(normalizeAgentToolResultMiddlewareRuntimes(undefined, declared)).toEqual(expected);
+    },
+  );
 
   it("preserves an explicit empty runtime list", () => {
-    expect(normalizeAgentToolResultMiddlewareRuntimes({ runtimes: [] })).toEqual([]);
+    expect(normalizeAgentToolResultMiddlewareRuntimes({ runtimes: [] }, ["agentsapi"])).toEqual([]);
   });
 
   it("ignores unknown runtime ids from manifest metadata", () => {

@@ -2,29 +2,20 @@ import Foundation
 import Network
 import OpenClawKit
 
-final class NetworkStatusService: @unchecked Sendable {
+final class NetworkStatusService: Sendable {
     func currentStatus(timeoutMs: Int = 1500) async throws -> OpenClawNetworkStatusPayload {
         guard timeoutMs > 0 else { throw URLError(.timedOut) }
 
-        return try await withCheckedThrowingContinuation { cont in
-            let monitor = NWPathMonitor()
-            let queue = DispatchQueue(label: "ai.openclawfoundation.app.network-status")
-            let state = NetworkStatusState()
-
-            monitor.pathUpdateHandler = { path in
-                guard state.markCompleted() else { return }
-                monitor.cancel()
-                cont.resume(returning: Self.payload(from: path))
-            }
-
-            monitor.start(queue: queue)
-
-            queue.asyncAfter(deadline: .now() + .milliseconds(timeoutMs)) {
-                guard state.markCompleted() else { return }
-                monitor.cancel()
-                cont.resume(throwing: URLError(.timedOut))
-            }
-        }
+        return try await AsyncTimeout.withTimeoutMs(
+            timeoutMs: timeoutMs,
+            onTimeout: { URLError(.timedOut) },
+            operation: {
+                let monitor = NWPathMonitor()
+                defer { monitor.cancel() }
+                var iterator = monitor.makeAsyncIterator()
+                guard let path = await iterator.next() else { throw URLError(.timedOut) }
+                return Self.payload(from: path)
+            })
     }
 
     private static func payload(from path: NWPath) -> OpenClawNetworkStatusPayload {
@@ -46,18 +37,5 @@ final class NetworkStatusService: @unchecked Sendable {
             isExpensive: path.isExpensive,
             isConstrained: path.isConstrained,
             interfaces: interfaces)
-    }
-}
-
-private final class NetworkStatusState: @unchecked Sendable {
-    private let lock = NSLock()
-    private var completed = false
-
-    func markCompleted() -> Bool {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        if self.completed { return false }
-        self.completed = true
-        return true
     }
 }

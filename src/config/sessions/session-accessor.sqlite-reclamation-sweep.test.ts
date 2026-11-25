@@ -9,7 +9,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
-import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 
@@ -43,8 +43,8 @@ test.each([false, true])(
         const workers: Worker[] = [];
         const spawn = archiveWorker.createSqliteTranscriptArchiveWorker;
         vi.spyOn(archiveWorker, "createSqliteTranscriptArchiveWorker").mockImplementation(
-          (data) => {
-            const worker = spawn(data);
+          (data, nativeLocations) => {
+            const worker = spawn(data, nativeLocations);
             workers.push(worker);
             return worker;
           },

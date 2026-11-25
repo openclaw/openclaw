@@ -1,5 +1,11 @@
 import process from "node:process";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import {
+  parseDateFirstTimestampMs,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
+  SessionCatalogListProviderParams,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
@@ -14,38 +20,13 @@ import {
   PI_LOCAL_SESSION_HOST_ID as LOCAL_HOST_ID,
   PI_SESSION_ID_PATTERN as SESSION_ID_PATTERN,
 } from "./pi-session-catalog-shared.js";
-import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
-import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
+import { listPiSummaryPage, piMessageText, readPiSessionById } from "./pi-session-store.js";
 
 const MAX_SEARCH_LENGTH = 500;
 
 type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 
 export const isExactPiSessionCursor = sessionCatalogPaging.isExactCursor;
-
-function textFromContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) => {
-      if (!isRecord(part)) {
-        return [];
-      }
-      if (part.type === "text" && typeof part.text === "string") {
-        return [part.text];
-      }
-      if (part.type === "image") {
-        const mimeType = optionalPiString(part.mimeType, 128);
-        return [mimeType ? `[image: ${mimeType}]` : "[image]"];
-      }
-      return [];
-    })
-    .join("\n");
-}
 
 const PI_PARAMETER_MESSAGES = {
   listNotObject: "Pi session list parameters must be an object",
@@ -56,7 +37,11 @@ const PI_PARAMETER_MESSAGES = {
   invalidThreadId: "threadId is invalid",
 };
 
-export async function listLocalPiSessionPage(value?: unknown): Promise<PiSessionPage> {
+export async function listLocalPiSessionPage(
+  value?: unknown,
+  bindSource = false,
+  exportSource?: SessionCatalogListProviderParams["exportSource"],
+): Promise<PiSessionPage> {
   const params = sessionCatalogPaging.parseListParams(value, {
     searchMaxLength: MAX_SEARCH_LENGTH,
     messages: PI_PARAMETER_MESSAGES,
@@ -65,26 +50,16 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
   const { summaries, hasMore } = await listPiSummaryPage(process.env, {
     offset,
     limit: params.limit,
+    exportSource,
     ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
   });
-  const page = summaries.map(({ file: _file, version: _version, ...session }) => session);
+  const page = summaries.map(({ file, version: _version, ...session }) =>
+    bindSource ? Object.assign(session, { sourceHomeId: sha256Hex(file) }) : session,
+  );
   return {
     sessions: page,
     ...(hasMore ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) } : {}),
   };
-}
-
-function isoTimestamp(
-  message: Record<string, unknown>,
-  entry: Record<string, unknown>,
-): string | undefined {
-  const value =
-    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
-  if (value === undefined) {
-    return undefined;
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 function jsonText(value: unknown, maxLength = 20_000): string | undefined {
@@ -130,7 +105,9 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
   const message = entry.message;
   const role = message.role;
   const id = optionalPiString(entry.id, 256);
-  const timestamp = isoTimestamp(message, entry);
+  const timestamp = timestampMsToIsoString(
+    parseDateFirstTimestampMs(message.timestamp) ?? parseDateFirstTimestampMs(entry.timestamp),
+  );
   const model = optionalPiString(message.model, 256);
   const provider = optionalPiString(message.provider, 256);
   const modelRef = provider && model ? `${provider}/${model}` : model;
@@ -140,12 +117,12 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
     ...(modelRef ? { model: modelRef } : {}),
   };
   if (role === "user") {
-    const text = textFromContent(message.content);
+    const text = piMessageText(message.content, true);
     return text ? [{ ...common, type: "userMessage", text }] : [];
   }
   if (role === "toolResult") {
     const toolName = optionalPiString(message.toolName, 256);
-    const text = textFromContent(message.content);
+    const text = piMessageText(message.content, true);
     return [{ ...common, type: "toolResult", text: toolName ? `${toolName}\n${text}` : text }];
   }
   if (role === "bashExecution") {
@@ -172,7 +149,7 @@ function piMessageItems(entry: Record<string, unknown>): SessionCatalogTranscrip
       return [];
     }
     const customType = optionalPiString(message.customType, 256);
-    const text = textFromContent(message.content);
+    const text = piMessageText(message.content, true);
     return text
       ? [{ ...common, type: "other", text: customType ? `${customType}\n${text}` : text }]
       : [];
@@ -208,14 +185,14 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
     const id = optionalPiString(entry.id, 256);
     const timestamp = optionalPiString(entry.timestamp, 128);
     const common = { ...(id ? { id } : {}), ...(timestamp ? { timestamp } : {}) };
-    if (entry.type === "compaction" && typeof entry.summary === "string") {
-      return [{ ...common, type: "other", text: entry.summary }];
-    }
-    if (entry.type === "branch_summary" && typeof entry.summary === "string") {
+    if (
+      (entry.type === "compaction" || entry.type === "branch_summary") &&
+      typeof entry.summary === "string"
+    ) {
       return [{ ...common, type: "other", text: entry.summary }];
     }
     if (entry.type === "custom_message" && entry.display === true) {
-      const text = textFromContent(entry.content);
+      const text = piMessageText(entry.content, true);
       return text ? [{ ...common, type: "other", text }] : [];
     }
     return [];
@@ -224,6 +201,7 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
 
 export async function readLocalPiTranscriptPage(
   value: unknown,
+  sourceHomeId?: string,
 ): Promise<SessionsCatalogReadResult> {
   const params = sessionCatalogPaging.parseReadParams(value, {
     threadIdMaxLength: 256,
@@ -231,7 +209,9 @@ export async function readLocalPiTranscriptPage(
     messages: PI_PARAMETER_MESSAGES,
   });
   const offset = sessionCatalogPaging.decodeCursor(params.cursor);
-  const items = piTranscriptItems(await readPiSessionById(params.threadId, process.env));
+  const items = piTranscriptItems(
+    await readPiSessionById(params.threadId, process.env, sourceHomeId),
+  );
   const page = sessionCatalogPaging.boundTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,

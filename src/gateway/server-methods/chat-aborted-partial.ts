@@ -1,18 +1,93 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
+import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import type { RpcSourceAdapter } from "../../sessions/session-controller.rpc-sources.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnlyInWorker,
+  loadIncognitoGatewaySessionEntryReadOnly,
+} from "../session-utils.js";
+import { broadcastChatError } from "./chat-broadcast.js";
+import type { GatewayRequestContext } from "./types.js";
 
 export type ChatAbortOrigin = "rpc" | "stop-command" | "placement-abandon";
 
 export type ChatAbortSessionSnapshot = Result<
   Pick<
-    ReturnType<typeof loadSessionEntry>,
+    Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
     "cfg" | "storePath" | "entry" | "canonicalKey" | "agentId"
   >,
   unknown
 >;
+
+/** Prepare fallible transcript metadata before synchronous cancellation can signal a producer. */
+export async function prepareChatAbortSessionSnapshot(
+  params: Parameters<typeof loadGatewaySessionEntryReadOnlyInWorker>[0],
+): Promise<ChatAbortSessionSnapshot> {
+  try {
+    return { ok: true, value: await loadGatewaySessionEntryReadOnlyInWorker(params) };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+/** Follow the existing commit receipts until this run releases its cancellation owner. */
+export function retainChatAbortSessionSnapshot(snapshot: ChatAbortSessionSnapshot) {
+  if (!snapshot.ok) {
+    return { read: () => snapshot, release: () => {} };
+  }
+  const selected = snapshot.value;
+  if (isIncognitoSessionKey(selected.canonicalKey)) {
+    return {
+      read: (): ChatAbortSessionSnapshot => {
+        try {
+          return {
+            ok: true,
+            value: loadIncognitoGatewaySessionEntryReadOnly(selected.canonicalKey, {
+              agentId: selected.agentId,
+            }),
+          };
+        } catch (error) {
+          return { ok: false, error };
+        }
+      },
+      release: () => {},
+    };
+  }
+  try {
+    const identity = readDatabasePathIdentitySync(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(selected.storePath).path,
+    );
+    const retained = retainPreparedSessionGenerationFacts({
+      databaseIdentity: identity.key,
+      sessionKey: selected.canonicalKey,
+      entry: selected.entry,
+    });
+    return {
+      read: (): ChatAbortSessionSnapshot => {
+        const entry = retained.readCurrent();
+        if (entry === undefined) {
+          return {
+            ok: false,
+            error: new Error("Aborted partial transcript session is unavailable"),
+          };
+        }
+        return {
+          ok: true,
+          value: { ...selected, entry: entry ? selected.entry : undefined },
+        };
+      },
+      release: retained.release,
+    };
+  } catch (error) {
+    return { read: (): ChatAbortSessionSnapshot => ({ ok: false, error }), release: () => {} };
+  }
+}
 
 export type AbortedPartialSnapshot = ReturnType<typeof captureAbortedPartial>;
 
@@ -21,6 +96,20 @@ export function withAbortedPartialPersistenceWarning(
   warning: string | undefined,
 ): ErrorShape {
   return warning ? { ...error, message: `${error.message} ${warning}` } : error;
+}
+
+export type QueuedCollectorAbortOutcome = Result<
+  { aborted: boolean; runIds: string[]; warning?: string },
+  ErrorShape
+>;
+
+export function withQueuedCollectorWarning(
+  outcome: QueuedCollectorAbortOutcome,
+  warning: string,
+): QueuedCollectorAbortOutcome {
+  return outcome.ok
+    ? { ok: true, value: { ...outcome.value, warning } }
+    : { ok: false, error: withAbortedPartialPersistenceWarning(outcome.error, warning) };
 }
 
 /** Retain a failed save when a later cancellation or terminal write also fails. */
@@ -37,6 +126,28 @@ export function abortedPartialPersistenceError(
     : new Error(message, { cause: error });
 }
 
+/** Settle already accepted persistence even when a later cancellation effect failed. */
+export async function settleChatAbortPersistence(
+  finish: () => Promise<string | undefined>,
+  failure: { error: unknown } | undefined,
+): Promise<string | undefined> {
+  let warning: string | undefined;
+  try {
+    warning = await finish();
+  } catch (error) {
+    if (!failure) {
+      throw error;
+    }
+    throw new AggregateError([failure.error, error], "Chat cancellation and persistence failed", {
+      cause: error,
+    });
+  }
+  if (failure) {
+    throw abortedPartialPersistenceError(failure.error, warning);
+  }
+  return warning;
+}
+
 /** Capture before signaling cancellation, without loading asynchronous transcript writers. */
 export function captureAbortedPartial(params: {
   runId: string;
@@ -46,16 +157,14 @@ export function captureAbortedPartial(params: {
   text: string;
   abortOrigin: ChatAbortOrigin;
   session?: ChatAbortSessionSnapshot;
+  resolveTerminalProducer?: RpcSourceAdapter["resolveTerminalProducer"];
 }) {
   const { runId, abortOrigin } = params;
   try {
-    const session = params.session ?? {
-      ok: true,
-      value: loadSessionEntry(
-        params.sessionKey,
-        params.agentId ? { agentId: params.agentId } : undefined,
-      ),
-    };
+    const session = params.session;
+    if (!session) {
+      throw new Error("Aborted partial transcript metadata is unavailable");
+    }
     if (!session.ok) {
       throw session.error;
     }
@@ -63,12 +172,21 @@ export function captureAbortedPartial(params: {
     if (entry?.sessionId !== params.sessionId) {
       throw new Error("Aborted partial transcript session changed before persistence");
     }
+    const producer = params.resolveTerminalProducer?.();
+    const settlement = {
+      deferred: false,
+      producer:
+        producer?.sessionId === params.sessionId && producer.sessionKey === params.sessionKey
+          ? producer
+          : undefined,
+    };
     // Snapshot the incarnation before signaling. Reset can keep the SID, and
     // the guarded writer rechecks both facts inside its commit transaction.
     return {
       runId,
       abortOrigin,
       ok: true,
+      settlement,
       value: {
         sessionKey: canonicalKey,
         sessionId: params.sessionId,
@@ -76,9 +194,8 @@ export function captureAbortedPartial(params: {
         expectedLifecycleRevision: entry.lifecycleRevision ?? null,
         agentId,
         storePath,
-        cfg,
+        config: cfg,
         message: params.text,
-        createIfMissing: true,
         idempotencyKey: `${runId}:assistant`,
         abortMeta: { aborted: true, origin: abortOrigin, runId },
       },
@@ -88,3 +205,72 @@ export function captureAbortedPartial(params: {
     return { runId, abortOrigin, ok: false, error } as const;
   }
 }
+
+/** Transfer the fallback before cancellation can clear the producer's session slot. */
+export function deferAbortedPartialPersistence(
+  snapshot: AbortedPartialSnapshot | undefined,
+  context: Pick<
+    GatewayRequestContext,
+    | "trackExecution"
+    | "logGateway"
+    | "broadcast"
+    | "nodeSendToSession"
+    | "agentRunSeq"
+    | "getRuntimeConfig"
+  >,
+): (() => void) | undefined {
+  if (!snapshot?.ok || snapshot.settlement.deferred || !snapshot.settlement.producer) {
+    return undefined;
+  }
+  let revoked = false;
+  try {
+    snapshot.settlement.deferred = snapshot.settlement.producer.handoff((producerCompleted) =>
+      context.trackExecution(async () => {
+        const producerError = await producerCompleted;
+        if (revoked || isCliPartialOutputRejected(producerError)) {
+          return;
+        }
+        let warning: string | undefined;
+        try {
+          const { persistAbortedPartial } = await import("./chat-transcript-persistence.js");
+          warning = await persistAbortedPartial({ context, snapshot, producerSettled: true });
+        } catch (error) {
+          context.logGateway.warn(
+            `chat.abort deferred transcript append failed: ${formatErrorMessage(error)}`,
+          );
+          warning = ABORTED_PARTIAL_PERSISTENCE_WARNING;
+        }
+        if (warning) {
+          try {
+            broadcastChatError({
+              terminalEntry: undefined,
+              context,
+              runId: snapshot.runId,
+              sessionKey: snapshot.value.sessionKey,
+              agentId: snapshot.value.agentId,
+              errorMessage: warning,
+              stopReason: "aborted-partial-persistence-failed",
+            });
+          } catch (error) {
+            // Delivery failure cannot retain a finished producer's successor fence.
+            context.logGateway.warn(
+              `chat.abort persistence warning delivery failed: ${formatErrorMessage(error)}`,
+            );
+          }
+        }
+      }),
+    );
+    if (snapshot.settlement.deferred) {
+      return () => {
+        revoked = true;
+      };
+    }
+  } catch (error) {
+    // No handoff was accepted; the caller keeps its synchronous persistence path.
+    context.logGateway.warn(`chat.abort producer handoff failed: ${formatErrorMessage(error)}`);
+  }
+  return undefined;
+}
+
+export const ABORTED_PARTIAL_PERSISTENCE_WARNING =
+  "Stopped, but a reply could not be saved to history. Copy any visible text before leaving this chat.";

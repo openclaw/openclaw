@@ -4,7 +4,7 @@ import JSON5 from "json5";
 import { VERSION } from "../version.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
-import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
+import type { ConfigFileSnapshot } from "./types.js";
 import { isSecretRef } from "./types.secrets.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
@@ -238,46 +238,21 @@ function stringifyReceivedValue(value: unknown): string | null {
   }
 }
 
-function isPluginOwnedConfigPath(
-  pathValue: string,
-  pathSegments?: readonly ConfigIssuePathSegment[],
-): boolean {
-  if (pathSegments) {
-    return (
-      pathSegments[0] === "channels" ||
-      (pathSegments[0] === "plugins" &&
-        pathSegments[1] === "entries" &&
-        pathSegments[3] === "config")
-    );
-  }
-  return (
-    pathValue.startsWith("channels.") || /^plugins\.entries\.[^.]+\.config(?:\.|$)/.test(pathValue)
-  );
-}
-
-function shouldOmitReceivedValue(
-  pathValue: string,
-  value: unknown,
-  pathSegments?: readonly ConfigIssuePathSegment[],
-): boolean {
-  return (
-    value === undefined ||
-    isSecretRef(value) ||
-    isSensitiveConfigPath(pathValue) ||
-    isPluginOwnedConfigPath(pathValue, pathSegments) ||
-    (typeof value === "object" && value !== null) ||
-    stringifyReceivedValue(value) === null
-  );
-}
-
 function appendReceivedValueHint(
   message: string,
   pathValue: string,
   value: unknown,
-  pathSegments?: readonly ConfigIssuePathSegment[],
+  pathSegments: readonly ConfigIssuePathSegment[],
 ): string {
   if (
-    shouldOmitReceivedValue(pathValue, value, pathSegments) ||
+    value === undefined ||
+    isSecretRef(value) ||
+    isSensitiveConfigPath(pathValue) ||
+    pathSegments[0] === "channels" ||
+    (pathSegments[0] === "plugins" &&
+      pathSegments[1] === "entries" &&
+      pathSegments[3] === "config") ||
+    (typeof value === "object" && value !== null) ||
     message.toLowerCase().includes("got:") ||
     /\breceived\b/i.test(message)
   ) {
@@ -298,43 +273,30 @@ function resolveConfigIssueLineInRaw(
   return offset === undefined ? undefined : lineAtOffset(raw, offset);
 }
 
-type AttachConfigIssueDiagnosticsParams = {
-  raw: string | null | undefined;
-  parsed: unknown;
-  effective: unknown;
-  configPath?: string | null;
-  includeReceivedValueHint?: boolean;
-};
-
-type ConfigIssueDiagnostics = ConfigValidationIssue & {
-  line?: number;
-  sourceFile?: string;
-};
-
-function attachConfigIssueDiagnostics(
-  issues: readonly ConfigValidationIssue[],
-  params: AttachConfigIssueDiagnosticsParams,
-): ConfigIssueDiagnostics[] {
-  const raw = typeof params.raw === "string" ? params.raw : null;
+/** Render invalid config issues with source locations, received values, and version-skew advice. */
+export function renderConfigValidationIssueLines(
+  snapshot: Pick<ConfigFileSnapshot, "issues" | "raw" | "parsed" | "sourceConfig" | "path">,
+  marker = "-",
+): string[] {
+  const raw = typeof snapshot.raw === "string" ? snapshot.raw : null;
   const sourceFile =
-    typeof params.configPath === "string" && params.configPath.trim()
-      ? path.basename(params.configPath)
+    typeof snapshot.path === "string" && snapshot.path.trim()
+      ? path.basename(snapshot.path)
       : "openclaw.json";
-  return issues.map((issue) => {
+  const issues = snapshot.issues.map((issue) => {
     const segments = issue.pathSegments;
     if (!segments || segments.length === 0) {
       return issue;
     }
-    const literalValue = resolveConfigValueAtPath(params.parsed, segments);
-    const effectiveValue = resolveConfigValueAtPath(params.effective, segments);
+    const literalValue = resolveConfigValueAtPath(snapshot.parsed, segments);
+    const effectiveValue = resolveConfigValueAtPath(snapshot.sourceConfig, segments);
     const line = raw === null ? undefined : resolveConfigIssueLineInRaw(raw, segments);
     // Validation follows includes, env substitution, and migrations. Only a
     // matching root-file literal is both accurate and safe to echo here.
     const canShowReceivedValue = line !== undefined && Object.is(literalValue, effectiveValue);
-    const message =
-      params.includeReceivedValueHint && canShowReceivedValue
-        ? appendReceivedValueHint(issue.message, issue.path, effectiveValue, segments)
-        : issue.message;
+    const message = canShowReceivedValue
+      ? appendReceivedValueHint(issue.message, issue.path, effectiveValue, segments)
+      : issue.message;
     return {
       ...issue,
       // Validation path metadata is non-enumerable; preserve it through this display copy.
@@ -342,20 +304,6 @@ function attachConfigIssueDiagnostics(
       message,
       ...(line === undefined ? {} : { line, sourceFile }),
     };
-  });
-}
-
-/** Render invalid config issues with source locations, received values, and version-skew advice. */
-export function renderConfigValidationIssueLines(
-  snapshot: Pick<ConfigFileSnapshot, "issues" | "raw" | "parsed" | "sourceConfig" | "path">,
-  marker = "-",
-): string[] {
-  const issues = attachConfigIssueDiagnostics(snapshot.issues, {
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    effective: snapshot.sourceConfig,
-    configPath: snapshot.path,
-    includeReceivedValueHint: true,
   });
   const lines = formatConfigIssueLines(issues, marker, { normalizeRoot: true });
   const touchedVersion = snapshot.sourceConfig.meta?.lastTouchedVersion;

@@ -16,6 +16,7 @@ import {
 } from "../agent-scope.js";
 import { resolveConfiguredModelEntries } from "../configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
+import { enrichHarnessRows, modelCatalogRouteVariantKey } from "../model-catalog-entry.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
 import {
@@ -32,7 +33,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedNativeModelSelection,
 } from "../prepared-model-runtime.types.js";
-import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "../workspace-default-path.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessModelCatalogParams, AgentHarnessModelCatalogResult } from "./types.js";
@@ -43,96 +44,22 @@ function isCatalogRowList(
   return Array.isArray(result);
 }
 
-function normalizeRouteBaseUrl(value: string | undefined): string {
-  if (!value) {
-    return "";
+function replaceRuntimeScope<T>(
+  previous: Readonly<Record<string, readonly T[]>> | undefined,
+  runtime: string,
+  rows: readonly T[],
+  retain: (row: T) => boolean,
+) {
+  const before = previous && Object.hasOwn(previous, runtime) ? (previous[runtime] ?? []) : [];
+  const next = [...before.filter(retain), ...rows];
+  if (isDeepStrictEqual(before, next)) {
+    return previous;
   }
-  try {
-    const url = new URL(value);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return value.trim();
+  const updated = { ...previous, [runtime]: next };
+  if (!next.length) {
+    delete updated[runtime];
   }
-}
-
-function routeVariantKey(entry: ModelCatalogEntry, identityKey: string): string {
-  return [
-    identityKey,
-    entry.nativeRuntime ?? "",
-    entry.api ?? "",
-    normalizeRouteBaseUrl(entry.baseUrl),
-  ].join("\0");
-}
-
-function mergeHarnessCompat(
-  observed: ModelCatalogEntry["compat"],
-  provider: ModelCatalogEntry["compat"],
-): ModelCatalogEntry["compat"] {
-  if (!observed && !provider) {
-    return undefined;
-  }
-  const compat = { ...provider, ...observed };
-  if (observed?.supportedReasoningEfforts?.length === 0) {
-    return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
-  }
-  const efforts = [
-    ...new Set([
-      ...(provider?.supportedReasoningEfforts ?? []),
-      ...(observed?.supportedReasoningEfforts ?? []),
-    ]),
-  ];
-  return efforts.length > 0
-    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: efforts }
-    : compat;
-}
-
-function enrichHarnessRows(
-  rows: readonly ModelCatalogEntry[],
-  snapshot: ModelCatalogSnapshot,
-): ModelCatalogEntry[] {
-  const keyOf = createModelCatalogIdentityKeyResolver();
-  const routeDonors = new Map<string, ModelCatalogEntry>();
-  const identityDonors = new Map<string, ModelCatalogEntry>();
-  let donorsPrepared = false;
-  return rows.map((entry) => {
-    // Native discovery owns these capabilities; host donors cannot invent its transport.
-    if (entry.nativeRuntime) {
-      return entry;
-    }
-    if (!donorsPrepared) {
-      // First donor wins: live snapshot entries take precedence over static rows.
-      for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-        const identityKey = keyOf(donor);
-        const routeKey = routeVariantKey(donor, identityKey);
-        if (!routeDonors.has(routeKey)) {
-          routeDonors.set(routeKey, donor);
-        }
-        if (!identityDonors.has(identityKey)) {
-          identityDonors.set(identityKey, donor);
-        }
-      }
-      donorsPrepared = true;
-    }
-    const identityKey = keyOf(entry);
-    const donor =
-      routeDonors.get(routeVariantKey(entry, identityKey)) ??
-      (entry.api === undefined && entry.baseUrl === undefined
-        ? identityDonors.get(identityKey)
-        : undefined);
-    if (!donor) {
-      return entry;
-    }
-    const compat = mergeHarnessCompat(entry.compat, donor.compat);
-    const mergedParams =
-      donor.params || entry.params ? { ...donor.params, ...entry.params } : undefined;
-    return {
-      ...donor,
-      ...entry,
-      ...(mergedParams ? { params: mergedParams } : {}),
-      ...(compat ? { compat } : {}),
-    };
-  });
+  return updated;
 }
 
 export async function augmentModelCatalogWithAgentHarness(params: {
@@ -151,7 +78,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   /** Explicit inventory acquisition; ordinary thinking reads stay selected-harness-only. */
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
-  isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
@@ -218,12 +144,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const pluginRegistry = params.observationConfig
     ? params.pluginRegistry
     : (params.pluginRegistry ?? getActivePluginRegistry());
-  if (!pluginRegistry || params.isCurrent?.() === false) {
+  if (!pluginRegistry) {
     return params.snapshot;
   }
-  const isCurrent = () =>
-    params.isCurrent?.() !== false &&
-    (Boolean(params.pluginRegistry) || getActivePluginRegistry() === pluginRegistry);
   if (params.includePickerRuntimes) {
     for (const { harness } of pluginRegistry.agentHarnesses) {
       if (harness.loadModelCatalog && !runtimeProviders.has(harness.id)) {
@@ -272,12 +195,12 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (!harness?.loadModelCatalog) {
       continue;
     }
-    if (params.isCurrent?.() === false) {
-      return params.snapshot;
-    }
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
+    const includesProvider = params.includesProvider;
+    const outsideScope = ({ provider }: { provider: string }) =>
+      includesProvider !== undefined && !includesProvider(provider);
     let listedRows: readonly ModelCatalogEntry[];
     let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
@@ -299,47 +222,56 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         }
       }
     } catch (error) {
-      if (!isCurrent()) {
-        return params.snapshot;
+      const failedProviders = new Set(
+        [
+          ...scopedProviders,
+          ...[...result.entries, ...result.routeVariants]
+            .filter((entry) => entry.nativeRuntime === runtime && !outsideScope(entry))
+            .map((entry) => entry.provider),
+        ].map(normalizeProvider),
+      );
+      if (result === params.snapshot) {
+        result = { ...params.snapshot };
       }
+      result.nativeProviderOutcomes = replaceRuntimeScope<ProviderCatalogOutcome>(
+        result.nativeProviderOutcomes,
+        runtime,
+        [...failedProviders].map((provider) => ({ provider, status: "unavailable" })),
+        outsideScope,
+      );
       params.onError?.(error, scopedProviders);
       continue;
     }
-    if (!isCurrent()) {
-      return params.snapshot;
-    }
-    const includesProvider = params.includesProvider;
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
       : listedRows;
-    const previousOutcomes =
-      result.nativeProviderOutcomes && Object.hasOwn(result.nativeProviderOutcomes, runtime)
-        ? (result.nativeProviderOutcomes[runtime] ?? [])
-        : [];
-    const scopedOutcomes = includesProvider
-      ? [
-          ...previousOutcomes.filter((outcome) => !includesProvider(outcome.provider)),
-          ...outcomes.filter((outcome) => includesProvider(outcome.provider)),
-        ]
-      : outcomes;
-    if (!isDeepStrictEqual(previousOutcomes, scopedOutcomes)) {
-      const nativeProviderOutcomes = {
-        ...result.nativeProviderOutcomes,
-        [runtime]: scopedOutcomes,
-      };
-      if (!scopedOutcomes.length) {
-        delete nativeProviderOutcomes[runtime];
-      }
+    const nativeProviderOutcomes = replaceRuntimeScope(
+      result.nativeProviderOutcomes,
+      runtime,
+      outcomes.filter((outcome) => !outsideScope(outcome)),
+      outsideScope,
+    );
+    const failedProviders = new Set(
+      outcomes.filter((outcome) => outcome.status !== "ready").map(({ provider }) => provider),
+    );
+    const nativeHostRows = replaceRuntimeScope(
+      result.nativeHostRows,
+      runtime,
+      scopedRows.filter(
+        (row) => !row.nativeRuntime && !failedProviders.has(normalizeProvider(row.provider)),
+      ),
+      (row) => outsideScope(row) || failedProviders.has(normalizeProvider(row.provider)),
+    );
+    if (
+      nativeProviderOutcomes !== result.nativeProviderOutcomes ||
+      nativeHostRows !== result.nativeHostRows
+    ) {
       if (result === params.snapshot) {
         result = { ...params.snapshot };
       }
       result.nativeProviderOutcomes = nativeProviderOutcomes;
+      result.nativeHostRows = nativeHostRows;
     }
-    const failedProviders = new Set(
-      scopedOutcomes
-        .filter((outcome) => outcome.status !== "ready")
-        .map(({ provider }) => provider),
-    );
     completedRows.push(...scopedRows);
     discovered = true;
     const rows = enrichHarnessRows(scopedRows, prepared);
@@ -378,11 +310,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     );
     const variantKeyOf = createModelCatalogIdentityKeyResolver();
     result.routeVariants = dedupeByKey([...rows, ...retainedVariants], (entry) =>
-      routeVariantKey(entry, variantKeyOf(entry)),
+      modelCatalogRouteVariantKey(entry, variantKeyOf(entry)),
     );
-  }
-  if (!isCurrent()) {
-    return params.snapshot;
   }
   if (discovered) {
     params.onDiscoveryCompleted?.(completedRows);
@@ -409,36 +338,56 @@ export function isPreparedNativeModelCatalogReady(params: {
   input: PreparedModelRuntimeInput;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   snapshot: ModelCatalogSnapshot;
-  selection: PreparedNativeModelSelection;
+  selection?: PreparedNativeModelSelection;
+  catalogAcquired?: boolean;
 }): boolean {
   const { selection, snapshot, pluginGeneration } = params;
-  if (
-    ![...snapshot.entries, ...snapshot.routeVariants].some(
-      (entry) =>
-        entry.provider === selection.provider &&
-        entry.id === selection.modelId &&
-        entry.nativeRuntime === selection.runtime,
-    )
-  ) {
+  if (!selection && params.catalogAcquired !== true) {
     return false;
   }
-  const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
-    (registration) => registration.harness.id === selection.runtime,
-  )?.harness;
-  return (
-    !harness?.readModelCatalogReadiness ||
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-        pluginRegistry: pluginGeneration.pluginRegistry,
-      },
-      () =>
-        harness.readModelCatalogReadiness?.({
-          ...preparedHarnessCatalogScope(params.input),
-          provider: selection.provider,
-          modelId: selection.modelId,
-        }),
-    ) !== undefined
+  if (!selection && !snapshot.routeVariants.some((entry) => entry.nativeRuntime)) {
+    return true;
+  }
+  let scope: AgentHarnessModelCatalogParams | undefined;
+  const readReady = (entry: ModelCatalogEntry) => {
+    const harness = pluginGeneration.pluginRegistry?.agentHarnesses.find(
+      (registration) => registration.harness.id === entry.nativeRuntime,
+    )?.harness;
+    return (
+      !harness?.readModelCatalogReadiness ||
+      harness.readModelCatalogReadiness({
+        ...(scope ??= preparedHarnessCatalogScope(params.input)),
+        provider: entry.provider,
+        modelId: entry.id,
+      }) !== undefined
+    );
+  };
+  return withPluginRuntimeGenerationScope(
+    {
+      metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: pluginGeneration.pluginRegistry,
+    },
+    () => {
+      if (selection) {
+        const matches = (entry: ModelCatalogEntry) =>
+          entry.provider === selection.provider &&
+          entry.id === selection.modelId &&
+          entry.nativeRuntime === selection.runtime;
+        const entry = snapshot.entries.find(matches) ?? snapshot.routeVariants.find(matches);
+        return entry !== undefined && readReady(entry);
+      }
+      // These rows already belong to this snapshot; only native readiness can change.
+      return snapshot.routeVariants.every(
+        (entry) =>
+          !entry.nativeRuntime ||
+          (snapshot.nativeProviderOutcomes &&
+            Object.hasOwn(snapshot.nativeProviderOutcomes, entry.nativeRuntime) &&
+            snapshot.nativeProviderOutcomes[entry.nativeRuntime]?.some(
+              (outcome) => outcome.provider === entry.provider && outcome.status !== "ready",
+            )) ||
+          readReady(entry),
+      );
+    },
   );
 }
 
@@ -448,32 +397,23 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
-  isCurrent?: () => boolean;
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;
   onDiscoveryCompleted?: (rows: readonly ModelCatalogEntry[]) => void;
   onError?: (error: unknown, providers?: readonly string[]) => void;
 }): Promise<ModelCatalogSnapshot> {
-  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(params.input);
+  const { input, ...catalogParams } = params;
+  const { config, agentId, agentDir, workspaceDir } = preparedHarnessCatalogScope(input);
   return augmentModelCatalogWithAgentHarness({
+    ...catalogParams,
     cfg: config,
     agentId,
     agentDir,
     workspaceDir,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: resolveNativeModelPrimary(params.input.config, agentId),
-    nativeSelection: params.nativeSelection,
-    snapshot: params.snapshot,
-    preparedSnapshot: params.preparedSnapshot,
+    defaultModel: resolveNativeModelPrimary(input.config, agentId),
     includePickerRuntimes: params.nativeSelection === undefined,
-    pluginRegistry: params.pluginRegistry,
-    isCurrent: params.isCurrent,
-    observationConfig: params.input.config,
-    includesProvider: params.includesProvider,
-    normalizeProvider: params.normalizeProvider,
-    onDiscoveryStarted: params.onDiscoveryStarted,
-    onDiscoveryCompleted: params.onDiscoveryCompleted,
-    onError: params.onError,
+    observationConfig: input.config,
   });
 }

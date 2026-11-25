@@ -28,7 +28,7 @@ export function readSystemAgentInferenceUnavailableErrorDetails(
   if (!isProtocolRecord(details)) {
     return undefined;
   }
-  const code = (details as { code?: unknown }).code;
+  const code = details.code;
   return code === SystemAgentErrorDetailCodes.INFERENCE_UNAVAILABLE ? { code } : undefined;
 }
 
@@ -38,6 +38,6 @@ export function readSystemAgentSessionInvalidatedErrorDetails(
   if (!isProtocolRecord(details)) {
     return undefined;
   }
-  const code = (details as { code?: unknown }).code;
+  const code = details.code;
   return code === SystemAgentErrorDetailCodes.SESSION_INVALIDATED ? { code } : undefined;
 }

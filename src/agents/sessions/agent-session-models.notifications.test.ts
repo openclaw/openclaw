@@ -3,15 +3,13 @@ import { describe, expect, it } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
-  createTestSession,
+  createModelSelectionSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
-import { SettingsManager } from "./settings-manager.js";
 
 const reasoningModel = {
   ...testModel,
@@ -31,30 +29,13 @@ async function createNotificationSession(
     model?: () => Promise<void>;
   } = {},
 ) {
-  const resourceLoader = createResourceLoader(
-    new Map([
-      [
-        "thinking_level_select",
-        [async (event: unknown) => options.thinking?.(event as ThinkingLevelSelectEvent)],
-      ],
-      ["model_select", [async () => options.model?.()]],
-    ]),
-  );
-  const fixture = await createTestSession({
+  return createModelSelectionSession({
     model: options.reasoning === false ? plainModel : reasoningModel,
-    settingsManager: SettingsManager.inMemory({
-      compaction: { enabled: false },
-      retry: { enabled: false },
-      defaultThinkingLevel: "high",
-    }),
-    resourceLoader,
-  });
-  fixture.modelRegistry.registerProvider(testModel.provider, {
-    api: testModel.api,
-    baseUrl: testModel.baseUrl,
     models: [reasoningModel, plainModel],
+    thinkingLevel: "high",
+    onThinkingSelect: async (event) => options.thinking?.(event),
+    onModelSelect: async () => options.model?.(),
   });
-  return { ...fixture, extensionRuntime: resourceLoader.getExtensions().runtime };
 }
 
 function notificationFailure(
@@ -197,61 +178,49 @@ describe("metadata notifications after publication", () => {
     ]);
   });
 
-  it.each(["model", "thinking"] as const)(
-    "refuses queued detached %s changes after the extension runtime is invalidated",
-    async (kind) => {
-      const { session, sessionManager, settingsManager, extensionRuntime } =
-        await createNotificationSession();
-      expect(sessionManager.getSessionTarget()).toBeUndefined();
-      const before = {
-        entries: structuredClone(sessionManager.getEntries()),
-        model: session.model,
-        thinking: session.thinkingLevel,
-        defaultModel: settingsManager.getDefaultModel(),
-        defaultThinking: settingsManager.getDefaultThinkingLevel(),
-      };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const held = withSessionManagerWrite(sessionManager, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
-      let settled = false;
-      const change = (
-        kind === "model"
-          ? extensionRuntime.setModel(plainModel)
-          : extensionRuntime.setThinkingLevel("low")
-      ).then(
-        () => ({ status: "fulfilled" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
-      );
-      void change.then(() => {
-        settled = true;
-      });
-      try {
-        await setImmediate();
-        expect(settled).toBe(false);
-        expect(sessionManager.getEntries()).toEqual(before.entries);
-        extensionRuntime.invalidate("detached extension invalidated while queued");
-      } finally {
-        release.resolve();
-        await held;
-        await change;
-      }
-      const outcome = await change;
-      expect.soft(sessionManager.getEntries()).toEqual(before.entries);
-      expect.soft(session.model).toBe(before.model);
-      expect.soft(session.thinkingLevel).toBe(before.thinking);
-      expect.soft(settingsManager.getDefaultModel()).toBe(before.defaultModel);
-      expect.soft(settingsManager.getDefaultThinkingLevel()).toBe(before.defaultThinking);
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") {
-        expect(outcome.error).toMatchObject({
-          message: "detached extension invalidated while queued",
-        });
-        expect(hasModelFallbackStop(outcome.error)).toBe(false);
-      }
-    },
-  );
+  it("refuses queued detached model changes after the extension runtime is invalidated", async () => {
+    const { session, sessionManager, settingsManager, extensionRuntime } =
+      await createNotificationSession();
+    expect(sessionManager.getSessionTarget()).toBeUndefined();
+    const before = {
+      entries: structuredClone(sessionManager.getEntries()),
+      model: session.model,
+      thinking: session.thinkingLevel,
+      defaultModel: settingsManager.getGlobalSettings().defaultModel,
+      defaultThinking: settingsManager.getDefaultThinkingLevel(),
+    };
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const held = withSessionManagerWrite(sessionManager, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    let settled = false;
+    const change = extensionRuntime.setModel(plainModel).catch((error: unknown) => error);
+    void change.then(() => {
+      settled = true;
+    });
+    try {
+      await setImmediate();
+      expect(settled).toBe(false);
+      expect(sessionManager.getEntries()).toEqual(before.entries);
+      extensionRuntime.invalidate("detached extension invalidated while queued");
+    } finally {
+      release.resolve();
+      await held;
+      await change;
+    }
+    const failure = await change;
+    expect.soft(sessionManager.getEntries()).toEqual(before.entries);
+    expect.soft(session.model).toBe(before.model);
+    expect.soft(session.thinkingLevel).toBe(before.thinking);
+    expect.soft(settingsManager.getGlobalSettings().defaultModel).toBe(before.defaultModel);
+    expect.soft(settingsManager.getDefaultThinkingLevel()).toBe(before.defaultThinking);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: "detached extension invalidated while queued",
+    });
+    expect(hasModelFallbackStop(failure)).toBe(false);
+  });
 });

@@ -1,47 +1,44 @@
-// Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   WizardNextResult as ProtocolWizardNextResult,
   WizardStep as ProtocolWizardStep,
 } from "../../packages/gateway-protocol/src/index.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import {
+  readProviderAuthFailure,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
   DEVICE_CODE_PHISHING_WARNING,
   WizardCancelledError,
   type WizardProgress,
   type WizardPrompter,
+  type WizardSelectParams,
+  type WizardMultiSelectParams,
 } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
 export type WizardStep = ProtocolWizardStep;
 
-type WizardStepInputRequirement = "always" | "never" | "client-executor";
-
-const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
-  note: "never",
-  select: "always",
-  text: "always",
-  confirm: "always",
-  multiselect: "always",
-  progress: "never",
-  action: "client-executor",
-} as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
-
 /** Whether a step needs a user answer instead of client or gateway acknowledgement. */
 export function wizardStepAwaitsInput(step: WizardStep): boolean {
-  const requirement = WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE[step.type];
-  switch (requirement) {
-    case "always":
+  switch (step.type) {
+    case "select":
+    case "text":
+    case "confirm":
+    case "multiselect":
       return true;
-    case "never":
+    case "note":
+    case "progress":
       return false;
-    case "client-executor":
+    case "action":
       return step.executor === "client";
   }
-  const unhandledRequirement: never = requirement;
-  return unhandledRequirement;
+  const unhandledType: never = step.type;
+  return unhandledType;
 }
 
 /** Remove secret prefill before a wizard step crosses a client boundary. */
@@ -87,43 +84,25 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       id: randomUUID(),
     };
   }
+
+  async function note(message: string, title?: string): Promise<void> {
+    await prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
+  }
+
   return {
     cancel(message) {
       throw new WizardCancelledError(message);
     },
-    async intro(title: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message: "",
-        executor: "client",
-      });
-    },
+    intro: (title) => note("", title),
+    outro: (message) => note(message, "Done"),
+    note,
 
-    async outro(message: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title: "Done",
-        message,
-        executor: "client",
-      });
-    },
-
-    async note(message: string, title?: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message,
-        executor: "client",
-      });
-    },
-
-    async deviceCode(params: {
-      title: string;
-      code: string;
-      expiresInMinutes?: number;
-      message?: string;
-    }): Promise<void> {
+    async deviceCode(params): Promise<void> {
       const externalUrl = session.consumeExternalUrl(true);
       const fallbackMessage = [
         params.message ?? "Enter this one-time code on the provider's sign-in page.",
@@ -155,11 +134,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       });
     },
 
-    async select<T>(params: {
-      message: string;
-      options: Array<{ value: T; label: string; hint?: string }>;
-      initialValue?: T;
-    }): Promise<T> {
+    async select<T>(params: WizardSelectParams<T>): Promise<T> {
       const res = await prompt({
         type: "select",
         message: params.message,
@@ -174,11 +149,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       return res as T;
     },
 
-    async multiselect<T>(params: {
-      message: string;
-      options: Array<{ value: T; label: string; hint?: string }>;
-      initialValues?: T[];
-    }): Promise<T[]> {
+    async multiselect<T>(params: WizardMultiSelectParams<T>): Promise<T[]> {
       const res = await prompt({
         type: "multiselect",
         message: params.message,
@@ -206,15 +177,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
         params.validate,
         params.signal,
       );
-      const value =
-        res === null || res === undefined
-          ? ""
-          : typeof res === "string"
-            ? res
-            : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
-              ? String(res)
-              : "";
-      return value;
+      return normalizeTextAnswer(res) ?? "";
     },
 
     async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
@@ -230,11 +193,12 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
 
     progress(label: string): WizardProgress {
       let stopped = false;
-      session.pushProgress(label);
+      session.pushProgress(label, undefined, label);
       return {
-        update: (message) => {
-          if (!stopped) {
-            session.pushProgress(message);
+        update: (message, reason) => {
+          // A refusal outlives the spinner: the prompt that replaced it still shows why.
+          if (!stopped || reason) {
+            session.pushProgress(message, undefined, message, reason);
           }
         },
         stop: (message) => {
@@ -243,7 +207,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
           }
           stopped = true;
           if (message) {
-            session.pushProgress(message);
+            session.pushProgress(message, undefined, message);
           }
         },
       };
@@ -281,6 +245,7 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private failureReason: ProviderAuthFailureReason | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
   private preparedModelRef: string | undefined;
   private modelActivation: ProtocolWizardNextResult["modelActivation"];
@@ -339,6 +304,7 @@ export class WizardSession {
       done: true,
       status: this.status,
       error: this.error,
+      ...(this.failureReason ? { reason: this.failureReason } : {}),
       ...(this.configuredAccounts
         ? {
             channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
@@ -414,6 +380,7 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
+    materializeErrorStack(this.abortController.signal.reason);
     this.rejectPendingAnswers();
     this.consumeExternalUrl();
     this.progressSteps = [];
@@ -427,7 +394,10 @@ export class WizardSession {
     if (this.status !== "running") {
       return;
     }
-    this.inputClosedError ??= error;
+    if (!this.inputClosedError) {
+      materializeErrorStack(error);
+      this.inputClosedError = error;
+    }
     this.consumeExternalUrl();
     if (!this.cancellationLocked && !this.preparationCancellationLocked) {
       this.abortController.abort(this.inputClosedError);
@@ -444,10 +414,25 @@ export class WizardSession {
     this.cancellationLocked = true;
   }
 
+  /** A retained write callback cannot outlive the runner that owns setup. */
+  assertPersistentEffectCurrent(): void {
+    this.signal.throwIfAborted();
+    if (this.status !== "running" || this.settled) {
+      throw new Error("Setup session is no longer active");
+    }
+  }
+
   /** Protect preparation until the next client checkpoint or final commit. */
   lockCancellationForPreparation() {
     this.signal.throwIfAborted();
     this.preparationCancellationLocked = true;
+    // Saving starts only after the browser sign-in returned. Retire its code and tab so the
+    // remaining setup never asks the user to enter a code they already approved.
+    if (this.pendingExternalUrl || this.devicePresentation.deviceCode) {
+      this.consumeExternalUrl();
+      const message = "Signed in. Finishing setup…";
+      this.pushProgress(message, undefined, message);
+    }
   }
 
   /** Resume cancellation after preparation, before more input or verification. */
@@ -473,8 +458,18 @@ export class WizardSession {
     this.resolveStep(step);
   }
 
-  pushProgress(message: string, presentation?: Pick<WizardStep, "title" | "deviceCode">) {
+  pushProgress(
+    message: string,
+    presentation?: Pick<WizardStep, "title" | "deviceCode">,
+    progressMessage?: string,
+    reason?: ProviderAuthFailureReason,
+  ) {
     if (this.status !== "running") {
+      return;
+    }
+    if (reason && this.currentStep && wizardStepAwaitsInput(this.currentStep)) {
+      // The open prompt keeps its id, so an answer in flight still settles it.
+      this.currentStep = { ...this.currentStep, progressMessage: message, reason };
       return;
     }
     clearImmediate(this.externalUrlImmediate);
@@ -494,6 +489,8 @@ export class WizardSession {
           ? `${this.devicePresentation.message}\n\n${message}`
           : message,
       executor: "gateway",
+      ...(progressMessage !== undefined ? { progressMessage } : {}),
+      ...(reason ? { reason } : {}),
       ...(this.pendingExternalUrl ? { externalUrl: this.pendingExternalUrl } : {}),
     };
     if (this.stepDeferred) {
@@ -564,6 +561,7 @@ export class WizardSession {
       } else {
         this.status = "error";
         this.error = coerceErrorMessage(error);
+        this.failureReason = readProviderAuthFailure(error)?.reason;
       }
     } finally {
       this.settled = true;

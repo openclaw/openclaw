@@ -1,5 +1,6 @@
 import {
   resolveCommandAuthorization,
+  resolveCommandAuthorizationAsync,
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -47,81 +48,47 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export function createDiscordNativeCommandAuthority(params: {
+/** Reads command access once, when the command is admitted. */
+export function resolveDiscordNativeCommandAccess(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
   sender: { id: string; name?: string; tag?: string };
   allowNameMatching: boolean;
-  isPolicyCurrent?: () => boolean;
   accountId: string;
   guildId?: string;
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = resolveCommandAuthorization(params).assertOwnerCurrent;
-  const readAuthorization = () => {
-    const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
-    const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
-    const senderIsOwner =
-      params.isPolicyCurrent?.() !== false &&
-      (resolveDiscordOwnerAccess({
-        allowFrom: owners,
-        sender: params.sender,
-        allowNameMatching: params.allowNameMatching,
-      }).ownerAllowed ||
-        resolveCommandAuthorization({ ...params, cfg }).senderIsOwner);
-    const commands = resolveDiscordNativeCommandAllowlistAccess({
-      cfg,
-      accountId: params.accountId,
+  const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
+  const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
+  const senderIsOwner =
+    resolveDiscordOwnerAccess({
+      allowFrom: owners,
       sender: params.sender,
-      chatType: params.ctx.ChatType === "direct" ? "direct" : "channel",
-      guildId: params.guildId,
-    });
-    return {
-      senderIsOwner,
-      allowed:
-        (!commands.configured || commands.allowed) &&
-        (!owners ||
-          owners.includes("*") ||
-          senderIsOwner ||
-          commands.allowed ||
-          params.commandName === "status" ||
-          params.pluginCommand),
-    };
-  };
-  const assertActive = () => {
-    assertAdmittedOwner?.();
-    if (params.isPolicyCurrent?.() === false || !readAuthorization().allowed) {
-      throw new Error("Discord command authority changed; send a new request.");
-    }
-  };
+      allowNameMatching: params.allowNameMatching,
+    }).ownerAllowed || resolveCommandAuthorization({ ...params, cfg }).senderIsOwner;
+  const commands = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    sender: params.sender,
+    guildId: params.guildId,
+  });
   return {
-    assertActive,
-    assertOwnerCurrent: () => {
-      assertActive();
-      if (!readAuthorization().senderIsOwner) {
-        throw new Error("Discord owner authority changed; send a new request.");
-      }
-    },
-    senderIsOwner: () => readAuthorization().senderIsOwner,
-    isAllowed: () => {
-      try {
-        assertActive();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    senderIsOwner,
+    allowed:
+      (!commands.configured || commands.allowed) &&
+      (!owners ||
+        owners.includes("*") ||
+        senderIsOwner ||
+        commands.allowed ||
+        params.commandName === "status" ||
+        params.pluginCommand),
   };
 }
 
 function resolveDiscordNativeCommandAllowlistAccess(params: {
   cfg: OpenClawConfig;
-  accountId?: string | null;
   sender: { id: string; name?: string; tag?: string };
-  chatType: "direct" | "group" | "thread" | "channel";
-  conversationId?: string;
   guildId?: string | null;
 }) {
   const commandsAllowFrom = params.cfg.commands?.allowFrom;
@@ -159,12 +126,11 @@ function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
-export function resolveDiscordNativeCommandChannelAccessContext(params: {
+export function resolveDiscordNativeCommandAccessContext(params: {
   cfg: OpenClawConfig;
-  discordConfig: DiscordConfig;
   accountId: string;
+  discordConfig: DiscordConfig;
   sender: { id: string; name?: string; tag?: string };
-  isDirectMessage: boolean;
   isThreadChannel: boolean;
   guild?: Guild<true> | Guild | null;
   rawChannelId: string;
@@ -174,24 +140,22 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
   threadParentName?: string;
   threadParentSlug?: string;
 }) {
+  const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
+  const configuredDmAllowFrom = resolveDiscordAccountAllowFrom(params) ?? [];
+  const ownerAccess = resolveDiscordOwnerAccess({
+    allowFrom: configuredDmAllowFrom,
+    sender: params.sender,
+    allowNameMatching,
+  });
   const guild = params.guild ?? null;
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg: params.cfg,
-    accountId: params.accountId,
     sender: params.sender,
-    chatType: params.isDirectMessage
-      ? "direct"
-      : params.isThreadChannel
-        ? "thread"
-        : guild
-          ? "channel"
-          : "group",
-    conversationId: params.rawChannelId || undefined,
     guildId: guild?.id,
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: guild ?? undefined,
-    guildId: guild?.id ?? undefined,
+    guildId: guild?.id,
     guildEntries: params.discordConfig?.guilds,
   });
   const channelConfig = guild
@@ -206,23 +170,6 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
         scope: params.isThreadChannel ? "thread" : "channel",
       })
     : null;
-  return { commandsAllowFromAccess, guildInfo, channelConfig } as const;
-}
-
-export async function resolveDiscordGuildNativeCommandAuthorized(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  discordConfig: DiscordConfig;
-  useAccessGroups: boolean;
-  commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
-  guildInfo?: ReturnType<typeof resolveDiscordGuildEntry> | null;
-  channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
-  memberRoleIds: string[];
-  sender: { id: string; name?: string; tag?: string };
-  allowNameMatching: boolean;
-  ownerAllowListConfigured: boolean;
-  ownerAllowed: boolean;
-}) {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
@@ -230,23 +177,43 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   });
   const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
     groupPolicy,
-    guildInfo: params.guildInfo,
-    channelConfig: params.channelConfig,
+    guildInfo,
+    channelConfig,
   });
+  const channelDenial =
+    channelConfig?.enabled === false
+      ? "disabled"
+      : guild && (channelConfig?.allowed === false || !policyAuthorizer.allowed)
+        ? "not-allowed"
+        : undefined;
+  return {
+    allowNameMatching,
+    configuredDmAllowFrom,
+    ...ownerAccess,
+    commandsAllowFromAccess,
+    guildInfo,
+    channelConfig,
+    policyAuthorizer,
+    channelDenial,
+  };
+}
+
+export async function resolveDiscordGuildNativeCommandAuthorized(params: {
+  commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
+  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
+  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+  policyAuthorizer: ReturnType<typeof resolveDiscordChannelPolicyCommandAuthorizer>;
+  memberRoleIds: string[];
+  sender: { id: string; name?: string; tag?: string };
+  allowNameMatching: boolean;
+  ownerAllowListConfigured: boolean;
+  ownerAllowed: boolean;
+}) {
+  const { policyAuthorizer } = params;
   if (!policyAuthorizer.allowed) {
     return false;
   }
-  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    memberRoleIds: params.memberRoleIds,
-    sender: params.sender,
-    allowNameMatching: params.allowNameMatching,
-  });
-  const commandAllowlistAuthorizer = {
-    configured: params.commandsAllowFromAccess.configured,
-    allowed: params.commandsAllowFromAccess.allowed,
-  };
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState(params);
   const ownerAuthorizer = {
     configured: params.ownerAllowListConfigured,
     allowed: params.ownerAllowed,
@@ -262,10 +229,10 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   };
   const fallbackAuthorizers = [policyFallbackAuthorizer, ownerAuthorizer, memberAuthorizer];
   const authorizers = params.commandsAllowFromAccess.configured
-    ? [commandAllowlistAuthorizer]
+    ? [params.commandsAllowFromAccess]
     : fallbackAuthorizers;
   return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
+    useAccessGroups: true,
     authorizers,
     modeWhenAccessGroupsOff: "configured",
   });
@@ -315,81 +282,23 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     return false;
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channelContext = await resolveDiscordNativeInteractionChannelContext({
-    channel: interaction.channel,
-    client: interaction.client,
-    hasGuild: Boolean(interaction.guild),
-    channelIdFallback: interaction.rawData.channel_id ?? "",
-  });
-  const {
-    isDirectMessage,
-    isGroupDm,
-    isThreadChannel,
-    channelName,
-    channelSlug,
-    rawChannelId,
-    threadParentId,
-    threadParentName,
-    threadParentSlug,
-  } = channelContext;
+  const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
+  const { isDirectMessage, isGroupDm, channelName, channelSlug, rawChannelId, memberRoleIds } =
+    channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
   }
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.map((roleId: string) => roleId)
-    : [];
-  const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const useAccessGroups = true;
-  const configuredDmAllowFrom =
-    resolveDiscordAccountAllowFrom({
-      cfg,
-      accountId,
-    }) ?? [];
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: configuredDmAllowFrom,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    allowNameMatching,
+  const channelAccess = resolveDiscordNativeCommandAccessContext({
+    cfg,
+    accountId,
+    discordConfig,
+    sender,
+    ...channelContext,
+    guild: interaction.guild ?? null,
   });
-  const { commandsAllowFromAccess, guildInfo, channelConfig } =
-    resolveDiscordNativeCommandChannelAccessContext({
-      cfg,
-      discordConfig,
-      accountId,
-      sender,
-      isDirectMessage,
-      isThreadChannel,
-      guild: interaction.guild ?? null,
-      rawChannelId,
-      channelName,
-      channelSlug,
-      threadParentId,
-      threadParentName,
-      threadParentSlug,
-    });
-  if (channelConfig?.enabled === false) {
+  const { commandsAllowFromAccess, guildInfo, channelConfig } = channelAccess;
+  if (channelAccess.channelDenial) {
     return false;
-  }
-  if (interaction.guild && channelConfig?.allowed === false) {
-    return false;
-  }
-  if (useAccessGroups && interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
-    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-      groupPolicy,
-      guildInfo,
-      channelConfig,
-    });
-    if (!policyAuthorizer.allowed) {
-      return false;
-    }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
@@ -400,13 +309,9 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: configuredDmAllowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
-      allowNameMatching,
+      configuredAllowFrom: channelAccess.configuredDmAllowFrom,
+      sender,
+      allowNameMatching: channelAccess.allowNameMatching,
       cfg,
       rest: interaction.client.rest,
     });
@@ -427,18 +332,10 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   }
   if (!isDirectMessage) {
     const authorized = await resolveDiscordGuildNativeCommandAuthorized({
-      cfg,
-      accountId,
-      discordConfig,
-      useAccessGroups,
-      commandsAllowFromAccess,
-      guildInfo,
-      channelConfig,
+      ...channelAccess,
       memberRoleIds,
       sender,
-      allowNameMatching,
-      ownerAllowListConfigured: ownerAllowList != null,
-      ownerAllowed: ownerOk,
+      ownerAllowListConfigured: channelAccess.ownerAllowList != null,
     });
     if (!authorized) {
       return false;
@@ -453,24 +350,18 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     !resolveDiscordOwnerAccess({
       allowFrom: commandOwnerAllowFrom,
       sender,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
     }).ownerAllowed
   ) {
     const routeState = resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      guildId: interaction.guild?.id,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
-      conversationId: rawChannelId,
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel
-        ? params.threadBindings?.getByThreadId(rawChannelId)
-        : undefined,
+      interaction,
+      channelContext,
+      threadBindings: params.threadBindings,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext: params.buildContext,
       interaction,
       channelContext,
@@ -479,7 +370,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       sessionPrefix: params.sessionPrefix ?? "discord:slash",
       channelConfig,
       guildInfo,
-      allowNameMatching,
+      allowNameMatching: channelAccess.allowNameMatching,
       commandAuthorized: true,
       user,
       sender,
@@ -487,7 +378,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       commandArgs: {},
     });
     if (
-      !resolveCommandAuthorization({ ctx: ctxPayload, cfg, commandAuthorized: true }).senderIsOwner
+      !(await resolveCommandAuthorizationAsync({ ctx: ctxPayload, cfg, commandAuthorized: true }))
+        .senderIsOwner
     ) {
       return false;
     }

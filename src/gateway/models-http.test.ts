@@ -1,5 +1,4 @@
-// Models HTTP tests cover OpenAI-compatible /v1/models behavior, read-scope
-// authorization, ordering, and disabled-surface responses.
+import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -14,16 +13,23 @@ let startGatewayServer: typeof import("./server.js").startGatewayServer;
 let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let enabledPort: number;
 
-beforeAll(async () => {
-  ({ startGatewayServer } = await import("./server.js"));
-  const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  enabledPort = portClaim.port;
-  enabledServer = await startOpenAiCompatGatewayServer({
+async function startModels(
+  overrides: Partial<Parameters<typeof startOpenAiCompatGatewayServer>[0]> = {},
+) {
+  const port = overrides.port ?? (await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
+  const server = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    port: portClaim,
     auth: { mode: "none" },
     openAiChatCompletionsEnabled: true,
+    ...overrides,
+    port,
   });
+  return { server, port: port.port };
+}
+
+beforeAll(async () => {
+  ({ startGatewayServer } = await import("./server.js"));
+  ({ server: enabledServer, port: enabledPort } = await startModels());
 });
 
 afterAll(async () => {
@@ -39,74 +45,40 @@ async function getModels(pathname: string, headers?: Record<string, string>) {
   });
 }
 
-async function expectFirstModelId(): Promise<string> {
-  const list = (await (await getModels("/v1/models")).json()) as {
-    data?: Array<{ id?: string }>;
-  };
-  const firstId = list.data?.[0]?.id;
-  if (typeof firstId !== "string") {
-    throw new Error("Expected /v1/models to return at least one string model id");
-  }
-  return firstId;
-}
-
-async function expectMissingReadScope(res: Response) {
-  expect(res.status).toBe(403);
-  await expect(res.json()).resolves.toEqual({
-    ok: false,
-    error: {
-      type: "forbidden",
-      message: "missing scope: operator.read",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    },
-  });
+async function modelIds(response: Promise<Response>) {
+  const res = await response;
+  expect(res.status).toBe(200);
+  const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
+  expect(json.object).toBe("list");
+  return json.data?.map((entry) => entry.id);
 }
 
 describe("OpenAI-compatible models HTTP API (e2e)", () => {
-  it("serves /v1/models when compatibility endpoints are enabled", async () => {
-    const res = await getModels("/v1/models");
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
-    expect(json.object).toBe("list");
-    expect(Array.isArray(json.data)).toBe(true);
-    expect((json.data?.length ?? 0) > 0).toBe(true);
-    expect(json.data?.map((entry) => entry.id)).toContain("openclaw");
-    expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
-    expect(
-      json.data?.every((entry) => typeof entry.id === "string" && entry.id?.startsWith("openclaw")),
-    ).toBe(true);
-  });
-
   it("serves /v1/models without trusting malformed Host headers", async () => {
-    const res = await getModels("/v1/models", { Host: "[" });
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
-    expect(json.object).toBe("list");
-    expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
+    const ids = await modelIds(getModels("/v1/models", { Host: "[" }));
+    expect(ids).toEqual(expect.arrayContaining(["openclaw", "openclaw/default"]));
+    expect(ids?.every((id) => typeof id === "string" && id.startsWith("openclaw"))).toBe(true);
   });
 
-  it("serves /v1/models/{id}", async () => {
-    const firstId = await expectFirstModelId();
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`);
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { id?: string; object?: string };
-    expect(json.object).toBe("model");
-    expect(json.id).toBe(firstId);
-  });
+  it.each(["openclaw%2Fnonexistent", "openclaw:nonexistent"])(
+    "rejects unknown agent %s",
+    async (model) => {
+      const res = await getModels(`/v1/models/${model}`);
+      expect(res.status).toBe(404);
+      await expect(res.json()).resolves.toHaveProperty("error.type", "invalid_request_error");
+    },
+  );
 
-  it("rejects agent-specific model ids outside the configured roster", async () => {
-    const res = await getModels("/v1/models/openclaw%2Fnonexistent");
-    expect(res.status).toBe(404);
-    await expect(res.json()).resolves.toEqual({
-      error: {
-        message: "Model 'openclaw/nonexistent' not found.",
-        type: "invalid_request_error",
-      },
-    });
+  it.each([
+    ["openclaw:main", "openclaw/main"],
+    ["agent:main", "openclaw/main"],
+    ["OpenClaw%2FMain", "openclaw/main"],
+    ["OPENCLAW", "openclaw"],
+    ["OpenClaw%2FDefault", "openclaw/default"],
+  ])("resolves accepted alias %s to listed model %s", async (pathId, listedId) => {
+    const res = await getModels(`/v1/models/${pathId}`);
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ id: listedId, object: "model" });
   });
 
   it("keeps generic aliases available for ownerless explicit fleets", async () => {
@@ -115,10 +87,7 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
         ownership: "explicit",
         entries: { main: {}, research: {} },
       };
-      const list = await getModels("/v1/models");
-      expect(list.status).toBe(200);
-      const listJson = (await list.json()) as { data?: Array<{ id?: string }> };
-      expect(listJson.data?.map((entry) => entry.id)).toContain("openclaw/default");
+      expect(await modelIds(getModels("/v1/models"))).toContain("openclaw/default");
 
       const detail = await getModels("/v1/models/openclaw%2Fdefault");
       expect(detail.status).toBe(200);
@@ -128,63 +97,60 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     }
   });
 
-  it("rejects operator scopes that lack read access", async () => {
-    const res = await getModels("/v1/models", { "x-openclaw-scopes": "operator.approvals" });
-    await expectMissingReadScope(res);
-  });
-
-  it("rejects requests with no declared operator scopes", async () => {
-    const res = await getModels("/v1/models", { "x-openclaw-scopes": "" });
-    await expectMissingReadScope(res);
-  });
-
-  it("rejects /v1/models/{id} without read access", async () => {
-    const firstId = await expectFirstModelId();
-    const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`, {
-      "x-openclaw-scopes": "operator.approvals",
-    });
-    await expectMissingReadScope(res);
+  it.each([
+    ["operator.sessions.read", "/v1/models"],
+    ["operator.sessions.read", "/v1/models/openclaw"],
+    ["", "/v1/models"],
+  ])("rejects scope '%s' for %s", async (scope, pathname) => {
+    const res = await getModels(pathname, { "x-openclaw-scopes": scope });
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toHaveProperty("error.details.missingScope", "operator.read");
   });
 
   it("rejects when disabled", async () => {
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port: portClaim,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: false,
-    });
+    const competitor = createServer();
+    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
-        headers: {},
-      });
+      ({ server } = await startModels({
+        startGatewayServer: async (...args) => {
+          // Try to steal the socket before the Gateway can finish its awaited startup work.
+          const collision = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
+            competitor.once("error", resolve);
+            competitor.listen(port, "127.0.0.1", () => resolve(undefined));
+          });
+          expect(collision?.code).toBe("EADDRINUSE");
+          return await startGatewayServer(...args);
+        },
+        port: portClaim,
+        openAiChatCompletionsEnabled: false,
+      }));
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
       expect(res.status).toBe(404);
     } finally {
-      await server.close({ reason: "models disabled test done" });
+      try {
+        await server?.close({ reason: "models disabled test done" });
+      } finally {
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
     }
   });
 
   it("treats shared-secret bearer auth as full compat operator access", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port: portClaim,
-      auth: { mode: "token", token: "secret" },
-      openAiChatCompletionsEnabled: true,
-    });
+    const { server, port } = await startModels({ auth: { mode: "token", token: "secret" } });
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+      const response = fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {
           authorization: "Bearer secret",
           "x-openclaw-scopes": "operator.approvals",
         },
       });
-      expect(res.status).toBe(200);
-      const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
-      expect(json.object).toBe("list");
-      expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
+      expect(await modelIds(response)).toContain("openclaw/default");
     } finally {
       await server.close({ reason: "models token auth compat test done" });
     }

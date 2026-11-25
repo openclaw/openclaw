@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBoundedUtf8Tail, decodeBoundedUtf8Tail } from "./bounded-utf8-tail.js";
+import { createBoundedUtf8Tail } from "./bounded-utf8-tail.js";
 
 describe("bounded UTF-8 tail", () => {
   it("keeps the newest bytes across several chunks", () => {
@@ -11,15 +11,17 @@ describe("bounded UTF-8 tail", () => {
   });
 
   it("drops a partial leading code point after byte truncation", () => {
-    const encoded = Buffer.from(`old🦞new`);
+    const tail = createBoundedUtf8Tail(5);
+    tail.append(Buffer.from(`old🦞new`));
 
-    expect(decodeBoundedUtf8Tail(encoded, 5)).toBe("new");
+    expect(tail.text()).toBe("new");
   });
 
   it("drops a partial trailing code point after byte truncation", () => {
-    const encoded = Buffer.from([0xf0, 0x9f, 0x98, 0x80]);
+    const tail = createBoundedUtf8Tail(1);
+    tail.append(Buffer.from([0xf0, 0x9f, 0x98, 0x80]));
 
-    expect(decodeBoundedUtf8Tail(encoded, 1)).toBe("");
+    expect(tail.text()).toBe("");
   });
 
   it("replaces the retained tail when one chunk fills the limit", () => {

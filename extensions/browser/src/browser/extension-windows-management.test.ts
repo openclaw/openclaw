@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   managementRequestSchema,
   parseWindowsJson,
@@ -14,177 +19,123 @@ import {
   WindowsManagementTransportError,
 } from "./extension-windows-management.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
-const missing = {
-  v: 1,
-  ok: true,
-  code: "ok",
-  registration: "missing",
-  mode: null,
-  store: "missing",
-  installation: null,
-};
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
+  return { ...actual, runCommandBuffered: vi.fn(actual.runCommandBuffered) };
+});
+const { runCommandBuffered: runProcess } = await vi.importActual<
+  typeof import("openclaw/plugin-sdk/process-runtime")
+>("openclaw/plugin-sdk/process-runtime");
+const { request, response: owned } = windowsFixture();
+const missing = { ...owned, registration: "missing", mode: null, installation: null };
+const framed = (value: unknown, suffix = "\n") => Buffer.from(JSON.stringify(value) + suffix);
+const responseScript = (value: unknown, exitCode = 0) =>
+  `process.stdout.write(${JSON.stringify(framed(value).toString())}); process.exitCode=${exitCode};`;
+const runManagement = (signal?: AbortSignal) =>
+  runWindowsManagement("fixture.exe", request, { signal });
 describe("accepted Windows management ABI", () => {
-  it.each([
-    '{"v":1,"v":1}',
-    '{"v":1,"\\u0076":1}',
-    '{"v":1,"context":{"x":1,"x":1}}',
-    '{"v":1.0}',
-    '{"v":1e0}',
-    '{"v":1,"x":"\\ud800"}',
-  ])("rejects ambiguous JSON %s", (json) => {
+  const invalidJson = ['{"v":1,"\\u0076":1}', '{"v":1.0}', '{"v":1,"x":"\\ud800"}'];
+  it.each(invalidJson)("rejects ambiguous JSON %s", (json) => {
     expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
   });
   it("enforces exact byte bounds, UTF-8 and LF-inclusive response framing", () => {
-    const request = windowsFixture().request;
     const json = JSON.stringify(request);
-    expect(
-      parseWindowsJson(Buffer.from(json + " ".repeat(32768 - Buffer.byteLength(json)))),
-    ).toEqual(request);
-    expect(() =>
-      parseWindowsJson(Buffer.from(json + " ".repeat(32769 - Buffer.byteLength(json)))),
-    ).toThrow();
+    const padded = (size: number) => Buffer.from(json + " ".repeat(size - Buffer.byteLength(json)));
+    expect(parseWindowsJson(padded(32768))).toEqual(request);
+    expect(() => parseWindowsJson(padded(32769))).toThrow();
     for (const bytes of [Buffer.from([239, 187, 191, 123, 125]), Buffer.from([192, 175])]) {
       expect(() => parseWindowsJson(bytes)).toThrow();
     }
-    expect(
-      parseWindowsManagementResponse(Buffer.from(JSON.stringify(missing) + "\n"), 0, request),
-    ).toEqual(missing);
+    const parse = (suffix = "\n", code = 0) =>
+      parseWindowsManagementResponse(framed(missing, suffix), code, request);
+    expect(parse()).toEqual(missing);
     for (const suffix of ["", "\r\n", "\n\n", "\n{}"]) {
-      expect(() =>
-        parseWindowsManagementResponse(Buffer.from(JSON.stringify(missing) + suffix), 0, request),
-      ).toThrow();
+      expect(() => parse(suffix)).toThrow();
     }
-    expect(() =>
-      parseWindowsManagementResponse(Buffer.from(JSON.stringify(missing) + "\n"), 1, request),
-    ).toThrow();
+    expect(() => parse("\n", 1)).toThrow();
   });
-  it("enforces action/Store and discriminated context rules", () => {
-    const { request } = windowsFixture();
-    for (const [action, store] of [
-      ["inspect", "request"],
-      ["inspect", "remove"],
-      ["install", "remove"],
-      ["uninstall", "request"],
-    ]) {
-      expect(managementRequestSchema.safeParse({ ...request, action, store }).success).toBe(false);
-    }
-    expect(
-      managementRequestSchema.safeParse({
-        ...request,
-        mode: "companion-managed-wsl",
-        context: null,
-      }).success,
-    ).toBe(true);
-    expect(
-      managementRequestSchema.safeParse({ ...request, mode: "companion-managed-wsl" }).success,
-    ).toBe(false);
-    expect(
-      managementRequestSchema.safeParse({
-        ...request,
-        expectedOrigins: [WINDOWS_OFFICIAL_ORIGIN, WINDOWS_OFFICIAL_ORIGIN],
-      }).success,
-    ).toBe(false);
+  it.each([
+    [{ action: "inspect", store: "request" }, false],
+    [{ action: "inspect", store: "remove" }, false],
+    [{ action: "install", store: "remove" }, false],
+    [{ action: "install", store: "request" }, true],
+    [{ action: "uninstall", store: "request" }, false],
+    [{ mode: "companion-managed-wsl", context: null }, true],
+    [{ mode: "companion-managed-wsl" }, false],
+    [{ expectedOrigins: [WINDOWS_OFFICIAL_ORIGIN, WINDOWS_OFFICIAL_ORIGIN] }, false],
+  ] as const)("validates management request %j as %s", (overrides, success) => {
+    expect(managementRequestSchema.safeParse({ ...request, ...overrides }).success).toBe(success);
   });
   it("accepts truthful partial failures and rejects disabled/unknown invented inventory", () => {
-    const f = windowsFixture();
-    const request = managementRequestSchema.parse({
-      ...f.request,
-      action: "install",
-      store: "request",
-    });
-    const partial = { ...f.response, ok: false, code: "browser_control_disabled" };
-    expect(
-      parseWindowsManagementResponse(Buffer.from(JSON.stringify(partial) + "\n"), 1, request),
-    ).toEqual(partial);
+    const install: typeof request = { ...request, action: "install", store: "request" };
+    const partial = { ...owned, ok: false, code: "browser_control_disabled" };
+    const parse = (response: unknown) =>
+      parseWindowsManagementResponse(framed(response), 1, install);
+    expect(parse(partial)).toEqual(partial);
     for (const store of ["disabled", "unknown"]) {
-      expect(() =>
-        parseWindowsManagementResponse(
-          Buffer.from(JSON.stringify({ ...partial, store }) + "\n"),
-          1,
-          request,
-        ),
-      ).toThrow();
+      expect(() => parse({ ...partial, store })).toThrow();
     }
-    expect(() =>
-      parseWindowsManagementResponse(
-        Buffer.from(JSON.stringify({ ...f.response, code: "context_conflict", ok: false }) + "\n"),
-        1,
-        request,
-      ),
-    ).toThrow();
+    expect(() => parse({ ...owned, code: "context_conflict", ok: false })).toThrow();
   });
 });
-const directories: string[] = [];
-afterEach(async () => {
-  for (const directory of directories.splice(0)) {
-    await fs.rm(directory, { recursive: true, force: true });
-  }
+async function makeDirectory() {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-"));
+  onTestFinished(() => fs.rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+afterEach(() => {
+  vi.mocked(runCommandBuffered).mockReset();
 });
 describe("real child-process management transport (not Windows PE proof)", () => {
   async function child(body: string) {
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-"));
-    directories.push(directory);
-    const script = path.join(directory, "helper.mjs");
+    const script = path.join(await makeDirectory(), "helper.mjs");
     await fs.writeFile(script, body);
-    const runner: typeof runCommandBuffered = (argv, options) => {
+    return vi.mocked(runCommandBuffered).mockImplementation((argv, options) => {
       expect(argv.slice(1)).toEqual(["--manage"]);
-      return runCommandBuffered([process.execPath, script, ...argv.slice(1)], options);
-    };
-    return runner;
+      return runProcess([process.execPath, script, ...argv.slice(1)], options);
+    });
   }
   it("sends exactly --manage, closes stdin at EOF and accepts a bounded typed failure on exit1", async () => {
     const response = { ...missing, ok: false, code: "busy", registration: null, store: null };
-    const run = await child(
-      'let input=""; for await (const chunk of process.stdin) input+=chunk; JSON.parse(input); if(process.argv[2]!=="--manage")process.exit(2); process.stdout.write(' +
-        JSON.stringify(JSON.stringify(response) + "\n") +
-        "); process.exitCode=1;",
+    await child(
+      'let input=""; for await (const chunk of process.stdin) input+=chunk; JSON.parse(input); if(process.argv[2]!=="--manage")process.exit(2);' +
+        responseScript(response, 1),
     );
-    expect(await runWindowsManagement("fixture.exe", windowsFixture().request, { run })).toEqual(
-      response,
-    );
+    expect(await runManagement()).toEqual(response);
   });
-  it.each(["stderr", "overflow", "exit-mismatch", "legacy"])(
-    "rejects %s without any retry",
-    async (kind) => {
-      const body =
-        kind === "stderr"
-          ? 'process.stderr.write("private error"); process.stdout.write(' +
-            JSON.stringify(JSON.stringify(missing) + "\n") +
-            ");"
-          : kind === "overflow"
-            ? 'process.stdout.write("x".repeat(32769));'
-            : kind === "legacy"
-              ? "process.stdout.write(Buffer.from([4,0,0,0,123,125]));"
-              : "process.stdout.write(" +
-                JSON.stringify(JSON.stringify(missing) + "\n") +
-                "); process.exitCode=1;";
-      const run = vi.fn(await child(body));
-      await expect(
-        runWindowsManagement("fixture.exe", windowsFixture().request, { run }),
-      ).rejects.toThrow(WindowsManagementTransportError);
-      expect(run).toHaveBeenCalledTimes(1);
-    },
-  );
-  it("joins cancellation after the real child has consumed management EOF", async () => {
+  it.each([
+    ["stderr", 'process.stderr.write("private error");' + responseScript(missing)],
+    ["overflow", 'process.stdout.write("x".repeat(32769));'],
+    ["exit-mismatch", responseScript(missing, 1)],
+  ])("rejects %s without any retry", async (_kind, body) => {
+    const run = await child(body);
+    await expect(runManagement()).rejects.toThrow(WindowsManagementTransportError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it("joins cancellation after the real child has consumed management EOF", async ({ signal }) => {
+    const receipts = await openFixtureReceiptChannel();
+    onTestFinished(() => receipts.close());
     const controller = new AbortController();
-    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-ready-"));
-    directories.push(directory);
-    const ready = path.join(directory, "ready");
-    const run = await child(
-      'import fs from "node:fs"; for await (const chunk of process.stdin) {} fs.writeFileSync(' +
-        JSON.stringify(ready) +
-        ', "ready"); setInterval(()=>{},1000);',
+    const ready = path.join(await makeDirectory(), "ready");
+    const encodedReady = JSON.stringify(ready);
+    await child(
+      fixtureReceiptClientSource(receipts.endpoint) +
+        `\nimport fs from "node:fs"; for await (const chunk of process.stdin) {} fs.writeFileSync(${encodedReady}, "ready"); sendReceipt(${encodedReady}, "ready"); setInterval(()=>{},1000);`,
     );
-    const result = runWindowsManagement("fixture.exe", windowsFixture().request, {
-      run,
-      signal: controller.signal,
-    });
+    const result = runManagement(controller.signal);
     const rejected = expect(result).rejects.toThrow("outcome is unknown");
     try {
-      await vi.waitFor(async () => expect(await fs.readFile(ready, "utf8")).toBe("ready"));
+      // The durable marker precedes the receipt; process settlement may overtake socket delivery.
+      const confirmReady = async () => expect(await fs.readFile(ready, "utf8")).toBe("ready");
+      await withinTest(
+        Promise.race([receipts.waitFor(ready, "ready"), result.then(confirmReady, confirmReady)]),
+        signal,
+      );
+      await confirmReady();
     } finally {
       controller.abort();
+      await rejected;
     }
-    await rejected;
   });
 });

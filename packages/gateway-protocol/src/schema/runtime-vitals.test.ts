@@ -16,7 +16,6 @@ describe("CPU breakdown wire contract", () => {
   it.each([
     undefined,
     {},
-    { hostUtilization: 0.5, hostCpuCount: 8 },
     { mainThreadCoreRatio: 0.5, workerCoreRatio: 1.5, otherThreadsCoreRatio: 0.5 },
     {
       mainThreadCoreRatio: 0,

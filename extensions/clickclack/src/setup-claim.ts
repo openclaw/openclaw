@@ -1,4 +1,5 @@
 // ClickClack plugin module claims short-lived setup codes without loading gateway clients.
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   createProviderOperationDeadline,
   readProviderJsonResponse,
@@ -18,20 +19,10 @@ import {
   isClickClackSetupLoopbackHost,
   requireClickClackSetupApiBaseUrl,
 } from "./setup-contract.js";
-import type { ClickClackSetupCodeClaim } from "./types.js";
 
 const CLICKCLACK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES = 64 * 1024;
 const CLICKCLACK_SETUP_CODE_CLAIM_TIMEOUT_MS = 30_000;
-
-class ClickClackSetupCodeClaimError extends Error {
-  constructor(
-    readonly status: number,
-    detail: string,
-  ) {
-    super(`ClickClack setup code claim failed (${status}): ${detail}`);
-  }
-}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -48,10 +39,7 @@ function requireString(record: Record<string, unknown>, key: string, label: stri
   return value;
 }
 
-function parseClickClackSetupCodeClaim(
-  value: unknown,
-  expectedClaimUrl?: string,
-): ClickClackSetupCodeClaim {
+function parseClickClackSetupCodeClaim(value: unknown, expectedClaimUrl?: string) {
   const claim = requireRecord(value, "response");
   const bot = requireRecord(claim.bot, "bot");
   const workspace = requireRecord(claim.workspace, "workspace");
@@ -62,10 +50,7 @@ function parseClickClackSetupCodeClaim(
   if (defaultTo !== undefined && typeof defaultTo !== "string") {
     throw new Error("ClickClack setup code claim returned invalid defaults.defaultTo");
   }
-  if (
-    allowFrom !== undefined &&
-    (!Array.isArray(allowFrom) || !allowFrom.every((entry) => typeof entry === "string"))
-  ) {
+  if (allowFrom !== undefined && !isStringArray(allowFrom)) {
     throw new Error("ClickClack setup code claim returned invalid defaults.allowFrom");
   }
   if (agentActivity !== undefined && typeof agentActivity !== "boolean") {
@@ -77,7 +62,7 @@ function parseClickClackSetupCodeClaim(
   if (expectedClaimUrl && !hasContractMetadata) {
     throw new Error("ClickClack setup code claim returned a legacy response for an exact endpoint");
   }
-  let contract: Pick<ClickClackSetupCodeClaim, "contract_version" | "api_base_url"> = {};
+  let contract: { contract_version?: 1; api_base_url?: string } = {};
   if (hasContractMetadata) {
     if (contractVersion !== 1 || typeof apiBaseUrlValue !== "string") {
       throw new Error("ClickClack setup code claim returned invalid v1 contract metadata");
@@ -123,14 +108,10 @@ export async function claimClickClackSetupCode(params: {
   code: string;
   fetch?: typeof fetch;
   lookupFn?: LookupFn;
-}): Promise<ClickClackSetupCodeClaim> {
-  let parsedClaimUrl: URL;
-  try {
-    parsedClaimUrl = new URL(params.claimUrl);
-  } catch {
-    throw new Error("ClickClack setup code claim URL must be a valid HTTP(S) endpoint.");
-  }
+}) {
+  const parsedClaimUrl = URL.parse(params.claimUrl);
   if (
+    !parsedClaimUrl ||
     (parsedClaimUrl.protocol !== "http:" && parsedClaimUrl.protocol !== "https:") ||
     parsedClaimUrl.username ||
     parsedClaimUrl.password ||
@@ -192,7 +173,10 @@ export async function claimClickClackSetupCode(params: {
   try {
     if (!response.ok) {
       const detail = await readResponseTextLimited(response, CLICKCLACK_ERROR_BODY_LIMIT_BYTES);
-      throw new ClickClackSetupCodeClaimError(response.status, detail);
+      throw Object.assign(
+        new Error(`ClickClack setup code claim failed (${response.status}): ${detail}`),
+        { status: response.status },
+      );
     }
     const value = await readProviderJsonResponse<unknown>(response, "ClickClack setup code claim", {
       maxBytes: CLICKCLACK_SETUP_CODE_CLAIM_JSON_LIMIT_BYTES,

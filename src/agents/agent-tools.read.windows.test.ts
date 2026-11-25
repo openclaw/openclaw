@@ -14,6 +14,48 @@ import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-t
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("registered core read on Windows", () => {
+  it.runIf(process.platform === "win32").each(["", "cygdrive/", "mnt/"])(
+    "reads, writes, and edits %s drive aliases through workspace containment",
+    async (prefix) => {
+      const workspaceDir = tempDirs.make("openclaw-drive-workspace-");
+      const outsideDir = tempDirs.make("openclaw-drive-outside-");
+      const alias = (target: string) => {
+        const drive = target[0]!.toLowerCase();
+        return `/${prefix}${drive}/${target.slice(3).replaceAll("\\", "/")}`;
+      };
+      const targetPath = path.join(workspaceDir, "note.txt");
+      const outsidePath = path.join(outsideDir, "note.txt");
+      await fs.writeFile(targetPath, "original", "utf8");
+      await fs.writeFile(outsidePath, "outside", "utf8");
+      const { readTool, writeTool, editTool } = expectReadWriteEditTools(
+        createOpenClawCodingTools({
+          workspaceDir,
+          config: { tools: { fs: { workspaceOnly: true } } },
+        }),
+      );
+
+      expect(
+        getTextContent(await readTool.execute("drive-read", { path: alias(targetPath) })),
+      ).toBe("original");
+      await writeTool.execute("drive-write", { path: `@${alias(targetPath)}`, content: "written" });
+      await editTool.execute("drive-edit", {
+        path: alias(targetPath),
+        edits: [{ oldText: "written", newText: "edited" }],
+      });
+      expect(await fs.readFile(targetPath, "utf8")).toBe("edited");
+      for (const [tool, args] of [
+        [readTool, {}],
+        [writeTool, { content: "denied" }],
+        [editTool, { edits: [{ oldText: "outside", newText: "denied" }] }],
+      ] as const) {
+        await expect(
+          tool.execute("drive-outside", { ...args, path: alias(outsidePath) }),
+        ).rejects.toThrow(/Path escapes sandbox root/);
+      }
+      expect(await fs.readFile(outsidePath, "utf8")).toBe("outside");
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "reads text produced by Windows PowerShell Out-File",
     async () => {
@@ -47,14 +89,8 @@ describe("registered core read on Windows", () => {
     const modelPath = `~\\${path.relative(homeDir, targetPath)}`;
     await fs.writeFile(targetPath, "home read", "utf8");
 
-    const tools = createOpenClawCodingTools({ workspaceDir });
-    const { readTool } = expectReadWriteEditTools(tools);
-    const result = await readTool?.execute("tool-home-read", { path: modelPath });
-    const text = result?.content
-      ?.filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n");
-
-    expect(text).toContain("home read");
+    const { readTool } = expectReadWriteEditTools(createOpenClawCodingTools({ workspaceDir }));
+    const result = await readTool.execute("tool-home-read", { path: modelPath });
+    expect(getTextContent(result)).toContain("home read");
   });
 });

@@ -1,24 +1,25 @@
-/**
- * Scheduled restrict-only exec pin enforcement in createOpenClawCodingTools.
- * A cap captured from a host-pinned creator surface must rebuild exec pinned to
- * that target; absence of the pin keeps baseline exec behavior.
- */
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawCodingToolsInternal as createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
   defaults: vi.fn<(defaults?: ExecToolDefaults) => void>(),
+  processDefaults: vi.fn<(defaults?: ProcessToolDefaults) => void>(),
   exec: vi.fn(async () => ({ content: [], details: {} })),
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
 
+// mock-isolation: observe pinned arguments without executing real shell commands or process tools.
 vi.mock("./bash-tools.js", () => ({
   createExecTool: (defaults?: ExecToolDefaults) => {
     shellSpies.defaults(defaults);
@@ -39,43 +40,109 @@ vi.mock("./bash-tools.js", () => ({
       execute: shellSpies.exec,
     };
   },
-  createProcessTool: () => ({
-    name: "process",
-    description: "process test double",
-    parameters: { type: "object", properties: {} },
-    execute: shellSpies.process,
-  }),
+  createProcessTool: (defaults?: ProcessToolDefaults) => {
+    shellSpies.processDefaults(defaults);
+    return {
+      name: "process",
+      description: "process test double",
+      parameters: { type: "object", properties: {} },
+      execute: shellSpies.process,
+    };
+  },
 }));
+
+const scheduledToolPolicy = {
+  version: 1,
+  mode: "trusted",
+  execTarget: { host: "gateway", ask: "always" },
+} as const;
+function scheduledExec(options: Parameters<typeof createOpenClawCodingTools>[0] = {}) {
+  return expectDefined(
+    createOpenClawCodingTools({ scheduledToolPolicy, ...options }).find(
+      (tool) => tool.name === "exec",
+    ),
+    "scheduled exec",
+  );
+}
 
 describe("createOpenClawCodingTools scheduled exec target", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("pins exec to the scheduled cap's restrict-only target", async () => {
+  it("keeps participation exec approvals in-turn, disables exit wakes, and makes process observational", async () => {
     const tools = createOpenClawCodingTools({
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "trusted",
-        execTarget: { host: "gateway", ask: "always" },
-      },
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:test",
+      }),
+      sessionPermissionPolicy: { mode: "full", root: process.cwd() },
+      exec: { notifyOnExit: true, approvalFollowupMode: "agent" },
+      approvalReviewerDeviceId: "participant-device",
     });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    if (!execTool) {
-      throw new Error("expected an exec tool on the scheduled surface");
-    }
-    // The pinned schema stops advertising host/security/ask/node entirely.
+    await tools
+      .find((tool) => tool.name === "exec")!
+      .execute("participation-exec", { command: "true" });
+    await tools
+      .find((tool) => tool.name === "process")!
+      .execute("participation-process", { action: "list" });
+    expect(shellSpies.defaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        notifyOnExit: false,
+        approvalFollowupMode: undefined,
+        approvalReviewerDeviceId: undefined,
+        mode: "ask",
+        bypassHostApprovalFloors: false,
+      }),
+    );
+    expect(shellSpies.processDefaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true, includeAncestors: false }),
+    );
+  });
+
+  it("projects participant containment into the verified sandbox workspace", async () => {
+    const hostRoot = "/tmp/participant-original";
+    const sandboxRoot = "/tmp/participant-sandbox";
+    const tools = createOpenClawCodingTools({
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+        source: {
+          agentId: "main",
+          sessionId: "invited",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: hostRoot,
+        },
+      }),
+      workspaceDir: hostRoot,
+      sandbox: createSandboxTestContext({
+        overrides: {
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: hostRoot,
+          fsBridge: createHostSandboxFsBridge(sandboxRoot),
+        },
+      }),
+      sessionPermissionPolicy: { mode: "full", root: hostRoot },
+    });
+    await tools.find((tool) => tool.name === "exec")!.execute("sandbox-exec", { command: "true" });
+    expect(shellSpies.defaults).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: sandboxRoot, participationRoot: sandboxRoot }),
+    );
+  });
+
+  it("uses the scheduled Gateway pin when no target is requested", async () => {
+    const execTool = scheduledExec();
     const properties = Object.keys(
       (execTool.parameters as { properties?: Record<string, unknown> }).properties ?? {},
     );
     expect(properties).toContain("command");
-    expect(properties).not.toContain("host");
-    expect(properties).not.toContain("security");
-    expect(properties).not.toContain("ask");
-    expect(properties).not.toContain("node");
+    for (const name of ["host", "security", "ask", "node"]) {
+      expect(properties).not.toContain(name);
+    }
 
     await execTool.execute("call-1", {
       command: "echo hi",
-      host: "node",
-      node: "remote",
       security: "full",
       ask: "off",
     });
@@ -88,6 +155,19 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       undefined,
       undefined,
     );
+  });
+
+  it.each([
+    { host: "node", node: "remote" },
+    { node: "remote" },
+    { host: "gateway", node: "remote" },
+    { host: "sandbox" },
+  ])("refuses a conflicting scheduled exec target before execution: %j", async (target) => {
+    const execTool = scheduledExec();
+    await expect(async () =>
+      execTool.execute("call-conflict", { command: "echo hi", ...target }),
+    ).rejects.toThrow(/pinned to host=gateway;.*host or node is not allowed for this job/);
+    expect(shellSpies.exec).not.toHaveBeenCalled();
   });
 
   it("pins the whole tool lifecycle, including execution preparation", async () => {
@@ -105,11 +185,22 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     };
 
     const pinned = pinExecToolTarget(source, { host: "gateway", ask: "always" });
+    expect(() =>
+      pinned.prepareBeforeToolCallParams?.(
+        { command: "echo hi", host: "node", node: "remote" },
+        { hookContext: undefined },
+      ),
+    ).toThrow("pinned to host=gateway");
+    expect(prepare).not.toHaveBeenCalled();
     await pinned.prepareBeforeToolCallParams?.(
-      { command: "echo hi", host: "node", node: "remote", security: "full", ask: "off" },
+      { command: "echo hi", security: "full", ask: "off" },
       { hookContext: undefined },
     );
-    pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "node", ask: "off" }, {});
+    expect(() =>
+      pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "node" }, {}),
+    ).toThrow("pinned to host=gateway");
+    expect(finalize).not.toHaveBeenCalled();
+    pinned.finalizeBeforeToolCallParams?.({ command: "echo hi", host: "gateway", ask: "off" }, {});
 
     expect(prepare).toHaveBeenCalledWith(
       { command: "echo hi", host: "gateway", ask: "always" },
@@ -122,19 +213,7 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
   });
 
   it("keeps the scheduled approval floor in a reused full-permission session", async () => {
-    const tools = createOpenClawCodingTools({
-      sessionPermissionPolicy: { root: process.cwd(), mode: "full" },
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "trusted",
-        execTarget: { host: "gateway", ask: "always" },
-      },
-    });
-
-    const exec = tools.find((tool) => tool.name === "exec");
-    if (!exec) {
-      throw new Error("expected an exec tool on the scheduled surface");
-    }
+    const exec = scheduledExec({ sessionPermissionPolicy: { root: process.cwd(), mode: "full" } });
     await exec.execute("call-full-session", { command: "echo hi" });
     expect(shellSpies.defaults).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,30 +236,14 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
     );
   });
 
-  it("keeps baseline exec behavior without a scheduled exec target", async () => {
-    const tools = createOpenClawCodingTools({
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-    });
-    const execTool = tools.find((tool) => tool.name === "exec");
-    expect(execTool).toBeDefined();
-
-    await execTool?.execute?.("call-2", { command: "echo hi", host: "node" });
-    expect(shellSpies.exec).toHaveBeenCalledWith(
-      "call-2",
-      { command: "echo hi", host: "node" },
-      undefined,
-      undefined,
-    );
-  });
-
-  it.each(
-    (["sandbox", "node"] as const).flatMap((host) =>
-      (["global", "agent", "run"] as const).map((source) => ({ host, source })),
-    ),
-  )(
+  it.each([
+    { host: "sandbox", source: "global" },
+    { host: "node", source: "agent" },
+    { host: "sandbox", source: "run" },
+  ] as const)(
     "preserves the current $source host=$host restriction beside a saved pin",
     async ({ host, source }) => {
-      const tools = createOpenClawCodingTools({
+      const exec = scheduledExec({
         ...(source === "run"
           ? { exec: { host } }
           : source === "agent"
@@ -195,10 +258,6 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
           execTarget: { host: "gateway" },
         },
       });
-      const exec = expectDefined(
-        tools.find((tool) => tool.name === "exec"),
-        "scheduled exec tool",
-      );
       await exec.execute("call-restricted-host", { command: "echo hi" });
       expect(shellSpies.defaults.mock.lastCall?.[0]?.host).toBe(host);
       expect(shellSpies.exec).toHaveBeenCalledWith(

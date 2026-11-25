@@ -5,20 +5,18 @@ import {
   EXEC_APPROVALS_POLICY_DOCUMENT_NAME,
   EXEC_APPROVALS_POLICY_URI,
 } from "../exec-approvals-uri.js";
+import { parseExecApprovalsFile } from "../policy-state-exec-approvals.js";
 import type { PolicyEvidence, PolicyExecApprovalEvidence } from "../policy-state.js";
 import { execApprovalsPolicyShapeFinding } from "./access-shapes.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
 import {
-  effectiveExecApprovalAgentAutoAllowSkillsEntry,
-  effectiveExecApprovalAgentSecurityEntry,
+  execApprovalAgentEntries,
   execApprovalAllowlistMissingTarget,
   execApprovalAllowlistRequirementKey,
   formatExecApprovalAllowlistEntry,
-  formatExecApprovalAllowlistRequirement,
   readExecApprovalAllowlistRequirements,
-  syntheticExecApprovalAgentEntry,
 } from "./exec-approval-rules.js";
-import { parseExecApprovalsFile } from "./policy-runtime.js";
+import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readStringList } from "./utils.js";
@@ -82,17 +80,6 @@ export function execApprovalsFindings(
       continue;
     }
     const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/execApprovals`;
-    const shapeFinding = execApprovalsPolicyShapeFinding(target.overlay.execApprovals, {
-      policyDocName,
-      policyPath,
-      targetPrefix: requirementBase,
-      propertyPrefix: `scopes.${target.scopeName}.execApprovals`,
-      allowDefaults: false,
-    });
-    if (shapeFinding !== undefined) {
-      findings.push(shapeFinding);
-      continue;
-    }
     const fileFindings = execApprovalsFileFindings(target.overlay.execApprovals, {
       policyDocName,
       file,
@@ -214,14 +201,12 @@ function execApprovalsRuleFindings(
 
   const allowedAgents = new Set(readStringList(execApprovalsPolicy, ["agents", "allowSecurity"]));
   if (allowedAgents.size > 0) {
-    const agentEntries =
-      params.targetAgentId === undefined
-        ? globalExecApprovalAgentSecurityEntries(params.entries, params.defaults)
-        : [
-            effectiveExecApprovalAgentSecurityEntry(params.entries, params.targetAgentId) ??
-              params.defaults ??
-              syntheticExecApprovalAgentEntry(params.targetAgentId),
-          ];
+    const agentEntries = execApprovalAgentEntries(
+      params.entries,
+      params.defaults,
+      "security",
+      params.targetAgentId,
+    );
     for (const entry of agentEntries) {
       const security = entry.security ?? params.defaultSecurity;
       if (allowedAgents.has(security.toLowerCase())) {
@@ -244,14 +229,12 @@ function execApprovalsRuleFindings(
     "allowAutoAllowSkills",
   ]);
   if (allowAutoAllowSkills === false) {
-    const autoAllowEntries =
-      params.targetAgentId === undefined
-        ? globalExecApprovalAgentAutoAllowSkillsEntries(params.entries, params.defaults)
-        : [
-            effectiveExecApprovalAgentAutoAllowSkillsEntry(params.entries, params.targetAgentId) ??
-              params.defaults ??
-              syntheticExecApprovalAgentEntry(params.targetAgentId),
-          ];
+    const autoAllowEntries = execApprovalAgentEntries(
+      params.entries,
+      params.defaults,
+      "autoAllowSkills",
+      params.targetAgentId,
+    );
     for (const entry of autoAllowEntries) {
       if (entry.autoAllowSkills !== true) {
         continue;
@@ -275,23 +258,24 @@ function execApprovalsRuleFindings(
   ]);
   if (expected !== undefined) {
     const expectedSet = new Set(expected.map((entry) => entry.key));
-    const actualEntries = execApprovalAllowlistEntries(params.entries, params.targetAgentId).filter(
-      (entry) => entry.pattern !== undefined,
-    );
-    const actual = actualEntries
-      .map((entry) =>
-        execApprovalAllowlistRequirementKey(entry.pattern as string, entry.argPattern),
-      )
-      .toSorted();
-    const actualSet = new Set(actual);
+    const actual = new Map<string, PolicyExecApprovalEvidence>();
+    for (const entry of execApprovalAllowlistEntries(params.entries, params.targetAgentId)) {
+      if (entry.pattern === undefined) {
+        continue;
+      }
+      const key = execApprovalAllowlistRequirementKey(entry.pattern, entry.argPattern);
+      if (!actual.has(key)) {
+        actual.set(key, entry);
+      }
+    }
     for (const entry of expected.toSorted((a, b) => a.key.localeCompare(b.key))) {
-      if (!actualSet.has(entry.key)) {
+      if (!actual.has(entry.key)) {
         const requirement = `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`;
         const target = execApprovalAllowlistMissingTarget(params.targetAgentId);
         findings.push({
           checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
           severity: "error",
-          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
+          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistEntry(entry)}'.`,
           source: "policy",
           path: params.fileDisplayName ?? params.displayName,
           target,
@@ -300,15 +284,11 @@ function execApprovalsRuleFindings(
         });
       }
     }
-    for (const key of actualSet) {
+    for (const key of [...actual.keys()].toSorted()) {
       if (expectedSet.has(key)) {
         continue;
       }
-      const entry = actualEntries.find(
-        (candidate) =>
-          candidate.pattern !== undefined &&
-          execApprovalAllowlistRequirementKey(candidate.pattern, candidate.argPattern) === key,
-      );
+      const entry = actual.get(key);
       findings.push(
         execApprovalFinding(entry, {
           checkId: CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
@@ -322,67 +302,25 @@ function execApprovalsRuleFindings(
   return findings;
 }
 
-function globalExecApprovalAgentSecurityEntries(
-  entries: readonly PolicyExecApprovalEvidence[],
-  defaults: PolicyExecApprovalEvidence | undefined,
-): readonly PolicyExecApprovalEvidence[] {
-  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
-  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
-  const securityEntries = agentEntries.filter(
-    (entry) =>
-      entry.agentId === "*" || entry.security !== undefined || entry.securityConfigured === true,
-  );
-  return wildcard === undefined
-    ? [...securityEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
-    : securityEntries;
-}
-
-function globalExecApprovalAgentAutoAllowSkillsEntries(
-  entries: readonly PolicyExecApprovalEvidence[],
-  defaults: PolicyExecApprovalEvidence | undefined,
-): readonly PolicyExecApprovalEvidence[] {
-  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
-  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
-  const explicitEntries = agentEntries.filter((entry) => entry.autoAllowSkills !== undefined);
-  return wildcard?.autoAllowSkills === undefined
-    ? [...explicitEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
-    : explicitEntries;
-}
-
 function execApprovalAllowlistEntries(
   entries: readonly PolicyExecApprovalEvidence[],
   agentId: string | undefined,
 ): readonly PolicyExecApprovalEvidence[] {
-  if (agentId === undefined) {
-    return entries.filter((entry) => entry.kind === "allowlist");
-  }
   return entries.filter(
     (entry) =>
       entry.kind === "allowlist" &&
-      entry.agentId !== undefined &&
-      (normalizeAgentId(entry.agentId) === normalizeAgentId(agentId) || entry.agentId === "*"),
+      (agentId === undefined ||
+        (entry.agentId !== undefined &&
+          (normalizeAgentId(entry.agentId) === normalizeAgentId(agentId) ||
+            entry.agentId === "*"))),
   );
 }
 
 function execApprovalFinding(
   entry: PolicyExecApprovalEvidence | undefined,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
+  params: Parameters<typeof policyEvidenceFinding>[1],
 ): HealthFinding {
-  const target = entry?.source ?? EXEC_APPROVALS_POLICY_URI;
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
+  return policyEvidenceFinding({ source: entry?.source ?? EXEC_APPROVALS_POLICY_URI }, params, {
     path: EXEC_APPROVALS_POLICY_DOCUMENT_NAME,
-    ocPath: target,
-    target,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
+  });
 }

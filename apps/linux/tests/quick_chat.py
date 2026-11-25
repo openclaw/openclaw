@@ -8,6 +8,7 @@ import struct
 import threading
 import time
 
+from gateway_switch import start_private_vault, stop_private_vault
 from inline_browser import FixtureHandler, GatewayFixture
 from window_chrome import WindowChromeFixture
 
@@ -43,6 +44,7 @@ class QuickChatFixture(GatewayFixture):
         super().__init__(artifacts_dir)
         self.RequestHandlerClass = QuickChatHandler
         self.chrome = WindowChromeFixture(None)
+        self.vault = None
         self.lock = threading.RLock()
         self.clients = set()
         self.requests = []
@@ -57,6 +59,7 @@ class QuickChatFixture(GatewayFixture):
 
     def start(self):
         self.chrome.start()
+        self.vault = start_private_vault(self.chrome)
         super().start()
 
     def request(self, client, frame):
@@ -370,6 +373,7 @@ class QuickChatFixture(GatewayFixture):
         self.shutdown()
         self.server_close()
         self.server_thread.join(timeout=5)
+        stop_private_vault(self.vault)
         self.chrome.close()
         if self.artifacts_dir is not None:
             (self.artifacts_dir / "quick-chat-results.json").write_text(json.dumps({

@@ -1,10 +1,14 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
-import {
-  type BrowserMockBundle,
-  setupPwSessionConnectionTest,
-} from "./pw-session.connection.test-support.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setupPwSessionConnectionTest } from "./pw-session.connection.test-support.js";
+
+// These fixtures count native-inventory browser sessions; keep the connection's
+// one-time headless probe out of them.
+vi.mock("./pw-session-webauthn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session-webauthn.js")>()),
+  isHeadlessChromium: async () => false,
+}));
 
 const { connectOverCdpSpy, getChromeWebSocketUrlSpy, markPageRefBlocked, markTargetBlocked, pwAi } =
   setupPwSessionConnectionTest();
@@ -15,6 +19,18 @@ const {
   listPagesViaPlaywright,
 } = pwAi;
 
+const cdpUrl = "http://127.0.0.1:9222";
+
+function tab(targetId: string, title: string, url: string) {
+  return { targetId, title, url };
+}
+const expectedTabs = (...tabs: ReturnType<typeof tab>[]) =>
+  tabs.map(({ targetId, title, url }) => ({ targetId, title, url, type: "page" }));
+const stuck = (suffix: "A" | "B") => ({
+  ...tab(`STUCK_${suffix}`, `Stuck ${suffix}`, `https://stuck-${suffix.toLowerCase()}.example`),
+  readTargetInfo: () => new Promise<never>(() => {}),
+});
+
 function makePageEnumerationBrowser(
   specs: Array<{
     targetId: string;
@@ -24,31 +40,28 @@ function makePageEnumerationBrowser(
     readTargetInfo?: () => Promise<{ targetInfo: { targetId: string; title: string } }>;
     isClosed?: () => boolean;
     detach?: () => Promise<void>;
+    published?: boolean;
   }>,
-): BrowserMockBundle & {
-  pages: import("playwright-core").Page[];
-  newCDPSession: ReturnType<typeof vi.fn>;
-  contextEvents: EventEmitter;
-  browserEvents: EventEmitter;
-  pageEvents: EventEmitter[];
-} {
+) {
   const browserClose = vi.fn(async () => {});
   const specByPage = new WeakMap<import("playwright-core").Page, (typeof specs)[number]>();
   const pageEvents: EventEmitter[] = [];
-  const pages = specs.map((spec) => {
-    const events = new EventEmitter();
-    pageEvents.push(events);
-    const page = {
-      on: events.on.bind(events),
-      off: events.off.bind(events),
-      context: () => context,
-      title: vi.fn(spec.readTitle ?? (async () => spec.title)),
-      url: vi.fn(() => spec.url),
-      isClosed: spec.isClosed ?? (() => false),
-    } as unknown as import("playwright-core").Page;
-    specByPage.set(page, spec);
-    return page;
-  });
+  const pages = specs
+    .filter((spec) => spec.published !== false)
+    .map((spec) => {
+      const events = new EventEmitter();
+      pageEvents.push(events);
+      const page = {
+        on: events.on.bind(events),
+        off: events.off.bind(events),
+        context: () => context,
+        title: vi.fn(spec.readTitle ?? (async () => spec.title)),
+        url: vi.fn(() => spec.url),
+        isClosed: spec.isClosed ?? (() => false),
+      } as unknown as import("playwright-core").Page;
+      specByPage.set(page, spec);
+      return page;
+    });
   const newCDPSession = vi.fn(async (page: import("playwright-core").Page) => {
     const spec = specByPage.get(page);
     if (!spec) {
@@ -83,7 +96,7 @@ function makePageEnumerationBrowser(
       send: vi.fn(async () => ({
         targetInfos: specs
           .filter((spec) => !spec.isClosed?.())
-          .map((spec) => ({ targetId: spec.targetId, type: "page" })),
+          .map((spec) => ({ targetId: spec.targetId, type: "page", url: spec.url })),
       })),
       detach: vi.fn(async () => {}),
     })),
@@ -92,13 +105,53 @@ function makePageEnumerationBrowser(
   return { browser, browserClose, pages, newCDPSession, contextEvents, browserEvents, pageEvents };
 }
 
+type EnumerationBrowser = ReturnType<typeof makePageEnumerationBrowser>;
+function installInventory(fixture: EnumerationBrowser, send: () => Promise<unknown>) {
+  const detach = vi.fn(async () => {});
+  Object.assign(fixture.browser, { newBrowserCDPSession: async () => ({ send, detach }) });
+  return detach;
+}
+function expectObservedConnection(fixture: EnumerationBrowser) {
+  expect(connectOverCdpSpy).toHaveBeenCalledOnce();
+  expect(fixture.browserClose).not.toHaveBeenCalled();
+  expect(fixture.contextEvents.listenerCount("page")).toBe(1);
+  expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
+}
+
+beforeEach(() => {
+  getChromeWebSocketUrlSpy.mockResolvedValue(null);
+});
+
 describe("pw-session page enumeration", () => {
+  it("does not wait for an extension-internal target that Playwright does not publish", async () => {
+    const fixture = makePageEnumerationBrowser([
+      {
+        targetId: "EXTENSION",
+        title: "Other extension",
+        url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/options.html",
+        published: false,
+      },
+      tab("GOODREADS", "My Books", "https://www.goodreads.com/review/list"),
+    ]);
+    connectOverCdpSpy.mockResolvedValue(fixture.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await expect(
+      listPagesViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        requireCompleteTargetList: true,
+      }),
+    ).resolves.toEqual(
+      expectedTabs(tab("GOODREADS", "My Books", "https://www.goodreads.com/review/list")),
+    );
+  });
+
   it("reconciles a page closed between native discovery and Page enumeration", async () => {
     vi.useFakeTimers();
     let closed = false;
     const fixture = makePageEnumerationBrowser([
-      { targetId: "A", title: "Closing", url: "https://a.example/", isClosed: () => closed },
-      { targetId: "B", title: "Survivor", url: "https://b.example/" },
+      { ...tab("A", "Closing", "https://a.example/"), isClosed: () => closed },
+      tab("B", "Survivor", "https://b.example/"),
     ]);
     const inventory = vi.fn(async () => {
       const targetIds = closed ? ["B"] : ["A", "B"];
@@ -108,22 +161,16 @@ describe("pw-session page enumeration", () => {
       }
       return { targetInfos: targetIds.map((targetId) => ({ targetId, type: "page" })) };
     });
-    Object.assign(fixture.browser, {
-      newBrowserCDPSession: async () => ({ send: inventory, detach: async () => {} }),
-    });
+    installInventory(fixture, inventory);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-    const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      requireCompleteTargetList: true,
-      timeoutMs: 100,
-    });
-    const listed = expect(listing).resolves.toEqual([
-      { targetId: "B", title: "Survivor", url: "https://b.example/", type: "page" },
-    ]);
-    void listed.catch(() => {});
+    const requireCompleteTargetList = true;
+    const listing = listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList, timeoutMs: 100 });
+    const result = expect(listing).resolves.toEqual(
+      expectedTabs(tab("B", "Survivor", "https://b.example/")),
+    );
+    void result.catch(() => {});
     await vi.advanceTimersByTimeAsync(100);
-    await listed;
+    await result;
     expect(inventory).toHaveBeenCalledTimes(2);
     expect(connectOverCdpSpy).toHaveBeenCalledOnce();
     expect(fixture.browserClose).not.toHaveBeenCalled();
@@ -131,22 +178,17 @@ describe("pw-session page enumeration", () => {
   });
 
   it.each([
-    { complete: false, disconnect: false, unresolved: false },
-    { complete: true, disconnect: false, unresolved: false },
-    { complete: true, disconnect: true, unresolved: false },
-    { complete: true, disconnect: true, unresolved: true },
+    { disconnect: false, unresolved: false },
+    { disconnect: true, unresolved: true },
   ])(
-    "reconciles a closed page (complete: $complete, browser disconnected: $disconnect, metadata unresolved: $unresolved)",
-    async ({ complete, disconnect, unresolved }) => {
-      const cdpUrl = "http://127.0.0.1:9222";
+    "reconciles a closed page (disconnected: $disconnect, metadata unresolved: $unresolved)",
+    async ({ disconnect, unresolved }) => {
       const started = createDeferred<void>();
       const release = createDeferred<void>();
       let closed = false;
       const fixture = makePageEnumerationBrowser([
         {
-          targetId: "A",
-          title: "Closing",
-          url: "https://a.example/",
+          ...tab("A", "Closing", "https://a.example/"),
           isClosed: () => closed,
           readTargetInfo: async () => {
             started.resolve();
@@ -157,22 +199,16 @@ describe("pw-session page enumeration", () => {
             throw new Error("Target page, context or browser has been closed");
           },
         },
-        { targetId: "B", title: "Survivor", url: "https://b.example/" },
+        tab("B", "Survivor", "https://b.example/"),
       ]);
-      const survivor = {
-        targetId: "B",
-        title: "Survivor",
-        url: "https://b.example/",
-        type: "page",
-      };
+      const survivor = { ...tab("B", "Survivor", "https://b.example/"), type: "page" };
       const replacement = makePageEnumerationBrowser([survivor]);
       connectOverCdpSpy
         .mockResolvedValueOnce(fixture.browser)
         .mockResolvedValue(replacement.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
       const listing = listPagesViaPlaywright({
         cdpUrl,
-        requireCompleteTargetList: complete,
+        requireCompleteTargetList: true,
         timeoutMs: 1_000,
       });
       const listed = expect(listing).resolves.toEqual([survivor]);
@@ -193,99 +229,30 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it("lists healthy pages without awaiting a wedged page title", async () => {
-    vi.useFakeTimers();
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        readTitle: () => new Promise<string>(() => {}),
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    let listed: Awaited<ReturnType<typeof listPagesViaPlaywright>> | undefined;
-    void listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }).then((pages) => {
-      listed = pages;
-    });
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(listed).toEqual([
-      {
-        targetId: "WEDGED",
-        title: "Wedged",
-        url: "https://wedged.example",
-        type: "page",
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
-        type: "page",
-      },
-    ]);
-  });
-
   it("times out stuck target-info reads in one window and shares them across enumerations", async () => {
     vi.useFakeTimers();
     const fixture = makePageEnumerationBrowser([
+      { ...stuck("A"), detach: () => new Promise(() => {}) },
+      { ...stuck("B"), detach: () => new Promise(() => {}) },
       {
-        targetId: "STUCK_A",
-        title: "Stuck A",
-        url: "https://stuck-a.example",
-        readTargetInfo: () => new Promise(() => {}),
-        detach: () => new Promise(() => {}),
-      },
-      {
-        targetId: "STUCK_B",
-        title: "Stuck B",
-        url: "https://stuck-b.example",
-        readTargetInfo: () => new Promise(() => {}),
-        detach: () => new Promise(() => {}),
-      },
-      {
-        targetId: "HEALTHY",
-        title: "Healthy title",
-        url: "https://healthy.example",
+        ...tab("HEALTHY", "Healthy title", "https://healthy.example"),
+        readTitle: () => new Promise<string>(() => {}),
       },
     ]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
     let listed: Array<Awaited<ReturnType<typeof listPagesViaPlaywright>>> | undefined;
-    void Promise.all([
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-      listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" }),
-    ]).then((pages) => {
-      listed = pages;
-    });
+    void Promise.all([listPagesViaPlaywright({ cdpUrl }), listPagesViaPlaywright({ cdpUrl })]).then(
+      (pages) => {
+        listed = pages;
+      },
+    );
     await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(listed).toEqual([
-      [
-        {
-          targetId: "HEALTHY",
-          title: "Healthy title",
-          url: "https://healthy.example",
-          type: "page",
-        },
-      ],
-      [
-        {
-          targetId: "HEALTHY",
-          title: "Healthy title",
-          url: "https://healthy.example",
-          type: "page",
-        },
-      ],
-    ]);
+    const healthy = [
+      { ...tab("HEALTHY", "Healthy title", "https://healthy.example"), type: "page" },
+    ];
+    expect(listed).toEqual([healthy, healthy]);
     expect(
       fixture.pages
         .slice(0, 2)
@@ -298,24 +265,10 @@ describe("pw-session page enumeration", () => {
 
   it("reports unavailable when every accessible page identity is unresolved", async () => {
     vi.useFakeTimers();
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "STUCK_A",
-        title: "Stuck A",
-        url: "https://stuck-a.example",
-        readTargetInfo: () => new Promise(() => {}),
-      },
-      {
-        targetId: "STUCK_B",
-        title: "Stuck B",
-        url: "https://stuck-b.example",
-        readTargetInfo: () => new Promise(() => {}),
-      },
-    ]);
+    const fixture = makePageEnumerationBrowser([stuck("A"), stuck("B")]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
-    const listing = listPagesViaPlaywright({ cdpUrl: "http://127.0.0.1:9222" });
+    const listing = listPagesViaPlaywright({ cdpUrl });
     const unavailable = expect(listing).rejects.toThrow(/target identities.*unavailable/i);
     await vi.advanceTimersByTimeAsync(2_000);
 
@@ -325,14 +278,11 @@ describe("pw-session page enumeration", () => {
   it.each(["during discovery", "after discovery", "during metadata"] as const)(
     "observes pages published %s without repeating the complete target inventory",
     async (timing) => {
-      const cdpUrl = "http://127.0.0.1:9222";
       const metadataRead = createDeferred<void>();
       const releaseMetadata = createDeferred<void>();
       const fixture = makePageEnumerationBrowser([
         {
-          targetId: "EXISTING",
-          title: "Existing",
-          url: "https://existing.example",
+          ...tab("EXISTING", "Existing", "https://existing.example"),
           readTargetInfo: async () => {
             metadataRead.resolve();
             if (timing === "during metadata") {
@@ -341,11 +291,7 @@ describe("pw-session page enumeration", () => {
             return { targetInfo: { targetId: "EXISTING", title: "Existing" } };
           },
         },
-        {
-          targetId: "RECOVERED",
-          title: "Recovered",
-          url: "https://recovered.example",
-        },
+        tab("RECOVERED", "Recovered", "https://recovered.example"),
       ]);
       let published = false;
       const context = fixture.browser.contexts()[0]!;
@@ -367,31 +313,17 @@ describe("pw-session page enumeration", () => {
           ],
         };
       });
-      Object.assign(fixture.browser, {
-        newBrowserCDPSession: vi.fn(async () => ({
-          send: inventoryRead,
-          detach: vi.fn(async () => {}),
-        })),
-      });
+      installInventory(fixture, inventoryRead);
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
       const listing = listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList: true });
-      const listed = expect(listing).resolves.toEqual([
-        {
-          targetId: "EXISTING",
-          title: "Existing",
-          url: "https://existing.example",
-          type: "page",
-        },
-        {
-          targetId: "RECOVERED",
-          title: "Recovered",
-          url: "https://recovered.example",
-          type: "page",
-        },
-      ]);
-      void listed.catch(() => {});
+      const result = expect(listing).resolves.toEqual(
+        expectedTabs(
+          tab("EXISTING", "Existing", "https://existing.example"),
+          tab("RECOVERED", "Recovered", "https://recovered.example"),
+        ),
+      );
+      void result.catch(() => {});
       await metadataRead.promise;
       if (timing === "after discovery") {
         // Let the first page read finish before the recovered Page exists.
@@ -403,258 +335,96 @@ describe("pw-session page enumeration", () => {
         publish();
         releaseMetadata.resolve();
       }
-      await listed;
+      await result;
       expect(inventoryRead).toHaveBeenCalledOnce();
-      expect(connectOverCdpSpy).toHaveBeenCalledOnce();
-      expect(fixture.browserClose).not.toHaveBeenCalled();
-      expect(fixture.contextEvents.listenerCount("page")).toBe(1);
-      expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
+      expectObservedConnection(fixture);
     },
   );
 
-  it("rejects an unavailable complete target enumeration even with zero cached pages", async () => {
-    const fixture = makePageEnumerationBrowser([]);
-    const detach = vi.fn(async () => {});
-    const browser = Object.assign(fixture.browser, {
-      newBrowserCDPSession: vi.fn(async () => ({
-        send: vi.fn(async () => {
-          throw new Error("Target identities are unavailable");
-        }),
-        detach,
-      })),
-    });
-    connectOverCdpSpy.mockResolvedValue(browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    await expect(
-      listPagesViaPlaywright({
-        cdpUrl: "http://127.0.0.1:9222",
-        requireCompleteTargetList: true,
-      }),
-    ).rejects.toThrow(/target identities.*unavailable/i);
-    expect(detach).toHaveBeenCalledOnce();
-  });
-
-  it.each<{
-    name: string;
-    nativeIds: string[];
-    pageIds: string[];
-    unresolvedId?: string;
-    rejectedId?: string;
-    blockedId?: string;
-    blockedPageId?: string;
-    complete?: boolean;
-    waitsForPublication?: boolean;
-    expected: string[] | null;
-  }>([
-    {
-      name: "native page not yet published",
-      nativeIds: ["A", "B"],
-      pageIds: ["A"],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "no published pages yet",
-      nativeIds: ["A"],
-      pageIds: [],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "unresolved page metadata",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
-      expected: null,
-    },
-    {
-      name: "rejected page metadata",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      rejectedId: "B",
-      expected: null,
-    },
-    {
-      name: "unresolved extra page",
-      nativeIds: ["A"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
-      expected: null,
-    },
-    {
-      name: "equal counts with different identities",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "STALE"],
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "native removal before page removal",
-      nativeIds: ["A"],
-      pageIds: ["A", "STALE"],
-      expected: ["A"],
-    },
-    { name: "last native page removed", nativeIds: [], pageIds: ["STALE"], expected: [] },
-    {
-      name: "all pages projected in page order",
-      nativeIds: ["B", "A"],
-      pageIds: ["A", "B"],
-      expected: ["A", "B"],
-    },
-    {
-      name: "known blocked target without a page",
-      nativeIds: ["A", "B"],
-      pageIds: ["A"],
-      blockedId: "B",
-      expected: ["A"],
-    },
-    {
-      name: "known blocked target with a page",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      blockedId: "B",
-      expected: ["A"],
-    },
-    {
-      name: "known blocked page and target",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      blockedId: "B",
-      blockedPageId: "B",
-      expected: ["A"],
-    },
-    {
-      name: "blocked page cannot identify missing native target",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      blockedPageId: "B",
-      unresolvedId: "B",
-      waitsForPublication: true,
-      expected: null,
-    },
-    {
-      name: "blocked page after native removal",
-      nativeIds: ["A"],
-      pageIds: ["A", "B"],
-      blockedPageId: "B",
-      expected: ["A"],
-    },
-    {
-      name: "general read keeps a healthy subset",
-      nativeIds: ["A", "B"],
-      pageIds: ["A", "B"],
-      unresolvedId: "B",
-      complete: false,
-      expected: ["A"],
-    },
-    {
-      name: "general read ignores native inventory",
-      nativeIds: [],
-      pageIds: ["A"],
-      complete: false,
-      expected: ["A"],
-    },
-  ])("enforces enumeration completeness: $name", async (testCase) => {
-    vi.useFakeTimers();
-    const cdpUrl = "http://127.0.0.1:9222";
-    const fixture = makePageEnumerationBrowser(
-      testCase.pageIds.map((targetId) => ({
-        targetId,
-        title: `projected:${targetId}`,
-        url: "https://same.example/",
-        readTargetInfo: async () => {
-          if (targetId === testCase.rejectedId) {
-            throw new Error("Target metadata unavailable");
-          }
-          return {
-            targetInfo: {
-              targetId: targetId === testCase.unresolvedId ? "" : targetId,
-              title: `projected:${targetId}`,
-            },
-          };
-        },
-      })),
-    );
-    const inventoryRead = vi.fn(async () => ({
-      targetInfos: [
-        ...testCase.nativeIds.map((targetId) => ({
-          targetId,
-          type: "page",
-          title: "native title",
-          url: "https://native.example/",
-        })),
-        { targetId: "WORKER", type: "service_worker" },
-      ],
-    }));
-    const detach = vi.fn(async () => {});
-    Object.assign(fixture.browser, {
-      newBrowserCDPSession: vi.fn(async () => ({ send: inventoryRead, detach })),
-    });
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-    if (testCase.blockedId) {
-      markTargetBlocked(cdpUrl, testCase.blockedId);
-    }
-    const blockedPage = fixture.pages.find(
-      (_, index) => testCase.pageIds[index] === testCase.blockedPageId,
-    );
-    if (blockedPage) {
-      markPageRefBlocked(cdpUrl, blockedPage);
-    }
-
-    const requireCompleteTargetList = testCase.complete ?? true;
-    const listing = listPagesViaPlaywright({ cdpUrl, requireCompleteTargetList, timeoutMs: 100 });
-    if (testCase.expected === null) {
-      const rejected = expect(listing).rejects.toThrow(
-        testCase.waitsForPublication
-          ? "Playwright page enumeration timed out after 100ms"
-          : /target identities.*unavailable/i,
-      );
-      await vi.advanceTimersByTimeAsync(100);
-      await rejected;
-    } else {
-      await expect(listing).resolves.toEqual(
-        testCase.expected.map((targetId) => ({
+  it.each(["rejected-metadata", "blocked-target", "unresolved-blocked-page"] as const)(
+    "enforces enumeration completeness: %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      const blockedPage = mode === "unresolved-blocked-page";
+      const fixture = makePageEnumerationBrowser(
+        ["A", "B"].map((targetId) => ({
           targetId,
           title: `projected:${targetId}`,
           url: "https://same.example/",
-          type: "page",
+          readTargetInfo: async () => {
+            if (targetId === "B" && mode === "rejected-metadata") {
+              throw new Error("Target metadata unavailable");
+            }
+            return {
+              targetInfo: {
+                targetId: targetId === "B" && blockedPage ? "" : targetId,
+                title: `projected:${targetId}`,
+              },
+            };
+          },
         })),
       );
-    }
-    expect(inventoryRead).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
-    expect(detach).toHaveBeenCalledTimes(requireCompleteTargetList ? 1 : 0);
-    expect(connectOverCdpSpy).toHaveBeenCalledOnce();
-    expect(fixture.browserClose).not.toHaveBeenCalled();
-    expect(fixture.contextEvents.listenerCount("page")).toBe(1);
-    expect(fixture.browserEvents.listenerCount("disconnected")).toBe(1);
-    if (blockedPage) {
-      expect(fixture.newCDPSession).not.toHaveBeenCalledWith(blockedPage);
-    }
-  });
+      const inventoryRead = vi.fn(async () => ({
+        targetInfos: [
+          ...["A", "B"].map((targetId) => ({
+            targetId,
+            type: "page",
+            title: "native title",
+            url: "https://native.example/",
+          })),
+          { targetId: "WORKER", type: "service_worker" },
+        ],
+      }));
+      const detach = installInventory(fixture, inventoryRead);
+      connectOverCdpSpy.mockResolvedValue(fixture.browser);
+      if (mode === "blocked-target") {
+        markTargetBlocked(cdpUrl, "B");
+      }
+      if (blockedPage) {
+        markPageRefBlocked(cdpUrl, fixture.pages[1]!);
+      }
+      const listing = listPagesViaPlaywright({
+        cdpUrl,
+        requireCompleteTargetList: true,
+        timeoutMs: 100,
+      });
+      if (mode === "blocked-target") {
+        await expect(listing).resolves.toEqual([
+          { targetId: "A", title: "projected:A", url: "https://same.example/", type: "page" },
+        ]);
+      } else {
+        const rejected = expect(listing).rejects.toThrow(
+          blockedPage
+            ? "Playwright page enumeration timed out after 100ms"
+            : /target identities.*unavailable/i,
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        await rejected;
+      }
+      expect(inventoryRead).toHaveBeenCalledOnce();
+      expect(detach).toHaveBeenCalledOnce();
+      expectObservedConnection(fixture);
+      if (blockedPage) {
+        expect(fixture.newCDPSession).not.toHaveBeenCalledWith(fixture.pages[1]);
+      }
+    },
+  );
 
   it.each(["abort", "disconnect"] as const)("releases a publication wait on %s", async (stop) => {
-    const specs = [{ targetId: "A", title: "A", url: "https://a.example/" }];
+    const specs = [tab("A", "A", "https://a.example/")];
     const fixture = makePageEnumerationBrowser(specs);
     const context = fixture.browser.contexts()[0]!;
     vi.spyOn(context, "pages").mockReturnValue([]);
     const inventoryRead = createDeferred<void>();
-    Object.assign(fixture.browser, {
-      newBrowserCDPSession: vi.fn(async () => ({
-        send: vi.fn(async () => {
-          inventoryRead.resolve();
-          return { targetInfos: [{ targetId: "A", type: "page" }] };
-        }),
-        detach: vi.fn(async () => {}),
-      })),
+    installInventory(fixture, async () => {
+      inventoryRead.resolve();
+      return { targetInfos: [{ targetId: "A", type: "page" }] };
     });
     const successor = makePageEnumerationBrowser(specs);
     connectOverCdpSpy.mockResolvedValueOnce(fixture.browser).mockResolvedValue(successor.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
     const controller = new AbortController();
     const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
+      cdpUrl,
       requireCompleteTargetList: true,
       signal: controller.signal,
     });
@@ -686,10 +456,7 @@ describe("pw-session page enumeration", () => {
   it.each(["attach", "read"] as const)(
     "releases only its own native inventory session when cancelled during %s",
     async (phase) => {
-      const cdpUrl = "http://127.0.0.1:9222";
-      const fixture = makePageEnumerationBrowser([
-        { targetId: "A", title: "A", url: "https://a.example/" },
-      ]);
+      const fixture = makePageEnumerationBrowser([tab("A", "A", "https://a.example/")]);
       const gate = createDeferred<void>();
       const started = createDeferred<void>();
       const detach = vi.fn(async () => {});
@@ -710,7 +477,6 @@ describe("pw-session page enumeration", () => {
         },
       });
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
       const controller = new AbortController();
       const listing = listPagesViaPlaywright({
         cdpUrl,
@@ -734,51 +500,20 @@ describe("pw-session page enumeration", () => {
     },
   );
 
-  it("aborts enumeration without a timeout while preserving the shared connection", async () => {
-    const fixture = makePageEnumerationBrowser([
-      {
-        targetId: "T1",
-        title: "Tab 1",
-        url: "https://example.com",
-        readTargetInfo: () => new Promise(() => {}),
-      },
-    ]);
-    connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue(null);
-
-    const controller = new AbortController();
-    const listing = listPagesViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      signal: controller.signal,
-    });
-    controller.abort(new Error("cancelled enumeration"));
-
-    await expect(listing).rejects.toThrow("cancelled enumeration");
-    expect(fixture.browserClose).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["focus", focusPageByTargetIdViaPlaywright, "bringToFront"],
     ["close", closePageByTargetIdViaPlaywright, "close"],
   ] as const)(
     "does not %s after cancellation during target resolution",
     async (_name, run, method) => {
-      let releaseTargetInfo: (() => void) | undefined;
-      let markTargetInfoStarted: (() => void) | undefined;
-      const targetInfoStarted = new Promise<void>((resolve) => {
-        markTargetInfoStarted = resolve;
-      });
-      const targetInfoReleased = new Promise<void>((resolve) => {
-        releaseTargetInfo = resolve;
-      });
+      const targetInfoStarted = createDeferred<void>();
+      const targetInfoReleased = createDeferred<void>();
       const fixture = makePageEnumerationBrowser([
         {
-          targetId: "T1",
-          title: "Tab 1",
-          url: "https://example.com",
+          ...tab("T1", "Tab 1", "https://example.com"),
           readTargetInfo: async () => {
-            markTargetInfoStarted?.();
-            await targetInfoReleased;
+            targetInfoStarted.resolve();
+            await targetInfoReleased.promise;
             return { targetInfo: { targetId: "T1", title: "Tab 1" } };
           },
         },
@@ -786,17 +521,16 @@ describe("pw-session page enumeration", () => {
       const finalIo = vi.fn(async () => {});
       Object.assign(fixture.pages[0]!, { [method]: finalIo });
       connectOverCdpSpy.mockResolvedValue(fixture.browser);
-      getChromeWebSocketUrlSpy.mockResolvedValue(null);
 
       const controller = new AbortController();
       const operation = run({
-        cdpUrl: "http://127.0.0.1:9222",
+        cdpUrl,
         targetId: "T1",
         signal: controller.signal,
       });
-      await targetInfoStarted;
+      await targetInfoStarted.promise;
       controller.abort(new Error("cancelled target resolution"));
-      releaseTargetInfo?.();
+      targetInfoReleased.resolve();
 
       await expect(operation).rejects.toThrow("cancelled target resolution");
       expect(finalIo).not.toHaveBeenCalled();

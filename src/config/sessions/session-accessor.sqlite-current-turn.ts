@@ -1,14 +1,18 @@
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import { readTranscriptEventAtSeqInTransaction } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import {
+  readActiveTranscriptEntryAnchorFromProjection,
+  readActiveTranscriptEntryIdentityInSnapshot,
+} from "./session-accessor.sqlite-transcript-anchor.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
 } from "./session-transcript-worker.types.js";
+import { SessionWorkStartChangedError } from "./work-start-error.js";
 
 /** Pair one active entry with the exact hydrated view without traversing transcript history. */
 export function readSessionTranscriptCurrentTurnEntry(
@@ -20,30 +24,42 @@ export function readSessionTranscriptCurrentTurnEntry(
 ): SessionTranscriptCurrentTurnEntryRead {
   return withCurrentProjectionSnapshot(
     scope,
-    ({ database, resolved }) => {
+    (projection) => {
+      const { database, resolved } = projection;
       const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
-      const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+      const version = projection.version;
       if (
         version.generation !== options.version.generation ||
         version.rawSeq !== options.version.rawSeq ||
         version.updatedAt !== options.version.updatedAt
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionWorkStartChangedError(
+          "Persisted user turn changed before replay admission. Retry the turn.",
+        );
       }
-      const anchor = readActiveTranscriptEntryAnchorInTransaction({
-        database,
-        resolved: { ...resolved, sessionKey: resolved.sessionKey ?? scope.sessionKey },
-        entryId: options.entryId,
-      });
+      const anchor = readActiveTranscriptEntryAnchorFromProjection(projection, options.entryId);
       if (fence && anchor && anchor.rawSeq >= fence.beforeRawSeq) {
         return { kind: "current-turn-entry", version };
       }
+      const identity = options.includeEntry
+        ? readActiveTranscriptEntryIdentityInSnapshot(projection, options.entryId)
+        : undefined;
       const event =
-        options.includeEntry && anchor
-          ? readTranscriptEventAtSeqInTransaction(database, resolved.sessionId, anchor.rawSeq)
-              ?.event
+        identity && (!fence || identity.seq < fence.beforeRawSeq)
+          ? readTranscriptEventAtSeqInTransaction(database, resolved.sessionId, identity.seq)?.event
           : undefined;
-      return { kind: "current-turn-entry", version, anchor, event };
+      return {
+        kind: "current-turn-entry",
+        version,
+        anchor,
+        event:
+          identity &&
+          isIndexedSessionEntry(event) &&
+          event.id === options.entryId &&
+          event.parentId === identity.parentId
+            ? event
+            : undefined,
+      };
     },
     options,
   );

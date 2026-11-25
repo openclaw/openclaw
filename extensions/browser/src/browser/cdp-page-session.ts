@@ -1,8 +1,6 @@
-/**
- * CDP page-session preparation and committed-navigation observation.
- */
 import { createHash } from "node:crypto";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
 
@@ -16,11 +14,7 @@ const CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS = 2_000;
 const CDP_TARGET_NAVIGATION_RESULT_POLL_MS = 50;
 const CDP_TARGET_NAVIGATION_STABILITY_MS = 250;
 
-type CdpGetFrameTreeSend = (
-  method: "Page.getFrameTree",
-  params?: undefined,
-  sessionId?: string,
-) => Promise<unknown>;
+type CdpGetFrameTreeSend = (method: "Page.getFrameTree") => Promise<unknown>;
 
 type CdpFrameTree = {
   frame?: {
@@ -62,11 +56,8 @@ function readCommittedFrameUrl(
 /** Read committed document identities together so snapshot facts share one browser observation. */
 export async function readCdpDocumentIdentities(
   send: CdpGetFrameTreeSend,
-  sessionId?: string,
 ): Promise<CdpDocumentIdentities> {
-  const result = (await send("Page.getFrameTree", undefined, sessionId).catch(
-    () => null,
-  )) as CdpFrameTreeResult | null;
+  const result = (await send("Page.getFrameTree").catch(() => null)) as CdpFrameTreeResult | null;
   const root = result?.frameTree;
   const loaderId = root?.frame?.loaderId;
   const identities: CdpDocumentIdentities = {
@@ -100,10 +91,10 @@ async function waitForCdpNavigationResult(
   requestedUrl: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const deadline = Date.now() + CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS;
+  const deadline = performance.now() + CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS;
   const requestedAboutBlank = requestedUrl.trim() === "" || requestedUrl.trim() === "about:blank";
   let stableCandidate: { key: string; since: number } | undefined;
-  while (Date.now() < deadline) {
+  while (performance.now() < deadline) {
     signal?.throwIfAborted();
     const frameTree = await send("Page.getFrameTree", undefined, sessionId).catch(() => null);
     signal?.throwIfAborted();
@@ -119,7 +110,7 @@ async function waitForCdpNavigationResult(
     // client redirects without waiting for slow subresources to finish loading.
     if (finalUrl && finalUrl !== "about:blank" && loaderId) {
       const key = `${loaderId}\n${finalUrl}`;
-      const now = Date.now();
+      const now = performance.now();
       if (stableCandidate?.key === key) {
         if (now - stableCandidate.since >= CDP_TARGET_NAVIGATION_STABILITY_MS) {
           return finalUrl;
@@ -130,9 +121,7 @@ async function waitForCdpNavigationResult(
     } else {
       stableCandidate = undefined;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
-    });
+    await sleepWithAbort(CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
   }
   return undefined;
 }

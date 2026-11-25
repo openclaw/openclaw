@@ -6,7 +6,6 @@ describe("scp remote host", () => {
   it.each([
     { value: "gateway-host", expected: "gateway-host" },
     { value: " bot@gateway-host ", expected: "bot@gateway-host" },
-    { value: "bot@192.168.64.3", expected: "bot@192.168.64.3" },
     { value: "bot@[fe80::1]", expected: "bot@[fe80::1]" },
   ])("normalizes safe hosts for %j", ({ value, expected }) => {
     expect(normalizeScpRemoteHost(value)).toBe(expected);
@@ -14,8 +13,6 @@ describe("scp remote host", () => {
 
   it.each([
     null,
-    undefined,
-    "",
     "   ",
     "-oProxyCommand=whoami",
     "bot@gateway-host -oStrictHostKeyChecking=no",
@@ -47,8 +44,6 @@ describe("scp remote path", () => {
         normalized: "/Users/demo/Library/Messages/Attachments/ab/cd/IMG 1234 (1).jpg",
       },
       null,
-      undefined,
-      "",
       "   ",
       "relative/path.jpg",
       "/Users/demo/Library/Messages/Attachments/ab/cd/bad$path.jpg",

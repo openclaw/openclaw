@@ -1,11 +1,8 @@
-/**
- * Config patch helpers used by Cloudflare AI Gateway interactive and
- * non-interactive onboarding flows.
- */
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
   applyProviderConnectionConfig,
+  createAliasOnlyPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
@@ -14,9 +11,11 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
 
-/**
- * Builds the minimal config patch for provider setup and default model aliasing.
- */
+const { applyProviderConfig: applyCloudflareAiGatewayAlias } = createAliasOnlyPresetAppliers({
+  modelRef: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  alias: "Cloudflare AI Gateway",
+});
+
 export function buildCloudflareAiGatewayConfigPatch(params: {
   accountId: string;
   gatewayId: string;
@@ -44,22 +43,12 @@ export function buildCloudflareAiGatewayConfigPatch(params: {
   };
 }
 
-/**
- * Applies provider model config while preserving existing agent model aliases.
- */
 export function applyCloudflareAiGatewayProviderConfig(
   cfg: OpenClawConfig,
   params?: { accountId?: string; gatewayId?: string },
 ): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF] = {
-    ...models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF],
-    alias: models[CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Cloudflare AI Gateway",
-  };
-
-  const existingProvider = cfg.models?.providers?.["cloudflare-ai-gateway"] as
-    | { baseUrl?: unknown }
-    | undefined;
+  const withAlias = applyCloudflareAiGatewayAlias(cfg);
+  const existingProvider = cfg.models?.providers?.["cloudflare-ai-gateway"];
   const baseUrl =
     params?.accountId && params?.gatewayId
       ? resolveCloudflareAiGatewayBaseUrl({
@@ -70,20 +59,11 @@ export function applyCloudflareAiGatewayProviderConfig(
         ? existingProvider.baseUrl
         : undefined;
   if (!baseUrl) {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
-      },
-    };
+    return withAlias;
   }
 
   return applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: models,
+    agentModels: withAlias.agents?.defaults?.models ?? {},
     providerId: "cloudflare-ai-gateway",
     api: "anthropic-messages",
     baseUrl,
@@ -91,9 +71,6 @@ export function applyCloudflareAiGatewayProviderConfig(
   });
 }
 
-/**
- * Applies Cloudflare AI Gateway config and makes its default model primary.
- */
 export function applyCloudflareAiGatewayConfig(
   cfg: OpenClawConfig,
   params?: { accountId?: string; gatewayId?: string },

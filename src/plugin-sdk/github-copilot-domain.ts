@@ -24,10 +24,6 @@ export function isSupportedGithubCopilotDomain(raw: string | undefined | null): 
   if (!trimmed) {
     return true;
   }
-  // Reject scheme/path/credentials so template URL construction cannot be hijacked.
-  if (!/^[a-z0-9.-]+$/.test(trimmed)) {
-    return false;
-  }
   return trimmed === DEFAULT_GITHUB_COPILOT_DOMAIN || GHE_DATA_RESIDENCY_HOST.test(trimmed);
 }
 

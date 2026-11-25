@@ -283,7 +283,7 @@ class WearContextPickerTest {
         gatewayState = WearGatewayState.CONNECTED,
         activeSessionId = "watch",
         activeSessionTitle = "Watch research session",
-        agents = listOf(WearAgentSummary("research-assistant", "Research assistant", null, true), WearAgentSummary("travel", "Travel assistant", null, false)),
+        agents = listOf(WearAgent("research-assistant", "Research assistant", null, true), WearAgent("travel", "Travel assistant", null, false)),
         sessions = listOf(WearSessionSummary("watch", "Watch research session", openOnWatch = true), WearSessionSummary("phone", "Phone session", activeOnPhone = true)),
         models = listOf(WearModelSummary("example/long-reasoning-model-reference", "Long reasoning model", true), WearModelSummary("example/fast", "Fast model", false)),
         agentControlsSupported = true,

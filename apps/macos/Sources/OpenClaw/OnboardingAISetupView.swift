@@ -29,6 +29,7 @@ private struct OnboardingRecommendedInstallCard: View {
             if let website = OnboardingProviderAuthLink.safeURL(self.install.website) {
                 Link(destination: website) { self.content }
                     .buttonStyle(.plain)
+                    .environment(\.openURL, AppActivation.shared.openURLAction)
             } else {
                 self.content
             }
@@ -149,26 +150,30 @@ struct OnboardingAISetupView: View {
         }
     }
 
+    private var discoveryProgress: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(self.model.waitingForPendingActivationDeadline
+                    ? "Waiting for the previous AI test to finish…"
+                    : "Looking for AI you already use…")
+                    .font(.callout.weight(.semibold))
+                Text(self.model.waitingForPendingActivationDeadline
+                    ? "OpenClaw will check again before changing any inference settings."
+                    : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity)
+    }
+
     private var detectingView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.waitingForPendingActivationDeadline
-                        ? "Waiting for the previous AI test to finish…"
-                        : "Looking for AI you already use…")
-                        .font(.callout.weight(.semibold))
-                    Text(self.model.waitingForPendingActivationDeadline
-                        ? "OpenClaw will check again before changing any inference settings."
-                        : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 18)
-            .frame(maxWidth: .infinity)
+            self.discoveryProgress
 
             if self.model.waitingForPendingActivationDeadline {
                 if let failure = self.model.detectError {
@@ -196,6 +201,9 @@ struct OnboardingAISetupView: View {
                     self.candidateRow(candidate)
                 }
             }
+        } else if self.model.discovering {
+            // Known choices below are usable; detected ones appear here when discovery ends.
+            self.discoveryProgress
         } else if self.model.detectError == nil,
                   self.model.configuredGatewayAuthIssue == nil
         {
@@ -311,15 +319,14 @@ struct OnboardingAISetupView: View {
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
         let status = self.model.statuses[candidate.kind] ?? .untried
         let selected = self.model.selectedKind == candidate.kind
-        let presentation = self.model.candidatePresentation[candidate.kind]
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     OnboardingProviderArtwork(
-                        icon: presentation?.icon,
-                        brandCandidates: [presentation?.brandId, candidate.kind],
+                        icon: candidate.icon,
+                        brandCandidates: [candidate.brandId, candidate.kind],
                         fallbackSymbol: Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)
@@ -331,7 +338,7 @@ struct OnboardingAISetupView: View {
                         }
                         Text(self.subtitle(for: candidate, status: status))
                             .font(.caption)
-                            .foregroundStyle(self.subtitleStyle(for: status))
+                            .foregroundStyle(Self.isFailed(status) ? Color.orange : Color.secondary)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
@@ -358,7 +365,9 @@ struct OnboardingAISetupView: View {
                     .padding(.top, 6)
             }
         }
-        .openClawSelectableRowChrome(selected: selected && !Self.isFailed(status))
+        .openClawSelectableRowChrome(
+            selected: selected && !Self.isFailed(status),
+            enabled: self.model.canSelectCandidate(kind: candidate.kind))
     }
 
     private func subtitle(
@@ -373,15 +382,6 @@ struct OnboardingAISetupView: View {
         case .untried:
             "\(candidate.modelRef) · \(candidate.detail)"
         }
-    }
-
-    private func subtitleStyle(
-        for status: OnboardingAISetupModel.CandidateStatus) -> Color
-    {
-        if case .failed = status {
-            return .orange
-        }
-        return .secondary
     }
 
     @ViewBuilder
@@ -446,33 +446,18 @@ struct OnboardingAISetupView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 ForEach(self.model.prepareOptions) { option in
-                    Button {
+                    self.providerChoiceRow(
+                        icon: option.icon,
+                        brandCandidates: [option.brandId, option.id],
+                        label: Text(option.label),
+                        hint: self.providerHint(option.hint),
+                        fallbackSymbol: "arrow.down.circle",
+                        actionLabel: Text(option.actionLabel ?? String(localized: "Connect / Set up")),
+                        // Discovery may find the model this row would prepare.
+                        disabled: self.model.discovering)
+                    {
                         self.model.startProviderPrepare(option)
-                    } label: {
-                        HStack(spacing: 10) {
-                            OnboardingProviderArtwork(
-                                icon: option.icon,
-                                brandCandidates: [option.brandId, option.id],
-                                fallbackSymbol: "arrow.down.circle")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(option.label)
-                                    .font(.callout.weight(.semibold))
-                                if let hint = option.hint, !hint.isEmpty {
-                                    Text(hint)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .multilineTextAlignment(.leading)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                            Text(option.actionLabel ?? String(localized: "Connect / Set up"))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
-                        }
-                        .openClawSelectableRowChrome(selected: false)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(self.model.isBusy)
                 }
             }
             .padding(12)
@@ -485,26 +470,6 @@ struct OnboardingAISetupView: View {
     private var providerAuthSection: some View {
         if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                if self.model.nativeSessionCatalogPreferenceRequired,
-                   !self.model.nativeSessionCatalogs.isEmpty
-                {
-                    Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show existing native conversations")
-                                .font(.callout.weight(.semibold))
-                            Text(String(
-                                format: String(localized: """
-                                Include existing %@ conversations in the sidebar. \
-                                This discovers them in place; it does not copy transcripts.
-                                """),
-                                self.model.nativeSessionCatalogSummary))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.checkbox)
-                    .padding(.bottom, 6)
-                }
                 Text("Connect an AI provider")
                     .font(.headline)
                 // Localization: the sign-in/API-key flow belongs to the selected provider, not OpenClaw.
@@ -541,76 +506,85 @@ struct OnboardingAISetupView: View {
     }
 
     private var apiKeysRow: some View {
-        Button {
+        self.providerChoiceRow(
+            icon: nil,
+            brandCandidates: [],
+            label: Text("API Keys"),
+            hint: Text("Connect with an API key or token"),
+            fallbackSymbol: "key.fill",
+            actionLabel: Text("Connect"),
+            selected: self.model.showManualEntry)
+        {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                 self.model.showManualEntry = true
                 // The form can already exist below the viewport; every tap must reveal it.
                 self.manualEntryRequest += 1
             }
-        } label: {
-            HStack(spacing: 10) {
-                OnboardingProviderArtwork(
-                    icon: nil,
-                    brandCandidates: [],
-                    fallbackSymbol: "key.fill")
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("API Keys")
-                        .font(.callout.weight(.semibold))
-                    Text("Connect with an API key or token")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Text("Connect")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .openClawSelectableRowChrome(selected: self.model.showManualEntry)
         }
-        .buttonStyle(.plain)
-        .disabled(self.model.isBusy)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
-        let fallbackSymbol = switch option.kind {
-        case "device-code": "link.badge.plus"
-        case "install": "puzzlepiece.extension"
-        case "custom": "point.3.connected.trianglepath.dotted"
-        default: "person.crop.circle.badge.checkmark"
+        let (fallbackSymbol, actionLabel): (String, LocalizedStringKey) = switch option.kind {
+        case "device-code": ("link.badge.plus", "Pair")
+        case "install": ("puzzlepiece.extension", "Set up…")
+        case "custom": ("point.3.connected.trianglepath.dotted", "Configure…")
+        default: ("person.crop.circle.badge.checkmark", "Sign in")
         }
-        let actionLabel: LocalizedStringKey = switch option.kind {
-        case "device-code": "Pair"
-        case "install": "Set up…"
-        case "custom": "Configure…"
-        default: "Sign in"
+        let useChoiceLabel = option.actionLabel == nil &&
+            (option.kind == "oauth" || option.kind == "device-code")
+        let buttonLabel = option.actionLabel ?? (useChoiceLabel ? option.label : nil)
+        let title = buttonLabel == nil ? option.label : option.groupLabel ?? option.label
+        return self.providerChoiceRow(
+            icon: option.icon,
+            brandCandidates: [option.brandId, option.id],
+            label: useChoiceLabel && title == option.label ? nil : Text(title),
+            hint: self.providerHint(option.hint),
+            fallbackSymbol: fallbackSymbol,
+            actionLabel: buttonLabel.map { Text($0) } ?? Text(actionLabel))
+        {
+            self.model.startProviderWizard(option, kind: .auth)
         }
-        return Button {
-            self.model.startProviderAuth(option)
-        } label: {
+    }
+
+    @ViewBuilder
+    private func providerHint(_ hint: String?) -> some View {
+        if let hint, !hint.isEmpty {
+            Text(hint).multilineTextAlignment(.leading)
+        }
+    }
+
+    private func providerChoiceRow(
+        icon: String?,
+        brandCandidates: [String?],
+        label: Text?,
+        hint: some View,
+        fallbackSymbol: String,
+        actionLabel: Text,
+        selected: Bool = false,
+        disabled: Bool = false,
+        action: @escaping () -> Void) -> some View
+    {
+        Button(action: action) {
             HStack(spacing: 10) {
                 OnboardingProviderArtwork(
-                    icon: option.icon,
-                    brandCandidates: [option.brandId, option.id],
+                    icon: icon,
+                    brandCandidates: brandCandidates,
                     fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
-                        .font(.callout.weight(.semibold))
-                    if let hint = option.hint, !hint.isEmpty {
-                        Text(hint)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.leading)
+                    if let label {
+                        label.font(.callout.weight(.semibold))
                     }
+                    hint.font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                Text(actionLabel)
+                actionLabel
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
-            .openClawSelectableRowChrome(selected: false)
+            .openClawSelectableRowChrome(selected: selected)
         }
         .buttonStyle(.plain)
-        .disabled(self.model.isBusy)
+        .disabled(self.model.isBusy || disabled)
     }
 
     private var manualForm: some View {
@@ -747,7 +721,7 @@ struct OnboardingErrorCard: View {
                     }
                     Button("Open help…") {
                         if let url = URL(string: "https://docs.openclaw.ai/\(docsSlug)") {
-                            NSWorkspace.shared.open(url)
+                            AppActivation.shared.open(url)
                         }
                     }
                     .buttonStyle(.link)

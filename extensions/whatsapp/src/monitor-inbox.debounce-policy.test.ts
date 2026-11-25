@@ -15,6 +15,16 @@ import {
 
 installWebMonitorInboxUnitTestHooks();
 
+function groupMessage(id: string, text: string, n: number, sender = "111", group = "123") {
+  return buildNotifyMessageUpsert({
+    id,
+    text,
+    timestamp: 1_700_000_000 + n,
+    participant: sender + "@s.whatsapp.net",
+    remoteJid: group + "@g.us",
+  }).messages[0]!;
+}
+
 it("updates WhatsApp timing and drains batches enabled after socket attachment", async () => {
   let cfg: OpenClawConfig = {
     channels: { whatsapp: { allowFrom: ["*"] } },
@@ -74,32 +84,19 @@ it.each(["quoted reply", "buffered text"] as const)(
   async (followUp) => {
     const onMessage = vi.fn<InboxOnMessage>(async () => {});
     const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const finalMessagePrepared = createDeferred<void>();
     const { listener, sock } = await startInboxMonitor(onMessage, {
       debounceMs: 60_000,
       durableInboundQueue: queue,
-      shouldDebounce: (message) => !message.quote?.id,
-    });
-    const first = buildNotifyMessageUpsert({
-      id: "group-a-first",
-      remoteJid: "123@g.us",
-      participant: "111@s.whatsapp.net",
-      text: "first",
-      timestamp: 1_700_000_000,
-    });
-    const second = buildNotifyMessageUpsert({
-      id: "group-a-second",
-      remoteJid: "123@g.us",
-      participant: "111@s.whatsapp.net",
-      text: "second",
-      timestamp: 1_700_000_001,
+      shouldDebounce: (message) => {
+        if (message.event.id === "group-a-fourth") {
+          finalMessagePrepared.resolve();
+        }
+        return !message.quote?.id;
+      },
     });
     const third = {
-      key: {
-        id: "group-b-third",
-        remoteJid: "123@g.us",
-        participant: "222@s.whatsapp.net",
-        fromMe: false,
-      },
+      ...groupMessage("group-b-third", "third", 2, "222"),
       message:
         followUp === "quoted reply"
           ? {
@@ -113,21 +110,18 @@ it.each(["quoted reply", "buffered text"] as const)(
               },
             }
           : { conversation: "third" },
-      messageTimestamp: 1_700_000_002,
     };
-    const fourth = buildNotifyMessageUpsert({
-      id: "group-a-fourth",
-      remoteJid: "123@g.us",
-      participant: "111@s.whatsapp.net",
-      text: "fourth",
-      timestamp: 1_700_000_003,
-    });
     try {
       sock.ev.emit("messages.upsert", {
         type: "notify",
-        messages: [...first.messages, ...second.messages, third, ...fourth.messages],
+        messages: [
+          groupMessage("group-a-first", "first", 0),
+          groupMessage("group-a-second", "second", 1),
+          third,
+          groupMessage("group-a-fourth", "fourth", 3),
+        ],
       });
-      await settleInboundWork();
+      await finalMessagePrepared.promise;
     } finally {
       await listener.close();
     }
@@ -169,34 +163,16 @@ it("keeps a sender switch behind an active admission without blocking another co
     shouldDebounce: (message) => message.payload.body === "first",
   });
   try {
-    sock.ev.emit(
-      "messages.upsert",
-      buildNotifyMessageUpsert({
-        id: "group-held-first",
-        remoteJid: "123@g.us",
-        participant: "111@s.whatsapp.net",
-        text: "first",
-        timestamp: 1_700_000_000,
-      }),
-    );
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [groupMessage("group-held-first", "first", 0)],
+    });
     await firstStarted.promise;
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [
-        ...buildNotifyMessageUpsert({
-          id: "group-held-second",
-          remoteJid: "123@g.us",
-          participant: "222@s.whatsapp.net",
-          text: "second",
-          timestamp: 1_700_000_001,
-        }).messages,
-        ...buildNotifyMessageUpsert({
-          id: "group-independent",
-          remoteJid: "456@g.us",
-          participant: "222@s.whatsapp.net",
-          text: "other conversation",
-          timestamp: 1_700_000_002,
-        }).messages,
+        groupMessage("group-held-second", "second", 1, "222", "123"),
+        groupMessage("group-independent", "other conversation", 2, "222", "456"),
       ],
     });
     await otherStarted.promise;

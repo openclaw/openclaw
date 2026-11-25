@@ -8,36 +8,25 @@ import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { resolveSecretInputRef } from "./types.secrets.js";
 import { withConfigIssuePath } from "./validation-issues.js";
 
-type ExplicitPluginReferences = {
-  entries: Set<string>;
-  allow: Set<string>;
-  deny: Set<string>;
-  slots: Map<string, string>;
-};
-
-function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
-  const references: ExplicitPluginReferences = {
-    entries: new Set(),
-    allow: new Set(),
-    deny: new Set(),
-    slots: new Map(),
-  };
+function collectExplicitPluginReferencePaths(raw: unknown): Map<string, string | undefined> {
+  const references = new Map<string, string | undefined>();
   if (!isRecord(raw) || !isRecord(raw.plugins)) {
     return references;
   }
   const { plugins } = raw;
-  if (isRecord(plugins.entries)) {
-    for (const pluginId of Object.keys(plugins.entries)) {
+  // Later sources win: entries > allow > deny > the last matching slot.
+  if (isRecord(plugins.slots)) {
+    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
+      if (typeof pluginId !== "string") {
+        continue;
+      }
       const normalized = normalizePluginId(pluginId);
-      if (normalized) {
-        references.entries.add(normalized);
+      if (normalized && normalized !== "none") {
+        references.set(normalized, slotId ? `plugins.slots.${slotId}` : undefined);
       }
     }
   }
-  for (const [key, target] of [
-    ["allow", references.allow],
-    ["deny", references.deny],
-  ] as const) {
+  for (const key of ["deny", "allow"] as const) {
     const value = plugins[key];
     if (!Array.isArray(value)) {
       continue;
@@ -46,44 +35,20 @@ function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences
       if (typeof entry === "string") {
         const normalized = normalizePluginId(entry);
         if (normalized) {
-          target.add(normalized);
+          references.set(normalized, `plugins.${key}`);
         }
       }
     }
   }
-  if (isRecord(plugins.slots)) {
-    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
-      if (typeof pluginId !== "string") {
-        continue;
-      }
+  if (isRecord(plugins.entries)) {
+    for (const pluginId of Object.keys(plugins.entries)) {
       const normalized = normalizePluginId(pluginId);
-      if (normalized && normalized !== "none") {
-        references.slots.set(normalized, slotId);
+      if (normalized) {
+        references.set(normalized, `plugins.entries.${normalized}`);
       }
     }
   }
   return references;
-}
-
-function resolveExplicitPluginReferencePath(
-  references: ExplicitPluginReferences,
-  pluginId: string,
-): string | undefined {
-  const normalized = normalizePluginId(pluginId);
-  if (!normalized) {
-    return undefined;
-  }
-  if (references.entries.has(normalized)) {
-    return `plugins.entries.${normalized}`;
-  }
-  if (references.allow.has(normalized)) {
-    return "plugins.allow";
-  }
-  if (references.deny.has(normalized)) {
-    return "plugins.deny";
-  }
-  const slotId = references.slots.get(normalized);
-  return slotId ? `plugins.slots.${slotId}` : undefined;
 }
 
 /** Classify one registry generation against its authored plugin references and deferred owners. */
@@ -93,7 +58,7 @@ export function createPluginRegistryConfigValidator(params: {
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
 }): (registry: PluginManifestRegistry) => void {
-  const references = collectExplicitPluginReferences(params.raw);
+  const references = collectExplicitPluginReferencePaths(params.raw);
   let checked = false;
   return (registry) => {
     if (checked) {
@@ -101,12 +66,15 @@ export function createPluginRegistryConfigValidator(params: {
     }
     checked = true;
     for (const diagnostic of registry.diagnostics) {
+      if (diagnostic.level === "info") {
+        continue;
+      }
       if (diagnostic.configDisposition === "preserve") {
         params.warnings.push(pluginDiagnosticToConfigWarning(diagnostic, "plugins.load.paths"));
         continue;
       }
       const explicitPath = diagnostic.pluginId
-        ? resolveExplicitPluginReferencePath(references, diagnostic.pluginId)
+        ? references.get(normalizePluginId(diagnostic.pluginId))
         : undefined;
       const issuePath =
         !diagnostic.pluginId && diagnostic.message.includes("plugin path not found")

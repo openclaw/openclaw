@@ -1,4 +1,3 @@
-// Anthropic Prompt Probe script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 // Live prompt probe for Anthropic setup-token and Claude CLI prompt-path debugging.
 // Usage:
@@ -29,66 +28,29 @@ import {
   signalExitCode,
   terminateManagedChild,
 } from "./lib/managed-child-process.mts";
+import { sleep } from "./lib/sleep.mjs";
 
 const TRANSPORT = process.env.OPENCLAW_PROMPT_TRANSPORT?.trim() === "direct" ? "direct" : "gateway";
 const GATEWAY_PROMPT_MODE = "extra";
 const PROMPT_TEXT = process.env.OPENCLAW_PROMPT_TEXT?.trim() ?? "";
 const PROMPT_LIST_JSON = process.env.OPENCLAW_PROMPT_LIST_JSON?.trim() ?? "";
 const USER_PROMPT = process.env.OPENCLAW_USER_PROMPT?.trim() || "is clawd here?";
-const ENABLE_CAPTURE = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_CAPTURE",
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE,
-});
-const INCLUDE_RAW = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_INCLUDE_RAW",
-  raw: process.env.OPENCLAW_PROMPT_INCLUDE_RAW,
-});
-const KEEP_TMP = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_KEEP_TMP",
-  raw: process.env.OPENCLAW_PROMPT_KEEP_TMP,
-});
+const ENABLE_CAPTURE = readBooleanEnv("OPENCLAW_PROMPT_CAPTURE");
+const INCLUDE_RAW = readBooleanEnv("OPENCLAW_PROMPT_INCLUDE_RAW");
+const KEEP_TMP = readBooleanEnv("OPENCLAW_PROMPT_KEEP_TMP");
 const CLAUDE_BIN = process.env.CLAUDE_BIN?.trim() || "claude";
 const NODE_BIN = process.env.OPENCLAW_NODE_BIN?.trim() || process.execPath;
-const TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 45_000,
-  label: "OPENCLAW_PROMPT_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_TIMEOUT_MS,
-});
-const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 120_000,
-  label: "OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
-});
-const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
-  fallback: 2 * 1024 * 1024,
-  label: "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
-});
+const TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_TIMEOUT_MS", 45_000);
+const GATEWAY_TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS", 120_000);
+const CAPTURE_PROXY_MAX_BODY_BYTES = readPositiveIntegerEnv(
+  "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
+  2 * 1024 * 1024,
+);
 const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
 const DIRECT_CLAUDE_ARGS = ["-p", "--append-system-prompt"];
-
-type CaptureSummary = {
-  url?: string;
-  authScheme?: string;
-  xApp?: string;
-  anthropicBeta?: string;
-  systemBlockCount: number;
-  systemBlocks: Array<{ index: number; bytes: number; preview: string }>;
-  containsPromptExact: boolean;
-  bodyContainsPromptExact: boolean;
-  userBytes?: number;
-  userPreview?: string;
-  rawBody?: string;
-};
 
 type PromptResult = {
   prompt: string;
@@ -103,7 +65,7 @@ type PromptResult = {
   stderr?: string;
   error?: string;
   matchedExtraUsage400: boolean;
-  capture?: CaptureSummary;
+  capture?: ReturnType<typeof summarizeCapture>;
   tmpDir?: string;
 };
 
@@ -131,9 +93,16 @@ type StoppableGatewayChild = {
 };
 
 type ClosableLogFile = {
-  appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
+
+function readBooleanEnv(name: string): boolean {
+  return parseBooleanEnv({ fallback: false, name, raw: process.env[name] });
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  return parseStrictIntegerOption({ fallback, label: name, min: 1, raw: process.env[name] });
+}
 
 function toHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join(", ") : value;
@@ -147,10 +116,7 @@ function summarizeText(text: string, max = 120): string {
   return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
-function summarizeCapture(
-  capture: ProxyCapture | undefined,
-  prompt: string,
-): CaptureSummary | undefined {
+function summarizeCapture(capture: ProxyCapture | undefined, prompt: string) {
   if (!capture) {
     return undefined;
   }
@@ -275,34 +241,17 @@ async function resolveSetupTokenSource(): Promise<TokenSource> {
     allowKeychainPrompt: false,
   });
   const candidates = listSetupTokenProfiles(store, normalizeProviderId);
-  if (SETUP_TOKEN_PROFILE) {
-    const match = candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE);
-    if (!match) {
-      throw new Error(`setup-token profile not found: ${SETUP_TOKEN_PROFILE}`);
-    }
-    return { profileId: match.id, token: validateSetupToken(match.token) };
-  }
-  const match = pickSetupTokenProfile(candidates);
+  const match = SETUP_TOKEN_PROFILE
+    ? candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE)
+    : pickSetupTokenProfile(candidates);
   if (!match) {
     throw new Error(
-      "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
+      SETUP_TOKEN_PROFILE
+        ? `setup-token profile not found: ${SETUP_TOKEN_PROFILE}`
+        : "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
     );
   }
   return { profileId: match.id, token: validateSetupToken(match.token) };
-}
-
-async function sleep(ms: number): Promise<void> {
-  return await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: () => T,
-): Promise<T> {
-  return await Promise.race([promise, sleep(timeoutMs).then(() => fallback())]);
 }
 
 async function readRequestBody(
@@ -509,13 +458,12 @@ async function startAnthropicProxy(params: {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await withTimeout(
+      await Promise.race([
         new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         }),
-        1_000,
-        () => undefined,
-      );
+        sleep(1_000),
+      ]);
     },
   };
 }
@@ -713,11 +661,7 @@ async function startGatewayProcess(params: {
       terminateManagedChild(child, "SIGKILL", { useWindowsTaskkill: false });
     },
   });
-  return {
-    async stop(): Promise<boolean> {
-      return await stopOnce();
-    },
-  };
+  return { stop: stopOnce };
 }
 
 async function stopGatewayPromptChild(
@@ -986,7 +930,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
         sessionKey: `agent:main:prompt-probe-${randomUUID()}`,
         idempotencyKey: `idem-${randomUUID()}`,
         message: "Reply with exactly: PROMPT PROBE OK.",
-        ...(GATEWAY_PROMPT_MODE === "extra" ? { extraSystemPrompt: prompt } : {}),
+        extraSystemPrompt: prompt,
         deliver: false,
       },
       timeoutMs: 15_000,

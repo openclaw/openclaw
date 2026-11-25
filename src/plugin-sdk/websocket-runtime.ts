@@ -1,7 +1,11 @@
 /** Node-compatible WebSocket transport and observer ticket helpers. */
+import { WebSocket as NativeWebSocket } from "../../packages/gateway-client/src/websocket.js";
+
+// Preserve the shipped constructor overloads; Gateway-only TLS typing stays internal.
+export const WebSocket: typeof import("ws").WebSocket = NativeWebSocket;
+export type WebSocket = import("ws").WebSocket;
 export {
   createWebSocketStream,
-  WebSocket,
   WebSocketServer,
 } from "../../packages/gateway-client/src/websocket.js";
 export type { ClientOptions, Data, RawData } from "../../packages/gateway-client/src/websocket.js";

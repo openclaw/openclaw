@@ -22,12 +22,13 @@ type WorkerRuntimeState = {
 type WorkerCleanupHelpers = {
   drainOpenClawAgentWriteQueuesForTest: typeof import("../src/state/openclaw-agent-write-admission.test-support.js").drainOpenClawAgentWriteQueuesForTest;
   clearSessionStoreCacheForTest: typeof import("../src/config/sessions/store-writer-state.js").clearSessionStoreCacheForTest;
-  drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
+  drainFileLockStateForTest: typeof import("../src/plugin-sdk/file-lock.js").drainFileLockStateForTest;
   drainSessionStoreWriterQueuesForTest: typeof import("../src/config/sessions/store-writer-state.test-support.js").drainSessionStoreWriterQueuesForTest;
-  resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
-  resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
+  resetContextWindowCacheForTest: typeof import("../src/agents/context.test-support.js").resetContextWindowCacheForTest;
+  resetFileLockStateForTest: typeof import("../src/plugin-sdk/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
   resetPreparedModelRuntimeSnapshotsForTest: typeof import("../src/agents/prepared-model-runtime.test-support.js").resetPreparedModelRuntimeSnapshotsForTest;
+  resetStickyRateLimitFallbacksForTest: typeof import("../src/agents/model-fallback-sticky.test-support.js").resetStickyRateLimitFallbacksForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -53,16 +54,17 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
   };
   globalState[WORKER_CLEANUP_HELPERS] ??= (async () => {
     const [
-      contextRuntimeState,
+      contextTestSupport,
       modelsConfigState,
       preparedModelRuntime,
       sessionStoreWriterState,
       sessionStoreWriterTestState,
       agentWriteAdmission,
       fileLock,
+      stickyFallbacks,
     ] = await Promise.all([
-      vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
-        "../src/agents/context-runtime-state.js",
+      vi.importActual<typeof import("../src/agents/context.test-support.js")>(
+        "../src/agents/context.test-support.js",
       ),
       vi.importActual<typeof import("../src/agents/models-config-state.test-support.js")>(
         "../src/agents/models-config-state.test-support.js",
@@ -79,7 +81,12 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/state/openclaw-agent-write-admission.test-support.js")>(
         "../src/state/openclaw-agent-write-admission.test-support.js",
       ),
-      vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+      vi.importActual<typeof import("../src/plugin-sdk/file-lock.js")>(
+        "../src/plugin-sdk/file-lock.js",
+      ),
+      vi.importActual<typeof import("../src/agents/model-fallback-sticky.test-support.js")>(
+        "../src/agents/model-fallback-sticky.test-support.js",
+      ),
     ]);
     return {
       drainOpenClawAgentWriteQueuesForTest:
@@ -88,11 +95,12 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
       drainSessionStoreWriterQueuesForTest:
         sessionStoreWriterTestState.drainSessionStoreWriterQueuesForTest,
-      resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
+      resetContextWindowCacheForTest: contextTestSupport.resetContextWindowCacheForTest,
       resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
       resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
       resetPreparedModelRuntimeSnapshotsForTest:
         preparedModelRuntime.resetPreparedModelRuntimeSnapshotsForTest,
+      resetStickyRateLimitFallbacksForTest: stickyFallbacks.resetStickyRateLimitFallbacksForTest,
     };
   })();
   return globalState[WORKER_CLEANUP_HELPERS];
@@ -340,15 +348,26 @@ function resolveDefaultPluginRegistryProxy(): PluginRegistry {
   return workerRuntimeState.defaultPluginRegistry;
 }
 
+async function settlePluginCacheRetirements(): Promise<void> {
+  const { waitForPluginCacheRetirement } = await vi.importActual<
+    typeof import("../src/plugins/plugin-cache.js")
+  >("../src/plugins/plugin-cache.js");
+  const { failures } = await waitForPluginCacheRetirement();
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Plugin cache retirement failed during test cleanup");
+  }
+}
+
 async function installDefaultPluginRegistry(): Promise<void> {
   // Worker module resets retire the lifecycle maps. Activate through the current
   // real module, never a cached closure or a suite's partial runtime mock.
-  const { resetPluginRuntimeStateForTest, setActivePluginRegistry } = await vi.importActual<
-    typeof import("../src/plugins/runtime.js")
-  >("../src/plugins/runtime.js");
+  const { clearActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await vi.importActual<typeof import("../src/plugins/runtime.js")>("../src/plugins/runtime.js");
+  await clearActivePluginRegistry();
   workerRuntimeState.materializedDefaultPluginRegistry = null;
   resetPluginRuntimeStateForTest();
   setActivePluginRegistry(resolveDefaultPluginRegistryProxy());
+  await settlePluginCacheRetirements();
 }
 
 // Some suites import channel/plugin consumers at module top level, before
@@ -370,6 +389,7 @@ afterEach(async () => {
     resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
     resetPreparedModelRuntimeSnapshotsForTest,
+    resetStickyRateLimitFallbacksForTest,
   } = await loadWorkerCleanupHelpers();
   await drainOpenClawAgentWriteQueuesForTest();
   await drainSessionStoreWriterQueuesForTest();
@@ -378,11 +398,16 @@ afterEach(async () => {
   resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
+  resetStickyRateLimitFallbacksForTest();
   await resetPreparedModelRuntimeSnapshotsForTest();
   await installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
+  const { clearActivePluginRegistry } = await vi.importActual<
+    typeof import("../src/plugins/runtime.js")
+  >("../src/plugins/runtime.js");
+  await clearActivePluginRegistry();
   const {
     clearSessionStoreCacheForTest,
     drainFileLockStateForTest,
@@ -393,4 +418,5 @@ afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
   clearSessionStoreCacheForTest();
   await drainFileLockStateForTest();
+  await settlePluginCacheRetirements();
 });

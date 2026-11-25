@@ -4,7 +4,7 @@ Official NVIDIA OpenShell sandbox backend for OpenClaw.
 
 This plugin lets OpenClaw use OpenShell-managed local or remote sandboxes with
 SSH command execution. Choose `mirror` mode for a synchronized local workspace
-or `remote` mode for a remote-canonical workspace.
+or `remote` mode for a workspace managed on the remote host.
 
 Mirror operations sharing a workspace run sequentially so concurrent agent
 turns cannot overwrite one another. Outbound attachments resolve against the
@@ -48,6 +48,16 @@ path to avoid resolving it relative to an agent workspace.
 Use the OpenShell docs for credentials, workspace mirroring, runtime selection, and troubleshooting:
 
 - https://docs.openclaw.ai/gateway/openshell
+
+## Brokered worker inference
+
+The optional `worker` configuration adds `openclaw openshell worker create`,
+`run`, and `configure`. It launches the ordinary OpenClaw node inside an
+OpenShell sandbox after credential-provider readiness, then binds the existing
+paired-device worker-inference profile. Docker and Podman use the same OpenShell
+gateway contract; OCE and Kubernetes are not required. Sandbox-only behavior is
+unchanged. See https://docs.openclaw.ai/gateway/openshell-workers for setup,
+credential custody, image requirements, and live-proof limitations.
 
 ## Package
 

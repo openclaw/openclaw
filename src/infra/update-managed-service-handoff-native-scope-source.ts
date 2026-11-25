@@ -16,16 +16,6 @@ async function inspectSystemdService(unit, deadline) {
   return parseSystemdProperties(result.stdout);
 }
 
-function procCgroupMembershipMatches(cgroupFile, controlGroup) {
-  if (!controlGroup) return false;
-  // v1/hybrid membership can span controllers. Only the systemd hierarchy
-  // or the unified v2 hierarchy proves placement, with an exact scope path.
-  return cgroupFile.split("\n").some((line) => {
-    const systemd = /^[1-9][0-9]*:name=systemd:(.*)$/.exec(line);
-    return line === "0::" + controlGroup || systemd?.[1] === controlGroup;
-  });
-}
-
 async function inspectTriageScope() {
   const result = await runServiceCommand("systemctl", [
     "--user",

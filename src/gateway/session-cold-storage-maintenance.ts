@@ -1,5 +1,10 @@
 import type { SessionsStorageStatusResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  resolveSessionColdStorageConfig,
+} from "../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayDetachedWorkAdmission,
@@ -12,6 +17,14 @@ type MaintenanceOwner = {
   stop: () => Promise<void>;
 };
 const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
+
+function hasTranscriptMaintenanceWork(config: OpenClawConfig): boolean {
+  const maintenance = resolveMaintenanceConfigFromInput(config.session?.maintenance);
+  return (
+    resolveSessionColdStorageConfig(config.session?.maintenance).enabled ||
+    (maintenance.mode === "enforce" && maintenance.resetArchiveRetentionMs != null)
+  );
+}
 
 function idleStatus(): MaintenanceStatus {
   return {
@@ -26,39 +39,38 @@ function idleStatus(): MaintenanceStatus {
 
 /** One sweep owner per Gateway, shared by periodic and explicit maintenance. */
 export function startSessionColdStorageMaintenance(params: {
+  scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   onError: (message: string) => void;
 }): MaintenanceOwner {
-  const previous = owners.get(params.getRuntimeConfig);
-  const previousDrain = previous?.stop();
-  const abortController = new AbortController();
-  let stopped = false;
+  const previousDrain = owners.get(params.getRuntimeConfig)?.stop();
+  const scheduler = params.scheduler.scope();
   let inFlight: Promise<void> | undefined;
   const status = idleStatus();
   const owner: MaintenanceOwner = {
     status: () => ({ ...status }),
     run: () => {
       const config = params.getRuntimeConfig();
-      if (stopped || config.session?.maintenance?.coldStorage?.enabled !== true) {
-        throw new Error("Transcript cold storage is disabled");
+      if (scheduler.signal.aborted || !hasTranscriptMaintenanceWork(config)) {
+        throw new Error("Chat history maintenance is disabled");
       }
       if (inFlight) {
         return inFlight;
       }
       const assertCurrent = () => {
         if (
-          stopped ||
+          scheduler.signal.aborted ||
           owners.get(params.getRuntimeConfig) !== owner ||
           params.getRuntimeConfig() !== config ||
           isGatewayWorkAdmissionClosed()
         ) {
           throw new Error(
-            "Transcript archival canceled because its runtime configuration changed or the Gateway is stopping",
+            "Chat history archival canceled because its runtime configuration changed or the Gateway is stopping",
           );
         }
       };
       status.running = true;
-      status.lastStartedAt = Date.now();
+      status.lastStartedAt = scheduler.now();
       status.lastError = null;
       status.archivedTranscripts = 0;
       status.externalizedTranscripts = 0;
@@ -81,7 +93,7 @@ export function startSessionColdStorageMaintenance(params: {
           status.externalizedTranscripts = result.externalizedTranscripts;
         },
         "runtime:session-cold-storage",
-        abortController.signal,
+        scheduler.signal,
       )
         .catch((error: unknown) => {
           status.lastError = error instanceof Error ? error.message : String(error);
@@ -89,15 +101,13 @@ export function startSessionColdStorageMaintenance(params: {
         })
         .finally(() => {
           status.running = false;
-          status.lastCompletedAt = Date.now();
+          status.lastCompletedAt = scheduler.now();
           inFlight = undefined;
         });
       return inFlight;
     },
     stop: async () => {
-      stopped = true;
-      clearInterval(timer);
-      abortController.abort();
+      await scheduler.stop();
       // A worker must relinquish its writer admission before database teardown.
       await inFlight?.catch(() => {});
       await previousDrain;
@@ -107,20 +117,22 @@ export function startSessionColdStorageMaintenance(params: {
     },
   };
   owners.set(params.getRuntimeConfig, owner);
-  const tick = () => {
-    if (
-      stopped ||
-      inFlight ||
-      isGatewayWorkAdmissionClosed() ||
-      params.getRuntimeConfig().session?.maintenance?.coldStorage?.enabled !== true
-    ) {
-      return;
-    }
-    void owner.run().catch((error: unknown) => params.onError(String(error)));
-  };
-  const timer = setInterval(tick, 60_000);
-  timer.unref();
-  tick();
+  scheduler.schedule({
+    id: "maintenance:session-cold-storage",
+    delayMs: 0,
+    everyMs: 60_000,
+    phase: "maintenance",
+    run: () => {
+      if (
+        inFlight ||
+        isGatewayWorkAdmissionClosed() ||
+        !hasTranscriptMaintenanceWork(params.getRuntimeConfig())
+      ) {
+        return undefined;
+      }
+      return owner.run().catch((error: unknown) => params.onError(String(error)));
+    },
+  });
   return owner;
 }
 
@@ -135,7 +147,7 @@ export function requestGatewaySessionColdStorageMaintenance(
 ): void {
   const owner = owners.get(getRuntimeConfig);
   if (!owner) {
-    throw new Error("Transcript maintenance is not running; wait for Gateway startup to finish");
+    throw new Error("Chat history maintenance is not running; wait for Gateway startup to finish");
   }
   // The lifecycle owner records completion/errors and drains this job on shutdown.
   void owner.run().catch(() => {});

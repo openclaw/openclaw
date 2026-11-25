@@ -1,3 +1,4 @@
+import AppKit
 import ConcurrencyExtras
 import Foundation
 import OpenClawKit
@@ -16,7 +17,7 @@ private actor DashboardReconnectAuthGate {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardReconnectTests {
     @Test func `primary discovery failure preserves commands owned by a pending picker`() async throws {
@@ -81,7 +82,7 @@ struct DashboardReconnectTests {
                     routeRevision: 1))
             }
             await discoveryGate.waitUntilRequested()
-            selection = Task { await manager._testSwitchTarget(target, in: original) }
+            selection = Task { _ = await manager.switchTarget(target, in: original)?.value }
             await profileGate.waitUntilRequested()
             manager.dispatchNativeCommand(.newSession)
             manager.dispatchNativeCommand(.commandPalette)
@@ -100,8 +101,8 @@ struct DashboardReconnectTests {
             var events: [String] = []
             var samples = 0
             var observation = "not sampled"
-            let deadline = ContinuousClock.now + .seconds(5)
-            while true {
+            try await DashboardTestWait.document(replacement, "replacement document")
+            try await TestWait.state("replacement command delivery") {
                 samples += 1
                 do {
                     let received = try await replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]
@@ -111,10 +112,7 @@ struct DashboardReconnectTests {
                     events = []
                     observation = "JavaScript error code \((error as NSError).code)"
                 }
-                if !replacement.webView.isLoading, events == expected { break }
-                // A delayed main-actor resumption must check fresh events before expiring.
-                if ContinuousClock.now >= deadline { break }
-                try await Task.sleep(for: .milliseconds(10))
+                return events == expected
             }
             #expect(manager._testAuxiliaryWindows().first?.target == target)
             #expect(replacement !== original)
@@ -236,11 +234,8 @@ struct DashboardReconnectTests {
             let first = try #require(manager._testController())
             let loginURL = server.url("/login")
             first.webView.load(URLRequest(url: loginURL))
-            let deadline = ContinuousClock.now + .seconds(10)
-            while !first.canDeliverNativeCommands || first.webView.isLoading || first.webView.url != loginURL,
-                  ContinuousClock.now < deadline
-            {
-                try await Task.sleep(for: .milliseconds(20))
+            try await DashboardTestWait.document(first, "personal sign-in document") {
+                first.webView.url == loginURL
             }
             #expect(first.webView.url == loginURL)
             #expect(!first.webView.isLoading)
@@ -248,7 +243,7 @@ struct DashboardReconnectTests {
             let reopened = try #require(manager._testController())
             #expect(reopened === first)
             #expect(reopened.webView.url == loginURL)
-            #expect(reopened.hasTLSParams(nil))
+            #expect(reopened.documentHost.tlsParams == nil)
             #expect(reopened.auth.usesBrowserIdentity)
         }
     }
@@ -259,7 +254,7 @@ struct DashboardReconnectTests {
         let identityURL = try #require(URL(string: "https://team.example/dashboard/"))
         let controller = DashboardWindowController(
             url: server.url("/"),
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "shared-owner-token",
                 password: nil),
@@ -283,7 +278,7 @@ struct DashboardReconnectTests {
         #expect(identified.auth == .browserIdentity(gatewayUrl: "wss://team.example/dashboard/"))
         #expect(identified.auth.token == nil)
         #expect(identified.auth.password == nil)
-        #expect(identified.hasTLSParams(nil))
+        #expect(identified.documentHost.tlsParams == nil)
 
         let nextTunnel = try #require(URL(string: "ws://127.0.0.1:29876"))
         await manager.handleEndpointState(.ready(
@@ -298,6 +293,60 @@ struct DashboardReconnectTests {
         #expect(reconnected.auth == identified.auth)
     }
 
+    @Test func `hidden dashboard follows native reconnects before returning and stops on close`() async throws {
+        try await TestIsolation.withIsolatedState {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let url = server.websocketURL()
+            let endpoint = GatewayEndpointState.ready(
+                mode: .remote, url: url, token: "synthetic-owner", password: nil, routeRevision: 0)
+            let generation = LockIsolated(0)
+            let manager = DashboardManager._testMake(
+                legacyCredentialsProvider: { _, _ in
+                    let accepted = generation.value
+                    return .init(
+                        credentials: [:],
+                        isCurrent: { generation.value == accepted },
+                        waitForInvalidation: nil)
+                })
+            let controller = DashboardWindowController(
+                url: server.url(),
+                auth: .nativeDevice(gatewayUrl: url.absoluteString, token: "synthetic-owner", password: nil),
+                websiteDataStore: .nonPersistent(),
+                windowAutosaveName: "",
+                requestBrowserProfileImportOffer: { _ in false })
+            manager._testSetController(controller)
+            defer { manager.close() }
+            controller.show()
+            await manager.handleEndpointState(endpoint)
+            let current = try #require(manager._testController())
+            let window = try #require(current.window)
+            try await DashboardTestWait.document(current, "initial dashboard")
+            _ = try await current.webView.evaluateJavaScript("window.unsentDraft = 'keep me'")
+            try #require(current.documentHost.hasCurrentNativeStartupCredentials)
+
+            window.orderOut(nil)
+            for revision in 1...2 {
+                generation.setValue(revision)
+                try #require(!current.documentHost.hasCurrentNativeStartupCredentials)
+                await manager.handleEndpointState(endpoint)
+                try #require(current.documentHost.hasCurrentNativeStartupCredentials)
+                #expect(!window.isVisible)
+                #expect(current.documentHost.isNativeAuthAvailable())
+            }
+            window.orderFront(nil)
+            #expect(manager._testController() === current)
+            #expect(try await current.webView.evaluateJavaScript("window.unsentDraft") as? String == "keep me")
+
+            current.closeDashboard()
+            generation.setValue(3)
+            await manager.handleEndpointState(endpoint)
+            #expect(!current.documentHost.hasCurrentNativeStartupCredentials)
+            #expect(!current.documentHost.isNativeAuthAvailable())
+            #expect(!window.isVisible)
+        }
+    }
+
     @Test func `authenticated control reconnect recovers unchanged ready route`() async throws {
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -306,7 +355,7 @@ struct DashboardReconnectTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -325,13 +374,20 @@ struct DashboardReconnectTests {
             routeRevision: 2)
         let manager = DashboardManager._testMake(
             authTokenProvider: { _ in await authGate.authToken() },
+            legacyCredentialsProvider: { _, _ in
+                guard await authGate.authToken() != nil else { throw CancellationError() }
+                return .init(credentials: [:], isCurrent: { true }, waitForInvalidation: nil)
+            },
             endpointStateProvider: { endpointState })
         manager._testSetController(controller)
-        defer { manager._testController()?.closeDashboard() }
+        defer { manager.close() }
 
         await manager.handleEndpointState(endpointState)
         let failureController = try #require(manager._testController())
-        #expect(failureController !== controller)
+        #expect(failureController.isShowingFailurePage)
+        #expect(!failureController.canDeliverNativeCommands)
+        #expect(failureController.auth.token == nil)
+        #expect(failureController.documentHost.nativeGatewayAuthProvider == nil)
         #expect(failureController.currentURL == URL(string: "about:blank"))
 
         await manager.handleEndpointState(endpointState)
@@ -347,6 +403,6 @@ struct DashboardReconnectTests {
         #expect(recoveredController !== failureController)
         #expect(!failureController.isWindowOpen)
         #expect(recoveredController.currentURL.absoluteString ==
-            replacementServer.url("/#token=route-b-device-token").absoluteString)
+            replacementServer.url("/").absoluteString)
     }
 }

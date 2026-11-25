@@ -1,5 +1,6 @@
 import { classifyCronAgentTurnShellPrompt } from "../agent-turn-command-prompt.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronStoredJob } from "../types.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 
@@ -9,7 +10,10 @@ export function resolveCronCommandPromptPreflight(
 ): RunCronAgentTurnResult | undefined {
   if (
     job.payload.kind !== "agentTurn" ||
-    classifyCronAgentTurnShellPrompt(job.payload) !== "commandPromptWithoutShellAccess"
+    classifyCronAgentTurnShellPrompt({
+      ...job.payload,
+      toolsAllow: resolveCronRunToolsAllow(job),
+    }) !== "commandPromptWithoutShellAccess"
   ) {
     return undefined;
   }

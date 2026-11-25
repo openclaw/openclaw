@@ -1,231 +1,69 @@
-// Registry retry tests cover plugin registry retry behavior after transient failures.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProviderPlugin, WebFetchProviderPlugin, WebSearchProviderPlugin } from "../types.js";
-
-type MockPluginRecord = {
-  id: string;
-  status: "loaded" | "error";
-  error?: string;
-  providerIds: string[];
-  webFetchProviderIds: string[];
-  webSearchProviderIds: string[];
-  migrationProviderIds: string[];
-};
-
-type MockRuntimeRegistry = {
-  plugins: MockPluginRecord[];
-  diagnostics: Array<{ pluginId?: string; message: string }>;
-  providers: Array<{ pluginId: string; provider: ProviderPlugin }>;
-  webFetchProviders: Array<{ pluginId: string; provider: WebFetchProviderPlugin }>;
-  webSearchProviders: Array<{ pluginId: string; provider: WebSearchProviderPlugin }>;
-};
-
-function createMockRuntimeRegistry(params: {
-  plugin: MockPluginRecord;
-  providers?: Array<{ pluginId: string; provider: ProviderPlugin }>;
-  webFetchProviders?: Array<{ pluginId: string; provider: WebFetchProviderPlugin }>;
-  webSearchProviders?: Array<{ pluginId: string; provider: WebSearchProviderPlugin }>;
-  diagnostics?: Array<{ pluginId?: string; message: string }>;
-}): MockRuntimeRegistry {
-  return {
-    plugins: [params.plugin],
-    diagnostics: params.diagnostics ?? [],
-    providers: params.providers ?? [],
-    webFetchProviders: params.webFetchProviders ?? [],
-    webSearchProviders: params.webSearchProviders ?? [],
-  };
-}
+import "../../test-utils/prepare-compiled-subprocesses.js";
+import type { PluginWebFetchProviderEntry, ProviderPlugin } from "../types.js";
 
 afterEach(() => {
   vi.resetModules();
   vi.restoreAllMocks();
 });
 
-describe("plugin contract registry scoped retries", () => {
-  it("retries when a manifest-declared provider has no runtime entry", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi
-      .fn()
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "arcee",
-            status: "loaded",
-            providerIds: ["arcee"],
-            webFetchProviderIds: [],
-            webSearchProviderIds: [],
-            migrationProviderIds: [],
-          },
-        }),
-      )
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "arcee",
-            status: "loaded",
-            providerIds: ["arcee"],
-            webFetchProviderIds: [],
-            webSearchProviderIds: [],
-            migrationProviderIds: [],
-          },
-          providers: [
-            {
-              pluginId: "arcee",
-              provider: {
-                id: "arcee",
-                label: "Arcee",
-                docsPath: "/providers/arcee",
-                auth: [],
-              } as ProviderPlugin,
-            },
-          ],
-        }),
-      );
-
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
-    vi.doMock("../provider-contract-public-artifacts.js", () => ({
-      resolveBundledExplicitProviderContractsFromPublicArtifacts: () => null,
-    }));
-
-    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
-
-    expect(
-      resolveProviderContractProvidersForPluginIds(["arcee"]).map((provider) => provider.id),
-    ).toEqual(["arcee"]);
-    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
+function mockRuntimeFallback() {
+  const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
+    throw new Error("public artifact should not hit bundled runtime registry");
   });
+  // mock-isolation: public-artifact lookup must never initialize bundled provider runtimes.
+  vi.doMock("../bundled-capability-runtime.js", () => ({ loadBundledCapabilityRuntimeRegistry }));
+  return loadBundledCapabilityRuntimeRegistry;
+}
 
-  it("retries web search provider loads after a transient plugin-scoped runtime error", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi
-      .fn()
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "searxng",
-            status: "error",
-            error: "transient searxng load failure",
-            providerIds: [],
-            webFetchProviderIds: [],
-            webSearchProviderIds: [],
-            migrationProviderIds: [],
-          },
-          diagnostics: [{ pluginId: "searxng", message: "transient searxng load failure" }],
-        }),
-      )
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "searxng",
-            status: "loaded",
-            providerIds: [],
-            webFetchProviderIds: [],
-            webSearchProviderIds: ["searxng"],
-            migrationProviderIds: [],
-          },
-          webSearchProviders: [
-            {
-              pluginId: "searxng",
-              provider: {
-                id: "searxng",
-                label: "SearXNG",
-                hint: "Search the web with SearXNG",
-                envVars: ["SEARXNG_URL"],
-                placeholder: "https://search.example.test",
-                signupUrl: "https://docs.searxng.org",
-                credentialPath: "plugins.entries.searxng.config.webSearch.url",
-                requiresCredential: true,
-                getCredentialValue: () => undefined,
-                setCredentialValue() {},
-                createTool: () => ({
-                  description: "search",
-                  parameters: {},
-                  execute: async () => ({}),
-                }),
-              } as WebSearchProviderPlugin,
-            },
-          ],
-        }),
-      );
+function makeProvider(label: string): ProviderPlugin {
+  return { id: "openai", label, auth: [] };
+}
 
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
-    vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
-      resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: () => null,
-    }));
+describe("plugin contract registry public artifacts", () => {
+  it("scopes provider load failures and prefers public artifacts over the runtime registry", async () => {
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
+    let artifactsAvailable = false;
+    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(() =>
+      artifactsAvailable
+        ? [
+            { pluginId: "openai", provider: makeProvider("OpenAI") },
+            { pluginId: "openai", provider: makeProvider("OpenAI Codex") },
+          ]
+        : null,
+    );
 
-    const { resolveWebSearchProviderContractEntriesForPluginId } = await import("./registry.js");
-
-    expect(
-      resolveWebSearchProviderContractEntriesForPluginId("searxng").map(
-        (entry) => entry.provider.id,
-      ),
-    ).toEqual(["searxng"]);
-    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses provider public artifacts before falling back to the bundled runtime registry", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
-      throw new Error("provider contract public artifact should not hit bundled runtime registry");
-    });
-    const resolveBundledExplicitProviderContractsFromPublicArtifacts = vi.fn(() => [
-      {
-        pluginId: "openai",
-        provider: {
-          id: "openai",
-          label: "OpenAI",
-          docsPath: "/providers/openai",
-          auth: [
-            {
-              id: "api-key",
-              label: "API key",
-              kind: "api_key",
-              run: async () => ({ profiles: [] }),
-            },
-          ],
-        } as ProviderPlugin,
-      },
-      {
-        pluginId: "openai",
-        provider: {
-          id: "openai",
-          label: "OpenAI Codex",
-          docsPath: "/providers/openai",
-          auth: [
-            {
-              id: "oauth",
-              label: "OAuth",
-              kind: "oauth",
-              run: async () => ({ profiles: [] }),
-            },
-          ],
-        } as ProviderPlugin,
-      },
-    ]);
-
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
     vi.doMock("../provider-contract-public-artifacts.js", () => ({
       resolveBundledExplicitProviderContractsFromPublicArtifacts,
     }));
 
-    const { resolveProviderContractProvidersForPluginIds } = await import("./registry.js");
+    const {
+      resolveProviderContractEntriesForPluginId,
+      resolveProviderContractProvidersForPluginIds,
+    } = await import("./registry.js");
+
+    expect(() => resolveProviderContractProvidersForPluginIds(["openai"])).toThrow(
+      "public artifact should not hit bundled runtime registry",
+    );
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
+
+    artifactsAvailable = true;
+    expect(
+      resolveProviderContractEntriesForPluginId("openai").map((entry) => entry.provider.label),
+    ).toEqual(["OpenAI", "OpenAI Codex"]);
 
     expect(
-      resolveProviderContractProvidersForPluginIds(["openai"]).map((provider) => provider.id),
-    ).toEqual(["openai"]);
-    expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(1);
-    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+      resolveProviderContractProvidersForPluginIds(["openai", "openai"]).map(({ id, label }) => ({
+        id,
+        label,
+      })),
+    ).toEqual([{ id: "openai", label: "OpenAI Codex" }]);
+    expect(resolveBundledExplicitProviderContractsFromPublicArtifacts).toHaveBeenCalledTimes(3);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("uses web search public artifacts before falling back to the bundled runtime registry", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi.fn(() => {
-      throw new Error(
-        "web search contract public artifact should not hit bundled runtime registry",
-      );
-    });
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
     const resolveBundledExplicitWebSearchProvidersFromPublicArtifacts = vi.fn(() => [
       {
         pluginId: "google",
@@ -248,9 +86,6 @@ describe("plugin contract registry scoped retries", () => {
       },
     ]);
 
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
-    }));
     vi.doMock("../web-provider-public-artifacts.explicit.js", () => ({
       resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
     }));
@@ -266,71 +101,41 @@ describe("plugin contract registry scoped retries", () => {
     expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
   });
 
-  it("retries web fetch provider loads after a transient plugin-scoped runtime error", async () => {
-    const loadBundledCapabilityRuntimeRegistry = vi
-      .fn()
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "firecrawl",
-            status: "error",
-            error: "transient firecrawl fetch load failure",
-            providerIds: [],
-            webFetchProviderIds: [],
-            webSearchProviderIds: [],
-            migrationProviderIds: [],
-          },
-          diagnostics: [
-            { pluginId: "firecrawl", message: "transient firecrawl fetch load failure" },
-          ],
-        }),
-      )
-      .mockReturnValueOnce(
-        createMockRuntimeRegistry({
-          plugin: {
-            id: "firecrawl",
-            status: "loaded",
-            providerIds: [],
-            webFetchProviderIds: ["firecrawl"],
-            webSearchProviderIds: ["firecrawl"],
-            migrationProviderIds: [],
-          },
-          webFetchProviders: [
-            {
-              pluginId: "firecrawl",
-              provider: {
-                id: "firecrawl",
-                label: "Firecrawl",
-                hint: "Fetch with Firecrawl",
-                envVars: ["FIRECRAWL_API_KEY"],
-                placeholder: "fc-...",
-                signupUrl: "https://firecrawl.dev",
-                credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
-                requiresCredential: true,
-                getCredentialValue: () => undefined,
-                setCredentialValue() {},
-                createTool: () => ({
-                  description: "fetch",
-                  parameters: {},
-                  execute: async () => ({}),
-                }),
-              } as WebFetchProviderPlugin,
-            },
-          ],
-        }),
-      );
-
-    vi.doMock("../bundled-capability-runtime.js", () => ({
-      loadBundledCapabilityRuntimeRegistry,
+  it("uses web fetch public artifacts before falling back to the bundled runtime registry", async () => {
+    const loadBundledCapabilityRuntimeRegistry = mockRuntimeFallback();
+    const provider: PluginWebFetchProviderEntry = {
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      label: "Firecrawl",
+      hint: "Fetch with Firecrawl",
+      envVars: ["FIRECRAWL_API_KEY"],
+      placeholder: "FIRECRAWL_API_KEY",
+      signupUrl: "https://firecrawl.dev",
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      getCredentialValue: () => undefined,
+      setCredentialValue() {},
+      createTool: () => null,
+    };
+    const resolveBundledExplicitWebFetchProvidersFromPublicArtifacts = vi.fn<
+      () => PluginWebFetchProviderEntry[] | null
+    >(() => [provider]);
+    vi.doMock("../web-provider-public-artifacts.explicit.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../web-provider-public-artifacts.explicit.js")>()),
+      resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
     }));
 
     const { resolveWebFetchProviderContractEntriesForPluginId } = await import("./registry.js");
+    expect(resolveBundledExplicitWebFetchProvidersFromPublicArtifacts).not.toHaveBeenCalled();
+    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
+    expect(resolveWebFetchProviderContractEntriesForPluginId("firecrawl")).toEqual([
+      { pluginId: "firecrawl", provider, credentialValue: "firecrawl-test" },
+    ]);
+    expect(loadBundledCapabilityRuntimeRegistry).not.toHaveBeenCalled();
 
-    expect(
-      resolveWebFetchProviderContractEntriesForPluginId("firecrawl").map(
-        (entry) => entry.provider.id,
-      ),
-    ).toEqual(["firecrawl"]);
-    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
+    resolveBundledExplicitWebFetchProvidersFromPublicArtifacts.mockReturnValueOnce(null);
+    expect(() => resolveWebFetchProviderContractEntriesForPluginId("firecrawl")).toThrow(
+      "public artifact should not hit bundled runtime registry",
+    );
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 });

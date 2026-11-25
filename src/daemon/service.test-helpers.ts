@@ -64,6 +64,10 @@ export function buildSystemdUnitPropertyOutput(
     JSON.stringify({ type: "as", data: params.dropInPaths ?? [] }),
     JSON.stringify({ type: "b", data: params.needDaemonReload ?? false }),
     JSON.stringify({ type: "s", data: params.loadState ?? "loaded" }),
+    JSON.stringify({ type: "s", data: "enabled" }),
+    JSON.stringify({ type: "s", data: "active" }),
+    JSON.stringify({ type: "b", data: true }),
+    JSON.stringify({ type: "b", data: false }),
   ].join("\n");
 }
 
@@ -80,8 +84,48 @@ export function createMockGatewayService(overrides: Partial<GatewayService> = {}
     stop: vi.fn(async () => {}),
     restart: vi.fn(async () => ({ outcome: "completed" as const })),
     isLoaded: vi.fn(async () => false),
+    isEnabled: vi.fn(async () => true),
     readCommand: vi.fn(async () => null),
     readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
     ...overrides,
   };
 }
+
+export const managerlessPreflightCases = [
+  ...(["git", "package"] as const).flatMap((updateInstallKind) =>
+    ([false, true] as const).map((shouldRestart) => ({
+      updateInstallKind,
+      shouldRestart,
+      condition: "absent",
+      portUsage: "free" as const,
+      portSource: "env" as const,
+    })),
+  ),
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "installed" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node absent" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node installed" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "global definition" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "unreadable" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "manager" },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "busy port",
+    portUsage: "busy" as const,
+    portSource: "env" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "configured busy port",
+    portUsage: "busy" as const,
+    portSource: "config" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "unknown port",
+    portUsage: "unknown" as const,
+    portSource: "env" as const,
+  },
+];

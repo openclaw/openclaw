@@ -5,27 +5,26 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
-import { MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
-  emoji?: string;
+  icon: string;
 };
 
-type ToolDisplayConfig = {
+export type ToolDisplayConfig = {
   version: number;
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
 };
 
-function displayAction(label: string, detailKeys?: string[]) {
-  return detailKeys === undefined ? { label } : { label, detailKeys };
+function displayTool(icon: string, title: string, detailKeys?: string[]): ToolDisplaySpec {
+  return detailKeys === undefined ? { icon, title } : { icon, title, detailKeys };
 }
 
-/** Static display metadata for known tools plus fallback detail-key selection. */
-export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
+/** Tool identity readers never load the per-action detail and progress specifications. */
+export const TOOL_DISPLAY_BASE = {
   version: 1,
   fallback: {
-    emoji: "🧩",
+    icon: "puzzle",
     detailKeys: [
       "command",
       "path",
@@ -49,348 +48,100 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     ],
   },
   tools: {
-    bash: {
-      emoji: "🛠️",
-      title: "Bash",
-      detailKeys: ["command"],
+    bash: displayTool("squareTerminal", "Bash", ["command"]),
+    computer: displayTool("monitor", "Computer", [
+      "action",
+      "coordinate",
+      "text",
+      "node",
+      "nodeId",
+      "screenIndex",
+    ]),
+    mobile_ui: displayTool("monitorSmartphone", "Mobile UI", [
+      "action",
+      "mobileAction",
+      "snapshotId",
+      "node",
+      "nodeId",
+    ]),
+    screen: displayTool("monitor", "Screen", ["action", "sessionKey", "dock"]),
+    theme: displayTool("palette", "Theme", ["action", "id", "mode"]),
+    terminal: displayTool("squareTerminal", "Terminal", ["action", "sessionId", "command", "cwd"]),
+    portal: displayTool("globe", "Portal", ["action", "port", "id", "title", "path"]),
+    process: displayTool("squareTerminal", "Process", ["sessionId"]),
+    gateway_process: displayTool("squareTerminal", "Background Shell", ["action", "sessionId"]),
+    read: displayTool("fileText", "Read", ["path"]),
+    write: displayTool("edit", "Write", ["path"]),
+    edit: displayTool("penLine", "Edit", ["path"]),
+    personal_instructions: displayTool("penLine", "Personal Instructions", ["action", "agentId"]),
+    presence: displayTool("radio", "Presence"),
+    attach: displayTool("paperclip", "Attach", ["path", "url", "fileName"]),
+    api: displayTool("globe", "API", ["url", "endpoint", "path", "method", "name"]),
+    browser: displayTool("globe", "Browser"),
+    canvas: displayTool("image", "Canvas"),
+    dashboard: displayTool("layoutDashboard", "Dashboard", ["action", "tabId", "name", "title"]),
+    nodes: displayTool("monitorSmartphone", "Nodes"),
+    cron: displayTool("calendarClock", "Cron"),
+    get_goal: displayTool("target", "Get Goal", []),
+    create_goal: displayTool("target", "Create Goal", ["objective", "token_budget"]),
+    update_goal: displayTool("target", "Update Goal", ["status"]),
+    progress_card: displayTool("listChecks", "Progress Card"),
+    ask_user: displayTool("shieldQuestion", "Ask User", ["questions.0.question"]),
+    secrets: displayTool("key", "Secrets", ["action", "name", "kind"]),
+    suggest_task: displayTool("spark", "Suggest Task", ["title", "tldr", "cwd"]),
+    dismiss_task: displayTool("trash", "Dismiss Task", ["task_id", "reason"]),
+    skill_workshop: displayTool("wrench", "Skill Workshop", ["action", "name", "proposal_id"]),
+    skill_library: displayTool("wrench", "Skill Library", ["action", "name", "skill_id"]),
+    openclaw: displayTool("claw", "OpenClaw", ["action", "path", "model"]),
+    gateway: displayTool("plug", "Gateway", ["action", "path"]),
+    plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
+    exec: displayTool("squareTerminal", "Exec", ["command"]),
+    tool_call: displayTool("wrench", "Tool Call", []),
+    dispatch_action: displayTool("wrench", "Tool Call", []),
+    tool_call_update: displayTool("wrench", "Tool Call", []),
+    session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
+    github_publish: displayTool("github", "GitHub Publish", ["title"]),
+    github_identity_status: displayTool("settings", "GitHub Identity Status", []),
+    session_project: displayTool("layers", "Session Project", ["action", "projectId"]),
+    sessions: displayTool("layers", "Session Settings"),
+    sessions_create: displayTool("layers", "New session", ["label", "agentId", "cwd", "group"]),
+    sessions_list: displayTool("layers", "Sessions", [
+      "kinds",
+      "label",
+      "agentId",
+      "search",
+      "limit",
+      "activeMinutes",
+      "includeDerivedTitles",
+      "includeLastMessage",
+      "messageLimit",
+    ]),
+    conversations_list: displayTool("messageSquare", "Conversations", ["channel", "limit"]),
+    conversations_send: displayTool("send", "Conversation Send", ["conversationRef"]),
+    conversations_turn: displayTool("arrowLeftRight", "Conversation Turn", [
+      "conversationRef",
+      "timeoutSeconds",
+    ]),
+    knowledge_record: {
+      ...displayTool("fileText", "Knowledge Record"),
+      progress: { label: "Read knowledge record", detailKeys: [] },
     },
-    computer: {
-      emoji: "🖱️",
-      title: "Computer",
-      detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
-    },
-    mobile_ui: {
-      emoji: "📱",
-      title: "Mobile UI",
-      detailKeys: ["action", "mobileAction", "snapshotId", "node", "nodeId"],
-    },
-    screen: {
-      emoji: "🖥️",
-      title: "Screen",
-      detailKeys: ["action", "sessionKey", "dock"],
-    },
-    theme: {
-      emoji: "🎨",
-      title: "Theme",
-      detailKeys: ["action", "id", "mode"],
-    },
-    terminal: {
-      emoji: "⌨️",
-      title: "Terminal",
-      detailKeys: ["action", "sessionId", "command", "cwd"],
-    },
-    portal: {
-      emoji: "🌐",
-      title: "Portal",
-      detailKeys: ["action", "port", "id", "title", "path"],
-    },
-    process: {
-      emoji: "🧰",
-      title: "Process",
-      detailKeys: ["sessionId"],
-    },
-    gateway_process: {
-      emoji: "🧰",
-      title: "Background Shell",
-      detailKeys: ["action", "sessionId"],
-    },
-    read: {
-      emoji: "📖",
-      title: "Read",
-      detailKeys: ["path"],
-    },
-    write: {
-      emoji: "✍️",
-      title: "Write",
-      detailKeys: ["path"],
-    },
-    edit: {
-      emoji: "📝",
-      title: "Edit",
-      detailKeys: ["path"],
-    },
-    attach: {
-      emoji: "📎",
-      title: "Attach",
-      detailKeys: ["path", "url", "fileName"],
-    },
-    api: {
-      emoji: "🌐",
-      title: "API",
-      detailKeys: ["url", "endpoint", "path", "method", "name"],
-    },
-    browser: {
-      emoji: "🌐",
-      title: "Browser",
-      actions: {
-        status: displayAction("status"),
-        start: displayAction("start"),
-        stop: displayAction("stop"),
-        tabs: displayAction("tabs"),
-        open: displayAction("open", ["targetUrl"]),
-        focus: displayAction("focus", ["targetId"]),
-        close: displayAction("close", ["targetId"]),
-        snapshot: displayAction("snapshot", ["targetUrl", "targetId", "ref", "element", "format"]),
-        screenshot: displayAction("screenshot", ["targetUrl", "targetId", "ref", "element"]),
-        navigate: displayAction("navigate", ["targetUrl", "targetId"]),
-        console: displayAction("console", ["level", "targetId"]),
-        pdf: displayAction("pdf", ["targetId"]),
-        upload: displayAction("upload", ["paths", "ref", "inputRef", "element", "targetId"]),
-        dialog: displayAction("dialog", ["accept", "promptText", "targetId"]),
-        act: displayAction("act", [
-          "request.kind",
-          "request.ref",
-          "request.selector",
-          "request.text",
-          "request.value",
-        ]),
-      },
-    },
-    canvas: {
-      emoji: "🖼️",
-      title: "Canvas",
-      actions: {
-        present: displayAction("present", ["target", "node", "nodeId"]),
-        hide: displayAction("hide", ["node", "nodeId"]),
-        navigate: displayAction("navigate", ["url", "node", "nodeId"]),
-      },
-    },
-    dashboard: {
-      emoji: "📋",
-      title: "Dashboard",
-      detailKeys: ["action", "tabId", "name", "title"],
-    },
-    nodes: {
-      emoji: "📱",
-      title: "Nodes",
-      actions: {
-        status: displayAction("status"),
-        describe: displayAction("describe", ["node", "nodeId"]),
-        pending: displayAction("pending"),
-        approve: displayAction("approve", ["requestId"]),
-        reject: displayAction("reject", ["requestId"]),
-        notify: displayAction("notify", ["node", "nodeId", "title", "body"]),
-        camera_snap: displayAction("camera snap", ["node", "nodeId", "facing", "deviceId"]),
-        camera_list: displayAction("camera list", ["node", "nodeId"]),
-        camera_clip: displayAction("camera clip", [
-          "node",
-          "nodeId",
-          "facing",
-          "duration",
-          "durationMs",
-        ]),
-        camera_ptz: displayAction("camera PTZ", ["ptzOperation", "node", "nodeId", "deviceId"]),
-        screen_record: displayAction("screen record", [
-          "node",
-          "nodeId",
-          "duration",
-          "durationMs",
-          "fps",
-          "screenIndex",
-        ]),
-        screen_snapshot: displayAction("screen snapshot", [
-          "node",
-          "nodeId",
-          "screenIndex",
-          "maxWidth",
-        ]),
-      },
-    },
-    cron: {
-      emoji: "⏰",
-      title: "Cron",
-      actions: {
-        status: displayAction("status"),
-        list: displayAction("list"),
-        add: displayAction("add", ["job.name", "job.id", "job.schedule", "job.cron"]),
-        update: displayAction("update", ["id"]),
-        remove: displayAction("remove", ["id"]),
-        run: displayAction("run", ["id"]),
-        runs: displayAction("runs", ["id"]),
-        wake: displayAction("wake", ["text", "mode"]),
-      },
-    },
-    get_goal: {
-      emoji: "🎯",
-      title: "Get Goal",
-      detailKeys: [],
-    },
-    create_goal: {
-      emoji: "🎯",
-      title: "Create Goal",
-      detailKeys: ["objective", "token_budget"],
-    },
-    update_goal: {
-      emoji: "🎯",
-      title: "Update Goal",
-      detailKeys: ["status"],
-    },
-    progress_card: {
-      emoji: "🗺️",
-      title: "Progress Card",
-    },
-    ask_user: {
-      emoji: "❓",
-      title: "Ask User",
-      detailKeys: ["questions.0.question"],
-    },
-    secrets: {
-      emoji: "🔑",
-      title: "Secrets",
-      detailKeys: ["action", "name", "kind"],
-    },
-    suggest_task: {
-      emoji: "✨",
-      title: "Suggest Task",
-      detailKeys: ["title", "tldr", "cwd"],
-    },
-    dismiss_task: {
-      emoji: "🗑️",
-      title: "Dismiss Task",
-      detailKeys: ["task_id", "reason"],
-    },
-    skill_workshop: {
-      emoji: "🧰",
-      title: "Skill Workshop",
-      detailKeys: ["action", "name", "proposal_id"],
-    },
-    openclaw: {
-      emoji: "🦀",
-      title: "OpenClaw",
-      detailKeys: ["action", "path", "model"],
-    },
-    gateway: {
-      emoji: "🔌",
-      title: "Gateway",
-      detailKeys: ["action", "path"],
-    },
-    plugins: {
-      emoji: "🧩",
-      title: "Plugins",
-      detailKeys: ["action", "pluginId", "packageName", "query"],
-    },
-    exec: {
-      emoji: "🛠️",
-      title: "Exec",
-      detailKeys: ["command"],
-    },
-    tool_call: {
-      emoji: "🧰",
-      title: "Tool Call",
-      detailKeys: [],
-    },
-    tool_call_update: {
-      emoji: "🧰",
-      title: "Tool Call",
-      detailKeys: [],
-    },
-    session_status: {
-      emoji: "📊",
-      title: "Session Status",
-      detailKeys: ["sessionKey", "model"],
-    },
-    github_publish: {
-      emoji: "🔀",
-      title: "GitHub Publish",
-      detailKeys: ["title"],
-    },
-    github_identity_status: {
-      emoji: "🔐",
-      title: "GitHub Identity Status",
-      detailKeys: [],
-    },
-    sessions: {
-      emoji: "🗂️",
-      title: "Session Settings",
-      actions: {
-        patch: displayAction("update", [
-          "sessionKey",
-          "label",
-          "pinned",
-          "archived",
-          "model",
-          "thinkingLevel",
-        ]),
-        group_list: displayAction("groups"),
-        group_set: displayAction("set groups", ["names"]),
-        group_rename: displayAction("rename group", ["name", "to"]),
-        group_delete: displayAction("delete group", ["name"]),
-      },
-    },
-    sessions_list: {
-      emoji: "🗂️",
-      title: "Sessions",
-      detailKeys: [
-        "kinds",
-        "label",
-        "agentId",
-        "search",
-        "limit",
-        "activeMinutes",
-        "includeDerivedTitles",
-        "includeLastMessage",
-        "messageLimit",
-      ],
-    },
-    conversations_list: {
-      emoji: "💬",
-      title: "Conversations",
-      detailKeys: ["channel", "limit"],
-    },
-    conversations_send: {
-      emoji: "📨",
-      title: "Conversation Send",
-      detailKeys: ["conversationRef"],
-    },
-    conversations_turn: {
-      emoji: "↔️",
-      title: "Conversation Turn",
-      detailKeys: ["conversationRef", "timeoutSeconds"],
+    knowledge_remember: {
+      ...displayTool("brain", "Knowledge Remember"),
+      progress: { label: "Remember knowledge", detailKeys: [] },
     },
     sessions_send: {
-      emoji: "📨",
-      title: "Session Send",
-      detailKeys: ["label", "sessionKey", "agentId", "timeoutSeconds"],
+      ...displayTool("send", "Session Send", ["label", "sessionKey", "agentId", "timeoutSeconds"]),
+      progress: { label: "Send to session", detailKeys: ["label"], referenceKey: "sessionKey" },
     },
     sessions_history: {
-      emoji: "🧾",
-      title: "Session History",
-      detailKeys: ["sessionKey", "limit", "includeTools"],
+      ...displayTool("fileText", "Session History", ["sessionKey", "limit", "includeTools"]),
+      progress: { label: "Read session history", detailKeys: [], referenceKey: "sessionKey" },
     },
-    sessions_search: {
-      emoji: "🔎",
-      title: "Session Search",
-      detailKeys: ["query", "sessionKey", "limit"],
-    },
-    transcripts: {
-      emoji: "🎙️",
-      title: "Transcripts",
-      actions: {
-        start: displayAction("start", [
-          "sessionId",
-          "title",
-          "providerId",
-          "accountId",
-          "guildId",
-          "channelId",
-          "meetingUrl",
-        ]),
-        stop: displayAction("stop", ["sessionId"]),
-        status: displayAction("status"),
-        import: displayAction("import", [
-          "sessionId",
-          "title",
-          "providerId",
-          "meetingUrl",
-          "speakerLabel",
-        ]),
-        summarize: displayAction("summarize", ["sessionId"]),
-      },
-    },
+    sessions_search: displayTool("search", "Session Search", ["query", "sessionKey", "limit"]),
+    transcripts: displayTool("mic", "Transcripts"),
     sessions_spawn: {
-      emoji: "🧑‍🔧",
-      title: "Sub-agent",
-      detailKeys: [
+      ...displayTool("bot", "Sub-agent", [
         "label",
         "taskName",
         "agentId",
@@ -398,122 +149,48 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         "thinking",
         "runTimeoutSeconds",
         "cleanup",
-      ],
+      ]),
+      progress: { label: "Start subagent", detailKeys: ["label"] },
     },
-    agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
-    structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
-    subagents: {
-      emoji: "🤖",
-      title: "Subagents",
-      actions: {
-        list: displayAction("list", ["recentMinutes"]),
-        kill: displayAction("kill", ["target"]),
-        steer: displayAction("steer", ["target"]),
-      },
-    },
-    agents_list: {
-      emoji: "🧭",
-      title: "Agents",
-      detailKeys: [],
-    },
-    memory_search: {
-      emoji: "🧠",
-      title: "Memory Search",
-      detailKeys: ["query"],
-    },
-    memory_get: {
-      emoji: "📓",
-      title: "Memory Get",
-      detailKeys: ["path", "from", "lines"],
-    },
-    web_search: {
-      emoji: "🔎",
-      title: "Web Search",
-      detailKeys: ["query", "count"],
-    },
-    web_fetch: {
-      emoji: "📄",
-      title: "Web Fetch",
-      detailKeys: ["url", "extractMode", "maxChars"],
-    },
-    code_execution: {
-      emoji: "🧮",
-      title: "Code Execution",
-      detailKeys: ["task"],
-    },
-    decision_evaluate: {
-      emoji: "⚖️",
-      title: "Decision Evaluation",
-      detailKeys: [],
-    },
-    message: MESSAGE_TOOL_DISPLAY_SPEC,
-    apply_patch: {
-      emoji: "🩹",
-      title: "Apply Patch",
-      detailKeys: [],
-    },
+    agents_wait: displayTool("clock", "Wait for Agents", ["ids", "timeoutSeconds"]),
+    structured_output: displayTool("fileText", "Structured Output", ["result"]),
+    subagents: displayTool("bot", "Subagents"),
+    agents_list: displayTool("users", "Agents", []),
+    memory_search: displayTool("search", "Memory Search", ["query"]),
+    memory_get: displayTool("brain", "Memory Get", ["path", "from", "lines"]),
+    skills_search: displayTool("search", "Skill Search", ["query"]),
+    skills_read: displayTool("fileText", "Skill Read", ["name"]),
+    web_search: displayTool("search", "Web Search", ["query", "count"]),
+    web_fetch: displayTool("globe", "Web Fetch", ["url", "extractMode", "maxChars"]),
+    code_execution: displayTool("braces", "Code Execution", ["task"]),
+    decision_evaluate: displayTool("shieldCheck", "Decision Evaluation", []),
+    /** Display metadata for the transport-neutral message action surface. */
+    message: displayTool("mail", "Message"),
+    apply_patch: displayTool("fileDiff", "Apply Patch", []),
     // Historical transcripts retain the old name. This display-only entry
     // preserves their presentation without restoring a runtime tool alias.
-    image: {
-      emoji: "🖼️",
-      title: "Image",
-      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
-    },
-    view_image: {
-      emoji: "🖼️",
-      title: "View Image",
-      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
-    },
-    image_generate: {
-      emoji: "🎨",
-      title: "Image Generation",
-      actions: {
-        generate: displayAction("generate", [
-          "prompt",
-          "model",
-          "count",
-          "resolution",
-          "aspectRatio",
-        ]),
-        list: displayAction("list", ["provider", "model"]),
-      },
-    },
-    music_generate: {
-      emoji: "🎵",
-      title: "Music Generation",
-      actions: {
-        generate: displayAction("generate", [
-          "prompt",
-          "model",
-          "durationSeconds",
-          "format",
-          "instrumental",
-        ]),
-        list: displayAction("list", ["provider", "model"]),
-      },
-    },
-    video_generate: {
-      emoji: "🎬",
-      title: "Video Generation",
-      actions: {
-        generate: displayAction("generate", [
-          "prompt",
-          "model",
-          "durationSeconds",
-          "resolution",
-          "aspectRatio",
-          "audio",
-          "watermark",
-        ]),
-        list: displayAction("list", ["provider", "model"]),
-      },
-    },
-    pdf: {
-      emoji: "📑",
-      title: "PDF",
-      detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
-    },
-    sessions_yield: { emoji: "⏸️", title: "Yield" },
-    tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
+    image: displayTool("image", "Image", ["path", "paths", "url", "urls", "prompt", "model"]),
+    view_image: displayTool("image", "View Image", [
+      "path",
+      "paths",
+      "url",
+      "urls",
+      "prompt",
+      "model",
+    ]),
+    image_generate: displayTool("image", "Image Generation"),
+    music_generate: displayTool("music", "Music Generation"),
+    video_generate: displayTool("play", "Video Generation"),
+    pdf: displayTool("fileText", "PDF", [
+      "path",
+      "paths",
+      "url",
+      "urls",
+      "prompt",
+      "pageRange",
+      "model",
+    ]),
+    sessions_yield: displayTool("pause", "Yield"),
+    tts: displayTool("audioLines", "TTS", ["text", "channel"]),
   },
-};
+} satisfies ToolDisplayConfig;

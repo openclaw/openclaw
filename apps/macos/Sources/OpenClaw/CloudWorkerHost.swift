@@ -349,12 +349,12 @@ final class CloudWorkerNodeProcess {
         self.process.terminate()
         let deadline = ContinuousClock.now + .seconds(10)
         while self.process.isRunning, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(25))
+            try? await Task.sleep(nanoseconds: 25_000_000)
         }
         if self.process.isRunning {
             Darwin.kill(self.process.processIdentifier, SIGKILL)
             while self.process.isRunning {
-                try? await Task.sleep(for: .milliseconds(25))
+                try? await Task.sleep(nanoseconds: 25_000_000)
             }
         }
     }

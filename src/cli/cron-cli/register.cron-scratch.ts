@@ -1,33 +1,16 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
+import type {
+  CronScratchGetResult,
+  CronScratchSetResult,
+} from "../../../packages/gateway-protocol/src/schema/cron.types.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
-
-type ScratchRecord = { content: string; revision: number; updatedAtMs: number };
-type ScratchGetResult = {
-  scratch: ScratchRecord | null;
-  currentRevision: number;
-  maxBytes: number;
-};
-type ScratchSetResult =
-  | { ok: true; scratch: ScratchRecord | null; currentRevision: number; maxBytes: number }
-  | { ok: false; reason: "revision-conflict"; currentRevision: number };
-
-function parseExpectedRevision(value: string | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const revision = parseStrictNonNegativeInteger(value);
-  if (revision === undefined) {
-    throw new CronCliError("--expected-revision must be a non-negative integer");
-  }
-  return revision;
-}
 
 export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
@@ -62,7 +45,7 @@ export function registerCronScratchCommand(cron: Command) {
           if (expectedRevision === undefined) {
             const current = (await callGatewayFromCli("cron.scratch.get", opts, {
               id,
-            })) as ScratchGetResult;
+            })) as CronScratchGetResult;
             if (mutations === 0) {
               if (opts.json) {
                 printCronJson(current);
@@ -71,8 +54,11 @@ export function registerCronScratchCommand(cron: Command) {
               }
               return;
             }
-            expectedRevision =
-              parseExpectedRevision(opts.expectedRevision) ?? current.currentRevision;
+            const explicitRevision = parseStrictNonNegativeInteger(opts.expectedRevision);
+            if (opts.expectedRevision !== undefined && explicitRevision === undefined) {
+              throw new CronCliError("--expected-revision must be a non-negative integer");
+            }
+            expectedRevision = explicitRevision ?? current.currentRevision;
           }
 
           const content = opts.unset
@@ -84,7 +70,7 @@ export function registerCronScratchCommand(cron: Command) {
             id,
             content,
             expectedRevision,
-          })) as ScratchSetResult;
+          })) as CronScratchSetResult;
           if (!result.ok) {
             throw new CronCliError(
               `cron scratch changed concurrently (current revision ${result.currentRevision})`,

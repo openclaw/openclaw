@@ -1,3 +1,6 @@
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import { BoundedSerialQueue } from "../../shared/bounded-serial-queue.js";
 import { REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE } from "../../talk/agent-run-control-shared.js";
 import {
@@ -5,15 +8,50 @@ import {
   resolveRealtimeVoiceAgentControlIntent,
   type RealtimeVoiceAgentControlResult,
 } from "../../talk/agent-run-control.js";
-import { formatError } from "../server-utils.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import type { GatewayRequestContext } from "../server-methods/shared-types.js";
+import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const REALTIME_CONTROL_MAX_PENDING = 8;
 
-export function createRealtimeControlQueue(): BoundedSerialQueue {
-  return new BoundedSerialQueue({
-    maxPendingCount: REALTIME_CONTROL_MAX_PENDING,
-    maxPendingWeight: REALTIME_CONTROL_MAX_PENDING,
-  });
+export type TalkRunCancelContext = Parameters<typeof createChatAbortOps>[0] &
+  Pick<GatewayRequestContext, "getRuntimeConfig">;
+
+/** Cancels one exact Talk-owned run through the Gateway `client-run` Stop helper. */
+export function createTalkRunCancel(params: {
+  context: TalkRunCancelContext;
+  sessionTarget: PreparedTalkSessionTarget;
+  connId: string;
+  assertCurrent?: () => void;
+}): (runId: string) => Promise<boolean> {
+  return async (runId) => {
+    const active = getRpcSourceForGateway(
+      runId,
+      params.context.resolveGatewayContext,
+      captureSessionTarget({
+        storeScope: params.sessionTarget.storePath,
+        sessionKey: params.sessionTarget.canonicalKey,
+        agentId: params.sessionTarget.agentId,
+      }),
+    );
+    if (!active) {
+      return false;
+    }
+    // Subagent cancellation stays off the Talk module graph until a cancel needs it.
+    const { stopExactClientRun } = await import("../server-methods/chat-abort-exact-run.js");
+    const stopped = await stopExactClientRun({
+      ops: createChatAbortOps(params.context),
+      cfg: params.context.getRuntimeConfig(),
+      runId,
+      active,
+      assertCurrent: params.assertCurrent,
+      hookContext: { commandSource: "talk", senderId: params.connId },
+    });
+    if (stopped.failure) {
+      throw stopped.failure.error;
+    }
+    return stopped.aborted;
+  };
 }
 
 export function createTalkRealtimeRunControlOwner(params: {
@@ -24,7 +62,10 @@ export function createTalkRealtimeRunControlOwner(params: {
   speak: (message: string) => void;
   warn: (message: string) => void;
 }) {
-  const queue = createRealtimeControlQueue();
+  const queue = new BoundedSerialQueue({
+    maxPendingCount: REALTIME_CONTROL_MAX_PENDING,
+    maxPendingWeight: REALTIME_CONTROL_MAX_PENDING,
+  });
   const enqueue = (
     args: unknown,
     options: {

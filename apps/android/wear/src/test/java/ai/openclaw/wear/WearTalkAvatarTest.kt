@@ -555,10 +555,8 @@ class WearTalkAvatarTest {
 
   private fun pcm16LeMouthLevels(
     pcm: ByteArray,
-    sampleRateHz: Int = WearProtocol.REALTIME_AUDIO_SAMPLE_RATE_HZ,
-    frameMillis: Int = MOUTH_FRAME_MILLIS,
   ): List<Float> =
-    Pcm16MouthLevelAccumulator(sampleRateHz, frameMillis).run {
+    Pcm16MouthLevelAccumulator().run {
       append(pcm) + flush()
     }
 
@@ -592,7 +590,6 @@ class WearTalkAvatarTest {
     WearRealtimeTalkClient.ActiveAttempt(
       nodeId = "watch-a",
       attemptId = "attempt-$generation",
-      generation = generation,
       resources =
         WearRealtimeTalkClient.ChannelResources(
           channel = FakeRealtimeChannel("watch-a", "channel-$generation"),

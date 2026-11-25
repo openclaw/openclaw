@@ -7,6 +7,7 @@ import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.bindNodeRuntimeTestFixture
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.i18n.NativeStringResources
@@ -14,7 +15,13 @@ import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.graphics.Bitmap
 import android.provider.Settings
+import android.view.KeyEvent
+import android.view.WindowManager
+import android.view.inspector.WindowInspector
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.InputModeManager
@@ -24,18 +31,26 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -62,6 +77,7 @@ class SidebarNavigationAccessibilityTest {
   private val models = ViewModelStore()
   private val mounted = mutableStateOf(true)
   private val selections = mutableListOf<SidebarDestination>()
+  private val selectedSessions = mutableListOf<String>()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -70,13 +86,19 @@ class SidebarNavigationAccessibilityTest {
   private var previousScale: String? = null
   private var editing = false
   private lateinit var inputModeManager: InputModeManager
+  private lateinit var backDispatcher: OnBackPressedDispatcher
+  private val personalizedOrder = listOf("agents", "work", "home", "skills", "threads")
 
   @Before
   fun setUp() {
     app = RuntimeEnvironment.getApplication() as NodeApp
+    app
+      .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
     prefs = newPrefs()
-    prefs.setSidebarPageOrder(defaultSidebarPageOrder)
-    prefs.setSidebarVisiblePages(defaultSidebarPageOrder)
+    prefs.setDisplayName("OpenClaw")
     previousRuntime = app.peekRuntime()
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     bindNodeRuntimeTestFixture(app, runtime)
@@ -101,14 +123,42 @@ class SidebarNavigationAccessibilityTest {
   }
 
   @Test
+  fun compactSidebarTargetsDoNotRouteEdgeTapsToAdjacentActions() {
+    showSidebar()
+    val pinned = composeRule.onNodeWithText("Pinned")
+    val pinnedCenter = pinned.fetchSemanticsNode().boundsInRoot.center
+    // A 44dp row can report expanded touch bounds, but the next row wins this tap.
+    composeRule.onRoot().performTouchInput {
+      click(pinnedCenter + Offset(0f, 23.dp.toPx()))
+    }
+    pinned.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+    composeRule.onNodeWithText("Recent").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    pinned.performClick()
+
+    val menuCenter =
+      composeRule
+        .onNodeWithTag("sidebar-pages-menu")
+        .fetchSemanticsNode()
+        .boundsInRoot.center
+    // The pencil's left edge must open its menu, not collapse the neighboring Pages row.
+    composeRule.onRoot().performTouchInput {
+      click(menuCenter - Offset(23.dp.toPx(), 0f))
+    }
+    composeRule.onNode(isPopup()).assertIsDisplayed()
+    composeRule.onNode(hasText("Edit pinned items") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+    composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
+  }
+
+  @Test
   fun visibleRowsSkipHiddenSlotsPersistMovesAndRetainNavigation() {
-    prefs.setSidebarVisiblePages(listOf("settings", "home", "threads"))
+    prefs.setSidebarPageOrder(personalizedOrder)
+    prefs.setSidebarVisiblePages(listOf("agents", "home", "threads"))
     showSidebar()
     capture("normal-sidebar")
-    assertActions("Settings", "Move down")
+    assertActions("Agents", "Move down")
     assertActions("Home", "Move up", "Move down")
     assertActions("Threads", "Move up")
-    composeRule.onNodeWithText("Work").assertDoesNotExist()
+    composeRule.onNodeWithText("Overview").assertDoesNotExist()
     composeRule.onNodeWithText("Skills").assertDoesNotExist()
     val home = composeRule.onNodeWithText("Home").assertIsSelected()
     // Keyboard focus is unavailable in touch mode; TalkBack node identity is checked separately.
@@ -116,12 +166,12 @@ class SidebarNavigationAccessibilityTest {
     home.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
     val homeId = home.fetchSemanticsNode().id
     invokeMove("Home", "Move up")
-    assertPersisted(listOf("home", "work", "settings", "skills", "threads"), listOf("settings", "home", "threads"))
+    assertPersisted(listOf("home", "work", "agents", "skills", "threads"), listOf("agents", "home", "threads"))
     assertActions("Home", "Move down")
     assertEquals(homeId, home.fetchSemanticsNode().id)
     home.assertIsSelected().assert(SemanticsMatcher.expectValue(SemanticsProperties.Focused, true))
     invokeMove("Home", "Move down")
-    assertPersisted(defaultSidebarPageOrder, listOf("settings", "home", "threads"))
+    assertPersisted(personalizedOrder, listOf("agents", "home", "threads"))
     home.performClick()
     composeRule.runOnIdle { assertEquals(listOf(SidebarDestination.Home), selections) }
     capture("normal-sidebar-restored")
@@ -129,46 +179,188 @@ class SidebarNavigationAccessibilityTest {
 
   @Test
   fun editorMovesHiddenPagesInFullOrderWithoutTogglingPinsOrNavigating() {
+    prefs.setSidebarPageOrder(personalizedOrder)
     prefs.setSidebarVisiblePages(listOf("home"))
     showSidebar()
     assertActions("Home")
     composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-    composeRule.onNodeWithText("Edit pinned items").performClick()
+    composeRule.onNodeWithText("Settings").assertDoesNotExist()
+    composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+    composeRule.onNodeWithText("Settings").assertDoesNotExist()
     editing = true
-    assertActions("Settings", "Move down")
-    assertActions("Work", "Move up", "Move down")
-    assertActions("Threads", "Move up")
-    invokeMove("Work", "Move up")
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
-    assertActions("Work", "Move down")
-    row("Work").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not pinned"))
-    row("Work").performClick()
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("work", "home"))
-    row("Work").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Pinned"))
-    row("Work").performClick()
-    row("Home").performClick()
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
-    composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
     capture("editor", popup = true)
+    assertActions("Agents", "Move down")
+    assertActions("Overview", "Move up", "Move down")
+    assertActions("Threads", "Move up", "Move down")
+    invokeMove("Overview", "Move up")
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
+    assertActions("Overview", "Move down")
+    row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not pinned"))
+    row("Overview").performClick()
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("work", "home"))
+    row("Overview").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Pinned"))
+    row("Overview").performClick()
+    row("Home").performClick()
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
+    composeRule.runOnIdle { assertTrue(selections.isEmpty()) }
   }
 
   @Test
   fun retainedActionRechecksLatestOrderAndVisibilityBeforeReportingHandled() {
+    prefs.setSidebarPageOrder(personalizedOrder)
+    prefs.setSidebarVisiblePages(personalizedOrder)
     showSidebar()
-    val moveUp = actions("Work").single { it.label == "Move up" }
+    val moveUp = actions("Overview").single { it.label == "Move up" }
     composeRule.runOnIdle {
       assertTrue(moveUp.action())
       assertFalse("Already at the boundary; stale action must not report success", moveUp.action())
       model.setSidebarVisiblePages(listOf("home"))
       assertFalse("Hidden source has no visible move", moveUp.action())
     }
-    assertPersisted(listOf("work", "settings", "home", "skills", "threads"), listOf("home"))
+    assertPersisted(listOf("work", "agents", "home", "skills", "threads"), listOf("home"))
     assertActions("Home")
+  }
+
+  @Test
+  fun defaultsResetAndOfflineSettingsUseTheExistingShellNavigation() {
+    composeRule.setContent {
+      if (mounted.value) {
+        backDispatcher = requireNotNull(LocalOnBackPressedDispatcherOwner.current).onBackPressedDispatcher
+        ShellScreen(model)
+      }
+    }
+    composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed().performClick()
+    capture("default-sidebar")
+    assertDefaultRows()
+    assertFalse(model.gatewayConnectionDisplay.value.isConnected)
+    val settings = composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().assertIsEnabled()
+    val gear = settings.fetchSemanticsNode()
+    assertTrue("Settings touch target", gear.size.width >= 48 && gear.size.height >= 48)
+    settings.performClick()
+    composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
+    capture("offline-settings")
+    composeRule.runOnIdle { backDispatcher.onBackPressed() }
+    composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed().performClick()
+    sidebarRow("Threads").performClick()
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    composeRule.onNodeWithContentDescription("Settings").performClick()
+    composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
+    composeRule.runOnIdle { backDispatcher.onBackPressed() }
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    sidebarRow("Threads").assertIsSelected()
+    composeRule.runOnIdle {
+      model.setSidebarPageOrder(personalizedOrder)
+      model.setSidebarVisiblePages(listOf("agents", "work", "home"))
+    }
+    assertPersisted(personalizedOrder, listOf("agents", "work", "home"))
+    sidebarRow("Agents").assertIsDisplayed()
+    composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
+    composeRule.onNodeWithText("Edit pinned items").performScrollTo().performClick()
+    composeRule.onNodeWithText("Reset pinned items").performScrollTo().performClick()
+    composeRule.runOnIdle {
+      val popup =
+        WindowInspector.getGlobalWindowViews().single {
+          it.isAttachedToWindow && (it.layoutParams as? WindowManager.LayoutParams)?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL
+        }
+      assertTrue(popup.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE)))
+      assertTrue(popup.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE)))
+    }
+    assertDefaultRows()
+    assertPersisted(listOf("home", "threads", "skills", "work"), listOf("home", "threads", "skills", "work"))
+    capture("reset-sidebar")
+  }
+
+  @Test
+  fun childSessionsOpenFromTheirParentsDisclosure() {
+    val parent = ChatSessionEntry(key = "agent:main:dashboard:release", displayName = "Release planning", updatedAtMs = 50, lastActivityAt = 50)
+    val child =
+      ChatSessionEntry(
+        key = "agent:main:subagent:changelog",
+        displayName = "Draft changelog",
+        updatedAtMs = 90,
+        lastActivityAt = 90,
+        parentSessionKey = parent.key,
+        status = "running",
+        hasActiveRun = true,
+      )
+    val other = ChatSessionEntry(key = "agent:main:dashboard:notes", displayName = "Product notes", updatedAtMs = 40, lastActivityAt = 40)
+    showSidebar(sessions = listOf(parent, child, other), activeSessionKey = other.key)
+    // The collapsed section announces its hidden child's work with its expansion state.
+    composeRule
+      .onNodeWithText("Recent")
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed, Working"))
+      .performClick()
+
+    composeRule.onNodeWithText("Release planning").assertIsDisplayed()
+    composeRule.onNodeWithText("Product notes").assertIsDisplayed()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+    val toggle = composeRule.onNodeWithTag("sidebar-session-children-toggle")
+    toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Expand child sessions")))
+    // The collapsed parent still shows that its child is working.
+    composeRule
+      .onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Working") and
+          hasAnyAncestor(hasTestTag("sidebar-session-children-toggle")),
+        useUnmergedTree = true,
+      ).assertExists()
+    capture("child-sessions-collapsed")
+
+    toggle.performClick()
+    toggle.assert(SemanticsMatcher.expectValue(SemanticsProperties.ContentDescription, listOf("Collapse child sessions")))
+    val childRow = composeRule.onNodeWithText("Draft changelog").assertIsDisplayed()
+
+    // Unmerged titles report the text position rather than the full-width row.
+    fun title(text: String) = composeRule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode().positionInRoot
+    assertTrue("The child sits below its parent", title("Draft changelog").y > title("Release planning").y)
+    assertTrue("The child is indented", title("Draft changelog").x > title("Release planning").x)
+    assertTrue("Product notes follows the parent's children", title("Product notes").y > title("Draft changelog").y)
+    capture("child-sessions-expanded")
+    childRow.performClick()
+    composeRule.runOnIdle { assertEquals(listOf(child.key), selectedSessions) }
+
+    toggle.performClick()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+  }
+
+  @Test
+  fun anOpenChildSessionKeepsItsParentExpanded() {
+    val parent = ChatSessionEntry(key = "agent:main:dashboard:release", displayName = "Release planning", updatedAtMs = 50, lastActivityAt = 50)
+    val child =
+      ChatSessionEntry(
+        key = "agent:main:subagent:changelog",
+        displayName = "Draft changelog",
+        updatedAtMs = 90,
+        lastActivityAt = 90,
+        parentSessionKey = parent.key,
+      )
+    showSidebar(sessions = listOf(parent, child), activeSessionKey = child.key)
+    composeRule.onNodeWithText("Recent").performClick()
+
+    composeRule.onNodeWithText("Draft changelog").assertIsDisplayed()
+    composeRule.onNodeWithTag("sidebar-session-children-toggle").performClick()
+    composeRule.onNodeWithText("Draft changelog").assertDoesNotExist()
+  }
+
+  private fun sidebarRow(label: String) = composeRule.onNode(hasText(label) and hasAnyAncestor(hasTestTag("sidebar-drawer")))
+
+  private fun assertDefaultRows() {
+    val rows =
+      listOf("Home", "Threads", "Skills", "Overview").map {
+        sidebarRow(it)
+          .assertIsDisplayed()
+          .fetchSemanticsNode()
+          .positionInRoot.y
+      }
+    assertTrue("Default pages are Home, Threads, Skills, Overview", rows.zipWithNext().all { (a, b) -> a < b })
+    sidebarRow("Settings").assertDoesNotExist()
   }
 
   private fun newPrefs() = SecurePrefs(app, app.getSharedPreferences("sidebar-reorder-secure", Context.MODE_PRIVATE))
 
-  private fun showSidebar() {
+  private fun showSidebar(
+    sessions: List<ChatSessionEntry> = emptyList(),
+    activeSessionKey: String = "agent:main:test",
+  ) {
     composeRule.setContent {
       if (mounted.value) {
         inputModeManager = LocalInputModeManager.current
@@ -177,8 +369,8 @@ class SidebarNavigationAccessibilityTest {
             viewModel = model,
             agents = emptyList(),
             selectedAgentId = "main",
-            sessions = emptyList(),
-            activeSessionKey = "agent:main:test",
+            sessions = sessions,
+            activeSessionKey = activeSessionKey,
             activeDestination = SidebarDestination.Home,
             connection = GatewayConnectionDisplay(false, "Offline", null),
             visible = true,
@@ -187,7 +379,7 @@ class SidebarNavigationAccessibilityTest {
             onDragActiveChange = {},
             onNewSession = {},
             onSelectAgent = {},
-            onSelectSession = {},
+            onSelectSession = { selectedSessions += it.key },
             onSelectCatalogSession = {},
             onCreateCatalogSession = {},
             onSelectDestination = { selections += it },
@@ -222,9 +414,10 @@ class SidebarNavigationAccessibilityTest {
   ) {
     composeRule.runOnIdle {
       val reloaded = newPrefs()
-      assertEquals(order, reloaded.sidebarPageOrder.value)
+      val expectedOrder = order + defaultSidebarPageOrder.filterNot(order::contains)
+      assertEquals(expectedOrder, reloaded.sidebarPageOrder.value)
       assertEquals(visible, reloaded.sidebarVisiblePages.value)
-      assertEquals(order, model.sidebarPageOrder.value)
+      assertEquals(expectedOrder, model.sidebarPageOrder.value)
       assertEquals(visible, model.sidebarVisiblePages.value)
     }
   }

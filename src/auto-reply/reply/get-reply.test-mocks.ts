@@ -47,8 +47,9 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
+// mock-isolation: Reply fixtures authorize their sender without command-owner database admission.
 vi.mock("../command-auth.js", () => ({
-  resolveCommandAuthorization: vi.fn(() => ({ isAuthorizedSender: true })),
+  resolveCommandAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
 }));
 
 vi.mock("./directive-handling.defaults.js", () => ({
@@ -72,11 +73,13 @@ vi.mock("./inbound-context.js", async () => {
   };
 });
 
-vi.mock("./session-reset-model.runtime.js", () => ({
+vi.mock("./session-reset-model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-reset-model.js")>()),
   applyResetModelOverride: vi.fn(async () => undefined),
 }));
 
-vi.mock("./stage-sandbox-media.runtime.js", () => ({
+vi.mock("./stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./stage-sandbox-media.js")>()),
   stageSandboxMedia: vi.fn(async (): Promise<StageSandboxMediaResult> => ({ staged: new Map() })),
 }));
 

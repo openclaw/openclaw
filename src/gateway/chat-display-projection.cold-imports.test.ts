@@ -1,7 +1,13 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../packages/markdown-core/src/image-spans.js", () => {
   throw new Error("Display projection must not load the Markdown image scanner");
+});
+
+// mock-isolation: Throw on import to prove display never initializes provider stream parsing.
+vi.mock("../../packages/ai/src/transports/transport-stream-shared.js", () => {
+  throw new Error("Display projection must not load provider stream parsing");
 });
 
 const visibleText = [
@@ -47,6 +53,7 @@ describe("display media without Markdown image scanning", () => {
       truncated: false,
       latestUrl: "/share/session?token=synthetic",
       cardUrl: "https://example.test/share/card.png",
+      assetBasePath: "",
     });
     expect(html).toContain("Visible reply");
     expect(html).toContain("[Image omitted]");

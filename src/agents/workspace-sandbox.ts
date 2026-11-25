@@ -1,13 +1,31 @@
 import fs from "node:fs/promises";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "./admitted-run-context.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
+import { runWithAgentToolSourceExecutionScope } from "./agent-tool-source-execution-guard.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
-import { resolveSandboxContext } from "./sandbox.js";
+import type { resolveSandboxContext } from "./sandbox/context.js";
+import {
+  type resolveSandboxRuntimeStatus,
+  withSandboxRuntimeStatusInWorker,
+} from "./sandbox/runtime-status.js";
+import { prepareRunSessionPermissionPolicy } from "./session-permission-policy.js";
+import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
+import { resolveSessionWorktree } from "./worktrees/session-lifecycle.js";
 
 export type WorkspaceSandboxParams = Pick<
   EmbeddedRunAttemptParams,
+  | "abortSignal"
+  | "awaitSessionDiffBaseline"
   | "agentId"
   | "config"
   | "cwd"
@@ -19,7 +37,6 @@ export type WorkspaceSandboxParams = Pick<
   | "sessionKey"
   | "sessionRoot"
   | "skillsSnapshot"
-  | "requireWritableSandbox"
   | "requireWorkspaceOnly"
   | "workspaceDir"
 > & {
@@ -40,7 +57,16 @@ function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string
 export function resolveHarnessWorkspace(
   workspaceDir: string,
   params: Pick<WorkspaceSandboxParams, "cwd" | "sessionRoot">,
-  prepared: Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>> | undefined,
+  prepared:
+    | Pick<
+        Awaited<ReturnType<typeof resolveAttemptWorkspaceSandbox>>,
+        | "sandbox"
+        | "resolvedWorkspace"
+        | "effectiveWorkspace"
+        | "effectiveCwd"
+        | "sessionPermissionRoot"
+      >
+    | undefined,
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> | undefined,
 ) {
   const projected =
@@ -58,82 +84,201 @@ export function resolveHarnessWorkspace(
   };
 }
 
+/** Retains placement custody across local workspace preparation and harness dispatch. */
+export async function preparePluginHarnessWorkspace(
+  params: WorkspaceSandboxParams & { agentId: string },
+) {
+  const placement = await prepareSessionPlacementSandbox(params);
+  try {
+    placement.assertCurrent();
+    const workspace = await resolveAttemptWorkspaceSandbox({
+      ...params,
+      placementSandbox: placement.sandbox,
+    });
+    try {
+      placement.assertCurrent();
+      return {
+        ...placement,
+        workspace,
+        [Symbol.dispose]: () => {
+          workspace[Symbol.dispose]();
+          placement[Symbol.dispose]();
+        },
+      };
+    } catch (error) {
+      workspace[Symbol.dispose]();
+      throw error;
+    }
+  } catch (error) {
+    placement[Symbol.dispose]();
+    throw error;
+  }
+}
+
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
-  const assertCurrent = params.admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext)
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.workspace.policy");
+  const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const participationCeiling = pluginExecutionAuthority?.participationCeiling;
+  const assertRunCurrent = params.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)
     : undefined;
-  if (params.admittedRunContext && !assertCurrent) {
+  if (params.admittedRunContext && !assertRunCurrent) {
     throw new Error("Sandbox preparation requires an active admitted run");
   }
-  assertCurrent?.();
+  const assertCurrent = composeSessionSourceAssertion([assertRunCurrent], (assertSource) => {
+    params.abortSignal?.throwIfAborted();
+    assertSource();
+  });
+  assertCurrent();
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  const sandbox = params.placementSandbox
-    ? null
-    : await resolveSandboxContext({
-        config: params.config,
-        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-        agentId:
-          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-        execOverrides: params.execOverrides,
-        sessionKey: sandboxSessionKey,
-        skillsSnapshot: params.skillsSnapshot,
-        workspaceDir: resolvedWorkspace,
-        assertCurrent,
-        admittedRunContext: params.admittedRunContext,
-      });
-  assertCurrent?.();
-  const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
-  const effectiveWorkspace =
-    sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
-      ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
-      : resolvedWorkspace;
-  const executionSandbox = params.placementSandbox ?? sandbox;
-  if (
-    params.requireWritableSandbox &&
-    executionSandbox?.enabled &&
-    executionSandbox.workspaceAccess !== "rw"
-  ) {
-    throw new Error("sandbox workspace is not read-write; collection review skipped");
-  }
-  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
-  // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
-  // the agent's canonical workspace as their permission boundary.
-  const sessionPermissionRoot = projectedWorkspace
-    ? sandbox.workspaceDir
-    : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)));
-  const sessionPermissionPolicy = params.permissionMode
-    ? {
-        root: sessionPermissionRoot,
-        mode: params.permissionMode,
-      }
-    : undefined;
-  if (sandbox?.enabled) {
-    assertSandboxCwd(requestedCwd, resolvedWorkspace);
-  }
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  return {
-    effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
-    effectiveFsWorkspaceOnly:
-      params.requireWorkspaceOnly === true ||
-      resolveEffectiveToolFsWorkspaceOnly({
-        cfg: params.config,
+  let preparedWorktreePath: string | undefined;
+  if (params.sessionKey?.trim()) {
+    const entry = await readSessionEntryReadOnlyInWorker(
+      {
         agentId: sessionAgentId,
-      }),
-    effectiveWorkspace,
-    resolvedWorkspace,
-    sessionPermissionRoot,
-    sessionPermissionPolicy,
-    sandbox,
-    sandboxSessionKey,
-    sessionAgentId,
-  };
+        sessionKey,
+        storePath: resolveSessionStorePathCore(params.config?.session?.store, {
+          agentId: sessionAgentId,
+        }),
+      },
+      assertCurrent,
+    );
+    if (entry?.worktree) {
+      const prepared = await resolveSessionWorktree({
+        binding: entry.worktree,
+        sessionKey,
+        assertCurrent,
+        turn: true,
+      });
+      if (prepared) {
+        await recordRegistryWorktreeActivity(
+          prepared.context.environment,
+          prepared.worktree,
+          assertCurrent,
+        );
+      }
+      preparedWorktreePath = prepared?.worktree.path;
+    }
+  }
+  const prepareWorkspace = async (
+    sandboxRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>,
+  ) =>
+    runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      assertCurrent();
+      if (sandboxRuntimeStatus?.sandboxed) {
+        phases.mark("attempt.setup.workspace.baseline_wait");
+        await params.awaitSessionDiffBaseline?.();
+        assertCurrent();
+      }
+      phases.mark("attempt.setup.workspace.mkdir");
+      if (resolvedWorkspace !== preparedWorktreePath) {
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+      }
+      assertCurrent();
+      phases.mark("attempt.setup.workspace.sandbox");
+      const sandboxRuntime = sandboxRuntimeStatus?.sandboxed
+        ? await import("./sandbox/context.js")
+        : undefined;
+      assertCurrent();
+      const sandbox =
+        sandboxRuntime && sandboxRuntimeStatus
+          ? await sandboxRuntime.resolveSandboxContext({
+              config: params.config,
+              agentId: sandboxRuntimeStatus.agentId,
+              execOverrides: params.execOverrides,
+              sessionKey: sandboxSessionKey,
+              skillsSnapshot: params.skillsSnapshot,
+              workspaceDir: resolvedWorkspace,
+              assertCurrent,
+              abortSignal: params.abortSignal,
+              admittedRunContext: params.admittedRunContext,
+              preparedRuntimeStatus: sandboxRuntimeStatus,
+            })
+          : null;
+      try {
+        phases.mark("attempt.setup.workspace.roots");
+        assertCurrent();
+        const projectedWorkspace =
+          sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
+        const effectiveWorkspace =
+          sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
+            ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
+            : resolvedWorkspace;
+        const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+        // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
+        // the agent's canonical workspace as their permission boundary.
+        const sessionPermissionRoot =
+          participationCeiling?.source?.root ??
+          (projectedWorkspace
+            ? sandbox.workspaceDir
+            : (params.sessionRoot ?? (await fs.realpath(resolvedWorkspace))));
+        const sessionPermissionPolicy = await prepareRunSessionPermissionPolicy({
+          root: sessionPermissionRoot,
+          mode: params.permissionMode,
+          pluginExecutionAuthority,
+          config: params.config,
+          agentId: sessionAgentId,
+          sandboxAvailable: sandbox?.enabled === true,
+          execOverrides: params.execOverrides,
+        });
+        if (sandbox?.enabled) {
+          assertSandboxCwd(requestedCwd, resolvedWorkspace);
+        }
+        assertCurrent();
+        if (effectiveWorkspace !== resolvedWorkspace) {
+          await fs.mkdir(effectiveWorkspace, { recursive: true });
+        }
+        assertCurrent();
+        phases.mark("attempt.setup.workspace.policy_finalize");
+        return {
+          effectiveCwd: sandbox?.enabled
+            ? effectiveWorkspace
+            : (requestedCwd ?? effectiveWorkspace),
+          effectiveFsWorkspaceOnly:
+            participationCeiling !== undefined ||
+            params.requireWorkspaceOnly === true ||
+            resolveEffectiveToolFsWorkspaceOnly({
+              cfg: params.config,
+              agentId: sessionAgentId,
+            }),
+          effectiveWorkspace,
+          resolvedWorkspace,
+          sessionPermissionRoot,
+          sessionPermissionPolicy,
+          sandbox,
+          ...(sandboxRuntimeStatus ? { sandboxRuntime: sandboxRuntimeStatus } : {}),
+          sandboxReport: sandboxRuntimeStatus
+            ? { mode: sandboxRuntimeStatus.mode, sandboxed: sandboxRuntimeStatus.sandboxed }
+            : undefined,
+          sandboxSessionKey,
+          sessionAgentId,
+          [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
+        };
+      } catch (error) {
+        sandbox?.[Symbol.dispose]?.();
+        throw error;
+      }
+    });
+  return await (params.placementSandbox
+    ? prepareWorkspace()
+    : withSandboxRuntimeStatusInWorker(
+        {
+          cfg: params.config,
+          // Independent policy sessions keep their own owner.
+          agentId:
+            params.sandboxAgentId ??
+            (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+          sessionKey: sandboxSessionKey,
+        },
+        { env: process.env, cwd: process.cwd(), assertCurrent },
+        prepareWorkspace,
+      ));
 }

@@ -1,6 +1,7 @@
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { listAmbientOnlyConfiguredChannelIds } from "../plugins/channel-presence-policy.js";
+import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
@@ -29,6 +30,12 @@ export function createPluginReloadChannels({
 }) {
   const channelTargets = new Set<ChannelId>();
   let releaseChannelStarts: ReturnType<ChannelManager["pauseChannelStarts"]> | undefined;
+  const stopChannel = (channelId: ChannelId) =>
+    channelManager.stopChannel(channelId, undefined, {
+      manual: false,
+      strict: true,
+      routeHandoff: true,
+    });
   const attempt = async (errors: unknown[], run: () => void | Promise<void>) => {
     try {
       await run();
@@ -48,6 +55,7 @@ export function createPluginReloadChannels({
       await attempt(errors, async () => {
         // Whole-channel targets include preparation that had not reserved an account at drain.
         const result = await channelManager.startChannel(plugin.id, undefined, {
+          reason: "plugin-reload",
           manual: false,
           preserveManualStop: true,
           skipUnavailableAccounts: true,
@@ -92,6 +100,18 @@ export function createPluginReloadChannels({
         channelTargets.add(channel.plugin.id);
       }
     }
+    // Native command handlers keep candidates bound to the registry that started them.
+    // Replacing it retires those candidates even when retained entries keep identity.
+    for (const { plugin } of previousRegistry.channels) {
+      if (
+        plugin.capabilities?.nativeCommands === true &&
+        previousRegistry.commands.some(({ command }) =>
+          pluginCommandSupportsChannel(command, plugin.id),
+        )
+      ) {
+        channelTargets.add(plugin.id);
+      }
+    }
   };
   const stopAdditional = async (
     nextRegistry: PluginRegistry,
@@ -117,11 +137,7 @@ export function createPluginReloadChannels({
         releaseAdditional(outcome, selected);
       };
       for (const channelId of additionalChannels) {
-        await channelManager.stopChannel(channelId, undefined, {
-          manual: false,
-          strict: true,
-          routeHandoff: true,
-        });
+        await stopChannel(channelId);
       }
     }
   };
@@ -134,12 +150,7 @@ export function createPluginReloadChannels({
       if (!channelTargets.has(plugin.id)) {
         continue;
       }
-      const stop = () =>
-        channelManager.stopChannel(plugin.id, undefined, {
-          manual: false,
-          strict: true,
-          routeHandoff: true,
-        });
+      const stop = () => stopChannel(plugin.id);
       if (resourceHandoffIds.has(pluginId)) {
         await attempt(errors, stop);
       } else {

@@ -45,6 +45,7 @@ export function matrixModelConfig(model: string, thinking: string): OpenClawConf
   return {
     defaults: {
       model: { primary: model, fallbacks: [] },
+      modelPolicy: { allow: [model] },
       fastModeDefault: false,
       models: {
         [model]: {

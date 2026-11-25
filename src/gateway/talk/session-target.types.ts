@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+
 // Keep shared Talk identity independent of the storage runtime used to prepare it.
 export type PreparedTalkSessionTarget = Readonly<{
   agentId: string;
@@ -5,4 +7,5 @@ export type PreparedTalkSessionTarget = Readonly<{
   sessionKey: string;
   canonicalKey: string;
   storePath: string;
+  assertCurrent(cfg: OpenClawConfig): void;
 }>;

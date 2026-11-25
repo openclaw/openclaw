@@ -1,14 +1,83 @@
 const MAIN_DOCKER_SEED_LANES = ["published-upgrade-survivor"] as const;
-const RELEASE_ONLY_DOCKER_SEED_LANES = [
+const OWNER_DOCKER_SEED_LANES = [
   "mcp-channels",
   "cron-mcp-cleanup",
   "mcp-code-mode-gateway",
+  "mcp-docker-custody",
   "update-channel-switch",
-  "fleet-cache",
+  "release-update-survivor",
 ] as const;
 
 export function resolveDockerSeedLanes(options: { includeReleaseOnly: boolean }) {
   return options.includeReleaseOnly
-    ? [...MAIN_DOCKER_SEED_LANES, ...RELEASE_ONLY_DOCKER_SEED_LANES]
+    ? [
+        ...MAIN_DOCKER_SEED_LANES,
+        ...OWNER_DOCKER_SEED_LANES.filter((lane) => lane !== "release-update-survivor"),
+      ]
     : [...MAIN_DOCKER_SEED_LANES];
+}
+
+// Published-driver compatibility stays main/release-only. The source-built
+// successor below proves the current update owners on relevant PRs.
+const MCP_DOCKER_SEED_LANES = [
+  "mcp-channels",
+  "cron-mcp-cleanup",
+  "mcp-code-mode-gateway",
+] as const;
+type DockerSeedLane = (typeof OWNER_DOCKER_SEED_LANES)[number];
+const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
+  ".github/workflows/ci.yml": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
+  "scripts/e2e/mcp-docker-custody-docker.sh": ["mcp-docker-custody"],
+  "scripts/e2e/lib/mcp-docker-custody/scenario.mjs": ["mcp-docker-custody"],
+  "scripts/e2e/lib/mcp-docker-custody/server.cjs": ["mcp-docker-custody"],
+  "src/agents/mcp-docker-command.ts": ["mcp-docker-custody"],
+  "src/agents/mcp-docker-custody.ts": ["mcp-docker-custody"],
+  "src/agents/mcp-docker-recovery.ts": ["mcp-docker-custody"],
+  "src/agents/mcp-stdio-transport.ts": ["mcp-docker-custody"],
+  "src/gateway/server-startup-bootstrap.ts": ["mcp-docker-custody"],
+  "src/cli/mcp-cli-state-owner.ts": ["mcp-docker-custody"],
+  "src/cli/mcp-cli.ts": ["mcp-docker-custody"],
+  "src/cli/mcp-cli-probe.ts": ["mcp-docker-custody"],
+  "scripts/e2e/docker-openai-seed.ts": MCP_DOCKER_SEED_LANES,
+  "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/mcp-code-mode/scenario.sh": ["mcp-code-mode-gateway"],
+  "scripts/e2e/lib/update-channel-switch/assertions.mjs": ["update-channel-switch"],
+  "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
+  "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/update-channel-switch-docker.sh": ["update-channel-switch"],
+  "scripts/lib/changed-path-facts.mjs": MCP_DOCKER_SEED_LANES,
+  "scripts/lib/ci-docker-seed-plan.mts": MCP_DOCKER_SEED_LANES,
+  "src/agents/embedded-agent-runner/run/attempt-bundle-tools.ts": ["mcp-code-mode-gateway"],
+  "src/agents/runtime-plan/tools.ts": ["mcp-code-mode-gateway"],
+};
+export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
+  const selected = new Set<DockerSeedLane>();
+  for (const changedPath of changedPaths) {
+    const normalizedPath = changedPath.replaceAll("\\", "/");
+    if (
+      [
+        "src/update/",
+        "src/state/",
+        "src/cli/update-cli/",
+        "src/daemon/",
+        "scripts/e2e/lib/upgrade-survivor/",
+      ].some((prefix) => normalizedPath.startsWith(prefix)) ||
+      [
+        "openclaw.mjs",
+        "release-launcher-forward.mjs",
+        "Dockerfile",
+        "src/gateway/server-start.ts",
+        "scripts/e2e/upgrade-survivor-docker.sh",
+        "scripts/lib/ci-docker-seed-plan.mts",
+        "scripts/lib/docker-e2e-scenarios.mts",
+      ].includes(normalizedPath)
+    ) {
+      selected.add("release-update-survivor");
+    }
+    for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
+      selected.add(lane);
+    }
+  }
+  return OWNER_DOCKER_SEED_LANES.filter((lane) => selected.has(lane));
 }

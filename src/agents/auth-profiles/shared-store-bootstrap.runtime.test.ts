@@ -38,7 +38,6 @@ describe("fresh shared-auth snapshot ownership", () => {
           ...loadAuthProfileStoreWithoutExternalProfiles(customDir),
           profiles: { external: apiKey("runtime-only") },
           runtimeExternalProfileIds: ["external"],
-          runtimeExternalCliProfileIds: ["external"],
         },
         customDir,
       );

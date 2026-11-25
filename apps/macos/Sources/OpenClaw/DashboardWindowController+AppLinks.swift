@@ -33,7 +33,7 @@ extension DashboardWindowController {
         // Keyboard Enter and physical clicks both produce trusted DOM clicks.
         // The isolated world protects this listener and its handler from page code.
         controller.addUserScript(WKUserScript(
-            source: Self.scopedDashboardScript(script, url: url),
+            source: ControlUIDocumentHost.scopedDashboardScript(script, url: url),
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true,
             in: DashboardAppLinkMessageHandler.world))

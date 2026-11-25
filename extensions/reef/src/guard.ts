@@ -21,8 +21,8 @@ export function createConfiguredGuard(
       pinnedModel: guard.pinnedModel,
       timeoutMs: guard.timeoutMs,
       rules: guard.rules,
-      complete: async ({ systemPrompt, input, maxTokens, responseFormat, signal }) => {
-        const result = await getReefRuntime().llm.complete({
+      complete: ({ systemPrompt, input, maxTokens, responseFormat, signal }) =>
+        getReefRuntime().llm.complete({
           model: `openai/${guard.pinnedModel}@${guard.authProfileId}`,
           systemPrompt,
           messages: [{ role: "user", content: input }],
@@ -35,15 +35,7 @@ export function createConfiguredGuard(
           requiredAuthMode: "oauth",
           signal,
           purpose: "reef.guard",
-        });
-        return {
-          text: result.text,
-          provider: result.provider,
-          model: result.model,
-          responseModel: result.responseModel,
-          stopReason: result.stopReason,
-        };
-      },
+        }),
     });
   }
   const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);

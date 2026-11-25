@@ -1,12 +1,23 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { matrixConfigAdapter } from "./config-adapter.js";
 import { MatrixChannelConfigSchema } from "./config-schema.js";
-import { resolveMatrixAccount, type ResolvedMatrixAccount } from "./matrix/accounts.js";
+import {
+  listMatrixAccountIds,
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
+  resolveMatrixAccountConfig,
+  type ResolvedMatrixAccount,
+} from "./matrix/accounts.js";
+import { normalizeMatrixAllowList } from "./matrix/monitor/allowlist.js";
 import { createMatrixSetupWizardProxy, matrixSetupContract } from "./setup-core.js";
 
 const matrixSetupWizard = createMatrixSetupWizardProxy(async () => ({
-  matrixSetupWizard: (await import("./setup-surface.js")).matrixSetupWizard,
+  matrixSetupWizard: (await import("./onboarding.js")).matrixOnboardingAdapter,
 }));
 
 export const matrixPluginBase = {
@@ -31,9 +42,43 @@ export const matrixPluginBase = {
     media: true,
   },
   reload: { configPrefixes: ["channels.matrix"], noopPrefixes: ["messages.ackReactionScope"] },
+  lifecycle: {
+    // channels remove loads the setup plugin; a removed account must not hand its cached
+    // login to a later account with the same id.
+    onAccountRemoved: async ({ accountId }: { accountId: string }) => {
+      const { clearMatrixCredentials } = await import("./matrix/credentials.js");
+      await clearMatrixCredentials(process.env, accountId);
+    },
+  },
   configSchema: MatrixChannelConfigSchema,
   config: {
-    ...matrixConfigAdapter,
+    ...createScopedChannelConfigAdapter<
+      ResolvedMatrixAccount,
+      ReturnType<typeof resolveMatrixAccountConfig>
+    >({
+      sectionKey: "matrix",
+      listAccountIds: listMatrixAccountIds,
+      /** @deprecated Use resolveAccountAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+      resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
+      resolveAccessorAccount: resolveMatrixAccountConfig,
+      defaultAccountId: resolveDefaultMatrixAccountId,
+      clearBaseFields: [
+        "name",
+        "homeserver",
+        "network",
+        "proxy",
+        "userId",
+        "accessToken",
+        "password",
+        "deviceId",
+        "deviceName",
+        "avatarUrl",
+        "initialSyncLimit",
+      ],
+      resolveAllowFrom: (account) => account.dm?.allowFrom,
+      formatAllowFrom: normalizeMatrixAllowList,
+    }),
+    resolveAccountAsync: adaptScopedAccountAccessor(resolveMatrixAccountAsync),
     isConfigured: (account) => account.configured,
     describeAccount: (account) =>
       describeAccountSnapshot({
@@ -50,6 +95,9 @@ export const matrixSetupPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   ...matrixPluginBase,
   config: {
     ...matrixPluginBase.config,
-    hasConfiguredState: ({ cfg }) => resolveMatrixAccount({ cfg }).configured,
+    /** @deprecated Use hasConfiguredStateAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
+    hasConfiguredState: ({ cfg, env }) => resolveMatrixAccount({ cfg, env }).configured,
+    hasConfiguredStateAsync: async ({ cfg, env }) =>
+      (await resolveMatrixAccountAsync({ cfg, env })).configured,
   },
 };

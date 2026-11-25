@@ -1,18 +1,64 @@
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const NO_ERROR_DETAIL = "no error detail";
 const MAX_ERROR_CAUSE_DEPTH = 32;
 
-function redact(value: string): string {
-  return redactSensitiveText(value);
+type SlackWebApiErrorData = {
+  error?: unknown;
+  needed?: unknown;
+  response_metadata?: {
+    scopes?: unknown;
+    acceptedScopes?: unknown;
+  };
+};
+
+export function getSlackWebApiErrorData(error: unknown): SlackWebApiErrorData | undefined {
+  if (!(error instanceof Error)) {
+    return undefined;
+  }
+  // SAFETY: Slack attaches data to Error; the object check and consumer coercers validate its fields.
+  const data = (error as Error & { data?: SlackWebApiErrorData }).data;
+  return data && typeof data === "object" ? data : undefined;
+}
+
+export function enrichSlackWebApiError(err: unknown): unknown {
+  if (!(err instanceof Error)) {
+    return err;
+  }
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeOptionalString(data?.error);
+  if (!code) {
+    return err;
+  }
+  const details: string[] = [];
+  const needed = normalizeOptionalString(data?.needed);
+  if (needed) {
+    details.push(`needed: ${needed}`);
+  }
+  const scopes = normalizeTrimmedStringList(data?.response_metadata?.scopes);
+  if (scopes.length) {
+    details.push(`granted: ${scopes.join(", ")}`);
+  }
+  const acceptedScopes = normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes);
+  if (acceptedScopes.length) {
+    details.push(`accepted: ${acceptedScopes.join(", ")}`);
+  }
+  const message = `${err.message || `An API error occurred: ${code}`}${
+    details.length ? ` (${details.join("; ")})` : ""
+  }`;
+  return message === err.message ? err : new Error(message);
 }
 
 function addStringDetail(details: string[], label: string, value: unknown) {
   if (typeof value !== "string") {
     return;
   }
-  const trimmed = redact(value.trim());
+  const trimmed = redactSensitiveText(value.trim());
   if (trimmed) {
     details.push(label ? `${label}: ${trimmed}` : trimmed);
   }
@@ -32,13 +78,10 @@ function addStringListDetail(details: string[], label: string, value: unknown) {
   if (!Array.isArray(value)) {
     return;
   }
-  const entries = value.flatMap((entry) => {
-    if (typeof entry !== "string") {
-      return [];
-    }
-    const trimmed = redact(entry.trim());
-    return trimmed ? [trimmed] : [];
-  });
+  const entries: string[] = [];
+  for (const entry of value) {
+    addStringDetail(entries, "", entry);
+  }
   if (entries.length) {
     details.push(`${label}: ${entries.join(", ")}`);
   }
@@ -57,7 +100,7 @@ function safeStringify(value: unknown): string | undefined {
       seen.add(nested);
       return nested;
     });
-    return result ? redact(result) : undefined;
+    return result ? redactSensitiveText(result) : undefined;
   } catch {
     return undefined;
   }
@@ -69,16 +112,15 @@ function addSlackResponseMetadata(details: string[], value: unknown) {
   }
   addStringListDetail(details, "scopes", value.scopes);
   addStringListDetail(details, "accepted", value.acceptedScopes);
-  const messages = value.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages) {
-      addStringDetail(details, "slack message", message);
-    }
-  }
-  const warnings = value.warnings;
-  if (Array.isArray(warnings)) {
-    for (const warning of warnings) {
-      addStringDetail(details, "slack warning", warning);
+  for (const [key, label] of [
+    ["messages", "slack message"],
+    ["warnings", "slack warning"],
+  ] as const) {
+    const entries = value[key];
+    if (Array.isArray(entries)) {
+      for (const entry of entries) {
+        addStringDetail(details, label, entry);
+      }
     }
   }
 }
@@ -133,10 +175,6 @@ function collectSlackErrorDetails(error: unknown, seen: Set<Error>): string[] {
   }
   if (isRecord(error)) {
     addRecordDetails(details, error);
-    const fallback = safeStringify(error);
-    if (details.length === 0 && fallback && fallback !== "{}") {
-      details.push(fallback);
-    }
   }
   return details;
 }

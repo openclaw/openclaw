@@ -1,6 +1,10 @@
+import { constants } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import {
+  coerceErrorMessage,
   collectErrorGraphCandidates,
   readErrorCauses,
 } from "@openclaw/normalization-core/error-coercion";
@@ -12,17 +16,43 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { tryReadJson } from "../infra/json-files.js";
 import {
   resolveOpenClawInstallationRootSync,
   resolveOpenClawPackageRootSync,
 } from "../infra/openclaw-root.js";
+import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import {
+  getGatewaySuspendAdmissionPhase,
+  onGatewaySuspendAdmissionChange,
+} from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
+import { isGatewayTransportError } from "./transport-error.js";
 
 export const GATEWAY_STALE_INSTALL_CLOSE_REASON =
   "gateway install changed; run: openclaw gateway restart";
+
+export type GatewayStaleConnectionReason = "installation-replaced" | "legacy-handler-unavailable";
+
+export function classifyGatewayStaleConnectionError(
+  error: unknown,
+): GatewayStaleConnectionReason | undefined {
+  if (coerceErrorMessage(error).includes(GATEWAY_STALE_INSTALL_CLOSE_REASON)) {
+    return "installation-replaced";
+  }
+  // Published June Gateways report failed runtime imports before STALE_INSTALL existed.
+  if (
+    isGatewayTransportError(error) &&
+    error.kind === "closed" &&
+    error.code === 1011 &&
+    error.reason === "gateway message handler unavailable"
+  ) {
+    return "legacy-handler-unavailable";
+  }
+  return undefined;
+}
 
 // The install root is process-stable; capture it before an upgrade can replace
 // package metadata, then consult it only after a dynamic import has failed.
@@ -41,10 +71,13 @@ export type GatewayInstallationReplacement = {
 type InstallationObserver = {
   root: string | null;
   installationRoot: string | null;
+  /** The update lease key of the installation, captured with it. */
+  updateKey: string | null;
   running: InstallationIdentity;
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
+  trialSettled?: boolean;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -56,16 +89,39 @@ const installationState = resolveGlobalSingleton<{ observer?: InstallationObserv
 export function registerGatewayInstallationReplacementHandler(
   onReplacement: InstallationObserver["onReplacement"],
 ): () => void {
+  const installationRoot = gatewayInstallRoot
+    ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
+    : null;
   const observer: InstallationObserver = {
     root: gatewayInstallRoot,
-    installationRoot: gatewayInstallRoot
-      ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
-      : null,
+    installationRoot,
+    updateKey: installationRoot ? resolveUpdateInstallRoot(installationRoot) : null,
     running: { version: VERSION, buildId: resolveRuntimeServiceBuildId() },
     onReplacement,
   };
   installationState.observer = observer;
+  // A Gateway keeps loading files from its release after the link moves on.
+  let releaseLease = () => {};
+  try {
+    releaseLease = gatewayInstallRoot
+      ? acquirePackageReleaseLease(gatewayInstallRoot)
+      : releaseLease;
+  } catch {
+    // Without a lease the release still survives collection for 24 hours.
+  }
+  const releaseSuspension = onGatewaySuspendAdmissionChange((phase) => {
+    if (phase !== "accepting") {
+      // A host operation may restore the running installation before reopening.
+      observer.replacement = undefined;
+    }
+  });
   return () => {
+    releaseSuspension();
+    try {
+      releaseLease();
+    } catch {
+      // A lease left behind by a stopped Gateway is ignored as soon as its process is gone.
+    }
     if (installationState.observer === observer) {
       installationState.observer = undefined;
     }
@@ -77,7 +133,12 @@ export function getGatewayInstallationReplacement(): GatewayInstallationReplacem
 }
 
 function recordReplacement(observer: InstallationObserver, onDisk?: InstallationIdentity): void {
-  if (installationState.observer !== observer || observer.replacement) {
+  // A live suspension owns installation changes and their stop/restart handoff.
+  if (
+    installationState.observer !== observer ||
+    observer.replacement ||
+    getGatewaySuspendAdmissionPhase() !== "accepting"
+  ) {
     return;
   }
   const identity = ({ version, buildId }: InstallationIdentity) =>
@@ -94,41 +155,119 @@ function recordReplacement(observer: InstallationObserver, onDisk?: Installation
   observer.onReplacement(fact);
 }
 
+async function readInstallationMetadata(file: string): Promise<unknown> {
+  try {
+    if (!(await fs.lstat(file)).isFile()) {
+      return null;
+    }
+    const handle = await fs.open(
+      file,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    try {
+      if (!(await handle.stat()).isFile()) {
+        return null;
+      }
+      // This is one bounded observation, not write authority. A later tick observes replacement.
+      // Expose only read: fs-safe's optional fd size hint performs synchronous fstat calls.
+      const raw = await readFileHandleBounded({ read: handle.read.bind(handle) }, 16 * 1024);
+      return JSON.parse(raw.toString("utf8"));
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
+  // The maintenance owner starts only after the Gateway listener is serving.
+  if (observer && !observer.trialSettled) {
+    observer.trialSettled = true;
+    void import("../update/gateway-trial.js")
+      .then(({ announceReady }) => announceReady(observer.running.buildId))
+      .catch(() => {
+        observer.trialSettled = false;
+      });
+  }
   const root = observer?.installationRoot;
-  if (!observer || !root || !observer.running.buildId || observer.replacement) {
+  if (
+    !observer ||
+    !root ||
+    !observer.running.buildId ||
+    observer.replacement ||
+    getGatewaySuspendAdmissionPhase() !== "accepting"
+  ) {
     return Promise.resolve();
   }
-  observer.check ??= (async () => {
-    // One bounded artifact read avoids mixing package metadata with a different build generation.
-    const metadata = asNullableRecord(
-      await tryReadJson(path.join(root, "dist", "build-info.json"), {
-        maxBytes: 16 * 1024,
-      }),
-    );
-    const version = normalizeNullableString(metadata?.version);
-    const buildId = normalizeNullableString(metadata?.buildId);
-    // npm can temporarily remove or partially replace metadata. Wait for a complete identity.
-    if (!version || version.length > 96 || !buildId || buildId.length > 96) {
-      return;
-    }
-    if (version !== observer.running.version || buildId !== observer.running.buildId) {
-      recordReplacement(observer, { version, buildId });
-    }
-  })().finally(() => {
-    observer.check = undefined;
-  });
+  if (observer.check) {
+    return observer.check;
+  }
+  observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
+    .then(async (value) => {
+      const metadata = asNullableRecord(value);
+      const version = normalizeNullableString(metadata?.version);
+      const buildId = normalizeNullableString(metadata?.buildId);
+      // npm can temporarily remove or partially replace metadata. Wait for a complete identity.
+      if (!version || version.length > 96 || !buildId || buildId.length > 96) {
+        return;
+      }
+      if (
+        (version !== observer.running.version || buildId !== observer.running.buildId) &&
+        !(observer.updateKey && (await isInstallationHeldByUpdateRun(observer.updateKey)))
+      ) {
+        recordReplacement(observer, { version, buildId });
+      }
+    })
+    .finally(() => {
+      observer.check = undefined;
+    });
   return observer.check;
 }
 
-type GatewayStaleInstall = {
+/**
+ * The update run owns the installation while it holds the install lease: it stops
+ * and restarts this Gateway itself. A self-restart into the new package during the
+ * run races its Doctor and Gateway start. A Gateway the run leaves stale restarts on
+ * a later check, after the run releases the lease.
+ */
+async function isInstallationHeldByUpdateRun(installRoot: string): Promise<boolean> {
+  try {
+    // Lease reads and process probes are synchronous; they run in the handoff worker.
+    const [{ prepareManagedHandoffParentStore }, { resolveServiceManagerEnv }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-worker.js"),
+      import("../daemon/service-process-env.js"),
+    ]);
+    const store = await prepareManagedHandoffParentStore({
+      installRoot,
+      serviceManagerEnv: resolveServiceManagerEnv(),
+    });
+    try {
+      const held = await store.read(installRoot);
+      if (held.kind !== "current") {
+        return false;
+      }
+      for (const holder of [held.lease.executor, held.lease.helper]) {
+        if (await store.isProcessIdentityCurrent(holder)) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await store.close();
+    }
+  } catch {
+    // An unreadable lease cannot hold the installation; keep today's self-restart.
+    return false;
+  }
+}
+
+export function classifyGatewayStaleInstall(error: unknown): {
   error: ErrorShape;
   restartCommand: string;
-};
-
-export function classifyGatewayStaleInstall(error: unknown): GatewayStaleInstall | null {
+} | null {
   const observer = installationState.observer;
   const root = observer?.root ?? gatewayInstallRoot;
   const missingRuntime = collectErrorGraphCandidates(error, readErrorCauses).some((candidate) =>

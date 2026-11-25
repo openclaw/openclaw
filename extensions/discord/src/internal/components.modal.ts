@@ -1,6 +1,6 @@
 import { ComponentType, TextInputStyle, type APITextInputComponent } from "discord-api-types/v10";
 import { BaseModalComponent, clean, parseCustomId, type ComponentData } from "./components.base.js";
-import { AnySelectMenu, TextDisplay } from "./components.message.js";
+import type { AnySelectMenu, TextDisplay } from "./components.message.js";
 
 export abstract class TextInput extends BaseModalComponent {
   readonly type = ComponentType.TextInput;
@@ -25,8 +25,7 @@ export abstract class TextInput extends BaseModalComponent {
   }
 }
 
-export abstract class CheckboxGroup extends BaseModalComponent {
-  readonly type = 22;
+abstract class ModalChoiceGroup extends BaseModalComponent {
   options: Array<{ value: string; label: string; description?: string; default?: boolean }> = [];
   required?: boolean;
   minValues?: number;
@@ -43,22 +42,12 @@ export abstract class CheckboxGroup extends BaseModalComponent {
   }
 }
 
-export abstract class RadioGroup extends BaseModalComponent {
+export abstract class CheckboxGroup extends ModalChoiceGroup {
+  readonly type = 22;
+}
+
+export abstract class RadioGroup extends ModalChoiceGroup {
   readonly type = 21;
-  options: Array<{ value: string; label: string; description?: string; default?: boolean }> = [];
-  required?: boolean;
-  minValues?: number;
-  maxValues?: number;
-  serialize() {
-    return clean({
-      type: this.type,
-      custom_id: this.customId,
-      options: this.options,
-      required: this.required,
-      min_values: this.minValues,
-      max_values: this.maxValues,
-    });
-  }
 }
 
 export abstract class Label extends BaseModalComponent {

@@ -54,12 +54,12 @@ suite.define(() => {
             async () => (await gateway.getRequests("sessions.list", { activeOnly: true })).length,
           )
           .toBe(listsBefore + 1);
-        await expect.poll(() => cpu.textContent()).toContain("25%");
+        await expect.poll(() => cpu.textContent()).toContain("0.25 cores");
         const vitalsBefore = (await gateway.getRequests("system.info")).length;
         await gateway.setMethodResponse("system.info", info(0.6));
         try {
-          await page.clock.runFor(2_000);
-          await expect.poll(() => cpu.textContent(), { timeout: 8_000 }).toContain("60%");
+          await page.clock.runFor(10_000);
+          await expect.poll(() => cpu.textContent(), { timeout: 8_000 }).toContain("0.60 cores");
           expect((await gateway.getRequests("system.info")).length).toBeGreaterThan(vitalsBefore);
           expect((await gateway.getRequests("sessions.list", { activeOnly: true })).length).toBe(
             listsBefore + 1,

@@ -2,6 +2,10 @@ import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readWorkspaceText } from "./memory-workspace-files.js";
 import { collectMarkdownFiles } from "./rem-evidence-files.js";
+import {
+  normalizeMemoryPath,
+  normalizeSnippet as normalizeWhitespace,
+} from "./short-term-promotion-utils.js";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -71,20 +75,9 @@ type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-type GroundedRemFilePreview = {
-  path: string;
-  facts: GroundedRemPreviewItem[];
-  reflections: GroundedRemPreviewItem[];
-  memoryImplications: GroundedRemPreviewItem[];
-  candidates: GroundedRemCandidate[];
-  renderedMarkdown: string;
-};
+type GroundedRemFilePreview = ReturnType<typeof previewGroundedRemForFile>;
 
-export type GroundedRemPreviewResult = {
-  workspaceDir: string;
-  scannedFiles: number;
-  files: GroundedRemFilePreview[];
-};
+export type GroundedRemPreviewResult = Awaited<ReturnType<typeof previewGroundedRemMarkdown>>;
 
 type CandidateSnippetSummary = GroundedRemCandidate & {
   score: number;
@@ -102,43 +95,14 @@ type ParsedMarkdownSection = {
   lines: ParsedSectionLine[];
 };
 
-type SectionSnippet = {
-  text: string;
-  line: number;
-};
-
-type SectionSummary = {
-  title: string;
-  text: string;
-  refs: string[];
-  scores: {
-    preference: number;
-    build: number;
-    incident: number;
-    logistics: number;
-    tasks: number;
-    routing: number;
-    externalization: number;
-    retries: number;
-    overall: number;
-  };
-};
-
-function normalizeWhitespace(value: string): string {
-  return value.trim().replace(/\s+/g, " ");
-}
-
-function normalizePath(rawPath: string): string {
-  return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
-}
+type SectionSummary = NonNullable<ReturnType<typeof summarizeSection>>;
 
 function stripMarkdown(text: string): string {
   return normalizeWhitespace(
     text
       .replace(/!\[[^\]]*]\([^)]*\)/g, "")
       .replace(/\[([^\]]+)]\([^)]*\)/g, "$1")
-      .replace(/[`*_~>#]/g, "")
-      .replace(/\s+/g, " "),
+      .replace(/[`*_~>#]/g, ""),
   );
 }
 
@@ -162,12 +126,9 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
     if (!current) {
       return;
     }
-    const meaningfulLines = current.lines.filter(
-      (entry) => normalizeWhitespace(entry.text).length > 0,
-    );
-    if (meaningfulLines.length > 0) {
-      const endLine = meaningfulLines[meaningfulLines.length - 1]?.line ?? current.endLine;
-      sections.push({ ...current, endLine, lines: meaningfulLines });
+    if (current.lines.length > 0) {
+      const endLine = current.lines[current.lines.length - 1]?.line ?? current.endLine;
+      sections.push({ ...current, endLine });
     }
     current = null;
   };
@@ -213,17 +174,14 @@ function parseMarkdownSections(content: string): ParsedMarkdownSection[] {
   return sections;
 }
 
-function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
-  const snippets: SectionSnippet[] = [];
+function sectionToSnippets(section: ParsedMarkdownSection): ParsedSectionLine[] {
+  const snippets: ParsedSectionLine[] = [];
   const seen = new Set<string>();
   for (const entry of section.lines) {
     const trimmed = entry.text.trim();
-    if (!trimmed) {
-      continue;
-    }
     const bulletMatch = trimmed.match(/^(?:[-*+]|\d+\.)\s+(?:\[[ xX]\]\s*)?(.*)$/);
     const candidateText = bulletMatch?.[1] ?? trimmed;
-    const text = normalizeWhitespace(stripMarkdown(candidateText));
+    const text = stripMarkdown(candidateText);
     if (text.length < 10) {
       continue;
     }
@@ -237,36 +195,18 @@ function sectionToSnippets(section: ParsedMarkdownSection): SectionSnippet[] {
   return snippets;
 }
 
-function countMatchingSnippets(snippets: SectionSnippet[], pattern: RegExp): number {
-  let count = 0;
-  for (const snippet of snippets) {
-    if (pattern.test(snippet.text)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]) {
+function scoreSection(section: ParsedMarkdownSection, snippets: ParsedSectionLine[]) {
   const title = section.title;
-  const titleBonus = (pattern: RegExp) => (pattern.test(title) ? 1 : 0);
-  const preference =
-    countMatchingSnippets(snippets, REM_MEMORY_SIGNAL_RE) + titleBonus(REM_MEMORY_SIGNAL_RE);
-  const build =
-    countMatchingSnippets(snippets, REM_BUILD_SIGNAL_RE) + titleBonus(REM_BUILD_SIGNAL_RE);
-  const incident =
-    countMatchingSnippets(snippets, REM_INCIDENT_SIGNAL_RE) + titleBonus(REM_INCIDENT_SIGNAL_RE);
-  const logistics =
-    countMatchingSnippets(snippets, REM_LOGISTICS_SIGNAL_RE) + titleBonus(REM_LOGISTICS_SIGNAL_RE);
-  const tasks =
-    countMatchingSnippets(snippets, REM_TASK_SIGNAL_RE) + titleBonus(REM_TASK_SIGNAL_RE);
-  const routing =
-    countMatchingSnippets(snippets, REM_ROUTING_SIGNAL_RE) + titleBonus(REM_ROUTING_SIGNAL_RE);
-  const externalization =
-    countMatchingSnippets(snippets, REM_EXTERNALIZATION_SIGNAL_RE) +
-    titleBonus(REM_EXTERNALIZATION_SIGNAL_RE);
-  const retries =
-    countMatchingSnippets(snippets, REM_RETRY_SIGNAL_RE) + titleBonus(REM_RETRY_SIGNAL_RE);
+  const score = (pattern: RegExp) =>
+    snippets.filter((snippet) => pattern.test(snippet.text)).length + Number(pattern.test(title));
+  const preference = score(REM_MEMORY_SIGNAL_RE);
+  const build = score(REM_BUILD_SIGNAL_RE);
+  const incident = score(REM_INCIDENT_SIGNAL_RE);
+  const logistics = score(REM_LOGISTICS_SIGNAL_RE);
+  const tasks = score(REM_TASK_SIGNAL_RE);
+  const routing = score(REM_ROUTING_SIGNAL_RE);
+  const externalization = score(REM_EXTERNALIZATION_SIGNAL_RE);
+  const retries = score(REM_RETRY_SIGNAL_RE);
   const overall =
     preference * 2 +
     build * 1.6 +
@@ -290,43 +230,32 @@ function scoreSection(section: ParsedMarkdownSection, snippets: SectionSnippet[]
 }
 
 function scoreSnippet(text: string, title: string): number {
-  let score = 1;
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.2;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score += 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_ROUTING_SIGNAL_RE.test(text)) {
-    score += 1.4;
-  }
-  if (REM_EXTERNALIZATION_SIGNAL_RE.test(text)) {
-    score += 1.1;
-  }
-  if (REM_RETRY_SIGNAL_RE.test(text)) {
-    score += 0.9;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (title && !REM_GENERIC_SECTION_RE.test(title)) {
-    score += 0.25;
-  }
-  return score;
+  return scoreSignals(
+    [
+      [REM_MEMORY_SIGNAL_RE.test(text), 2.2],
+      [REM_BUILD_SIGNAL_RE.test(text), 1.2],
+      [REM_INCIDENT_SIGNAL_RE.test(text), 1.2],
+      [REM_LOGISTICS_SIGNAL_RE.test(text), 0.9],
+      [REM_ROUTING_SIGNAL_RE.test(text), 1.4],
+      [REM_EXTERNALIZATION_SIGNAL_RE.test(text), 1.1],
+      [REM_RETRY_SIGNAL_RE.test(text), 0.9],
+      [REM_TASK_SIGNAL_RE.test(text) && !REM_BUILD_SIGNAL_RE.test(text), -0.8],
+      [Boolean(title) && !REM_GENERIC_SECTION_RE.test(title), 0.25],
+    ],
+    1,
+  );
+}
+
+function scoreSignals(signals: readonly (readonly [boolean, number])[], initial = 0): number {
+  return signals.reduce((score, [matches, weight]) => (matches ? score + weight : score), initial);
 }
 
 function chooseSummarySnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
+  snippets: ParsedSectionLine[],
+): ParsedSectionLine[] {
   const selectionLimit = REM_GENERIC_SECTION_RE.test(section.title) ? 2 : 3;
-  return [...snippets]
+  return snippets
     .toSorted((left, right) => {
       const scoreDelta =
         scoreSnippet(right.text, section.title) - scoreSnippet(left.text, section.title);
@@ -352,14 +281,8 @@ function joinSummaryParts(parts: string[]): string {
 function summarizeSection(
   pathValue: string,
   section: ParsedMarkdownSection,
-): SectionSummary | null {
-  if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-    return null;
-  }
-  const snippets = sectionToSnippets(section);
-  if (snippets.length === 0) {
-    return null;
-  }
+  snippets: ParsedSectionLine[],
+) {
   const selected = chooseSummarySnippets(section, snippets);
   if (selected.length === 0) {
     return null;
@@ -416,93 +339,52 @@ function isDurableSignalSnippet(text: string, title: string): boolean {
 }
 
 function scoreCandidateSnippet(text: string, title: string): number {
-  let score = 0;
-  if (REM_PERSISTENCE_SIGNAL_RE.test(text)) {
-    score += 3.2;
-  }
-  if (REM_MEMORY_SIGNAL_RE.test(text)) {
-    score += 2.4;
-  }
-  if (REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text)) {
-    score += 1.8;
-  }
-  if (REM_PERSON_PATTERN_SIGNAL_RE.test(text)) {
-    score += 2.3;
-  }
-  if (REM_OPERATOR_RULE_SIGNAL_RE.test(text)) {
-    score += 1.6;
-  }
-  if (REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score += 1.2;
-  }
-  if (REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score += 1.5;
-  }
-  if (REM_METADATA_HEAVY_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`)) {
-    score -= 2.2;
-  }
-  if (REM_PROCESS_FRAME_SIGNAL_RE.test(text)) {
-    score -= 2.4;
-  }
-  if (REM_TOOLING_META_SIGNAL_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 2.1;
-  }
-  if (REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 4.2;
-  }
-  if (REM_TRAVEL_DECISION_SIGNAL_RE.test(text)) {
-    score -= 2.6;
-  }
-  if (REM_SPECIFICITY_BURDEN_RE.test(text) && !REM_STABLE_PERSON_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_SITUATIONAL_SIGNAL_RE.test(text)) {
-    score -= 2.8;
-  }
-  if (REM_TRANSIENT_SIGNAL_RE.test(text)) {
-    score -= 2;
-  }
-  if (REM_INCIDENT_SIGNAL_RE.test(text)) {
-    score -= 1.6;
-  }
-  if (REM_TASK_SIGNAL_RE.test(text)) {
-    score -= 1.2;
-  }
-  if (REM_LOGISTICS_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 1.4;
-  }
-  if (REM_BUILD_SIGNAL_RE.test(text) && !REM_MEMORY_SIGNAL_RE.test(text)) {
-    score -= 0.8;
-  }
-  if (REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !REM_SECTION_PERSISTENCE_TITLE_RE.test(title)) {
-    score -= 1.2;
-  }
-  if (/[`/]/.test(text) || /https?:\/\//i.test(text)) {
-    score -= 0.8;
-  }
-  return score;
+  const memory = REM_MEMORY_SIGNAL_RE.test(text);
+  const stablePerson = REM_STABLE_PERSON_SIGNAL_RE.test(text);
+  const persistentTitle = REM_SECTION_PERSISTENCE_TITLE_RE.test(title);
+  return scoreSignals([
+    [REM_PERSISTENCE_SIGNAL_RE.test(text), 3.2],
+    [memory, 2.4],
+    [REM_EXPLICIT_PREFERENCE_SIGNAL_RE.test(text), 1.8],
+    [REM_PERSON_PATTERN_SIGNAL_RE.test(text), 2.3],
+    [REM_OPERATOR_RULE_SIGNAL_RE.test(text), 1.6],
+    [persistentTitle, 1.2],
+    [stablePerson, 1.5],
+    [REM_METADATA_HEAVY_SIGNAL_RE.test(text), -2.4],
+    [REM_PROJECT_META_SIGNAL_RE.test(`${title} ${text}`), -2.2],
+    [REM_PROCESS_FRAME_SIGNAL_RE.test(text), -2.4],
+    [REM_TOOLING_META_SIGNAL_RE.test(text) && !stablePerson, -2.1],
+    [REM_MONITORING_SIGNAL_RE.test(`${title} ${text}`) && !memory, -4.2],
+    [REM_TRAVEL_DECISION_SIGNAL_RE.test(text), -2.6],
+    [REM_SPECIFICITY_BURDEN_RE.test(text) && !stablePerson, -1.2],
+    [REM_SITUATIONAL_SIGNAL_RE.test(text), -2.8],
+    [REM_TRANSIENT_SIGNAL_RE.test(text), -2],
+    [REM_INCIDENT_SIGNAL_RE.test(text), -1.6],
+    [REM_TASK_SIGNAL_RE.test(text), -1.2],
+    [REM_LOGISTICS_SIGNAL_RE.test(text) && !memory, -1.4],
+    [REM_BUILD_SIGNAL_RE.test(text) && !memory, -0.8],
+    [REM_SECTION_TRANSIENT_TITLE_RE.test(title) && !persistentTitle, -1.2],
+    [/[`/]/.test(text) || /https?:\/\//i.test(text), -0.8],
+  ]);
 }
 
-function chooseFactSnippets(
+function chooseScoredSnippets(
   section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
-  return [...snippets]
+  snippets: ParsedSectionLine[],
+  scoreFor: (text: string, title: string) => number,
+  minimumScore: number,
+): ParsedSectionLine[] {
+  return snippets
     .map((snippet) => {
       const text = compactCandidateSnippetText(snippet.text, section.title);
-      const score =
-        scoreCandidateSnippet(text, section.title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0);
-      return { snippet: { ...snippet, text }, score };
+      return { snippet: { ...snippet, text }, score: scoreFor(text, section.title) };
     })
     .filter(
       (entry) =>
         !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
         isDurableSignalSnippet(entry.snippet.text, section.title),
     )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.4)
+    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= minimumScore)
     .toSorted((left, right) => {
       if (right.score !== left.score) {
         return right.score - left.score;
@@ -533,44 +415,6 @@ function buildFactText(title: string, text: string): string {
   return text;
 }
 
-function chooseCandidateSnippets(
-  section: ParsedMarkdownSection,
-  snippets: SectionSnippet[],
-): SectionSnippet[] {
-  return [...snippets]
-    .map((snippet) => {
-      const text = compactCandidateSnippetText(snippet.text, section.title);
-      const claimScores = atomizeClaimText(text).map((claim) =>
-        scoreCandidateSnippet(claim, section.title),
-      );
-      const score = Math.max(
-        scoreCandidateSnippet(text, section.title),
-        ...claimScores,
-        Number.NEGATIVE_INFINITY,
-      );
-      return { snippet: { ...snippet, text }, score };
-    })
-    .filter(
-      (entry) =>
-        !REM_MONITORING_SIGNAL_RE.test(`${section.title} ${entry.snippet.text}`) ||
-        isDurableSignalSnippet(entry.snippet.text, section.title),
-    )
-    .filter((entry) => entry.snippet.text.length >= 18 && entry.score >= 1.8)
-    .toSorted((left, right) => {
-      if (right.score !== left.score) {
-        return right.score - left.score;
-      }
-      return left.snippet.line - right.snippet.line;
-    })
-    .slice(0, 2)
-    .map((entry) => entry.snippet)
-    .toSorted((left, right) => left.line - right.line);
-}
-
-function buildCandidateSnippetText(title: string, text: string): string {
-  return buildFactText(title, text);
-}
-
 function findTopLevelDelimiter(text: string, delimiter: string): number {
   let roundDepth = 0;
   let squareDepth = 0;
@@ -591,11 +435,11 @@ function findTopLevelDelimiter(text: string, delimiter: string): number {
   return -1;
 }
 
-function splitTopLevelClauses(text: string, delimiter: string): string[] {
+function splitTopLevelClauses(text: string): string[] {
   const parts: string[] = [];
   let rest = text;
   while (rest.length > 0) {
-    const splitAt = findTopLevelDelimiter(rest, delimiter);
+    const splitAt = findTopLevelDelimiter(rest, ";");
     if (splitAt < 0) {
       parts.push(rest);
       break;
@@ -638,10 +482,7 @@ function atomizeClaimText(text: string): string[] {
   if (!normalized) {
     return [];
   }
-  const atomic = splitTopLevelClauses(normalized, ";")
-    .flatMap((part) => splitSubjectLeadClaim(part))
-    .map((part) => normalizeWhitespace(part))
-    .filter(Boolean);
+  const atomic = splitTopLevelClauses(normalized).flatMap(splitSubjectLeadClaim);
   return uniqueStrings(atomic).slice(0, 3);
 }
 
@@ -654,21 +495,6 @@ function classifyCandidateLeanFromText(text: string, title: string): GroundedRem
     return "likely_situational";
   }
   return "unclear";
-}
-
-function addReflection(
-  reflections: GroundedRemPreviewItem[],
-  seen: Set<string>,
-  text: string,
-  refs: string[],
-) {
-  const normalized = normalizeWhitespace(text);
-  const key = normalized.toLowerCase();
-  if (!normalized || seen.has(key)) {
-    return;
-  }
-  seen.add(key);
-  reflections.push({ text: normalized, refs });
 }
 
 function coalesceGroundedRemItems<T extends GroundedRemPreviewItem>(
@@ -718,7 +544,7 @@ export function previewGroundedRemForFile(params: {
   relPath: string;
   content: string;
   formatItem?: (line: string, refs: readonly string[]) => string;
-}): GroundedRemFilePreview {
+}) {
   const sections = parseMarkdownSections(params.content);
   const sectionScores = sections.map((section) => ({
     section,
@@ -727,27 +553,29 @@ export function previewGroundedRemForFile(params: {
   const monitoringSignal = sectionScores.reduce(
     (sum, { section, snippets }) =>
       sum +
-      countMatchingSnippets(snippets, REM_MONITORING_SIGNAL_RE) +
+      snippets.filter((snippet) => REM_MONITORING_SIGNAL_RE.test(snippet.text)).length +
       (REM_MONITORING_SIGNAL_RE.test(section.title) ? 1 : 0),
     0,
   );
-  const summaries = sectionScores
-    .map(({ section }) => summarizeSection(params.relPath, section))
+  const eligibleSections = sectionScores.filter(
+    ({ section, snippets }) => !REM_BLOCKED_SECTION_RE.test(section.title) && snippets.length > 0,
+  );
+  const summaries = eligibleSections
+    .map(({ section, snippets }) => summarizeSection(params.relPath, section, snippets))
     .filter((summary): summary is SectionSummary => summary !== null);
-  const factSummaries: FactSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseFactSnippets(section, snippets).map((snippet) => ({
+  const factSummaries: FactSnippetSummary[] = eligibleSections.flatMap(({ section, snippets }) =>
+    chooseScoredSnippets(
+      section,
+      snippets,
+      (text, title) =>
+        scoreCandidateSnippet(text, title) + (REM_MEMORY_SIGNAL_RE.test(text) ? 0.6 : 0),
+      1.4,
+    ).map((snippet) => ({
       text: buildFactText(section.title, snippet.text),
       refs: [makeRef(params.relPath, snippet.line)],
       score: scoreCandidateSnippet(snippet.text, section.title),
-    }));
-  });
+    })),
+  );
 
   const memoryImplications = coalesceGroundedRemItems(
     summaries
@@ -758,31 +586,30 @@ export function previewGroundedRemForFile(params: {
       })),
   ).slice(0, REM_SUMMARY_MEMORY_LIMIT);
 
-  const candidateSnippets: CandidateSnippetSummary[] = sections.flatMap((section) => {
-    if (REM_BLOCKED_SECTION_RE.test(section.title)) {
-      return [];
-    }
-    const snippets = sectionToSnippets(section);
-    if (snippets.length === 0) {
-      return [];
-    }
-    return chooseCandidateSnippets(section, snippets).flatMap((snippet) =>
-      atomizeClaimText(snippet.text)
-        .map((claim) => {
-          const score = scoreCandidateSnippet(claim, section.title);
-          const text = buildCandidateSnippetText(section.title, claim);
-          return {
-            text,
+  const candidateSnippets: CandidateSnippetSummary[] = eligibleSections.flatMap(
+    ({ section, snippets }) =>
+      chooseScoredSnippets(
+        section,
+        snippets,
+        (text, title) =>
+          Math.max(
+            scoreCandidateSnippet(text, title),
+            ...atomizeClaimText(text).map((claim) => scoreCandidateSnippet(claim, title)),
+          ),
+        1.8,
+      ).flatMap((snippet) =>
+        atomizeClaimText(snippet.text)
+          .map((claim) => ({
+            text: buildFactText(section.title, claim),
             refs: [makeRef(params.relPath, snippet.line)],
             lean: classifyCandidateLeanFromText(claim, section.title),
-            score,
-          };
-        })
-        .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
-    );
-  });
+            score: scoreCandidateSnippet(claim, section.title),
+          }))
+          .filter((candidate) => candidate.text.length >= 12 && candidate.score >= 1.8),
+      ),
+  );
 
-  const candidates = coalesceGroundedRemItems(
+  const candidates: GroundedRemCandidate[] = coalesceGroundedRemItems(
     candidateSnippets.toSorted((left, right) => {
       const leanRank = { likely_durable: 0, unclear: 1, likely_situational: 2 };
       const leanDelta = leanRank[left.lean] - leanRank[right.lean];
@@ -793,23 +620,17 @@ export function previewGroundedRemForFile(params: {
     }),
   ).slice(0, 4);
 
-  const durableImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
-
-  const candidateDrivenImplications = coalesceGroundedRemItems(
-    candidateSnippets.filter(
-      (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
-    ),
-  )
-    .toSorted((left, right) => right.score - left.score)
-    .slice(0, REM_SUMMARY_MEMORY_LIMIT)
-    .map((candidate) => ({ text: candidate.text, refs: candidate.refs }));
+  const selectImplications = (eligible: (candidate: CandidateSnippetSummary) => boolean) =>
+    coalesceGroundedRemItems(candidateSnippets.filter(eligible))
+      .toSorted((left, right) => right.score - left.score)
+      .slice(0, REM_SUMMARY_MEMORY_LIMIT)
+      .map(({ text, refs }) => ({ text, refs }));
+  const durableImplications = selectImplications(
+    (candidate) => candidate.lean === "likely_durable" || candidate.score >= 4,
+  );
+  const candidateDrivenImplications = selectImplications(
+    (candidate) => candidate.lean !== "likely_situational" && candidate.score >= 2.2,
+  );
 
   const effectiveMemoryImplications =
     durableImplications.length > 0
@@ -850,139 +671,81 @@ export function previewGroundedRemForFile(params: {
   }
 
   const reflections: GroundedRemPreviewItem[] = [];
-  const seenReflections = new Set<string>();
+  const addReflection = (eligible: boolean, text: string, refs: string[] | undefined) => {
+    if (eligible && refs?.length) {
+      reflections.push({ text, refs });
+    }
+  };
   const relationshipFacts = facts.filter((item) => REM_STABLE_PERSON_SIGNAL_RE.test(item.text));
   const multiRelationshipContext = relationshipFacts.length >= 2;
-  const buildSignal = summaries.reduce((sum, item) => sum + item.scores.build, 0);
-  const incidentSignal = summaries.reduce((sum, item) => sum + item.scores.incident, 0);
-  const logisticsSignal = summaries.reduce((sum, item) => sum + item.scores.logistics, 0);
-  const routingSignal = summaries.reduce((sum, item) => sum + item.scores.routing, 0);
-  const externalizationSignal = summaries.reduce(
-    (sum, item) => sum + item.scores.externalization,
-    0,
+  const operationalContext = !multiRelationshipContext && facts.length > 0;
+  const signalFor = (metric: keyof SectionSummary["scores"]) =>
+    summaries.reduce((sum, item) => sum + item.scores[metric], 0);
+  const buildSignal = signalFor("build");
+  const incidentSignal = signalFor("incident");
+  const strongestRefs = (predicate: (summary: SectionSummary) => boolean) =>
+    findStrongestSummary(summaries, predicate)?.refs;
+  const factRefs = (pattern: RegExp) =>
+    facts.filter((item) => pattern.test(item.text)).flatMap((item) => item.refs);
+  const wholeFileRefs = [
+    makeRef(
+      params.relPath,
+      sections[0]?.startLine ?? 1,
+      sections[sections.length - 1]?.endLine ?? 1,
+    ),
+  ];
+
+  addReflection(
+    facts.length === 0 && monitoringSignal >= 3,
+    "This day reads mostly as monitoring and operational state, not as durable memory. It should be treated as current-state exhaust unless a clearer rule or preference appears.",
+    wholeFileRefs,
   );
-  const retrySignal = summaries.reduce((sum, item) => sum + item.scores.retries, 0);
+  addReflection(
+    effectiveMemoryImplications.length > 0,
+    "A stable rule or preference was stated explicitly, which suggests operating choices are being made legible instead of left implicit.",
+    effectiveMemoryImplications.flatMap((item) => item.refs),
+  );
+  addReflection(
+    multiRelationshipContext,
+    "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
+    relationshipFacts.flatMap((item) => item.refs),
+  );
+  addReflection(
+    operationalContext && signalFor("routing") >= 2 && buildSignal >= incidentSignal,
+    "The strongest pattern here is a preference for converting messy inbound information into routed workflows with different downstream actions, instead of handling each case manually.",
+    strongestRefs(isRoutingSummary),
+  );
+  addReflection(
+    operationalContext && signalFor("externalization") >= 2,
+    "Important context tends to get externalized quickly into notes, trackers, or memory surfaces, which suggests a preference for explicit systems over holding context informally.",
+    strongestRefs((summary) => summary.scores.externalization > 0),
+  );
+  addReflection(
+    operationalContext && buildSignal >= 2,
+    "The day leaned toward building operator infrastructure, which suggests the interaction is often used to reshape the system around recurring needs rather than just complete isolated tasks.",
+    factRefs(REM_BUILD_SIGNAL_RE),
+  );
+  addReflection(
+    facts.length > 0 && incidentSignal >= 2,
+    signalFor("retries") >= 2
+      ? "When something breaks repeatedly, the response is systematic: retries, root-cause narrowing, and preserving enough state to resume once the blocker is fixed."
+      : "A meaningful share of the day went into friction, and the interaction pattern looks pragmatic rather than emotional: diagnose the blocker, preserve state, and move on.",
+    strongestRefs((summary) => summary.scores.incident > 0),
+  );
+  addReflection(
+    operationalContext && signalFor("logistics") >= 2,
+    "Personal logistics and operating-system work are being managed in the same surface, which suggests a preference for one integrated control plane rather than separate personal and technical loops.",
+    factRefs(REM_LOGISTICS_SIGNAL_RE),
+  );
   const taskSignal = sectionScores.reduce(
     (sum, { section, snippets }) => sum + scoreSection(section, snippets).tasks,
     0,
   );
-  const strongestRoutingSummary = findStrongestSummary(summaries, isRoutingSummary);
-  const strongestIncidentSummary = findStrongestSummary(
-    summaries,
-    (summary) => summary.scores.incident > 0,
+  addReflection(
+    taskSignal >= 3 && reflections.length === 0,
+    "The raw note is mostly task and current-state material, so it should not be over-read as memory.",
+    wholeFileRefs,
   );
-  const strongestExternalizationSummary = findStrongestSummary(
-    summaries,
-    (summary) => summary.scores.externalization > 0,
-  );
-
-  if (facts.length === 0 && monitoringSignal >= 3) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "This day reads mostly as monitoring and operational state, not as durable memory. It should be treated as current-state exhaust unless a clearer rule or preference appears.",
-      [
-        makeRef(
-          params.relPath,
-          sections[0]?.startLine ?? 1,
-          sections[sections.length - 1]?.endLine ?? 1,
-        ),
-      ],
-    );
-  }
-  if (effectiveMemoryImplications.length > 0) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "A stable rule or preference was stated explicitly, which suggests operating choices are being made legible instead of left implicit.",
-      effectiveMemoryImplications.flatMap((item) => item.refs),
-    );
-  }
-  if (multiRelationshipContext) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "More than one active relationship thread appears in the same day, which means person-memory matters operationally: who each person is should be kept separate from the transient date or venue details attached to them.",
-      relationshipFacts.flatMap((item) => item.refs),
-    );
-  }
-  if (
-    !multiRelationshipContext &&
-    facts.length > 0 &&
-    routingSignal >= 2 &&
-    strongestRoutingSummary &&
-    buildSignal >= incidentSignal
-  ) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "The strongest pattern here is a preference for converting messy inbound information into routed workflows with different downstream actions, instead of handling each case manually.",
-      strongestRoutingSummary.refs,
-    );
-  }
-  if (
-    !multiRelationshipContext &&
-    facts.length > 0 &&
-    externalizationSignal >= 2 &&
-    strongestExternalizationSummary
-  ) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "Important context tends to get externalized quickly into notes, trackers, or memory surfaces, which suggests a preference for explicit systems over holding context informally.",
-      strongestExternalizationSummary.refs,
-    );
-  }
-  if (!multiRelationshipContext && facts.length > 0 && buildSignal >= 2) {
-    const buildRefs = facts
-      .filter((item) => REM_BUILD_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs);
-    if (buildRefs.length > 0) {
-      addReflection(
-        reflections,
-        seenReflections,
-        "The day leaned toward building operator infrastructure, which suggests the interaction is often used to reshape the system around recurring needs rather than just complete isolated tasks.",
-        buildRefs,
-      );
-    }
-  }
-  if (facts.length > 0 && incidentSignal >= 2 && strongestIncidentSummary) {
-    addReflection(
-      reflections,
-      seenReflections,
-      retrySignal >= 2
-        ? "When something breaks repeatedly, the response is systematic: retries, root-cause narrowing, and preserving enough state to resume once the blocker is fixed."
-        : "A meaningful share of the day went into friction, and the interaction pattern looks pragmatic rather than emotional: diagnose the blocker, preserve state, and move on.",
-      strongestIncidentSummary.refs,
-    );
-  }
-  if (!multiRelationshipContext && facts.length > 0 && logisticsSignal >= 2) {
-    const logisticsRefs = facts
-      .filter((item) => REM_LOGISTICS_SIGNAL_RE.test(item.text))
-      .flatMap((item) => item.refs);
-    if (logisticsRefs.length > 0) {
-      addReflection(
-        reflections,
-        seenReflections,
-        "Personal logistics and operating-system work are being managed in the same surface, which suggests a preference for one integrated control plane rather than separate personal and technical loops.",
-        logisticsRefs,
-      );
-    }
-  }
-  if (taskSignal >= 3 && reflections.length === 0) {
-    addReflection(
-      reflections,
-      seenReflections,
-      "The raw note is mostly task and current-state material, so it should not be over-read as memory.",
-      [
-        makeRef(
-          params.relPath,
-          sections[0]?.startLine ?? 1,
-          sections[sections.length - 1]?.endLine ?? 1,
-        ),
-      ],
-    );
-  }
 
   const reflectionLimit =
     facts.length === 0
@@ -1037,13 +800,13 @@ export function previewGroundedRemForFile(params: {
 export async function previewGroundedRemMarkdown(params: {
   workspaceDir: string;
   inputPaths: string[];
-}): Promise<GroundedRemPreviewResult> {
+}) {
   const workspaceDir = params.workspaceDir.trim();
   const files = await collectMarkdownFiles(workspaceDir, params.inputPaths);
   const previews: GroundedRemFilePreview[] = [];
   for (const filePath of files) {
     const content = await readWorkspaceText(workspaceDir, filePath);
-    const relPath = normalizePath(path.relative(workspaceDir, filePath));
+    const relPath = normalizeMemoryPath(path.relative(workspaceDir, filePath));
     previews.push(previewGroundedRemForFile({ relPath, content }));
   }
   return {

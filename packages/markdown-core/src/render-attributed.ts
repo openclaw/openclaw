@@ -29,7 +29,7 @@ export function renderMarkdownWithAttributedRanges<TStyle extends string>(
   profile?: FormatCapabilityProfile,
 ): { text: string; ranges: AttributedRange<TStyle>[] } {
   const projected = profile ? applyConstructFallbacks(ir, profile) : ir;
-  const text = projected.text ?? "";
+  const text = projected.text;
   const insertions: Array<{ pos: number; length: number }> = [];
   let rendered = text;
   if (options.renderLink) {

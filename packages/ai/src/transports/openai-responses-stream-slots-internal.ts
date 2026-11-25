@@ -1,5 +1,6 @@
 import type { ResponseReasoningItem } from "openai/resources/responses/responses.js";
 import type { AssistantMessage, TextContent } from "../types.js";
+import { isResponsesTerminalEventType } from "./openai-responses-contracts.js";
 import {
   isResponsesProviderTool,
   ResponsesOutputIdentityError,
@@ -10,6 +11,7 @@ import type {
   TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
+import { detachPartialSnapshot } from "./openai-transport-shared.js";
 
 export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
   | {
@@ -30,11 +32,6 @@ export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
     }
   | { type: "toolCall"; toolCall: TToolCall };
 
-type DeferredTextSlot = {
-  pendingText: string | null;
-  collapseCandidate: { block: { text: string } } | null;
-};
-
 type ResponsesOutputIdentityItem = {
   type: string;
   id?: string | null;
@@ -47,9 +44,13 @@ type ResponsesOutputState = {
   outputIndex?: number;
   contentIndex: number;
   completed: boolean;
+  completedProse?: string;
 };
 
 export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
+
+// Long hidden reasoning may emit only bookkeeping; Codex treats every SSE event as liveness.
+export const RESPONSES_BOOKKEEPING_TIMEOUT_MS = 15 * 60_000;
 
 export function createResponsesOutputTracker(params: {
   output: Pick<AssistantMessage, "content">;
@@ -67,7 +68,7 @@ export function createResponsesOutputTracker(params: {
     const callId = item.call_id ?? item.id;
     return item.type === "function_call" && callId ? `function_call:${callId}` : undefined;
   };
-  const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
+  const peek = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
     const key = identity(item);
     const output =
       (outputIndex === undefined ? undefined : outputs.get(outputIndex)) ??
@@ -78,6 +79,13 @@ export function createResponsesOutputTracker(params: {
         output.outputIndex !== undefined &&
         output.outputIndex !== outputIndex)
     ) {
+      return undefined;
+    }
+    return output;
+  };
+  const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
+    const output = peek(item, outputIndex);
+    if (!output) {
       return undefined;
     }
     if (
@@ -111,11 +119,14 @@ export function createResponsesOutputTracker(params: {
           visibleTextEmitted ||=
             (event.type === "text_delta" && event.delta.length > 0) ||
             (event.type === "text_end" && event.content.length > 0);
-          sink.push(event);
+          sink.push(detachPartialSnapshot(event));
         },
       };
     },
-    observeEvent(event: OpenAIResponsesStreamEvent): void {
+    observeEvent(
+      event: OpenAIResponsesStreamEvent,
+      outputSlots: Pick<ReturnType<typeof createResponsesOutputSlotTracker>, "resolveOutputItem">,
+    ): boolean {
       currentEventType = event.type;
       // An earlier conflict cannot establish whether a later terminal will reject the response.
       terminalAllowsRetry = false;
@@ -138,6 +149,24 @@ export function createResponsesOutputTracker(params: {
           event.response.incomplete_details == null &&
           !terminalHasRefusal;
       }
+      // Physical activity always preserves liveness; only advancing output
+      // resets progress. Peek must not preempt the reducer's identity validators.
+      if (event.type.endsWith(".delta") && "delta" in event) {
+        return typeof event.delta === "string" && event.delta.length > 0;
+      }
+      if (
+        (event.type === "response.output_item.added" ||
+          event.type === "response.output_item.done") &&
+        (event.item.type === "reasoning" ||
+          event.item.type === "message" ||
+          event.item.type === "function_call")
+      ) {
+        const previous = peek(event.item, readResponsesOutputIndex(event));
+        return event.type === "response.output_item.added"
+          ? previous === undefined && !outputSlots.resolveOutputItem(event, event.item)
+          : previous?.completed !== true;
+      }
+      return isResponsesTerminalEventType(event.type);
     },
     get,
     set(
@@ -145,6 +174,7 @@ export function createResponsesOutputTracker(params: {
       contentIndex: number,
       outputIndex?: number,
       completed = false,
+      completedProse?: string,
     ): void {
       const output: ResponsesOutputState = get(item, outputIndex) ?? {
         type: item.type,
@@ -152,6 +182,10 @@ export function createResponsesOutputTracker(params: {
         completed,
       };
       Object.assign(output, { contentIndex, completed });
+      if (completedProse !== undefined) {
+        // Collapsed message items share a public block, not their completed prose.
+        output.completedProse = completedProse;
+      }
       if (item.call_id) {
         output.callId = item.call_id;
       }
@@ -169,14 +203,20 @@ export function createResponsesOutputTracker(params: {
   };
 }
 
-export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
-  slot: TSlot,
-  delta: string,
-  materialize: (slot: TSlot) => void,
-): void {
+export function appendResponsesPendingTextDelta<
+  TSlot extends {
+    pendingText: string | null;
+    collapseCandidate: { rendered: { prose: string } } | null;
+  },
+>(slot: TSlot, delta: string, materialize: (slot: TSlot) => void): void {
+  const offset = slot.pendingText?.length ?? 0;
   slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
-  const priorText = slot.collapseCandidate?.block.text ?? "";
-  if (priorText.startsWith(slot.pendingText) || slot.pendingText.startsWith(priorText)) {
+  const priorText = slot.collapseCandidate?.rendered.prose ?? "";
+  // Earlier deltas already matched; only compare the new overlap with the prior item.
+  if (
+    offset >= priorText.length ||
+    priorText.startsWith(delta.slice(0, priorText.length - offset), offset)
+  ) {
     return;
   }
   // Divergence means this is a distinct message; materialize its withheld delta.
@@ -191,38 +231,33 @@ export function readResponsesOutputIndex(event: object): number | undefined {
 }
 
 export function createResponsesOutputSlotTracker<TSlot extends { type: string }>() {
-  const indexed = new Map<number, TSlot>();
-  let unindexed: TSlot | undefined;
+  const slots = new Map<number | undefined, TSlot>();
   return {
     register(event: object, slot: TSlot): void {
       const outputIndex = readResponsesOutputIndex(event);
-      if (outputIndex === undefined) {
-        if (unindexed) {
-          throw new Error("Responses stream added overlapping unindexed output items");
-        }
-        unindexed = slot;
-        return;
+      if (slots.has(outputIndex)) {
+        throw new Error(
+          outputIndex === undefined
+            ? "Responses stream added overlapping unindexed output items"
+            : `Responses stream reused active output index ${outputIndex}`,
+        );
       }
-      if (indexed.has(outputIndex)) {
-        throw new Error(`Responses stream reused active output index ${outputIndex}`);
-      }
-      indexed.set(outputIndex, slot);
+      slots.set(outputIndex, slot);
     },
     resolve<TType extends TSlot["type"]>(
       event: object,
       type: TType,
     ): Extract<TSlot, { type: TType }> | undefined {
       const outputIndex = readResponsesOutputIndex(event);
-      let slot = outputIndex === undefined ? unindexed : indexed.get(outputIndex);
+      let slot = slots.get(outputIndex);
       if (outputIndex === undefined && !slot) {
-        const matches = [...indexed.values()].filter((candidate) => candidate.type === type);
+        const matches = [...slots.values()].filter((candidate) => candidate.type === type);
         slot = matches.length === 1 ? matches[0] : undefined;
       }
       return slot?.type === type ? (slot as Extract<TSlot, { type: TType }>) : undefined;
     },
     get(event: object): TSlot | undefined {
-      const outputIndex = readResponsesOutputIndex(event);
-      return outputIndex === undefined ? unindexed : indexed.get(outputIndex);
+      return slots.get(readResponsesOutputIndex(event));
     },
     resolveOutputItem(event: object, item: { type: string }): TSlot | undefined {
       if (item.type === "reasoning") {
@@ -234,15 +269,15 @@ export function createResponsesOutputSlotTracker<TSlot extends { type: string }>
       return readResponsesOutputIndex(event) === undefined ? undefined : this.get(event);
     },
     values(): TSlot[] {
-      return [...new Set([...indexed.values(), ...(unindexed ? [unindexed] : [])])];
+      // Unindexed slots follow indexed slots regardless of admission order.
+      const indexed = [...slots].filter(([index]) => index !== undefined).map(([, slot]) => slot);
+      const unindexed = slots.get(undefined);
+      return [...new Set([...indexed, ...(unindexed ? [unindexed] : [])])];
     },
     forget(slot: TSlot): void {
-      if (unindexed === slot) {
-        unindexed = undefined;
-      }
-      for (const [outputIndex, candidate] of indexed) {
+      for (const [outputIndex, candidate] of slots) {
         if (candidate === slot) {
-          indexed.delete(outputIndex);
+          slots.delete(outputIndex);
         }
       }
     },

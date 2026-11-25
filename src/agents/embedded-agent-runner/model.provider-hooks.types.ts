@@ -14,16 +14,10 @@ export type ProviderRuntimeHooks = {
   applyProviderResolvedTransportWithPlugin?: (
     params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
   ) => unknown;
-  buildProviderUnknownModelHintWithPlugin: (
-    params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
-  ) => string | undefined;
-  prepareProviderDynamicModel: (
-    params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => ReturnType<typeof prepareProviderDynamicModel>;
+  buildProviderUnknownModelHintWithPlugin: typeof buildProviderUnknownModelHintWithPlugin;
+  prepareProviderDynamicModel: typeof prepareProviderDynamicModel;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
-  shouldPreferProviderRuntimeResolvedModel?: (
-    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
-  ) => boolean;
+  shouldPreferProviderRuntimeResolvedModel?: typeof shouldPreferProviderRuntimeResolvedModel;
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;

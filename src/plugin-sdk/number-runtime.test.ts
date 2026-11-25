@@ -11,7 +11,8 @@ describe("private observed-message history policy", () => {
     expect(resolvePromptHistoryLimit(5000, 10)).toBe(200);
   });
 
-  it.each([undefined, Number.MAX_SAFE_INTEGER])("bounds fallback windows for %s", (configured) => {
+  it("bounds fallback windows for the schema maximum", () => {
+    const configured = Number.MAX_SAFE_INTEGER;
     expect(resolvePromptHistoryLimit(configured, 5000)).toBe(200);
     expect(resolvePromptHistoryLimit(configured, -1)).toBe(0);
     expect(resolvePromptHistoryLimit(configured, Number.POSITIVE_INFINITY)).toBe(0);

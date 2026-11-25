@@ -1,28 +1,25 @@
 import { isKnownTransportErrorCode } from "../shared/assistant-error-format.js";
 
-function pathEndsWith(path: readonly string[], suffix: readonly string[]): boolean {
-  if (path.length < suffix.length) {
-    return false;
-  }
-  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
-}
-
+/** `objectPath` is false once an array is on the path: only object cause chains keep transport codes. */
 export function shouldRedactStructuredAuthorizationCode(
   normalizedKey: string,
   path: readonly string[],
-  transportCode?: string,
+  value?: string,
+  objectPath = true,
 ): boolean {
   if (normalizedKey !== "code") {
     return false;
   }
+  const transportCode = objectPath ? value : undefined;
   const normalizedPath = path.map((part) => part.toLowerCase());
+  // A tool call's multi-word `code` argument is source, such as a Code Mode script.
+  if (normalizedPath.at(-2) === "arguments" && value !== undefined && /\s/u.test(value)) {
+    return false;
+  }
   if (
     normalizedPath.length === 1 ||
-    pathEndsWith(normalizedPath, ["error", "code"]) ||
-    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
-    pathEndsWith(normalizedPath, ["status", "code"]) ||
-    pathEndsWith(normalizedPath, ["details", "code"]) ||
-    pathEndsWith(normalizedPath, ["warnings", "code"])
+    (normalizedPath.at(-1) === "code" &&
+      ["error", "nodeerror", "status", "details", "warnings"].includes(normalizedPath.at(-2) ?? ""))
   ) {
     return false;
   }

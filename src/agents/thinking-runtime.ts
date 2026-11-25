@@ -36,19 +36,6 @@ export function hasResolvedThinkingCatalogEntry(params: {
   );
 }
 
-/** Native runtimes resolve their own observations; host turns cannot borrow native-only facts. */
-export function needsThinkHydration(
-  catalog: readonly ThinkingCatalogEntry[] | undefined,
-  provider: string,
-  model: string,
-  agentRuntime: string,
-): boolean {
-  return (
-    agentRuntime !== "openclaw" ||
-    !hasResolvedThinkingCatalogEntry({ catalog, provider, model, agentRuntime })
-  );
-}
-
 export function normalizeThinkingCatalogProviders<T extends ThinkingCatalogEntry>(
   catalog: readonly T[],
 ): T[] {
@@ -63,7 +50,7 @@ export function concretizeAgentRuntime(runtime: string): string {
   return runtime === "auto" ? "openclaw" : runtime;
 }
 
-/** Resolves an explicit session override before configured model/provider policy. */
+/** Resolves session and configured runtime policy, retaining placement for implicit selection. */
 export function resolveEffectiveAgentRuntime(
   params: {
     cfg: OpenClawConfig;
@@ -71,10 +58,14 @@ export function resolveEffectiveAgentRuntime(
     modelId: string;
     modelApi?: string | null;
     modelBaseUrl?: unknown;
+    /** Existing placement owns runtime selection only when policy is implicit. */
+    placementRuntime?: string;
     sessionEntry?: Pick<
       SessionEntry,
       "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked"
     >;
+    /** Execution applies the implicit-runtime fallback that a turn would take. */
+    mode?: "execution" | "projection";
   } & AgentRuntimePolicyScope,
 ): string {
   const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
@@ -82,9 +73,9 @@ export function resolveEffectiveAgentRuntime(
     entry: params.sessionEntry,
     cfg: params.cfg,
   });
-  const runtime = resolveAvailableAgentHarnessPolicy({
+  const policy = resolveAvailableAgentHarnessPolicy({
     ...params,
-    mode: "projection",
+    mode: params.mode ?? "projection",
     config: params.cfg,
     modelProvider: {
       api: params.modelApi ?? undefined,
@@ -92,7 +83,11 @@ export function resolveEffectiveAgentRuntime(
     },
     agentHarnessId: params.sessionEntry?.modelSelectionLocked ? sessionRuntime : undefined,
     agentHarnessRuntimeOverride: sessionRuntime,
-  }).runtime;
+  });
+  const runtime =
+    policy.runtimeSource === "implicit"
+      ? (params.placementRuntime ?? policy.runtime)
+      : policy.runtime;
   if (runtime === "auto") {
     // Reuse the loaded harness registry without triggering plugin discovery.
     // This keeps thinking policy aligned with the harness that would own the turn.
@@ -110,39 +105,46 @@ export function resolveEffectiveAgentRuntime(
   return concretizeAgentRuntime(runtime);
 }
 
-/** Revalidates a turn-local thinking level after fallback selects its actual model/runtime. */
-export function resolveCandidateThinkingLevel(params: {
+/** Resolves the concrete runtime that owns a candidate turn; a concrete caller selection wins. */
+export function resolveCandidateAgentRuntime(params: {
   cfg?: OpenClawConfig;
   provider: string;
   modelId: string;
-  level?: ThinkLevel;
-  catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
   /** Concrete harness already selected by the caller, when selection is pinned. */
   agentRuntime?: string | null;
-}): ThinkLevel | undefined {
+}): string {
+  const concreteRuntime = params.agentRuntime?.trim().toLowerCase();
+  if (concreteRuntime && concreteRuntime !== "auto" && concreteRuntime !== "default") {
+    return concreteRuntime;
+  }
+  return resolveEffectiveAgentRuntime({
+    cfg: params.cfg ?? {},
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+  });
+}
+
+/** Revalidates a turn-local thinking level after fallback selects its actual model/runtime. */
+export function resolveCandidateThinkingLevel(
+  params: Parameters<typeof resolveCandidateAgentRuntime>[0] & {
+    level?: ThinkLevel;
+    catalog?: ThinkingCatalogEntry[];
+  },
+): ThinkLevel | undefined {
   if (!params.level) {
     return undefined;
   }
-  const concreteRuntime = params.agentRuntime?.trim().toLowerCase();
-  const agentRuntime =
-    concreteRuntime && concreteRuntime !== "auto" && concreteRuntime !== "default"
-      ? concreteRuntime
-      : resolveEffectiveAgentRuntime({
-          cfg: params.cfg ?? {},
-          provider: params.provider,
-          modelId: params.modelId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionEntry: params.sessionEntry,
-        });
   return resolveSupportedThinkingLevel({
     provider: params.provider,
     model: params.modelId,
     level: params.level,
     catalog: params.catalog,
-    agentRuntime,
+    agentRuntime: resolveCandidateAgentRuntime(params),
   });
 }

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import {
   executeSqliteQuerySync,
@@ -10,6 +9,7 @@ import {
   legacyAcpMigrationSourceSchema,
   type LegacyAcpMigrationSource,
 } from "../../infra/legacy-acp-migration-source.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
@@ -27,7 +27,7 @@ import type { SessionEntry } from "./types.js";
 
 const sourcesSchema = z.array(legacyAcpMigrationSourceSchema);
 
-function readSources(database: DatabaseSync, sessionKey: string): LegacyAcpMigrationSource[] {
+function readSources(database: EngineConnection, sessionKey: string): LegacyAcpMigrationSource[] {
   if (!hasLegacyAcpMigrationProvenanceColumn(database)) {
     return [];
   }
@@ -43,22 +43,31 @@ function readSources(database: DatabaseSync, sessionKey: string): LegacyAcpMigra
     : [];
 }
 
+export function readLegacyAcpMigrationContextInDatabase(
+  database: Parameters<typeof readExactSessionEntryRowValidated>[0],
+  sessionKey: string,
+) {
+  const selected = readExactSessionEntryRowValidated(database, sessionKey);
+  return {
+    entry: selected?.entry,
+    sources: selected?.row.legacy_acp_migration_json
+      ? sourcesSchema.parse(JSON.parse(selected.row.legacy_acp_migration_json))
+      : [],
+  };
+}
+
+/** Native ACP maintenance and offline import; runtime reads use the source worker. */
 export function readLegacyAcpMigrationContext(scope: SessionEntryReadScope) {
   const resolved = resolveSqliteScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const selected = readExactSessionEntryRowValidated(database, resolved.sessionKey);
-    return {
-      entry: selected?.entry,
-      sources: selected?.row.legacy_acp_migration_json
-        ? sourcesSchema.parse(JSON.parse(selected.row.legacy_acp_migration_json))
-        : [],
-    };
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readLegacyAcpMigrationContextInDatabase(database, resolved.sessionKey),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : { entry: undefined, sources: [] };
 }
 
 function writeSources(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   sources: LegacyAcpMigrationSource[],
 ): void {
@@ -74,7 +83,7 @@ function writeSources(
 
 /** Repair retries may carry the same source again, but cannot restamp its consumed identity. */
 export function recordLegacyAcpMigrationSources(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   sources: readonly LegacyAcpMigrationSource[],
 ): void {
@@ -100,16 +109,50 @@ export function recordLegacyAcpMigrationSources(
   writeSources(database, sessionKey, [...merged.values()]);
 }
 
-export function retainLegacyAcpMigrationSourcesForEntry(
-  database: DatabaseSync,
-  sessionKey: string,
+/** The entry writer persists this projection together with its new lifecycle. */
+function retainLegacyAcpMigrationSourcesJson(
+  value: string | null | undefined,
   entry: SessionEntry | undefined,
-): void {
-  const sources = readSources(database, sessionKey);
-  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
-  if (retained.length !== sources.length) {
-    writeSources(database, sessionKey, retained);
+): string | null {
+  if (!value) {
+    return null;
   }
+  const sources = sourcesSchema.parse(JSON.parse(value));
+  const retained = sources.filter((source) => legacyAcpMigrationBindingMatches(source, entry));
+  return retained.length === sources.length
+    ? value
+    : retained.length
+      ? JSON.stringify(retained)
+      : null;
+}
+
+export function prepareLegacyAcpMigrationSourcesForEntryWrite(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+  previousEntry: SessionEntry | undefined,
+  previousRow: { legacy_acp_migration_json?: string | null } | undefined,
+): { legacy_acp_migration_json?: string | null } {
+  if (
+    !previousEntry ||
+    (previousEntry.sessionId === entry.sessionId &&
+      previousEntry.lifecycleRevision === entry.lifecycleRevision) ||
+    !hasLegacyAcpMigrationProvenanceColumn(database.db)
+  ) {
+    return {};
+  }
+  // Full snapshots carry provenance; partial legacy snapshots need one column read.
+  const value =
+    previousRow && "legacy_acp_migration_json" in previousRow
+      ? previousRow.legacy_acp_migration_json
+      : executeSqliteQueryTakeFirstSync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_nodes")
+            .select("legacy_acp_migration_json")
+            .where("session_key", "=", sessionKey),
+        )?.legacy_acp_migration_json;
+  return { legacy_acp_migration_json: retainLegacyAcpMigrationSourcesJson(value, entry) };
 }
 
 export function copyLegacyAcpMigrationSourcesForRepair(

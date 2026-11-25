@@ -15,14 +15,17 @@ export type CurrentConversationBindingTouch = {
   };
 };
 
-export type CurrentConversationBindingWorkerOperations = {
-  "conversationBindings.readSelection": {
-    input: readonly ConversationRef[];
-    output: ReadonlyArray<SessionBindingRecord | null>;
-  };
-  "conversationBindings.resolve": { input: ConversationRef; output: SessionBindingRecord | null };
-  "conversationBindings.touch": {
-    input: CurrentConversationBindingTouch;
-    output: SessionBindingRecord | null;
-  };
+export type CurrentConversationBindingBind = {
+  record: SessionBindingRecord;
+  metadataKeys?: string[];
+  accountPolicy?: { inferredAgentId: string | undefined };
+  expected?: SessionBindingRecord | null;
 };
+
+export type CurrentConversationBindingRemove =
+  | { conversation: ConversationRef; bindingId?: string; expected?: SessionBindingRecord | null }
+  | {
+      targetSessionKey: string;
+      scope?: { channel: string; accountId: string };
+      genericOnly: boolean;
+    };

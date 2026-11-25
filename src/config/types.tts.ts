@@ -1,4 +1,3 @@
-// Defines text-to-speech configuration types from the canonical authoring schema.
 import type { z } from "zod";
 import type { TtsConfigSchema } from "./zod-schema.core.js";
 

@@ -1,11 +1,38 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
-import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
-import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
+import {
+  summarizeUpdateStepFailure,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
+
+function diagnosticStepKey(kind: string, name: string, index: number): string {
+  return truncateUtf16Safe(
+    `${kind}:${name}${index === 0 ? "" : `:${index + 1}`}`,
+    UPDATE_RUN_TEXT_LIMIT,
+  );
+}
+
+/** Preserve the failed outcome without attaching command or working-directory metadata. */
+export function createUpdateStepFailureError(step: ResultStep): Error {
+  return new Error(summarizeUpdateStepFailure(step), {
+    cause: {
+      exitCode: step.exitCode,
+      stderrTail: step.stderrTail,
+      failureFacts: step.failureFacts,
+      signal: step.signal,
+      killed: step.killed,
+      outputLimitExceeded: step.outputLimitExceeded,
+      termination: step.termination,
+      snapshotCapacity: step.snapshotCapacity,
+    },
+  });
+}
 
 /** Physical process success does not erase a failed inspection or incomplete termination. */
 export function isFailedUpdateStep(
@@ -32,6 +59,14 @@ export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolea
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
+export function isUpdatePostInstallVerificationDeferred(step: ResultStep): boolean {
+  return (
+    step.name === "post-install-verify" &&
+    step.exitCode === null &&
+    step.advisory?.kind === "recoverable-maintenance"
+  );
+}
+
 /** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
@@ -49,31 +84,37 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
     ? {
         ...capacity,
         candidates: capacity.candidates.slice(0, 3).map((candidate) => {
-          const copied: UpdateSnapshotCapacity["candidates"][number] = {
+          const projected: (typeof capacity.candidates)[number] = {
             kind: candidate.kind,
             availableBytes: candidate.availableBytes,
             directory: text(candidate.directory),
           };
           if (candidate.allocationError) {
-            copied.allocationError = text(candidate.allocationError);
+            projected.allocationError = text(candidate.allocationError);
           }
-          return copied;
+          return projected;
         }),
         selection: capacity.selection
           ? { ...capacity.selection, directory: text(capacity.selection.directory) }
           : null,
       }
     : undefined;
-  const warnings = step.warnings?.length
-    ? step.warnings
-    : step.advisory
-      ? [step.advisory.message]
-      : [];
+  // An explicit empty list records settled warnings without regrading the
+  // original advisory exit as a failure or recreating its warning from display text.
+  const warnings = step.warnings ?? (step.advisory ? [step.advisory.message] : []);
   return [
     {
       step: text(step.name),
       status: failed ? "failed" : "completed",
       exitCode: step.exitCode,
+      termination: step.termination,
+      signal: step.signal,
+      stderrTail:
+        failed &&
+        (step.termination === "signal" || step.name === "candidate-state-snapshot") &&
+        step.stderrTail
+          ? truncateUtf16Safe(step.stderrTail, 8192)
+          : undefined,
       // A completed retry replaces diagnostics from the previous attempt with the same ID.
       failureFacts:
         step.failureFacts?.length && !step.advisory ? step.failureFacts.slice(0, 5) : undefined,
@@ -98,7 +139,7 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       { kind: "diagnostic", messages: step.diagnostics ?? [] },
     ].flatMap(({ kind, messages }) =>
       messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        step: diagnosticStepKey(kind, step.name, index),
         status: "completed" as const,
         detail: text(detail),
       })),
@@ -118,14 +159,45 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
+/** Project current warnings and late diagnostics without reopening or regrading history. */
+export function projectUpdateRunResultSteps<T extends Pick<UpdateRunRecord, "steps">>(
+  record: T,
+  additionalSteps: readonly UpdateStepResult[],
+): T {
+  if (additionalSteps.length === 0) {
+    return record;
+  }
+  const steps = new Map(record.steps.map((step) => [step.step, step]));
+  for (const step of additionalSteps) {
+    if (step.warnings !== undefined) {
+      // Explicit warnings replace the owner's previous list, including settlement.
+      // Match generated keys exactly; a prefix can include another step's warnings.
+      for (let index = 0; index < UPDATE_RUN_DIAGNOSTIC_LIMIT; index++) {
+        steps.delete(diagnosticStepKey("warning", step.name, index));
+      }
+    }
+    for (const projected of updateRunStepsFromResultStep(step)) {
+      steps.set(projected.step, projected);
+    }
+  }
+  return {
+    ...record,
+    steps: [...steps.values()],
+  };
+}
+
 export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
-    (step.step === "reconcile:settle" ||
-      (step.status === "completed" && step.step.startsWith("warning:"))) &&
-    step.detail
-      ? [step.detail]
-      : [],
-  );
+  return [
+    ...new Set(
+      steps.flatMap((step) =>
+        (step.step === "reconcile:settle" ||
+          (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        step.detail
+          ? [step.detail]
+          : [],
+      ),
+    ),
+  ];
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

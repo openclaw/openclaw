@@ -7,6 +7,7 @@ import type {
   WorkerEnvironmentBootstrapReceipt,
   WorkerEnvironmentRecord,
 } from "./environment-record.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import type { WorkerEnvironmentState } from "./state.js";
 
 export type WorkerEnvironmentTransitionPatch = {
@@ -47,7 +48,11 @@ export type BootstrapRefreshInput = {
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt;
   assertCurrent: () => void;
 } & (
-  | { expectedState: "attached"; expectedPlacementGeneration: number }
+  | {
+      expectedState: "attached";
+      expectedPlacementGeneration: number;
+      expectedReclaimResult?: WorkerWorkspacePendingResult;
+    }
   | { expectedState: "ready" | "idle"; expectedPlacementGeneration?: never }
 );
 export type WorkerEnvironmentPruneInput = {

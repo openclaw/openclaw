@@ -41,8 +41,7 @@ function flushOutput(): void {
   if (stopped || outputInFlight || output.length === 0) {
     return;
   }
-  const audio = Buffer.alloc(output.length);
-  output.readInto(audio);
+  const audio = output.take();
   outputInFlight = true;
   post({ type: "audio", audio, generation: outputGeneration }, [audio.buffer]);
 }

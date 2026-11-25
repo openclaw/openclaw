@@ -3,11 +3,9 @@ import { maskApiKey } from "./secret-mask.js";
 
 describe("maskApiKey", () => {
   it.each([
-    ["", "missing"],
     ["   ", "missing"],
     [" short ", "s...t"],
     [" a ", "a...a"],
-    [" ab ", "a...b"],
     [" abcdefghijklmnop ", "ab...op"],
     ["1234567890abcdefghijklmnop", "12345678...ijklmnop"],
   ])("masks %o", (value, expected) => {

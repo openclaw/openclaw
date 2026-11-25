@@ -12,10 +12,10 @@ import type {
   AgentComponentInteraction,
   ComponentInteractionContext,
   DiscordChannelContext,
-} from "./agent-components-helpers.js";
+} from "./agent-components.types.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
-  () => import("./agent-components.runtime.js"),
+  () => import("openclaw/plugin-sdk/conversation-runtime"),
 );
 
 export async function dispatchPluginDiscordInteractiveEvent(params: {
@@ -29,13 +29,15 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   values?: string[];
   fields?: Array<{ id: string; name: string; values: string[] }>;
   messageId?: string;
+  /** The tap already updated the source message; handler edits replace that update. */
+  sourceAnswered?: boolean;
 }): Promise<"handled" | "unmatched"> {
   const normalizedConversationId =
     params.interactionCtx.rawGuildId || params.channelCtx.channelType === ChannelType.GroupDM
       ? `channel:${params.interactionCtx.channelId}`
       : `user:${params.interactionCtx.userId}`;
-  let responded = false;
-  let acknowledged = false;
+  let responded = params.sourceAnswered === true;
+  let acknowledged = params.sourceAnswered === true;
   const updateOriginalMessage = async (input: {
     text?: string;
     components?: TopLevelComponents[];
@@ -44,6 +46,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       ...(input.text !== undefined ? { content: input.text } : {}),
       ...(input.components !== undefined ? { components: input.components } : {}),
     };
+    if (params.sourceAnswered) {
+      // The tap's update answered the interaction; @original is the source message.
+      await params.interaction.editReply(payload);
+      return;
+    }
     if (acknowledged) {
       await params.interaction.reply(payload);
       return;
@@ -52,6 +59,13 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       throw new Error("Discord interaction cannot update the source message");
     }
     await params.interaction.update(payload);
+  };
+  const replyWithText = async (
+    method: "reply" | "followUp",
+    { text, ephemeral = true }: { text: string; ephemeral?: boolean },
+  ) => {
+    responded = true;
+    await params.interaction[method]({ content: text, ephemeral });
   };
   const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
@@ -62,24 +76,10 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       acknowledged = true;
       responded = true;
     },
-    reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
-      responded = true;
-      const payload = { content: text, ephemeral };
-      // Deferred component replies edit the public source; follow-ups preserve reply visibility.
-      await (acknowledged
-        ? params.interaction.followUp(payload)
-        : params.interaction.reply(payload));
-    },
-    followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
-      responded = true;
-      await params.interaction.followUp({
-        content: text,
-        ephemeral,
-      });
-    },
-    editMessage: async (
-      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
-    ) => {
+    // Deferred component replies edit the public source; follow-ups preserve reply visibility.
+    reply: (payload) => replyWithText(acknowledged ? "followUp" : "reply", payload),
+    followUp: (payload) => replyWithText("followUp", payload),
+    editMessage: async (input) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -95,16 +95,19 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
   };
+  const acknowledgeSilently = async () => {
+    try {
+      await respond.acknowledge();
+    } catch {
+      // An expired interaction must not prevent an admitted plugin handler from settling.
+    }
+  };
   const conversationRuntime = await loadConversationRuntime();
   const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
     const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
       conversationRuntime;
-    try {
-      await respond.acknowledge();
-    } catch {
-      // Interaction may have expired; try to continue anyway.
-    }
+    await acknowledgeSilently();
     const resolved = await resolvePluginConversationBindingApproval({
       approvalId: pluginBindingApproval.approvalId,
       decision: pluginBindingApproval.decision,
@@ -160,24 +163,11 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       },
     },
     respond,
-    onMatched: async () => {
-      try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may have expired before the plugin handler ran.
-      }
-    },
+    onMatched: acknowledgeSilently,
   });
-  if (!dispatched.matched) {
-    return "unmatched";
-  }
-  if (dispatched.handled) {
+  if (dispatched.matched && dispatched.handled) {
     if (!responded) {
-      try {
-        await respond.acknowledge();
-      } catch {
-        // Interaction may have expired after the handler finished.
-      }
+      await acknowledgeSilently();
     }
     return "handled";
   }

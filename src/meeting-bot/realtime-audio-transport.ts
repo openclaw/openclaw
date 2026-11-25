@@ -1,13 +1,8 @@
-export type MeetingRealtimeAudioTransportHealth = {
+import type { MeetingOutputLoopbackHealth } from "./output-loopback-verifier.js";
+
+export type MeetingRealtimeAudioTransportHealth = Partial<MeetingOutputLoopbackHealth> & {
   consecutiveInputErrors?: number;
   lastInputError?: string;
-  lastOutputLoopbackAt?: string;
-  lastOutputLoopbackCorrelation?: number;
-  lastOutputLoopbackPeak?: number;
-  lastOutputLoopbackRms?: number;
-  outputLoopbackSignalBytes?: number;
-  outputGeneration?: number;
-  verifiedOutputGeneration?: number;
 };
 
 export interface MeetingRealtimeAudioTransport {

@@ -1,7 +1,12 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { isStringRecord as isRecordOfStrings } from "@openclaw/normalization-core/record-coerce";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import {
+  isRecord,
+  isStringRecord as isRecordOfStrings,
+} from "@openclaw/normalization-core/record-coerce";
+import { readAuthProfileJsonCellText } from "../agents/auth-profiles/sqlite-json.js";
 import { acquireFileLockSyncWithRetry } from "../infra/file-lock-sync.js";
 import {
   executeSqliteQuerySync,
@@ -13,18 +18,13 @@ import {
   recordLegacyMigrationRun,
   recordLegacyMigrationSource,
 } from "../infra/state-migrations.receipts.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
 const MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 type MigrationDatabase = Pick<OpenClawStateDatabase, "migration_runs" | "migration_sources">;
-type AuthProfileTargetDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "auth_profile_store" | "auth_profile_state"
-> &
-  Pick<OpenClawStateDatabase, "config_machine_state">;
 
 export type AuthProfileMigrationSourceReceipt = {
   sourceKey: string;
@@ -45,38 +45,73 @@ export type AuthProfileMigrationSourceReceipt = {
   env?: NodeJS.ProcessEnv;
 };
 
-function digestBytes(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-export function createAuthProfileMigrationSourceReceipt(params: {
-  sourcePath: string;
-  sourceBytes: Buffer;
-  sourceRecordCount: number;
+export function prepareAuthProfileSourceReceipt(params: {
+  pathname: string;
   targetDatabasePath: string;
   targetTable: AuthProfileMigrationSourceReceipt["targetTable"];
   targetStoreKey?: AuthProfileMigrationSourceReceipt["targetStoreKey"];
-  now?: Date;
+  now: () => number;
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
-  const sourcePath = path.resolve(params.sourcePath);
-  const sourceSha256 = digestBytes(params.sourceBytes);
-  const sourceKey = `auth-profile-v2:${digestBytes(Buffer.from(`${sourcePath}\0${sourceSha256}`))}`;
-  const stamp = (params.now ?? new Date()).toISOString().replaceAll(":", "-");
+  const sourceBytes = fs.readFileSync(params.pathname);
+  const parsed = parseAuthProfileMigrationSource({ sourceBytes, sourcePath: params.pathname });
+  const sourceRecordCount = isRecord(parsed) ? Object.keys(parsed).length : 0;
+  const now = new Date(params.now());
+  const sourcePath = path.resolve(params.pathname);
+  const sourceSha256 = sha256Hex(sourceBytes);
+  const sourceKey = `auth-profile-v2:${sha256Hex(`${sourcePath}\0${sourceSha256}`)}`;
+  const stamp = now.toISOString().replaceAll(":", "-");
   return {
     sourceKey,
     runId: `${sourceKey}:${randomUUID()}`,
     sourcePath,
     sourceSha256,
-    sourceSizeBytes: params.sourceBytes.byteLength,
-    sourceRecordCount: params.sourceRecordCount,
-    sourceBytes: Buffer.from(params.sourceBytes),
+    sourceSizeBytes: sourceBytes.byteLength,
+    sourceRecordCount,
+    sourceBytes,
     targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
     ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
     archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
     ...(params.env ? { env: params.env } : {}),
   };
+}
+
+export function assertAuthProfileMigrationSourcesUnchanged(
+  sourcePaths: readonly string[],
+  receipts: readonly AuthProfileMigrationSourceReceipt[],
+): void {
+  const receiptByPath = new Map(receipts.map((receipt) => [receipt.sourcePath, receipt]));
+  for (const pathname of new Set([
+    ...sourcePaths,
+    ...receipts.map((receipt) => receipt.sourcePath),
+  ])) {
+    const receipt = receiptByPath.get(path.resolve(pathname));
+    if (fs.existsSync(pathname) !== Boolean(receipt)) {
+      throw new Error("legacy auth source set changed during migration; retry Doctor");
+    }
+    if (!receipt) {
+      continue;
+    }
+    const currentSha256 = sha256Hex(fs.readFileSync(pathname));
+    if (currentSha256 !== receipt.sourceSha256) {
+      throw new Error("legacy auth source changed during migration; retry Doctor");
+    }
+  }
+}
+
+export function parseAuthProfileMigrationSource(
+  receipt: Pick<AuthProfileMigrationSourceReceipt, "sourceBytes" | "sourcePath"> | undefined,
+): unknown {
+  if (!receipt?.sourceBytes) {
+    return null;
+  }
+  const text = decodeUtf8Input(receipt.sourceBytes, `Legacy auth source ${receipt.sourcePath}`);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 function reportJson(receipt: AuthProfileMigrationSourceReceipt): string {
@@ -93,7 +128,7 @@ function reportJson(receipt: AuthProfileMigrationSourceReceipt): string {
 }
 
 export function digestAuthProfileMigrationValue(value: unknown): string {
-  return digestBytes(Buffer.from(JSON.stringify(value) ?? "<undefined>"));
+  return sha256Hex(JSON.stringify(value) ?? "<undefined>");
 }
 
 function recordAuthProfileMigrationImported(
@@ -148,32 +183,35 @@ function recordAuthProfileMigrationImported(
   );
 }
 
-function retirePendingAuthProfileMigrationReceipt(
+function updateAuthProfileMigrationReceipt(
   receipt: AuthProfileMigrationSourceReceipt,
-  status: "retryable" | "superseded",
-  previousStatus: "imported" | "completed" = "imported",
+  status: "retryable" | "superseded" | "completed" | "archived-unparsed",
+  previousStatus?: "imported" | "completed",
   now = Date.now(),
 ): void {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<MigrationDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_runs")
-          .set({ status, finished_at: now })
-          .where("id", "=", receipt.runId)
-          .where("status", "=", previousStatus),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_sources")
-          .set({ status })
-          .where("source_key", "=", receipt.sourceKey)
-          .where("last_run_id", "=", receipt.runId)
-          .where("status", "=", previousStatus),
-      );
+      let run = kysely
+        .updateTable("migration_runs")
+        .set({ status, finished_at: now })
+        .where("id", "=", receipt.runId);
+      let source = kysely
+        .updateTable("migration_sources")
+        .set({
+          status,
+          ...(status === "completed" || status === "archived-unparsed"
+            ? { removed_source: 1 }
+            : {}),
+        })
+        .where("source_key", "=", receipt.sourceKey)
+        .where("last_run_id", "=", receipt.runId);
+      if (previousStatus) {
+        run = run.where("status", "=", previousStatus);
+        source = source.where("status", "=", previousStatus);
+      }
+      executeSqliteQuerySync(db, run);
+      executeSqliteQuerySync(db, source);
     },
     { env: receipt.env },
   );
@@ -194,52 +232,27 @@ function restoreAuthProfileMigrationArchiveNoClobber(
   return "restored";
 }
 
-function recordAuthProfileMigrationCompleted(
-  receipt: AuthProfileMigrationSourceReceipt,
-  now = Date.now(),
-  status: "completed" | "archived-unparsed" = "completed",
-): void {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = getNodeSqliteKysely<MigrationDatabase>(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_runs")
-          .set({ status, finished_at: now })
-          .where("id", "=", receipt.runId),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("migration_sources")
-          .set({ status, removed_source: 1 })
-          .where("source_key", "=", receipt.sourceKey)
-          .where("last_run_id", "=", receipt.runId),
-      );
-    },
-    { env: receipt.env },
-  );
-}
-
-export function archiveAuthProfileMigrationSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-): void {
+function archiveAuthProfileMigrationSource(receipt: AuthProfileMigrationSourceReceipt): void {
   if (fs.existsSync(receipt.sourcePath)) {
     const sourceBytes = fs.readFileSync(receipt.sourcePath);
-    if (digestBytes(sourceBytes) !== receipt.sourceSha256) {
+    if (sha256Hex(sourceBytes) !== receipt.sourceSha256) {
       throw new Error("legacy auth source changed after verification");
     }
     fs.renameSync(receipt.sourcePath, receipt.archivePath);
   }
   const archiveBytes = fs.readFileSync(receipt.archivePath);
-  if (digestBytes(archiveBytes) !== receipt.sourceSha256) {
+  if (sha256Hex(archiveBytes) !== receipt.sourceSha256) {
     throw new Error("legacy auth archive verification failed");
   }
 }
 
 export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly string[]): () => void {
   const releases: Array<() => void> = [];
+  const releaseAll = () => {
+    for (const release of releases.toReversed()) {
+      release();
+    }
+  };
   try {
     for (const sourcePath of [
       ...new Set(sourcePaths.map((entry) => path.resolve(entry))),
@@ -247,16 +260,10 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
       releases.push(acquireFileLockSyncWithRetry(sourcePath));
     }
   } catch (error) {
-    for (const release of releases.toReversed()) {
-      release();
-    }
+    releaseAll();
     throw error;
   }
-  return () => {
-    for (const release of releases.toReversed()) {
-      release();
-    }
-  };
+  return releaseAll;
 }
 
 function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceReceipt): void {
@@ -266,26 +273,13 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
   }
   const db = openNodeSqliteDatabase(receipt.targetDatabasePath, { readOnly: true });
   try {
-    const kysely = getNodeSqliteKysely<AuthProfileTargetDatabase>(db);
     const readTarget = (kind: "store" | "state") => {
-      // v13 shared KV cells and agent rows contain the same receipt payload.
-      const query =
-        receipt.targetStoreKey === "shared"
-          ? kysely
-              .selectFrom("config_machine_state")
-              .select("value_json as json")
-              .where("state_key", "=", `authProfiles.${kind}`)
-          : kind === "store"
-            ? kysely
-                .selectFrom("auth_profile_store")
-                .select("store_json as json")
-                .where("store_key", "=", "primary")
-            : kysely
-                .selectFrom("auth_profile_state")
-                .select("state_json as json")
-                .where("state_key", "=", "primary");
-      const row = executeSqliteQueryTakeFirstSync(db, query);
-      return typeof row?.json === "string" ? JSON.parse(row.json) : null;
+      const json = readAuthProfileJsonCellText(
+        db,
+        kind,
+        receipt.targetStoreKey === "shared" ? "shared-state" : "agent",
+      );
+      return typeof json === "string" ? JSON.parse(json) : null;
     };
     const store = expectedProfiles.length > 0 ? readTarget("store") : null;
     for (const [profileId, expectedSha256] of expectedProfiles) {
@@ -293,33 +287,27 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
         throw new Error("auth profile migration target verification failed");
       }
     }
-    if (receipt.expectedStateSha256) {
-      if (digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256) {
-        throw new Error("auth profile migration target verification failed");
-      }
+    if (
+      receipt.expectedStateSha256 &&
+      digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256
+    ) {
+      throw new Error("auth profile migration target verification failed");
     }
   } finally {
     db.close();
   }
 }
 
+/** Finalize while the migration owner holds the source-file lock. */
 export function finalizeAuthProfileMigrationSource(
   receipt: AuthProfileMigrationSourceReceipt,
   status: "completed" | "archived-unparsed" = "completed",
-  options: { sourceLocked?: boolean } = {},
 ): void {
   receipt.completionStatus = status;
-  const release = options.sourceLocked
-    ? undefined
-    : acquireFileLockSyncWithRetry(receipt.sourcePath);
-  try {
-    recordAuthProfileMigrationImported(receipt);
-    verifyAuthProfileMigrationTarget(receipt);
-    archiveAuthProfileMigrationSource(receipt);
-    recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
-  } finally {
-    release?.();
-  }
+  recordAuthProfileMigrationImported(receipt);
+  verifyAuthProfileMigrationTarget(receipt);
+  archiveAuthProfileMigrationSource(receipt);
+  updateAuthProfileMigrationReceipt(receipt, status);
 }
 
 export function resumePendingAuthProfileMigrationArchives(
@@ -417,9 +405,9 @@ export function resumePendingAuthProfileMigrationArchives(
       if (completed) {
         receipt.sourceBytes = fs.readFileSync(receipt.archivePath);
         if (
-          digestBytes(receipt.sourceBytes) !== receipt.sourceSha256 ||
+          sha256Hex(receipt.sourceBytes) !== receipt.sourceSha256 ||
           (sourceExists &&
-            digestBytes(fs.readFileSync(receipt.sourcePath)) !== receipt.sourceSha256) ||
+            sha256Hex(fs.readFileSync(receipt.sourcePath)) !== receipt.sourceSha256) ||
           !recoverCompleted?.(receipt)
         ) {
           continue;
@@ -429,47 +417,44 @@ export function resumePendingAuthProfileMigrationArchives(
           // across a crash between restoring the source and updating SQLite.
           fs.linkSync(receipt.archivePath, receipt.sourcePath);
         }
-        retirePendingAuthProfileMigrationReceipt(receipt, "retryable", "completed");
+        updateAuthProfileMigrationReceipt(receipt, "retryable", "completed");
         changes.push("Reset an inconsistent completed auth migration receipt for retry.");
         continue;
       }
       const bytes = fs.readFileSync(sourceExists ? receipt.sourcePath : receipt.archivePath);
-      if (digestBytes(bytes) !== receipt.sourceSha256) {
+      if (sha256Hex(bytes) !== receipt.sourceSha256) {
         if (!sourceExists) {
           throw new Error("legacy auth archive verification failed");
         }
         // A changed live source gets its own hash-owned run; a changed archive
         // cannot prove the original credentials and must never be restored.
-        retirePendingAuthProfileMigrationReceipt(receipt, "superseded");
+        updateAuthProfileMigrationReceipt(receipt, "superseded", "imported");
         changes.push("Retired an interrupted auth migration receipt for a changed source.");
         continue;
       }
       try {
         verifyAuthProfileMigrationTarget(receipt);
       } catch {
+        let status: "retryable" | "superseded" = "retryable";
         if (!sourceExists) {
           // Restore only hash-verified archive bytes, without replacing a
           // source recreated by a non-cooperating legacy writer or restore.
           const restored = restoreAuthProfileMigrationArchiveNoClobber(receipt);
           if (restored === "source-exists") {
             const currentBytes = fs.readFileSync(receipt.sourcePath);
-            const status =
-              digestBytes(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
-            retirePendingAuthProfileMigrationReceipt(receipt, status);
-            changes.push(
-              status === "retryable"
-                ? "Reset an interrupted auth migration receipt for retry."
-                : "Retired an interrupted auth migration receipt for a changed source.",
-            );
-            continue;
+            status = sha256Hex(currentBytes) === receipt.sourceSha256 ? "retryable" : "superseded";
           }
         }
-        retirePendingAuthProfileMigrationReceipt(receipt, "retryable");
-        changes.push("Reset an interrupted auth migration receipt for retry.");
+        updateAuthProfileMigrationReceipt(receipt, status, "imported");
+        changes.push(
+          status === "retryable"
+            ? "Reset an interrupted auth migration receipt for retry."
+            : "Retired an interrupted auth migration receipt for a changed source.",
+        );
         continue;
       }
       archiveAuthProfileMigrationSource(receipt);
-      recordAuthProfileMigrationCompleted(receipt, Date.now(), receipt.completionStatus);
+      updateAuthProfileMigrationReceipt(receipt, receipt.completionStatus ?? "completed");
     } finally {
       release();
     }
@@ -478,10 +463,10 @@ export function resumePendingAuthProfileMigrationArchives(
   return changes;
 }
 
-export function hasTerminalAuthProfileMigrationReceipt(
-  sourceKey: string,
-  env?: NodeJS.ProcessEnv,
-): boolean {
+/** Finish a reappeared source under the caller's source-file lock, without replaying credentials. */
+export function archivePreviouslyMigratedAuthProfileSource(
+  receipt: AuthProfileMigrationSourceReceipt,
+): string | null {
   const row = withExistingOpenClawStateDatabaseReadOnly(
     ({ db }) =>
       executeSqliteQueryTakeFirstSync(
@@ -489,11 +474,35 @@ export function hasTerminalAuthProfileMigrationReceipt(
         getNodeSqliteKysely<MigrationDatabase>(db)
           .selectFrom("migration_sources")
           .select("status")
-          .where("source_key", "=", sourceKey),
+          .where("source_key", "=", receipt.sourceKey),
       ),
-    { env },
+    { env: receipt.env },
   );
-  return row?.status === "completed" || row?.status === "archived-unparsed";
+  if (row?.status !== "completed" && row?.status !== "archived-unparsed") {
+    return null;
+  }
+  const directory = path.dirname(receipt.sourcePath);
+  const prefix = `${path.basename(receipt.sourcePath)}.migrated-`;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+      continue;
+    }
+    const archivePath = path.join(directory, entry.name);
+    try {
+      if (sha256Hex(fs.readFileSync(archivePath)) !== receipt.sourceSha256) {
+        continue;
+      }
+    } catch {
+      // An unreadable archive cannot prove that another copy of these bytes survives.
+      continue;
+    }
+    // Include replacement archives: the terminal receipt may name a lost original.
+    assertAuthProfileMigrationSourcesUnchanged([receipt.sourcePath], [receipt]);
+    fs.unlinkSync(receipt.sourcePath);
+    return archivePath;
+  }
+  archiveAuthProfileMigrationSource(receipt);
+  return receipt.archivePath;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
@@ -501,7 +510,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
   ] = {
     recordAuthProfileMigrationImported,
-    recordAuthProfileMigrationCompleted,
     restoreAuthProfileMigrationArchiveNoClobber,
   };
 }

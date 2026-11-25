@@ -36,7 +36,7 @@ export function resolveVitestCacheSlotPath(
   return path.join(root, "slots", configCacheKey(config, cwd), String(slot));
 }
 
-/** A slot remains borrowed through retries and the process owner's final join. */
+/** A slot remains borrowed through preflight and the process owner's final join. */
 export function createVitestCacheSlots(platform = process.platform) {
   const idleSlots = new Map<string, number[]>();
   const nextSlots = new Map<string, number>();

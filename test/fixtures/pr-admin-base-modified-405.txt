@@ -1,0 +1,1 @@
+{"message":"Base branch was modified. Review and try the merge again.","documentation_url":"https://docs.github.com/rest/pulls/pulls#merge-a-pull-request","status":"405"}gh: Base branch was modified. Review and try the merge again. (HTTP 405)
