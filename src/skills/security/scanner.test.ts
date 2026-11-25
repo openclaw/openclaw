@@ -223,6 +223,29 @@ describe("scanSource", () => {
       ["dangerous-exec", 'const run = exec;\nrun("id");\nimport { exec } from "child_process";', 2],
       [
         "dangerous-exec",
+        'import { exec as run } from "child_process";\nconst label = <string>"ok";\nrun("id");',
+      ],
+      [
+        "dynamic-code-execution",
+        'const Constructor = <FunctionConstructor>Function;\nnew Constructor("return 1");',
+      ],
+      ["dynamic-code-execution", 'const run = eval;\nconst view = <div>{run("1+1")}</div>;'],
+      [
+        "dynamic-code-execution",
+        'const first = { run: eval };\nconst second = { ...first };\nsecond.run("1+1");',
+      ],
+      ["dynamic-code-execution", 'const box = { ...{ run: x => x }, run: eval };\nbox.run("1+1");'],
+      [
+        "dynamic-code-execution",
+        'const first = { run: x => x };\nfirst.run = eval;\nconst second = { ...first };\nsecond.run("1+1");',
+      ],
+      ["dynamic-code-execution", 'const box = { run: eval, ...null };\nbox.run("1+1");'],
+      [
+        "dangerous-exec",
+        'const box = { ...require("child_process") };\nconst run = box.exec;\nrun("id");',
+      ],
+      [
+        "dangerous-exec",
         'function task() { run("id"); }\nconst { exec: run } = require("child_process");\ntask();',
         1,
       ],
@@ -272,6 +295,11 @@ describe("scanSource", () => {
       'function safe(launch) { launch("ok"); }\nimport { spawn as launch } from "child_process";',
       'let run = proc.exec;\nrun = x => x;\nrun("ok");\nimport proc from "child_process";',
       'function task(run) { run("ok"); }\nconst { exec: run } = require("child_process");\ntask(x => x);',
+      'const unused = eval;\nconst run = x => x;\nconst view = <div>{run("ok")}</div>;',
+      'const box = { run: eval, ...{ run: x => x } };\nbox.run("ok");',
+      'const safe = {};\nsafe.run = x => x;\nconst box = { run: eval, ...safe };\nbox.run("ok");',
+      'const first = { run: eval };\nfirst.run = x => x;\nconst second = { ...first };\nsecond.run("ok");',
+      'const mod = require("child_process");\nconst box = { run: mod.exec, ...{ run: x => x } };\nbox.run("ok");',
     ]) {
       expect(scanSource(source, "plugin.ts"), source).toEqual([]);
     }
@@ -299,6 +327,29 @@ describe("scanSource", () => {
     expect(scanSource(indented, "SKILL.md")).toEqual([
       expect.objectContaining({ ruleId: "dangerous-exec", line: 4 }),
     ]);
+    for (const [example, ruleId, line] of [
+      [
+        '> ```js\n> const { exec: run } = require("child_process");\n> run("id");\n> ```',
+        "dangerous-exec",
+        3,
+      ],
+      [
+        '> ```js\n> const cp = require("child_process");\n> cp.exec("id");\n> ```',
+        "dangerous-exec",
+        3,
+      ],
+      [
+        '1. Deploy:\n\n   ```ts\n   const run = eval;\n   run("1+1");\n   ```',
+        "dynamic-code-execution",
+        5,
+      ],
+      ['> > ```js\n> > const run = eval;\n> > run("1+1");\n> > ```', "dynamic-code-execution", 3],
+      ['# Example\n\n\tconst run = eval;\n\trun("1+1");', "dynamic-code-execution", 4],
+    ] as const) {
+      expect(scanSource(example, "SKILL.md"), example).toEqual([
+        expect.objectContaining({ ruleId, line }),
+      ]);
+    }
   });
 
   it("does not flag a computed exec-style call on a non-child_process object", () => {

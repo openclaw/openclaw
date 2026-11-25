@@ -70,24 +70,35 @@ export function collectCapabilityCalls(source: string): CallMatches {
   const { parse }: typeof import("@babel/parser") = require("@babel/parser");
   const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
 
-  function analyze(code: string, startLine: number, startIndex: number): boolean {
-    let file: t.File;
-    try {
-      file = parse(code, {
-        sourceType: "unambiguous",
-        plugins: ["typescript", "jsx"],
-        allowReturnOutsideFunction: true,
-        allowUndeclaredExports: true,
-        createImportExpressions: true,
-        startLine,
-        startIndex,
-        startColumn: 0,
-      });
-    } catch (error) {
-      if (error instanceof SyntaxError || error instanceof RangeError) {
-        return false;
+  function analyze(
+    code: string,
+    startLine: number,
+    startIndex: number,
+    columnOffsets?: readonly number[],
+  ): boolean {
+    let file: t.File | undefined;
+    // Angle assertions are valid TypeScript but ambiguous with JSX. Accept either syntax.
+    for (const jsx of [false, true]) {
+      try {
+        file = parse(code, {
+          sourceType: "unambiguous",
+          plugins: jsx ? ["typescript", "jsx"] : ["typescript"],
+          allowReturnOutsideFunction: true,
+          allowUndeclaredExports: true,
+          createImportExpressions: true,
+          startLine,
+          startIndex,
+          startColumn: 0,
+        });
+        break;
+      } catch (error) {
+        if (!(error instanceof SyntaxError) && !(error instanceof RangeError)) {
+          throw error;
+        }
       }
-      throw error;
+    }
+    if (!file) {
+      return false;
     }
     let state: State = { bindings: new Map(), properties: new Map() };
     const objects = new WeakMap<t.ObjectExpression, ObjectValue>();
@@ -236,6 +247,32 @@ export function collectCapabilityCalls(source: string): CallMatches {
         exit(path) {
           const object: ObjectValue = new Map();
           for (const entry of path.node.properties) {
+            if (entry.type === "SpreadElement") {
+              const spread = value(entry.argument, path.scope);
+              if (spread instanceof Map) {
+                const keys = new Set(spread.keys());
+                for (let current: State | undefined = state; current; current = current.parent) {
+                  for (const key of current.properties.get(spread)?.keys() ?? []) {
+                    keys.add(key);
+                  }
+                }
+                for (const key of keys) {
+                  object.set(key, readProperty(spread, key));
+                }
+              } else if (spread === "process-module") {
+                for (const key of PROCESS_METHODS) {
+                  object.set(key, "process-call");
+                }
+              } else if (
+                !["NullLiteral", "NumericLiteral", "BooleanLiteral", "StringLiteral"].includes(
+                  entry.argument.type,
+                )
+              ) {
+                // An unknown spread can overwrite any earlier property; its provenance is unknown.
+                object.clear();
+              }
+              continue;
+            }
             if (entry.type === "ObjectProperty" || entry.type === "ObjectMethod") {
               const name = propertyName(entry);
               if (name !== undefined) {
@@ -295,7 +332,7 @@ export function collectCapabilityCalls(source: string): CallMatches {
           if (!columns) {
             lines.set(location.line, (columns = new Set()));
           }
-          columns.add(location.column);
+          columns.add(location.column + (columnOffsets?.[location.line - startLine] ?? 0));
         },
       },
     };
@@ -312,8 +349,8 @@ export function collectCapabilityCalls(source: string): CallMatches {
   if (analyze(source, 1, 0)) {
     return matches;
   }
-  // Reuse the Markdown owner's block ranges for fenced and indented examples. Parse raw
-  // source slices so findings retain their original lines and columns, not rendered offsets.
+  // Parse the Markdown owner's decoded code, with original line/column mappings. Container
+  // prefixes and code indentation are Markdown syntax, not part of the inspected program.
   const lines = source.split("\n");
   const starts: number[] = [];
   let offset = 0;
@@ -321,7 +358,8 @@ export function collectCapabilityCalls(source: string): CallMatches {
     starts.push(offset);
     offset += line.length + 1;
   }
-  for (const block of markdownToIRWithMeta(source).ir.blocks ?? []) {
+  const { ir } = markdownToIRWithMeta(source);
+  for (const block of ir.blocks ?? []) {
     if (
       block.kind !== "code_block" ||
       block.sourceStartLine === undefined ||
@@ -330,8 +368,13 @@ export function collectCapabilityCalls(source: string): CallMatches {
       continue;
     }
     const start = block.sourceStartLine + (block.codeOrigin === "fenced" ? 1 : 0);
-    const end = block.sourceEndLine - (block.codeClosed === true ? 1 : 0);
-    analyze(lines.slice(start, end).join("\n"), start + 1, starts[start] ?? source.length);
+    const code = ir.text.slice(block.start, block.end);
+    const columns = code.split("\n").map((line, index) => {
+      const content = line.trimStart();
+      const rawColumn = (lines[start + index] ?? "").lastIndexOf(content);
+      return content && rawColumn >= 0 ? rawColumn - (line.length - content.length) : 0;
+    });
+    analyze(code, start + 1, starts[start] ?? source.length, columns);
   }
   return matches;
 }
