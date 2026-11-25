@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import {
+  hasPendingSharedAuthCleanup,
+  inspectSharedAuthLegacySourceFile,
+} from "../agents/auth-profiles/shared-store-bootstrap.js";
 import { normalizeHeartbeatRepairSource } from "../commands/doctor-automatic-heartbeat-repair.js";
 import { tryProjectRetiredHeartbeatConfig } from "../commands/doctor-heartbeat-legacy.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
@@ -34,6 +38,7 @@ import {
   logStateMigrationResult,
   throwIfDoctorStateMigrationRefused,
 } from "../infra/state-migrations.messages.js";
+import type { LegacyStateDetection } from "../infra/state-migrations.types.js";
 import {
   recordDoctorMigrationFullBackup,
   runWithDoctorMigrationBackup,
@@ -133,17 +138,14 @@ export async function upgradeStateDirectory(params: {
     try {
       restore = await beginStateUpgradeRestore(env);
       if (outdated.length === 0 && !configRepair && !includeRepair) {
-        const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
-          prepareLegacySessionSurfaces({ config, env }),
-        );
+        const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
         const legacy = await detectLegacyStateMigrations({
           cfg: config,
           env,
           doctorOnlyStateMigrations: true,
-          artifactPreservingReadOnly: true,
           legacySessionSurfaces,
         });
-        if (legacy.preview.length === 0) {
+        if (!hasRealLegacyWork(legacy, env)) {
           await publishStateUpgradeRestore(restore, { targets: [], config });
           return { status: "current" };
         }
@@ -291,26 +293,19 @@ export async function upgradeStateDirectory(params: {
               },
             );
           }
-          const legacySessionSurfaces = await withArtifactPreservingStateReads(() =>
-            prepareLegacySessionSurfaces({ config, env }),
-          );
+          const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
           const legacyState = await detectLegacyStateMigrations({
             cfg: config,
             env,
             doctorOnlyStateMigrations: true,
-            artifactPreservingReadOnly: true,
             legacySessionSurfaces,
           });
-          if (
-            outdated.length === 0 &&
-            !configRepair &&
-            !includeRepair &&
-            legacyState.preview.length === 0
-          ) {
+          const legacyWork = hasRealLegacyWork(legacyState, env);
+          if (outdated.length === 0 && !configRepair && !includeRepair && !legacyWork) {
             return { status: "current" };
           }
           // File imports retain their existing Doctor owner, not a subprocess or copy.
-          if (legacyState.preview.length > 0) {
+          if (legacyWork) {
             const legacy = await autoMigrateLegacyState({
               cfg: config,
               env,
@@ -320,6 +315,23 @@ export async function upgradeStateDirectory(params: {
             });
             logStateMigrationResult(legacy, log);
             throwIfDoctorStateMigrationRefused(legacy.stepReceipts);
+            const { noteSessionTranscriptHealth } =
+              await import("../commands/doctor-session-transcripts.js");
+            await noteSessionTranscriptHealth({
+              cfg: config,
+              env,
+              shouldRepair: true,
+              ...(legacy.postSessionPluginMigration
+                ? { postSessionPluginMigration: legacy.postSessionPluginMigration }
+                : {}),
+              postSessionPluginMigrationPlanBound: true,
+              onStepReceipt: (receipt) => throwIfDoctorStateMigrationRefused([receipt]),
+              onWarnings: (warnings) => {
+                for (const warning of warnings) {
+                  log.warn(warning);
+                }
+              },
+            });
           }
           if (configRepair) {
             await commitAutomaticConfigRepair(
@@ -411,4 +423,34 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
         { cause: error },
       )
     : error;
+}
+
+/** Fresh auth ownership is Doctor bootstrap, not a legacy payload to import at boot. */
+function hasRealLegacyWork(detected: LegacyStateDetection, env: NodeJS.ProcessEnv): boolean {
+  for (const [kind, source] of Object.entries(detected)) {
+    if (
+      kind !== "sharedAuthStore" &&
+      source !== null &&
+      typeof source === "object" &&
+      "hasLegacy" in source &&
+      source.hasLegacy === true
+    ) {
+      return true;
+    }
+  }
+  if (detected.worktrees.pathRewrites.length > 0 || detected.deviceIdentity.hasInvalidCanonical) {
+    return true;
+  }
+  const auth = detected.sharedAuthStore;
+  if (!auth.hasLegacy) {
+    return false;
+  }
+  if (auth.held || auth.conflictingSourcePath) {
+    return true;
+  }
+  const file = inspectSharedAuthLegacySourceFile(auth.sourcePath);
+  return (
+    (file.status === "present" && file.size > 0) ||
+    hasPendingSharedAuthCleanup(env, auth.sourcePath, { artifactPreservingReadOnly: true })
+  );
 }

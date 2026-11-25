@@ -10,6 +10,8 @@ import { openClientCredentialCustody } from "../infra/client-credential-store.js
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
+import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -28,6 +30,7 @@ import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -86,11 +89,27 @@ describe("startup retained deletion", () => {
         );
       }
       {
-        using active = new DatabaseSync(activePath);
-        active.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-        active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-            VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
+        const seedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-current-agent-"));
+        dirs.push(seedDir);
+        const seedPath = path.join(seedDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+        fs.mkdirSync(path.dirname(seedPath), { recursive: true });
+        {
+          using active = new DatabaseSync(seedPath);
+          active.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+          active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+            INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+              VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
+        }
+        // A current fixture includes the content owners' committed completion metadata.
+        const prepared = await autoMigrateLegacyState({
+          cfg: {},
+          env: { OPENCLAW_STATE_DIR: seedDir },
+          doctorOnlyStateMigrations: true,
+        });
+        throwIfDoctorStateMigrationRefused(prepared.stepReceipts);
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        fs.renameSync(seedPath, activePath);
       }
       {
         using retained = new DatabaseSync(retainedPath, { allowExtension: true });
@@ -159,7 +178,9 @@ describe("startup retained deletion", () => {
           .get();
         expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
       } else {
-        await expect(upgrade).rejects.toThrow("no such module: vec0");
+        await expect(upgrade).rejects.toThrow(
+          "OpenClaw agent database is unavailable while agent retired is deleted.",
+        );
       }
       await closeOpenClawAgentDatabasesAsync();
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
@@ -262,7 +283,8 @@ describe("canonical in-place migration", () => {
           await lock?.release();
         }
       };
-      await expect(upgrade()).resolves.toEqual({ status: "upgraded" });
+      const result = await upgrade();
+      expect(result, JSON.stringify(result)).toEqual({ status: "upgraded" });
       publication.mockRestore();
       if (trial) {
         const repairedConfig = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
@@ -298,9 +320,9 @@ describe("canonical in-place migration", () => {
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
           user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
-        expect(agent.prepare("SELECT min_reader FROM schema_meta").get()).toEqual({
-          min_reader: 43,
-        });
+        expect(
+          agent.prepare("SELECT min_reader FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({ min_reader: 43 });
       }
       await expect(
         executeExistingOpenClawStateRead(
@@ -377,14 +399,10 @@ describe("upgradeStateDirectory version zero", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-v0-"));
     dirs.push(stateDir);
     fs.mkdirSync(path.join(stateDir, "state"));
-    const anchor = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    anchor.close();
+    fs.writeFileSync(path.join(stateDir, "state", "openclaw.sqlite"), "");
     // Fresh agent catalogs also belong to bootstrap.
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
-    const agent = new DatabaseSync(
-      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    );
-    agent.close();
+    fs.writeFileSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"), "");
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),

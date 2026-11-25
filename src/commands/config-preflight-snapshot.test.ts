@@ -313,71 +313,75 @@ it("waits through temporary schema custody before reading startup configuration 
   });
 });
 
-it("overlaps config discovery with schema admission and drains both before reporting refusal", async ({
-  signal,
-}) => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    writeConfig(home);
-    await retiredDatabase(true);
-    const env = { ...process.env };
-    const stateDir = env.OPENCLAW_STATE_DIR;
-    const schemaEntered = createDeferred();
-    const releaseSchema = createDeferred();
-    const schemaRefused = createDeferred();
-    const configEntered = createDeferred();
-    const releaseConfig = createDeferred();
-    const schemaFailure = new Error("synthetic schema admission refusal");
-    const configFailure = new Error("synthetic config discovery failure");
-    let snapshotLocation: string | undefined;
-    let configRetainedSnapshot = false;
-    const inspect = vi
-      .spyOn(databasePreflight, "assertOpenClawDatabasesReady")
-      .mockImplementation(async (options) => {
-        schemaEntered.resolve();
-        await releaseSchema.promise;
-        expect(options.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-        schemaRefused.resolve();
-        throw schemaFailure;
+it.each(["config", "schema"] as const)(
+  "settles config source admission before reporting a %s refusal",
+  async (refusal, { signal }) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      writeConfig(home);
+      await retiredDatabase(true);
+      const env = { ...process.env };
+      const stateDir = env.OPENCLAW_STATE_DIR;
+      const configEntered = createDeferred();
+      const releaseConfig = createDeferred();
+      const schemaEntered = createDeferred();
+      const releaseSchema = createDeferred();
+      const configFailure = new Error("synthetic config discovery failure");
+      const schemaFailure = new Error("synthetic schema admission refusal");
+      const guard = vi.fn(async () => true);
+      const inspect = vi
+        .spyOn(databasePreflight, "assertOpenClawDatabasesReady")
+        .mockImplementation(async (options) => {
+          expect(guard).toHaveBeenCalledOnce();
+          expect(getActiveOpenClawStateDatabaseReadSnapshot({ env: process.env })).toBeUndefined();
+          expect(options.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+          schemaEntered.resolve();
+          await releaseSchema.promise;
+          throw schemaFailure;
+        });
+      const admission = readAdmittedConfigSnapshot({
+        env,
+        readSnapshot: async () => {
+          const snapshot = await readCore();
+          expect(getActiveOpenClawStateDatabaseReadSnapshot({ env })?.location).toBeDefined();
+          env.OPENCLAW_STATE_DIR = path.join(home, "changed-during-config-read");
+          configEntered.resolve();
+          await releaseConfig.promise;
+          if (refusal === "config") {
+            throw configFailure;
+          }
+          return { snapshot };
+        },
+        beforeStatePreparation: guard,
       });
-    const guard = vi.fn(async () => true);
-    const admission = readAdmittedConfigSnapshot({
-      env,
-      readSnapshot: async () => {
-        snapshotLocation = getActiveOpenClawStateDatabaseReadSnapshot({ env })?.location;
-        env.OPENCLAW_STATE_DIR = path.join(home, "changed-during-config-read");
-        configEntered.resolve();
-        await releaseConfig.promise;
-        configRetainedSnapshot = snapshotLocation !== undefined && fs.existsSync(snapshotLocation);
-        throw configFailure;
-      },
-      beforeStatePreparation: guard,
+      const waitFor = (gate: Promise<void>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, admission, message), signal);
+      try {
+        await waitFor(configEntered.promise, "Config discovery never began");
+        expect(inspect).not.toHaveBeenCalled();
+        expect(guard).not.toHaveBeenCalled();
+        releaseConfig.resolve();
+        if (refusal === "schema") {
+          await waitFor(
+            schemaEntered.promise,
+            "Schema readiness never began after source admission",
+          );
+          releaseSchema.resolve();
+          await expect(admission).rejects.toBe(schemaFailure);
+        } else {
+          await expect(admission).rejects.toBe(configFailure);
+          expect(guard).not.toHaveBeenCalled();
+          expect(inspect).not.toHaveBeenCalled();
+        }
+        expect(getActiveOpenClawStateDatabaseReadSnapshot({ env: process.env })).toBeUndefined();
+      } finally {
+        releaseConfig.resolve();
+        releaseSchema.resolve();
+        await admission.catch(() => undefined);
+        inspect.mockRestore();
+      }
     });
-    const waitFor = (gate: Promise<void>, message: string) =>
-      withinTest(awaitGateBeforeSettlement(gate, admission, message), signal);
-    try {
-      await waitFor(schemaEntered.promise, "Schema admission never began");
-      releaseSchema.resolve();
-      await waitFor(
-        configEntered.promise,
-        "Config discovery did not start while schema admission was pending",
-      );
-      await withinTest(schemaRefused.promise, signal);
-      const retainedLocation = expectDefined(snapshotLocation, "Expected the admitted snapshot");
-      expect(fs.existsSync(retainedLocation)).toBe(true);
-      expect(guard).not.toHaveBeenCalled();
-      releaseConfig.resolve();
-      await expect(admission).rejects.toBe(schemaFailure);
-      expect(configRetainedSnapshot).toBe(true);
-      expect(fs.existsSync(retainedLocation)).toBe(true);
-      expect(getActiveOpenClawStateDatabaseReadSnapshot({ env })).toBeUndefined();
-    } finally {
-      releaseSchema.resolve();
-      releaseConfig.resolve();
-      await admission.catch(() => undefined);
-      inspect.mockRestore();
-    }
-  });
-});
+  },
+);
 
 it("reads live startup metadata without copying the state database while writers commit", async () => {
   await withDoctorConfigPreflightHome(async (home) => {

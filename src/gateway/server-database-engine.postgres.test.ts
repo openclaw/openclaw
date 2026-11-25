@@ -191,12 +191,18 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
 
   it("reports invalid config with exit 78 through gateway run on PostgreSQL and SQLite", async () => {
     const { current, snapshot } = await bootstrapped();
-    const agents = { entries: { main: {}, helper: {} } };
-    await current.writeConfig({ ...snapshot.sourceConfig, agents });
+    const agents = { ownership: "explicit", entries: { main: {}, helper: {} } };
+    await current.writeConfig({
+      ...snapshot.sourceConfig,
+      agents,
+      gateway: { ...snapshot.sourceConfig.gateway, port: "invalid" },
+    });
     const sqliteConfigPath = current.path("sqlite-invalid.json");
-    await fs.writeFile(sqliteConfigPath, JSON.stringify({ gateway: { mode: "local" }, agents }));
-    const diagnostic =
-      'agents.ownership: multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor';
+    await fs.writeFile(
+      sqliteConfigPath,
+      JSON.stringify({ gateway: { mode: "local", port: "invalid" }, agents }),
+    );
+    const diagnostic = "gateway.port: Invalid input: expected number, received string";
     const nodeExecutable = resolveTestNodeExecPath();
     for (const engine of ["sqlite", "postgres"]) {
       const result = await runCliProcessChild({

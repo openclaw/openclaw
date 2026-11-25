@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import {
+  cliCleanupRetirementEntrypoints,
+  doctorOutputEntrypoints,
+} from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
@@ -25,10 +28,9 @@ it("repairs an included legacy config without flattening and restores both autho
       import { createTrialPending, resolvePrefix, writeTrial } from ${moduleUrl("../../update/store.js")};
       import { ROLLBACK_SOURCE } from ${moduleUrl("../../update/rollback-source.js")};
       import { resolveRuntimeServiceBuildId, VERSION } from ${moduleUrl("../../version.js")};
-      import { withCliPluginInvocation } from ${moduleUrl("../run-main-plugin-cache.js")};
-      import { withCliProcessScope } from ${moduleUrl("../runtime-cleanup-scope.js")};
-      import { closeCliResources } from ${moduleUrl("../runtime-cleanup.js")};
-      await withCliProcessScope(() => withCliPluginInvocation(false, async cleanup => {
+      import { withCliCommandCleanup, withCliProcessScope } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliCleanupRetirementEntrypoints.scope).href)};
+      import { closeCliResources } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliCleanupRetirementEntrypoints.cleanup).href)};
+      await withCliProcessScope(() => withCliCommandCleanup(false, async cleanup => {
       try {
       const env = process.env;
       const stateDir = env.OPENCLAW_STATE_DIR;

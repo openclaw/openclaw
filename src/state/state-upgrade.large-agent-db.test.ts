@@ -9,6 +9,11 @@ import { sha256File } from "../infra/crypto-digest.js";
 import { readSqliteCleanCloseSeal } from "../infra/sqlite-clean-close-seal.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  autoMigrateLegacyState,
+  detectLegacyStateMigrations,
+} from "../infra/state-migrations.doctor.js";
+import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
 import { detectSharedAuthStoreMigration } from "../infra/state-migrations.shared-auth-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -22,7 +27,9 @@ import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -40,12 +47,30 @@ describe("startup canonical ownership", () => {
     const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
     {
-      using agent = new DatabaseSync(agentPath);
-      agent.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-      agent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
-      agent
-        .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)")
-        .run(OPENCLAW_AGENT_SCHEMA_VERSION);
+      const seedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-current-agent-"));
+      dirs.push(seedDir);
+      const seedPath = path.join(seedDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(seedPath), { recursive: true });
+      {
+        using agent = new DatabaseSync(seedPath);
+        agent.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        agent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        agent
+          .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)")
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION);
+        agent.exec(`INSERT INTO session_nodes
+          (session_key, current_session_id, entry_json, updated_at)
+          VALUES ('agent:main:main', 'retained-session', '{"sessionId":"retained-session"}', 1)`);
+      }
+      const prepared = await autoMigrateLegacyState({
+        cfg: {},
+        env: { OPENCLAW_STATE_DIR: seedDir },
+        doctorOnlyStateMigrations: true,
+      });
+      throwIfDoctorStateMigrationRefused(prepared.stepReceipts);
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(seedPath, agentPath);
     }
     fs.truncateSync(agentPath, 64 * 1024 * 1024 + 1);
     const statePath = path.join(stateDir, "state/openclaw.sqlite");
@@ -165,8 +190,17 @@ describe("startup canonical ownership", () => {
       artifactPreservingReadOnly: true,
     });
     expect(legacy.hasLegacy).toBe(false);
+    const pending = await detectLegacyStateMigrations({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+      artifactPreservingReadOnly: true,
+    });
+    expect(pending.preview).toEqual([]);
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     await expect(upgradeStateDirectory({ env, log })).resolves.toEqual({ status: "current" });
     await closeOpenClawAgentDatabasesAsync();
+    expect(exec).not.toHaveBeenCalledWith(expect.stringMatching(/\bANALYZE\b/i));
     expect(await sha256File(agentPath)).toBe(agentBytes);
     expect(await sha256File(statePath)).toBe(stateBytes);
     expect(fs.statSync(agentPath)).toMatchObject({

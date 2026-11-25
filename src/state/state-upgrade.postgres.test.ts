@@ -124,7 +124,6 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
         assert(lock);
         try {
           return await lock.run(async () => {
-            openClientCredentialCustody(env, { createIfMissing: true })?.close();
             withEngineStoreAdmission(() => {
               using anchor = openNodeSqliteDatabase(statePath);
               const database = new PostgresSyncConnection(connection!, namespace, anchor, storeId);
@@ -160,6 +159,9 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
     expect(upgradedAgent.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
+    expect(
+      upgradedAgent.prepare("SELECT min_reader FROM schema_meta WHERE meta_key = 'primary'").get(),
+    ).toEqual({ min_reader: 43 });
     for (const file of [statePath, agentPath]) {
       expect(fs.readdirSync(path.dirname(file)).filter((name) => name.includes(".pre-"))).toEqual(
         [],

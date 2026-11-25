@@ -338,12 +338,12 @@ describe("Gateway config selection before migration admission", () => {
       );
       const plugins = {
         enabled: false,
-        installs: { example: { source: "path", installPath: path.join(root, "plugin") } },
+        entries: { example: { enabled: false } },
       };
       writeJson(configPath, {
         gateway: { mode: "local" },
-        meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
-        agents: { entries: { main: {}, helper: {} } },
+        meta: { lastTouchedVersion: "1.0.0" },
+        agents: { ownership: "explicit", entries: { main: {}, helper: {} } },
         plugins,
       });
       if (withBackup) {

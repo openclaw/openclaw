@@ -6,7 +6,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/state-upgrade.large-agent-db.test.ts",
   "src/state/state-upgrade.test.ts",
   "src/state/state-upgrade-startup.test.ts",
-  "src/state/state-upgrade.large-postgres.test.ts",
   "src/state/state-upgrade.postgres.test.ts",
   "src/sessions/session-controller-model.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",

@@ -41,6 +41,41 @@ import {
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
+/** Decode historical BLOB values in typed columns before migration readers consume them. */
+export function normalizeSqliteText(db: DatabaseSync): void {
+  // Keys change type in place; their parents and children are decoded in the same pass.
+  db.exec("PRAGMA foreign_keys = OFF");
+  const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+    )
+    // SAFETY: the statement fixes the column names and types of each row.
+    .all() as Array<{ name: string }>;
+  for (const { name } of tables) {
+    // SAFETY: table_xinfo fixes the names and types of these catalog columns.
+    const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{
+      name: string;
+      type: string;
+      hidden: number;
+    }>;
+    for (const column of columns) {
+      // Declared BLOB and typeless columns may hold real bytes.
+      if (column.hidden !== 0 || column.type === "" || /BLOB/iu.test(column.type)) {
+        continue;
+      }
+      const c = quote(column.name);
+      try {
+        db.prepare(
+          `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,
+        ).run();
+      } catch {
+        // A constraint on the decoded value leaves it for the canonical repair to refuse.
+      }
+    }
+  }
+}
+
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
 
 /** Tables whose existing read contracts can change before this migration completes. */
