@@ -28,6 +28,7 @@ import {
   preparedScriptWrapperEnv,
   testRunnerFixtureEnv,
 } from "./prepared-script-wrapper.test-support.js";
+import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
 const installedModulesDir = path.dirname(
   path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
@@ -64,21 +65,9 @@ async function implementationReadyBeforeSettlement(
   pidPath: string,
   operation: PromiseLike<unknown>,
 ): Promise<number> {
-  // The PID record precedes the receipt; command output and exit use different pipes.
+  // Require the published PID record before reading it for termination.
   const recorded = () => existsSync(pidPath) && readFileSync(pidPath, "utf8").trim() !== "";
-  const settled = Promise.resolve(operation).then(
-    () => {
-      if (!recorded()) {
-        throw new Error(`timeout waiting for pid in ${pidPath}`);
-      }
-    },
-    (error: unknown) => {
-      if (!recorded()) {
-        throw error;
-      }
-    },
-  );
-  await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
+  await fixtureReadyBeforeSettlement(receipts, pidPath, operation, recorded);
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
 }
 
@@ -103,6 +92,80 @@ function writeTsxFixture(modulesDir: string, marker: string) {
 }
 
 describe("script direct-run entrypoints", () => {
+  it.for([
+    { outcome: "failure", code: 1 },
+    { outcome: "SIGTERM", code: 143 },
+  ])(
+    "closes singleton smoke leases before removing its home after $outcome",
+    async ({ outcome, code }) => {
+      await withShimFixture(
+        TSX_SHIM_WRAPPERS[0],
+        async ({ checkoutRoot, fixtureRoot, runNode }) => {
+          const script = "scripts/test-built-plugin-singleton.mts";
+          for (const file of [
+            script,
+            "scripts/lib/build-smoke-env.mts",
+            "scripts/lib/repo-root.mjs",
+            "scripts/process-warning-filter.mts",
+          ]) {
+            writeFileSync(path.join(checkoutRoot, file), readFileSync(file));
+          }
+          writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
+          writeFileSync(path.join(checkoutRoot, "pnpm-workspace.yaml"), "packages: []\n");
+          // Exercise the real entrypoint teardown without building/staging plugins.
+          writeFileSync(
+            path.join(checkoutRoot, "scripts/lib/dist-artifact-ownership.mts"),
+            "export async function withDistArtifactOwnership(root, run) { return run(); }\n",
+          );
+          writeFileSync(
+            path.join(checkoutRoot, "scripts/stage-bundled-plugin-runtime.mts"),
+            "export function prepareBundledPluginRuntime() { throw new Error('unexpected staging'); }\n",
+          );
+          const entry = path.join(checkoutRoot, "dist/plugins/build-smoke-entry.js");
+          const receipt = path.join(fixtureRoot, "smoke-home");
+          mkdirSync(path.dirname(entry), { recursive: true });
+          writeFileSync(
+            entry,
+            `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+const home = process.env.OPENCLAW_HOME;
+const db = new DatabaseSync(path.join(home, "lease.sqlite"));
+process.once("exit", () => {
+  const present = fs.existsSync(home);
+  db.close();
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ home, present, closed: !db.isOpen }));
+});
+${outcome === "SIGTERM" ? 'process.emit("SIGTERM");' : 'throw new Error("fixture import failed");'}
+`,
+          );
+          const result = await runNode(
+            [path.join(checkoutRoot, script)],
+            {
+              ...testRunnerFixtureEnv(),
+              TMPDIR: fixtureRoot,
+              TMP: fixtureRoot,
+              TEMP: fixtureRoot,
+            },
+            checkoutRoot,
+          );
+          expectExit(result, code);
+          if (outcome === "failure") {
+            expect(result.stderr).toContain("fixture import failed");
+          }
+          const closed = JSON.parse(readFileSync(receipt, "utf8")) as {
+            home: string;
+            present: boolean;
+            closed: boolean;
+          };
+          expect(closed).toMatchObject({ present: true, closed: true });
+          expect(existsSync(closed.home)).toBe(false);
+        },
+      );
+    },
+  );
+
   it
     .skipIf(process.platform === "win32")
     .for(["scripts/run-vitest.mjs", "scripts/check-changed.mjs"] as const)(
@@ -549,3 +612,47 @@ it("joins commands before deleting a rejected fixture", async () => {
   expect(result.stdout).toBe("completed");
   expect(existsSync(root)).toBe(false);
 });
+
+it.each(["aggregate", "cause"] as const)(
+  "retains fixture evidence for nested %s cleanup failures",
+  async (kind) => {
+    const failure = Object.assign(new Error("child cleanup unverified"), {
+      processTreeState: "indeterminate",
+    });
+    const bodyFailure = new Error("fixture assertion failed");
+    const nested =
+      kind === "aggregate"
+        ? new AggregateError([bodyFailure, failure], "body and cleanup failed")
+        : new Error("cleanup wrapper", { cause: failure });
+    let root = "";
+    try {
+      const error = await withShimFixture(
+        TSX_SHIM_WRAPPERS[0],
+        async ({ fixtureRoot, runNode }) => {
+          root = fixtureRoot;
+          writeFileSync(path.join(root, "evidence"), "keep");
+          const result = await runNode(
+            ["-e", 'process.stdout.write("joined stdout"); process.stderr.write("joined stderr");'],
+            testRunnerFixtureEnv(),
+            root,
+          );
+          expectExit(result, 0);
+          throw nested;
+        },
+      ).catch((cause: unknown) => cause);
+      expect(existsSync(root), "nested unverified custody retains the fixture").toBe(true);
+      expect(readFileSync(path.join(root, "evidence"), "utf8")).toBe("keep");
+      expect(error).toMatchObject({ message: expect.stringContaining(root), cause: nested });
+      expect((error as Error & { cause?: unknown }).cause).toBe(nested);
+      expect(managedChild.hasUnjoinedWork(error)).toBe(true);
+      const output = readFileSync(path.join(root, "command-output.log"), "utf8");
+      expect(output).toContain("joined stdout");
+      expect(output).toContain("joined stderr");
+    } finally {
+      // The real command joined; only the synthetic cleanup receipt retains this root.
+      if (root) {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  },
+);

@@ -1,6 +1,6 @@
 import { AsyncContext } from "../shared/async-context.js";
 import { runWithAsyncStore } from "../shared/async-store.js";
-import { throwSettledAggregate } from "./error-graph-internal.js";
+import { materializeErrorStack, throwSettledAggregate } from "./error-graph-internal.js";
 import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
@@ -15,6 +15,17 @@ export type SqliteReadOnlyWorkerScope = {
 export const readOnlyWorkerScope = new AsyncContext<SqliteReadOnlyWorkerScope>(
   Symbol("sqliteReadOnlyWorkerScope"),
 );
+
+// Retired scopes keep their cancellation signal. Caller-first ordering preserves the
+// caller's reason when both signals are already aborted.
+export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal | undefined {
+  const scope = readOnlyWorkerScope.getStore();
+  return scope
+    ? signal
+      ? AbortSignal.any([signal, scope.controller.signal])
+      : scope.controller.signal
+    : signal;
+}
 
 export class SqliteReadOnlyWorkerScopeClosedError extends Error {
   readonly code = "SQLITE_READONLY_WORKER_SCOPE_CLOSED";
@@ -51,6 +62,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
         options?.signal.removeEventListener("abort", abort);
         scope.active = false;
         scope.controller.abort(new SqliteReadOnlyWorkerScopeClosedError());
+        materializeErrorStack(scope.controller.signal.reason);
         await Promise.allSettled(scope.pending);
         const closed = await Promise.allSettled([
           scope.worker?.close(),

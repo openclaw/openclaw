@@ -7,7 +7,7 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import {
   runUtilityCompletion,
   type UtilityCompletionAttempt,
@@ -133,7 +133,6 @@ async function runLabelAttempts(
   const maxLength = resolvePositiveInteger(params.maxLength, DEFAULT_MAX_LABEL_LENGTH);
   const assertCurrent = () => {
     params.assertCurrent?.();
-    params.operatorAuthority?.assertCurrent();
     params.abortSignal?.throwIfAborted();
   };
   const seen = new Set(

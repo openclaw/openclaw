@@ -7,6 +7,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
@@ -19,7 +20,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
-import { isImmutableGitCommitRef } from "./git-install.js";
+import { isImmutableGitCommitRef } from "./git-source-spec.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import type {
@@ -431,10 +432,8 @@ async function cloneMarketplaceRepo(params: {
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-"));
   const repoDir = path.join(tmpDir, "repo");
-  const cleanup = async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  };
-  params.logger?.info?.(`Cloning marketplace source ${normalized.label}...`);
+  const cleanup = () => fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
+  params.logger?.info?.(terminalText`Cloning marketplace source ${normalized.label}...`);
   const acquired = await acquireGitSource({
     ...normalized,
     repoDir,
@@ -709,7 +708,7 @@ async function downloadUrlToTempFile(
         },
       };
     } finally {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     }
   } catch (error) {

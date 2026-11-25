@@ -76,7 +76,7 @@ describe("chat transcript cache", () => {
     expect(historyBuildReads).toBeGreaterThan(0);
   });
 
-  it("keeps multi-part run usage current when only output tokens change", () => {
+  it("keeps multi-part run usage current when only output tokens change", async () => {
     const runId = "run-composed";
     const group = (id: string, role: string, timestamp: number, content: string) => ({
       kind: "group",
@@ -124,7 +124,7 @@ describe("chat transcript cache", () => {
       });
     const tokens = () => container.querySelector(".chat-working-indicator__tokens")?.textContent;
     drawUsage(5_500, 1);
-    expect(tokens()).toContain("5.5k");
+    await expect.poll(tokens).toContain("5.5k");
     drawUsage(7_200, 2);
     expect(tokens()).toContain("7.2k");
   });

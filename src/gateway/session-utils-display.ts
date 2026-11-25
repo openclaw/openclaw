@@ -222,23 +222,6 @@ export function projectGatewaySessionRunState(params: {
     fields.status = liveSubagentRunActive
       ? subagentStatus
       : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
-    const ownsInterruptedSession =
-      entry?.lifecycleRunId === subagentRun.runId ||
-      (entry?.lifecycleRunId === undefined && entry?.lastRunId === subagentRun.runId) ||
-      (subagentRun.taskRunId !== undefined &&
-        entry?.subagentRecovery?.lastRunId === subagentRun.runId &&
-        entry.lifecycleRunId ===
-          (entry.subagentRecovery.sessionLifecycleRunId ?? subagentRun.taskRunId));
-    if (
-      fields.status === "interrupted" &&
-      subagentStatus === "failed" &&
-      subagentRun.execution.interruptionReason === "gateway-restart" &&
-      ownsInterruptedSession
-    ) {
-      fields.status = "failed";
-      fields.lastRunError ??=
-        "Restart recovery could not reach the parent. Inspect the child session before continuing.";
-    }
     // A lifecycle start after the spawn run ended belongs to a follow-up turn; do not refill
     // its cleared terminal fields from the finished spawn run.
     const fallbackEndedAt =
@@ -324,9 +307,11 @@ export function projectPreparedSessionChild(
   parentKey: string,
   now: number,
   rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
+  hasActiveDescendantRun = false,
 ) {
-  const active = projectGatewaySessionRunState({ ...child, now, rowContext }).fields
-    .hasActiveSubagentRun;
+  const active =
+    hasActiveDescendantRun ||
+    projectGatewaySessionRunState({ ...child, now, rowContext }).fields.hasActiveSubagentRun;
   return {
     included: resolveSessionChildOwners({
       ...child,

@@ -16,7 +16,7 @@ import {
 } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
-  readActivePathEntryRelationFromProjection,
+  isOnActivePathInProjection,
   readActiveTranscriptEntryAnchorFromProjection,
   readActiveTranscriptEntryAnchorInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
@@ -82,7 +82,7 @@ export function readSessionEntryTranscriptFacts(
       transcript: {
         anchors: [],
         ...(selection.activePathEntryId !== undefined
-          ? { activePathRelation: selection.activePathEntryId === null ? "exact" : "off-path" }
+          ? { onActivePath: selection.activePathEntryId === null }
           : {}),
       },
     };
@@ -274,7 +274,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       const activePath =
         selection.activePathEntryId !== undefined && currentProjection
           ? {
-              activePathRelation: readActivePathEntryRelationFromProjection(
+              onActivePath: isOnActivePathInProjection(
                 currentProjection,
                 selection.activePathEntryId,
               ),

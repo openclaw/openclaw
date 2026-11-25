@@ -12,7 +12,7 @@ import {
   resolveExplicitIncognitoAgentSqliteTarget,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { openMemoryContextEngineTurnOutboxStore } from "./context-engine-turn-outbox-memory.js";
 import type {
@@ -41,7 +41,7 @@ async function runContextEngineTurnOutboxCommand(
     env,
     path: resolveOpenClawAgentSqlitePath({ agentId: target.agentId, env, path: target.path }),
   };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   try {
     const worker =
       await openOpenClawAgentSqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>(

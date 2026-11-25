@@ -6,6 +6,8 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { captureModelCostPricing } from "../../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../../utils/usage-format.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcome,
@@ -14,6 +16,7 @@ import {
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
+import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -29,6 +32,7 @@ import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js"
 import { resolveRuntimeModelAttempt } from "./backend.js";
 import {
   isSettledTurnCutOffByOutputLimit,
+  resolveSettledTurnFinalizationRequest,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
@@ -39,7 +43,6 @@ import {
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
@@ -69,6 +72,28 @@ async function prepareSettledTurnFinalization(
   options: SettledTurnFinalizationOptions,
 ) {
   const { attempt } = input;
+  let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
+  const priceTerminalUsage = async (prepared: ReturnType<typeof prepareEmbeddedRunTerminal>) => {
+    const meta = prepared.agentMeta;
+    if (meta.costUsd !== undefined) {
+      return;
+    }
+    const costUsd = await estimateAggregateUsageCostAsync({
+      usage: meta.usage,
+      prepareCost: async () => {
+        pricing ??= captureModelCostPricing(input.runParams.config, input.runParams.agentDir);
+        return (await pricing).resolve(meta.provider, meta.model);
+      },
+    });
+    if (costUsd !== undefined) {
+      meta.costUsd = costUsd;
+      if (meta.usage) {
+        meta.usage.cost = { ...meta.usage.cost, total: costUsd };
+      }
+    } else if (meta.usage) {
+      delete meta.usage.cost;
+    }
+  };
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
   const observeSourceDelivery = async () => {
     let sourceReplyDeliveryState: TerminalPreparationInput["sourceReplyDeliveryState"];
@@ -97,6 +122,7 @@ async function prepareSettledTurnFinalization(
     ...input,
     ...delivery,
   });
+  await priceTerminalUsage(prepared);
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.runParams,
     attempt,
@@ -115,7 +141,7 @@ async function prepareSettledTurnFinalization(
       !input.runParams.providerReviewAcknowledgment &&
       typeof options.harness.finalizeSettledTurn === "function",
   });
-  return { prepared, prompt, observeSourceDelivery };
+  return { prepared, prompt, observeSourceDelivery, priceTerminalUsage };
 }
 
 /** Requests projection only after the canonical delivery and finalization decision. */
@@ -162,11 +188,13 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     preparedAttempt.sessionTarget || sessionTarget || sessionWriterFence
       ? { ...preparedAttempt.sessionTarget, ...sessionTarget, ...sessionWriterFence }
       : undefined;
-  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority({
-    attempt: preparedAttempt,
-    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+  const finalizationParams = {
+    ...preparedAttempt,
     sessionTarget: committedSessionTarget,
-  });
+    sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
+    sessionFile: initial.sessionFileUsed ?? preparedAttempt.sessionFile,
+  };
+  const sessionWriterDeliveryAuthority = resolveSessionWriterDeliveryAuthority(finalizationParams);
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
   const preparation = await prepareSettledTurnFinalization(
@@ -189,7 +217,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     input.finalization.abortSignal,
   );
   if (!assertFinalizationActive) {
-    throw new Error("admitted run authority is no longer active");
+    throw new Error("This agent run is no longer active. Start a new turn to retry.");
   }
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -211,21 +239,22 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     for (;;) {
       finalizationAttempt += 1;
       assertFinalizationActive();
-      finalization = await runPreparedSettledTurnFinalization({
-        attempt: {
-          ...input.finalization.preparedAttempt,
-          // The first transcript append may have committed the writer after
-          // dispatch preparation. The summary must retain that original fence.
-          ...(committedSessionTarget ? { sessionTarget: committedSessionTarget } : {}),
-          sessionId: committedSessionTarget?.sessionId ?? initial.sessionIdUsed,
-          sessionFile: initial.sessionFileUsed ?? input.finalization.preparedAttempt.sessionFile,
-        },
-        settledAttempt: initial.attempt,
-        harness: input.finalization.harness,
-        prompt,
-        createAttemptControls: input.finalization.createAttemptControls,
-        abortSignal: input.finalization.abortSignal,
-      });
+      const runFinalization = () =>
+        runPreparedSettledTurnFinalization({
+          attempt: finalizationParams,
+          settledAttempt: initial.attempt,
+          harness: input.finalization.harness,
+          prompt,
+          createAttemptControls: input.finalization.createAttemptControls,
+          abortSignal: input.finalization.abortSignal,
+        });
+      finalization = finalizationParams.sessionManager
+        ? await withSessionManagerWriteAssertion(
+            finalizationParams.sessionManager,
+            assertFinalizationActive,
+            runFinalization,
+          )
+        : await runFinalization();
       assertFinalizationActive();
       finalizerAnswered = finalization.outcome === "answered";
       attempt = finalization.attempt;
@@ -322,6 +351,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     ...(await observeSourceDelivery()),
     lastRunPromptUsage,
   });
+  await preparation.priceTerminalUsage(finalizedPrepared);
   // A tool-free summary cannot show that the cut-off work finished, so the host
   // says the turn was cut short instead of presenting the summary as a clean finish.
   if (
@@ -383,13 +413,11 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   };
 }
 
-function resolveSessionWriterDeliveryAuthority(input: {
-  attempt: EmbeddedRunAttemptParams;
-  sessionId: string;
-  sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
-  const target = input.sessionTarget ?? input.attempt.sessionTarget;
-  const sessionKey = target?.sessionKey ?? input.attempt.sessionKey;
+function resolveSessionWriterDeliveryAuthority(
+  attempt: EmbeddedRunAttemptParams,
+): ReplyPayloadMetadata["sessionWriterDeliveryAuthority"] {
+  const target = attempt.sessionTarget;
+  const sessionKey = target?.sessionKey ?? attempt.sessionKey;
   const expectedLifecycleRevision = target?.expectedLifecycleRevision;
   const expectedWriterRunId = target?.expectedWriterRunId;
   if (
@@ -399,10 +427,8 @@ function resolveSessionWriterDeliveryAuthority(input: {
     return undefined;
   }
   return {
-    ...(target?.agentId || input.attempt.agentId
-      ? { agentId: target?.agentId ?? input.attempt.agentId }
-      : {}),
-    expectedSessionId: input.sessionId,
+    ...(target?.agentId || attempt.agentId ? { agentId: target?.agentId ?? attempt.agentId } : {}),
+    expectedSessionId: attempt.sessionId,
     ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
     ...(expectedWriterRunId !== undefined ? { expectedWriterRunId } : {}),
     sessionKey,
@@ -457,14 +483,10 @@ async function runPreparedSettledTurnFinalization(input: {
         input.harness,
       ),
     );
-    const outcome = finalization.outcome;
-    const result = finalization.result;
-    const settledAttempt = input.settledAttempt;
-    const prompt = input.prompt;
-    const agentHarnessId = input.attempt.agentHarnessId;
-    const runtimePlan = input.attempt.runtimePlan;
+    const { outcome, result } = finalization;
+    const { settledAttempt, prompt } = input;
+    const { agentHarnessId, runtimePlan } = input.attempt;
     const { preparedTerminalReply } = result;
-    const text = preparedTerminalReply.text;
     // Finalization replaces terminal ownership, not host-private facts from settled tools.
     // Its response model does not replace the original runtime-owned selection.
     // Replay, abort, and lifecycle state remain finalizer-local.
@@ -488,7 +510,7 @@ async function runPreparedSettledTurnFinalization(input: {
         finalPromptText: prompt,
         ...copyAttemptDeliveryState(settledAttempt),
         messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
-        assistantTexts: text ? [text] : [],
+        assistantTexts: preparedTerminalReply.text ? [preparedTerminalReply.text] : [],
         assistantTranscriptOwned: result.assistantTranscriptOwned,
         assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
         lastAssistantTextMessageIndex: result.assistantMessageIndex,

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -18,13 +19,20 @@ import type {
   SessionPendingInputWithdrawalResult,
 } from "./session-pending-input-withdrawal.worker.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import {
   settleSessionWorkerReceipt,
   type SessionWorkerReceiptAdmission,
 } from "./session-worker-receipt.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
-type WithdrawalSelection = { runId: string } | { inputIds: readonly string[] };
+type WithdrawalSelection =
+  | { runId: string }
+  | {
+      inputIds: readonly string[];
+      audience?: import("./session-pending-input-audience.js").PendingInputAudience;
+    };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -41,12 +49,15 @@ function readWithdrawalResult(
     receipt.kind !== "session-pending-input-withdrawal" ||
     receipt.sessionKey !== input.sessionKey ||
     receipt.sessionId !== input.sessionId ||
-    ("runId" in input
-      ? receipt.runId !== input.runId || typeof receipt.outcome !== "boolean"
-      : !Array.isArray(receipt.inputIds) ||
-        receipt.inputIds.length !== input.inputIds.length ||
-        JSON.stringify(receipt.inputIds) !== JSON.stringify(input.inputIds) ||
-        !isRecord(receipt.outcome))
+    ("lifecycleGeneration" in input
+      ? receipt.lifecycleGeneration !== input.lifecycleGeneration ||
+        typeof receipt.outcome !== "boolean"
+      : "runId" in input
+        ? receipt.runId !== input.runId || typeof receipt.outcome !== "boolean"
+        : !Array.isArray(receipt.inputIds) ||
+          receipt.inputIds.length !== input.inputIds.length ||
+          JSON.stringify(receipt.inputIds) !== JSON.stringify(input.inputIds) ||
+          !isRecord(receipt.outcome))
   ) {
     return undefined;
   }
@@ -73,9 +84,10 @@ async function withdrawSessionPendingInputs(
   const input: SessionPendingInputWithdrawal = {
     sessionKey: logical.sessionKey,
     sessionId: target.sessionId,
+    endCause: "delete",
     ...selection,
   };
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     target,
     "Pending input withdrawal changed its captured database owner",
   );
@@ -83,9 +95,14 @@ async function withdrawSessionPendingInputs(
   const withdraw = async () => {
     const resolved = await prepareSqliteScope(target);
     assertCurrent();
-    const { options, identity, assertCurrent: assertSourceCurrent } = captured.resolve(resolved);
+    const {
+      options,
+      identity,
+      assertCurrent: assertSourceCurrent,
+    } = await captured.resolve(resolved);
+    assertCurrent();
     if (!identity.key.startsWith("file:")) {
-      return "runId" in input
+      return !("inputIds" in input)
         ? false
         : { kind: "dismissed" as const, inputIds: [], runIds: [], missingIds: [...input.inputIds] };
     }
@@ -174,10 +191,39 @@ export async function dismissRetiredSessionPendingInputs(
   scope: WithdrawalScope,
   inputIds: readonly string[],
   assertCurrent: () => void,
+  audience?: import("./session-pending-input-audience.js").PendingInputAudience,
 ): Promise<RetiredPendingInputDismissalOutcome> {
-  const result = await withdrawSessionPendingInputs(scope, { inputIds }, assertCurrent);
+  const result = await withdrawSessionPendingInputs(scope, { inputIds, audience }, assertCurrent);
   if (typeof result === "boolean") {
     throw new Error("Retired input withdrawal returned a queued-input result");
   }
   return result;
+}
+
+export async function listOrphanedSessionPendingInputTargets(
+  scope: Omit<WithdrawalScope, "sessionKey" | "sessionId">,
+) {
+  const captured = {
+    ...scope,
+    sessionKey: "",
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  const target = await captureSessionStoreReadTarget(
+    captured,
+    "Orphaned input discovery changed its captured database owner",
+  );
+  const resolved = await prepareSqliteScope(captured);
+  const { options, identity, source, assertReadCurrent } = await target.resolve(resolved);
+  if (!identity.key.startsWith("file:")) {
+    return [];
+  }
+  const targets = await withSessionHistoryWorkerDatabase(options, (owner) =>
+    owner.readPendingInputOrphans({
+      env: captured.env,
+      source,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    }),
+  );
+  assertReadCurrent();
+  return targets;
 }

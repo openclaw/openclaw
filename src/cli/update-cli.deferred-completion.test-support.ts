@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-import { createUpdateFixtureAssertions } from "./update-cli-shared-fixture.test-support.js";
+import {
+  createUpdateFixtureAssertions,
+  withPostCoreUpdateFixtureRun,
+} from "./update-cli-shared-fixture.test-support.js";
 
 export const readPackageVersion = vi.fn();
 export const syncPluginsForUpdateChannel = vi.fn();
@@ -50,8 +53,9 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtimeCapture,
 }));
-vi.mock("../infra/update-runner-git.js", () => ({
-  updateGitCheckout: vi.fn(),
+// mock-isolation: the real runner builds Git worktrees; this suite owns deferred completion only.
+vi.mock("../infra/update-runner-git-release.js", () => ({
+  updateGitRelease: vi.fn(),
 }));
 // Runtime publication has its own fixture; this suite owns deferred completion and config writes.
 vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
@@ -148,7 +152,7 @@ const {
 } = await import("./update-cli/update-cli-config.test-support.js");
 const { writeJsonFixture } = await import("./update-cli/update-cli-package.test-support.js");
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
-export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
+export const { updateGitRelease } = await import("../infra/update-runner-git-release.js");
 const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
 export { runExec };
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
@@ -213,7 +217,7 @@ export function installDeferredCompletionFixture() {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
         ...env,
       },
-      () => updateCommand(options),
+      () => withPostCoreUpdateFixtureRun(() => updateCommand(options)),
     );
   const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) =>
     runPostCoreCommand({ yes: true, restart: false }, env);
@@ -267,9 +271,7 @@ export function installDeferredCompletionFixture() {
     vi.mocked(runCommandWithTimeout).mockRejectedValue(
       new Error("Completion must not run a core install"),
     );
-    vi.mocked(updateGitCheckout).mockRejectedValue(
-      new Error("Completion must not run core update"),
-    );
+    vi.mocked(updateGitRelease).mockRejectedValue(new Error("Completion must not run core update"));
     spawn.mockImplementation(() => {
       throw new Error("Completion must not spawn core update");
     });

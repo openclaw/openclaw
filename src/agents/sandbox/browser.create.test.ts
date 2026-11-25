@@ -569,7 +569,7 @@ describe("sandbox browser lifecycle", () => {
           // Keep the production deadline clock still while native HTTP establishes
           // the fixture's stalled request. Advance that same 250ms deadline only
           // after real request admission; never replace fetch or its abort signal.
-          vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
           startupResult = ensureTestSandboxBrowser({ cfg })
             .then(
               () => new Error("Sandbox browser startup completed before the stalled request"),
@@ -710,7 +710,7 @@ describe("sandbox browser lifecycle", () => {
         }
       };
       const server = createServer();
-      const assertCurrent = await captureSandboxStateOwner();
+      const { assertCurrent } = await captureSandboxStateOwner();
       const retry = vi.fn();
       const quotaRecovery = phase.startsWith("quota");
       let preparation: Promise<unknown> | undefined;

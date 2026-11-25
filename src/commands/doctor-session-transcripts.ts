@@ -254,12 +254,12 @@ export async function noteSessionTranscriptHealth(options?: {
       targets: previewTargets ?? listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
-    const resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
+    const resolvedSkillsReport = await repairCanonicalSessionResolvedSkills(rowRepairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
     const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
-    const deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
-    repairLegacySessionExecPolicy(rowRepairParams);
-    repairLegacyDashboardChatTypes(rowRepairParams);
+    const deliveryReport = await repairCanonicalSessionDeliveryStates(rowRepairParams);
+    await repairLegacySessionExecPolicy(rowRepairParams);
+    await repairLegacyDashboardChatTypes(rowRepairParams);
     const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
       ...rowRepairParams,
       authority: maintenanceAuthority,

@@ -149,8 +149,6 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
         clearPendingLifecycleTimeout: vi.fn(),
         sweepPendingLifecycle: vi.fn(),
         completeSubagentRunWithRecovery: vi.fn(),
-        getGatewayRecoveryRuntime: () => undefined,
-        finalizeInterruptedSubagentRun: vi.fn(async () => 0),
         startSubagentAnnounceCleanupFlow: controller.startSubagentAnnounceCleanupFlow,
         completeCleanupBookkeeping: controller.completeCleanupBookkeeping,
         resumeRequesterSettleWake: controller.resumeRequesterSettleWake,
@@ -160,7 +158,6 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
         sessionEffectsHostCurrent: (entry) => controller.sessionEffectsHostCurrent(entry),
         shouldSuppressSessionEffects: (entry, effects) =>
           controller.shouldSuppressSessionEffects(entry, effects),
-        discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
         shouldEmitEndedHookForRun: () => false,
         emitSubagentEndedHookForRun: vi.fn(async () => {}),
         callGateway: vi.fn(),

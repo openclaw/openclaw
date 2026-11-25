@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker proxy lifetime", () => {
-  it("releases completed command proxies after the host closes", async () => {
+  it.each([1, 5])("releases %i completed command proxies after the host closes", async (count) => {
     const source = `
       import {createSpawnBrokerHost} from ${JSON.stringify(new URL("./host.js", import.meta.url).href)};
       const host = createSpawnBrokerHost();
@@ -18,7 +18,7 @@ describe.skipIf(skipBrokerTests)("spawn broker proxy lifetime", () => {
         return new WeakRef(child);
       }
       const references = [];
-      for (let index = 0; index < 5; index++) references.push(await command());
+      for (let index = 0; index < ${count}; index++) references.push(await command());
       await host.close();
       for (let index = 0; index < 5; index++) {
         // Collect after the completed command's promise frames have unwound.

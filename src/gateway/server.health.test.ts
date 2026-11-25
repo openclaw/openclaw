@@ -4,15 +4,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
+import * as gatewayCrash from "../infra/gateway-crash.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { readHttp } from "./control-ui-fixture.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
 
-// Health/presence coverage does not exercise post-restart delivery recovery.
-// Keep that auto-reply graph in the dedicated restart-sentinel suite.
+// mock-isolation: Health/presence coverage keeps the auto-reply graph in the dedicated restart-sentinel suite.
 vi.mock("./server-restart-sentinel.js", () => ({
-  recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
+  recoverPendingProducedSessionDeliveries: vi.fn(async () => undefined),
 }));
 
 const presenceTimeout = { timeout: 6_000 };
@@ -32,6 +33,54 @@ installGatewayTestHooks({
   cleanup: async () => {
     await harness?.close();
   },
+});
+
+test("binds the direct local startup observation to the WebSocket hello boot ID", async ({
+  signal,
+}) => {
+  await harness.server.startupSettled;
+  const { ws, hello } = await harness.openClient();
+  try {
+    const url = `http://127.0.0.1:${harness.port}/startupz`;
+    const headers = { "x-openclaw-startup-boot-id": "1" };
+    const response = await readHttp(url, { headers, signal });
+    expect(response.status).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    const body = response.json() as { gatewayBootId?: string };
+    expect(body).toMatchObject({
+      ok: true,
+      status: "started",
+      gatewayBootId: expect.stringMatching(/\S/),
+    });
+    expect(hello).toHaveProperty("server.bootId", body.gatewayBootId);
+    const plain = await readHttp(url, { signal });
+    expect(plain.status).toBe(200);
+    expect(plain.json()).not.toHaveProperty("gatewayBootId");
+    const foreignHost = await readHttp(url, {
+      headers: { ...headers, host: "gateway.example.test" },
+      signal,
+    });
+    expect(foreignHost.status).toBe(200);
+    expect(foreignHost.json()).not.toHaveProperty("gatewayBootId");
+  } finally {
+    ws.close();
+  }
+});
+
+test("health and status keep a predecessor crash visible after recovery", async () => {
+  const recentCrashes = [
+    { bootId: "previous-run", pid: 42, startedAtMs: 1_000, detectedAtMs: 3_000, signal: "SIGSEGV" },
+  ];
+  const snapshot = vi.spyOn(gatewayCrash, "getGatewayRecentCrashes").mockReturnValue(recentCrashes);
+  const { ws } = await harness.openClient();
+  try {
+    for (const method of ["health", "health", "status"]) {
+      expect(await rpcReq(ws, method, {})).toMatchObject({ ok: true, payload: { recentCrashes } });
+    }
+  } finally {
+    ws.close();
+    snapshot.mockRestore();
+  }
 });
 
 test(

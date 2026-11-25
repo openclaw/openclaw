@@ -33,8 +33,15 @@ vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   })),
 }));
 
+// mock-isolation: Auth import fixtures own credentials; catalog filesystem migration is covered by its owner suite.
 vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
-  maybeMigrateModelCatalogCredentials: vi.fn(async () => undefined),
+  maybeMigrateModelCatalogCredentials: vi.fn(async () => ({
+    detected: 0,
+    migrated: 0,
+    removed: 0,
+    warnings: [],
+    findings: [],
+  })),
 }));
 
 let testState: OpenClawTestState;

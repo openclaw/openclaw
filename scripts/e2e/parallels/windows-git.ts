@@ -134,11 +134,11 @@ print(digest)`,
   return zipPath;
 }
 
-export function ensureGuestGit(input: {
+export async function ensureGuestGit(input: {
   guest: WindowsGuest;
   server: HostServer | null;
-  minGitZipPath: string;
-}): void {
+  getMinGitZipPath: () => Promise<string>;
+}): Promise<void> {
   const existing = input.guest.exec(
     ["cmd.exe", "/d", "/s", "/c", "where git.exe && git.exe --version"],
     {
@@ -149,11 +149,12 @@ export function ensureGuestGit(input: {
   if (existing.includes("git version")) {
     return;
   }
-  if (!input.server || !input.minGitZipPath) {
+  if (!input.server) {
     die("MinGit artifact/server missing");
   }
-  const minGitUrl = input.server.urlFor(input.minGitZipPath);
-  const minGitName = path.basename(input.minGitZipPath);
+  const minGitZipPath = await input.getMinGitZipPath();
+  const minGitUrl = input.server.urlFor(minGitZipPath);
+  const minGitName = path.basename(minGitZipPath);
   input.guest.powershell(
     `$ErrorActionPreference = 'Stop'
 $depsRoot = Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps'

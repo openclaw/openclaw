@@ -38,6 +38,7 @@ export async function runPostActivationInspections(params: {
   gatewayReady: boolean;
   result: UpdateRunResult;
   timeoutMs?: number;
+  checkIds?: string[];
   nodeRunner?: string;
   ownedManagedUpdateEnv?: NodeJS.ProcessEnv;
 }): Promise<UpdateRunResult> {
@@ -64,11 +65,12 @@ export async function runPostActivationInspections(params: {
     // The last target Doctor owns this policy; the replaced parent graph does not.
     const inlineReceipt = params.result.postUpdate?.plugins?.doctorLint?.deferredInspectionCheckIds;
     const selectors = UpdateDoctorDeferredInspectionCheckIdsSchema.safeParse(
-      inlineReceipt !== undefined
-        ? inlineReceipt
-        : params.result.steps.findLast(
-            (candidate) => candidate.deferredInspectionCheckIds !== undefined,
-          )?.deferredInspectionCheckIds,
+      params.checkIds ??
+        (inlineReceipt !== undefined
+          ? inlineReceipt
+          : params.result.steps.findLast(
+              (candidate) => candidate.deferredInspectionCheckIds !== undefined,
+            )?.deferredInspectionCheckIds),
     );
     if (!selectors.success) {
       return incomplete("the target Doctor did not report usable deferred inspection selectors");
@@ -153,16 +155,19 @@ export async function runPostActivationInspections(params: {
     if (report.checksRun !== new Set(checkIds).size) {
       return incomplete("the target lint did not run every deferred inspection");
     }
+    // An empty pending set proves every deferred check ran, including advisory findings.
+    step.deferredInspectionCheckIds = [];
     const warnings = report.doctorLintFindings
       .filter((finding) => finding.severity !== "info")
       .map((finding) => `${finding.checkId}: ${finding.message}`);
-    if (warnings.length > 0) {
-      step.warnings = warnings;
-    }
+    step.warnings = warnings;
     if (report.doctorLintFindings.length > 0) {
       step.advisory = {
         kind: "recoverable-maintenance",
-        message: `Deferred Doctor inspections reported ${report.doctorLintFindings.length} advisory finding${report.doctorLintFindings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`,
+        message:
+          warnings.length > 0
+            ? `Doctor inspections reported ${warnings.length} advisory finding${warnings.length === 1 ? "" : "s"} after restart. Run \`openclaw doctor --lint --all --severity-min info\` to inspect them.`
+            : "Doctor inspections completed with informational findings. Run `openclaw doctor --lint --all --severity-min info` to see them.",
       };
     }
     return { ...params.result, steps: [...params.result.steps, step] };

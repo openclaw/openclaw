@@ -1,14 +1,10 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { buildRuntimeProbeEnv } from "../../daemon/runtime-paths.js";
-import * as containerEnvironment from "../../infra/container-environment.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
-import * as versionManagerPath from "../../shared/version-manager-path.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
-import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 
 const nodeRuntimeVersions = new Map<string, NodeJS.ProcessVersions>();
 
@@ -45,11 +41,6 @@ export function stubNodeRuntime() {
   vi.spyOn(process, "versions", "get").mockReturnValue(runtime.versions);
   vi.spyOn(process, "version", "get").mockReturnValue(`v${runtime.versions.node}`);
   return runtime;
-}
-
-export function mockNonContainerSystemRuntime(): void {
-  vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
-  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
 }
 
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
@@ -128,46 +119,3 @@ export const unsupportedServiceRuntimeFixture = {
   sqliteProbe: { available: true, version: "3.51.3", text: false, blob: true, json: true },
   capabilityError: "Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)",
 } as const;
-
-export function currentGitCoreFixture(root: string, version: string) {
-  const outcome = updateResult({
-    status: "skipped",
-    mode: "git",
-    root,
-    reason: "already-current",
-    before: { version, sha: "abc123" },
-  });
-  return {
-    outcome,
-    runtimeRefusal: {
-      status: "error",
-      reason: "node-runtime-preflight",
-      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.22.1", root) },
-    },
-  };
-}
-
-export function expectInterruptedDoctorPackageRollback(runs: UpdateRunRecord[]): void {
-  expect(runs).toMatchObject([
-    {
-      phase: "finished",
-      status: "failed",
-      reason: "doctor-failed",
-      verification: {
-        recovery: {
-          serviceRestartSafe: false,
-          packageRollbackVerified: true,
-          reason: "runtime-verification-failed",
-        },
-        rollbackOutcome: { status: "succeeded" },
-      },
-      steps: expect.arrayContaining([
-        expect.objectContaining({
-          step: "openclaw doctor",
-          status: "failed",
-          detail: expect.stringContaining("interrupted lifecycle"),
-        }),
-      ]),
-    },
-  ]);
-}

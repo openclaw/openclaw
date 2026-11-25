@@ -37,7 +37,7 @@ export class SampleVault extends VaultScanner {
     },
   ) {
     const data = await this.scan();
-    const query = input.query?.toLowerCase().trim();
+    const query = input.query?.toLowerCase().trim().normalize("NFC");
     const timeMatches = temporalPredicate(input);
     const types = input.type ? expandTypes(data.ontology, input.type) : null;
     const current = eligible(data, undefined, false);
@@ -63,7 +63,7 @@ export class SampleVault extends VaultScanner {
             r.title,
             ...(r.kind === "claim" ? [r.body] : []),
             ...(r.metadata.aliases ?? []),
-          ].some((v) => v.toLowerCase().includes(query))),
+          ].some((v) => v.toLowerCase().normalize("NFC").includes(query))),
     );
     matched.sort(
       (a, b) =>
@@ -335,13 +335,13 @@ export class SampleVault extends VaultScanner {
   }
   async attachment(input: { id: string; path: string; sha256: string; offset?: number }) {
     const data = await this.scan(),
-      records = data.records.filter((r) => r.id === input.id);
-    const evidence =
-      records.length === 1
-        ? records[0]!.metadata.evidence?.find(
-            (e) => e.path === input.path && e.sha256 === input.sha256,
-          )
-        : undefined;
+      records = data.records.filter((r) => r.id === input.id),
+      record = records.length === 1 ? records[0] : undefined;
+    const evidence = record
+      ? [...(record.metadata.evidence ?? []), ...annotationEvidence(record.metadata)].find(
+          (e) => e.path === input.path && e.sha256 === input.sha256,
+        )
+      : undefined;
     if (!evidence) {
       throw new Error("Attachment unavailable in this record and scope");
     }

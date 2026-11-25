@@ -152,6 +152,8 @@ describe("exec foreground failures", () => {
       noOutputTimedOut: false,
       aggregated: "",
     });
+    expect(details.message).toMatch(/timed out/i);
+    expect(details.message).toContain("Verify the resulting state before retrying");
     expect(details.durationMs).toBeTypeOf("number");
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
@@ -171,17 +173,12 @@ describe("exec foreground failures", () => {
 
     expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe("pty");
     const text = requireTextContent(result);
-    for (const fragment of [
-      "Command aborted by signal 9",
-      "OpenClaw selected its Linux OOM-score wrapper",
-      "attempts to set this child's oom_score_adj to 1000",
+    const details = result.details;
+    assert(details.status === "failed");
+    expect(text).toContain("Command aborted by signal 9");
+    expect(details.message).toContain(
       "SIGKILL alone does not identify whether the Linux OOM killer",
-      "Check cgroup memory events or kernel logs",
-      "If they show memory pressure, narrow the command",
-      "adjust memory, concurrency, or resource limits",
-    ]) {
-      expect(text).toContain(fragment);
-    }
+    );
     expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
   });
 

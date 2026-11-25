@@ -57,7 +57,9 @@ it.each([
 
   if (code === 0) {
     const warning = maintenance!.warnings.join("\n");
-    expect(warning).toContain("Gateway started but readiness was not verified");
+    expect(warning).toContain(
+      "Gateway started after Doctor maintenance, but readiness was not verified",
+    );
     expect(warning).toContain(phase);
     expect(warning).toContain("openclaw gateway status --deep");
     expect(warning).toContain("openclaw gateway diagnostics export");
@@ -68,11 +70,17 @@ it.each([
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("Doctor gateway-restoration failed"),
     );
-    expect(maintenance!.warnings).toEqual([]);
+    expect(maintenance!.warnings).toEqual([
+      expect.stringMatching(
+        /repair children have exited.*openclaw doctor --fix.*After repair succeeds.*openclaw gateway status --deep.*openclaw gateway start/s,
+      ),
+    ]);
   }
   expect(boundary.log).not.toHaveBeenCalledWith(
-    "Gateway restarted and verified after Doctor repair.",
+    "Gateway restarted and verified after Doctor maintenance.",
   );
+  // A stop duration is reported only for a verified restart.
+  expect(boundary.log).not.toHaveBeenCalledWith(expect.stringMatching(/^The Gateway was stopped/u));
   expect(boundary.restart).toHaveBeenCalledOnce();
 });
 

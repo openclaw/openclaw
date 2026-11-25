@@ -41,6 +41,7 @@ const defaults = {
   canStart: true,
   refuseManualStart: false,
   emptyCommand: false,
+  executable: "/usr/bin/openclaw",
 };
 let state = { ...defaults };
 
@@ -106,7 +107,7 @@ beforeEach(async () => {
         "a(sasbttttuii)",
         state.emptyCommand
           ? []
-          : [["/usr/bin/openclaw", ["/usr/bin/openclaw", "gateway"], false, 0, 0, 0, 0, 0, 0, 0]],
+          : [[state.executable, ["/usr/bin/openclaw", "gateway"], false, 0, 0, 0, 0, 0, 0, 0]],
       ),
       WorkingDirectory: property("s", "/home/gateway"),
       Environment: property("as", state.assignments),
@@ -130,6 +131,42 @@ beforeEach(async () => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("system-scope effective command", () => {
+  it.each(["/runtime/bun", "/runtime/node"])(
+    "reports native executable %s separately from argv zero",
+    async (executable) => {
+      const original = await readLoaded();
+      state.executable = executable;
+      const onEffectiveExecutable = vi.fn();
+      const command = await readSystemdServiceExecStart(env, {
+        requireEffective: true,
+        requireLoaded: true,
+        systemdReadTarget: target,
+        onEffectiveExecutable,
+      });
+      expect(command).toEqual(original);
+      expect(onEffectiveExecutable).toHaveBeenCalledExactlyOnceWith(executable);
+      expectNoLoad();
+    },
+  );
+
+  it.each(["invalid-command", "foreign-account", "manager-changed"] as const)(
+    "does not report an executable after %s",
+    async (failure) => {
+      state.emptyCommand = failure === "invalid-command";
+      state.serviceUser = failure === "foreign-account" ? "other" : "gateway";
+      state.managerChanges = failure === "manager-changed";
+      const onEffectiveExecutable = vi.fn();
+      await expect(
+        readSystemdServiceExecStart(env, {
+          requireEffective: true,
+          systemdReadTarget: target,
+          onEffectiveExecutable,
+        }),
+      ).rejects.toThrow();
+      expect(onEffectiveExecutable).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { canStart: false, refuse: false, empty: true, reason: "disabled-no-start" },
     { canStart: true, refuse: true, empty: true, reason: "refuse-manual-start" },

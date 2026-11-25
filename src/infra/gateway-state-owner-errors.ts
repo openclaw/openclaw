@@ -1,9 +1,26 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { LockPayload } from "./gateway-lock-payload.js";
 
-export class StateDatabaseAccessError extends Error {
-  override name = "StateDatabaseAccessError";
+const GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE =
+  "OpenClaw state process owner is no longer current";
+
+/**
+ * This process released or replaced its state owner, e.g. while an in-process
+ * restart hands state from the closing iteration to the next one. A plain Error
+ * keeps the message identical across worker replies and logs.
+ */
+export function createGatewayStateProcessOwnerRetiredError(): Error {
+  return new Error(GATEWAY_STATE_PROCESS_OWNER_RETIRED_MESSAGE);
 }
+
+export const StateDatabaseAccessError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseAccessError"),
+  () =>
+    class extends Error {
+      override name = "StateDatabaseAccessError";
+    },
+);
+export type StateDatabaseAccessError = InstanceType<typeof StateDatabaseAccessError>;
 
 export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayStateOwnerContentionError"),

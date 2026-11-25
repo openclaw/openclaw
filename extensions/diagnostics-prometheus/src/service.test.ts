@@ -98,12 +98,12 @@ openclaw_gateway_rpc_requests_total{method="health"} 8`);
 openclaw_gateway_rpc_client_requests_total{client_kind="macos",method="health"} 1`);
     expectMetrics(rendered)(`openclaw_gateway_rpc_requests_total{method="sessions.list"} 3
 openclaw_gateway_rpc_requests_total{method="cron.list"} 3
-openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2
-openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1
+openclaw_cron_list_requests_total{compact="true",page="first",scope="session",source="wire"} 2
+openclaw_cron_list_requests_total{compact="true",page="first",scope="session",source="internal"} 1
 openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2
 openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="internal"} 1
-openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2
-openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1`);
+openclaw_models_list_requests_total{scope="agent",source="wire",view="configured"} 2
+openclaw_models_list_requests_total{scope="agent",source="internal",view="configured"} 1`);
     expect(
       rendered
         .split("\n")
@@ -363,37 +363,34 @@ openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1`);
       ["run-should-not-export", "session-should-not-export", "matched secret prompt"],
     ));
 
-  it("separates request and turn model-call metrics by observation unit", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      api: "openai-responses",
-      transport: "http",
-      durationMs: 250,
-    });
-    metrics.record({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-2",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      api: "claude-code",
-      transport: "stdio-live",
-      observationUnit: "turn",
-      durationMs: 2500,
-    });
-
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
-openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`);
-  });
+  it("separates request and turn model-call metrics by observation unit", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "model.call.completed",
+          runId: "run-1",
+          callId: "call-1",
+          provider: "openai",
+          model: "gpt-5.4",
+          api: "openai-responses",
+          transport: "http",
+          durationMs: 250,
+        },
+        {
+          type: "model.call.completed",
+          runId: "run-1",
+          callId: "call-2",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          api: "claude-code",
+          transport: "stdio-live",
+          observationUnit: "turn",
+          durationMs: 2500,
+        },
+      ],
+      `openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
+openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`,
+    ));
 
   it("records sanitized async diagnostic queue drop summaries from core diagnostics", () =>
     expectRecordedMetrics(
@@ -545,19 +542,6 @@ openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4`,
       ["chat-should-not-export", "sk-secret"],
     ));
 
-  it("keeps only the bounded prefix from scoped queue lane labels", () =>
-    expectRecordedMetrics(
-      [
-        {
-          type: "queue.lane.enqueue",
-          lane: "dreaming-narrative:session-main",
-          queueSize: 2,
-        },
-      ],
-      `openclaw_queue_lane_size{lane="dreaming-narrative"} 2`,
-      ["session-main"],
-    ));
-
   it("records skill usage metrics without raw paths or session identifiers", () =>
     expectRecordedMetrics(
       [
@@ -577,45 +561,42 @@ openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainst
       ["run-should-not-export", "session-should-not-export", "SKILL.md"],
     ));
 
-  it("bounds messaging labels without exporting raw chat identifiers", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "message.delivery.started",
-      channel: "matrix",
-      deliveryKind: "text",
-      sessionKey: "session-should-not-export",
-    });
-    metrics.record({
-      type: "message.processed",
-      channel: "telegram/custom",
-      chatId: "chat-should-not-export",
-      messageId: "message-should-not-export",
-      outcome: "completed",
-      reason: "progress draft / message tool 123",
-      durationMs: 25,
-    });
-    metrics.record({
-      type: "message.delivery.error",
-      channel: "discord/custom",
-      deliveryKind: "progress draft" as never,
-      durationMs: 50,
-      errorCategory: "TimeoutError",
-    });
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1
+  it("bounds messaging labels without exporting raw chat identifiers", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "message.delivery.started",
+          channel: "matrix",
+          deliveryKind: "text",
+          sessionKey: "session-should-not-export",
+        },
+        {
+          type: "message.processed",
+          channel: "telegram/custom",
+          chatId: "chat-should-not-export",
+          messageId: "message-should-not-export",
+          outcome: "completed",
+          reason: "progress draft / message tool 123",
+          durationMs: 25,
+        },
+        {
+          type: "message.delivery.error",
+          channel: "discord/custom",
+          deliveryKind: "progress draft" as never,
+          durationMs: 50,
+          errorCategory: "TimeoutError",
+        },
+      ],
+      `openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1
 openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1
-openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1`);
-    expectExcludes(
-      rendered,
-      "chat-should-not-export",
-      "message-should-not-export",
-      "session-should-not-export",
-      "progress draft",
-    );
-  });
+openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1`,
+      [
+        "chat-should-not-export",
+        "message-should-not-export",
+        "session-should-not-export",
+        "progress draft",
+      ],
+    ));
 
   it("records inbound dispatch and session turn telemetry", () =>
     expectRecordedMetrics(
@@ -663,49 +644,46 @@ openclaw_session_turn_created_total{agent="agent.default",channel="telegram",tri
       ["run-should-not-export"],
     ));
 
-  it("records session recovery and talk metrics without exporting raw ids or content", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "session.recovery.completed",
-      sessionId: "session-should-not-export",
-      sessionKey: "key-should-not-export",
-      state: "processing",
-      stateGeneration: 2,
-      ageMs: 12_000,
-      queueDepth: 1,
-      reason: "startup-sweep",
-      activeWorkKind: "tool_call",
-      allowActiveAbort: true,
-      status: "released",
-      action: "abort-active-run",
-    });
-    metrics.record({
-      type: "talk.event",
-      sessionId: "talk-session-should-not-export",
-      turnId: "turn-should-not-export",
-      talkEventType: "input.audio.delta",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      byteLength: 320,
-    });
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1
+  it("records session recovery and talk metrics without exporting raw ids or content", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "session.recovery.completed",
+          sessionId: "session-should-not-export",
+          sessionKey: "key-should-not-export",
+          state: "processing",
+          stateGeneration: 2,
+          ageMs: 12_000,
+          queueDepth: 1,
+          reason: "startup-sweep",
+          activeWorkKind: "tool_call",
+          allowActiveAbort: true,
+          status: "released",
+          action: "abort-active-run",
+        },
+        {
+          type: "talk.event",
+          sessionId: "talk-session-should-not-export",
+          turnId: "turn-should-not-export",
+          talkEventType: "input.audio.delta",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          provider: "openai",
+          byteLength: 320,
+        },
+      ],
+      `openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1
 openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12
 openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1
-openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320`);
-    expectExcludes(
-      rendered,
-      "session-should-not-export",
-      "key-should-not-export",
-      "talk-session-should-not-export",
-      "turn-should-not-export",
-    );
-  });
+openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320`,
+      [
+        "session-should-not-export",
+        "key-should-not-export",
+        "talk-session-should-not-export",
+        "turn-should-not-export",
+      ],
+    ));
 
   it("subscribes to internal diagnostics and renders scrape text", () => {
     const listeners: Parameters<TrustedExporterInternalDiagnostics["onEvent"]>[0][] = [];

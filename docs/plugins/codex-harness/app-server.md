@@ -42,6 +42,14 @@ already running elsewhere:
 }
 ```
 
+To keep agent workspace files on the remote host too, follow the
+[split-storage setup](/nodes/file-transfers#split-storage-setup). Pair a file node
+that can access the app-server's workspace, then set `appServer.remoteWorkspaceRoot`
+to that same root. The storage mapping supplies Gateway workspace access; it does
+not start the app-server. This differs from
+[paired-device execution](/plugins/codex-harness/placement), which keeps the
+app-server and model connection on the Gateway.
+
 Ask OpenClaw can verify an already configured model through an explicitly
 configured WebSocket or Unix socket app-server. The initial Codex setup and
 sign-in flow still requires local stdio; finish sign-in on the remote host and
@@ -281,7 +289,7 @@ the native configured model provider; select the model with the standard
 OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
 route compatibility and subscription/API-key account checks still apply.
 
-Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
+Owned local stdio processes use the [agent Git maintenance defaults](/concepts/managed-worktrees). The client acquisition owner applies these defaults before choosing a shared process, including catalog, resume, fork, and turn requests, so those paths do not start competing writers merely because one prepared Git settings first. OpenClaw preserves unrelated native Git parameters and shell-environment policy. Inherited Git parameters stay in the private process environment rather than being copied into native thread configuration. Clearing them removes the inherited values while retaining the host's maintenance defaults. External app-server peers and remote execution retain their own environment policy.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

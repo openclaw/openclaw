@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { findTranscriptEvent } from "../../config/sessions/session-transcript-match.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
@@ -75,6 +76,8 @@ export async function retainCanvasWidgetRead(
     throw denied();
   }
   try {
+    // Pruned widgets must not occupy history readers to authorize bytes that no longer exist.
+    const document = await readCanvasDocumentHtmlSource(docId);
     const source = read.prepared;
     const scope: SessionTranscriptReadScope = {
       agentId: source.readSource?.agentId ?? source.agentId,
@@ -87,13 +90,14 @@ export async function retainCanvasWidgetRead(
       scope,
       { kind: "canvas-widget", docId },
       invocation.signal,
+      "canvas-widget",
     );
     read.assertCurrent();
     if (
       found ||
       (await hasArchivedWidgetReceipt(scope, docId, read.assertCurrent, invocation.signal))
     ) {
-      return { read, pending: false };
+      return { read, document, pending: false };
     }
     // Tool output can precede its ordered transcript commit while parallel peers run.
     // Live presentation only permits waiting; the saved receipt alone grants the read.
@@ -119,7 +123,7 @@ export async function retainCanvasWidgetRead(
     if (!pending) {
       throw denied();
     }
-    return { read, pending: true };
+    return { read, document, pending: true };
   } catch (error) {
     read.release();
     throw error;

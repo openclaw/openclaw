@@ -17,6 +17,7 @@ export type NpmProjectInstallEnvOptions = NpmConfigScope & {
 const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
 
 const NPM_CONFIG_KEYS_TO_RESET = new Set([
+  "npm_config_allow_scripts",
   "npm_config_cache",
   "npm_config_dry_run",
   "npm_config_global",

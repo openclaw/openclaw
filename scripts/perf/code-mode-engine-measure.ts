@@ -95,29 +95,39 @@ if (!child) {
       bridgeCalls++;
       return { id: request.id, ok: true, json: JSON.stringify(request.args[1]) };
     });
-  const execute = (source: string, checkpoint = false) =>
-    host.run(() =>
-      executor.execute(
-        {
-          kind: "exec",
-          source,
-          config,
-          ...prepared,
-        },
-        {
-          timeoutMs: config.timeoutMs,
-          inlineHost: {
-            onBoundary: async (boundary, context) =>
-              checkpoint
-                ? { kind: "checkpoint" }
-                : {
-                    kind: "continue",
-                    timeoutMs: context.maxTimeoutMs,
-                    pendingRequests: [],
-                    settledRequests: settle(boundary.pendingRequests),
-                  },
+  const retain = (result: CodeModeWorkerResult) => {
+    if (result.status === "waiting") {
+      continuations.add(result.continuation);
+    }
+    return result;
+  };
+  // Take custody where each result arrives, before a sibling failure or a
+  // consumer assertion can prevent registration of a parked execution.
+  const execute = async (source: string, checkpoint = false) =>
+    retain(
+      await host.run(() =>
+        executor.execute(
+          {
+            kind: "exec",
+            source,
+            config,
+            ...prepared,
           },
-        },
+          {
+            timeoutMs: config.timeoutMs,
+            inlineHost: {
+              onBoundary: async (boundary, context) =>
+                checkpoint
+                  ? { kind: "checkpoint" }
+                  : {
+                      kind: "continue",
+                      timeoutMs: context.maxTimeoutMs,
+                      pendingRequests: [],
+                      settledRequests: settle(boundary.pendingRequests),
+                    },
+            },
+          },
+        ),
       ),
     );
   const finish = async (initial: CodeModeWorkerResult) => {
@@ -125,15 +135,16 @@ if (!child) {
     while (result.status === "waiting") {
       assert(checkpoints++ < 100_000, "run did not finish");
       const current = result;
-      continuations.add(current.continuation);
-      result = await host.run(() =>
-        current.continuation.resume(
-          {
-            kind: "resume",
-            config,
-            settledRequests: settle(current.pendingRequests),
-          },
-          { timeoutMs: config.timeoutMs },
+      result = retain(
+        await host.run(() =>
+          current.continuation.resume(
+            {
+              kind: "resume",
+              config,
+              settledRequests: settle(current.pendingRequests),
+            },
+            { timeoutMs: config.timeoutMs },
+          ),
         ),
       );
       continuations.delete(current.continuation);
@@ -183,6 +194,7 @@ if (!child) {
   const summaries = [];
   const armCpu = process.cpuUsage();
   const armAt = performance.now();
+  const failures = new Set<unknown>();
   try {
     const coldAt = performance.now();
     assert.equal(await finish(await execute("return 42;")), 42);
@@ -228,7 +240,8 @@ if (!child) {
       });
     }
     const beforeParkBytes = process.memoryUsage().rss;
-    const parked = await Promise.all(
+    // A failed execution still owns its launched siblings until they settle.
+    const parkedResults = await Promise.allSettled(
       Array.from({ length: 8 }, () =>
         execute(
           "const b=new Uint8Array(1024*1024); b.fill(7); await tool_0({value:1}); return b[0]+b[b.length-1];",
@@ -236,11 +249,16 @@ if (!child) {
         ),
       ),
     );
+    const parked = parkedResults.map((result) => {
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      return result.value;
+    });
     let retainedBytes = 0;
     for (const result of parked) {
       assert.equal(result.status, "waiting", JSON.stringify(result));
       assert(result.status === "waiting");
-      continuations.add(result.continuation);
       retainedBytes += result.continuation.retainedBytes;
     }
     await setTimeout(100);
@@ -296,11 +314,36 @@ if (!child) {
         },
       }),
     );
+  } catch (error) {
+    failures.add(error);
   } finally {
-    await Promise.all([...continuations].map((value) => value.dispose()));
-    await host.close();
-    await scheduler.stop();
-    clearInterval(sampler);
-    clearInterval(keepAlive);
+    try {
+      const disposed = await Promise.allSettled(
+        [...continuations].map(async (value) => value.dispose()),
+      );
+      for (const result of disposed) {
+        if (result.status === "rejected") {
+          failures.add(result.reason);
+        }
+      }
+      for (const close of [() => host.close(), () => scheduler.stop()]) {
+        try {
+          await close();
+        } catch (error) {
+          failures.add(error);
+        }
+      }
+    } finally {
+      // Keep the process alive until every cleanup attempt settles, including
+      // when another cleanup rejects. Rejection must not leave either timer alive.
+      clearInterval(sampler);
+      clearInterval(keepAlive);
+    }
+  }
+  if (failures.size > 0) {
+    const [cause] = failures;
+    throw failures.size === 1
+      ? cause
+      : new AggregateError(failures, "Code Mode measurement and cleanup failed", { cause });
   }
 }

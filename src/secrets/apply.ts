@@ -20,6 +20,7 @@ import {
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   findPluginConfigEntry,
   hasPluginConfigId,
@@ -345,9 +346,12 @@ async function projectPlanState(params: {
       if (!fs.existsSync(envPath)) {
         continue;
       }
-      const current = fs.readFileSync(envPath, "utf8");
+      const bytes = fs.readFileSync(envPath);
+      const current = bytes.toString("utf8");
       const scrubbed = scrubEnvRaw(current, scrubbedValues, knownSecretEnvVars);
       if (scrubbed !== current) {
+        // No-op inspections may tolerate legacy bytes; rewrites must not replace them.
+        decodeUtf8Input(bytes, `File ${envPath}`);
         envRawByPath.set(envPath, scrubbed);
         changedFiles.add(envPath);
       }
@@ -548,7 +552,7 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   const stat = fs.statSync(pathname);
   return {
     existed: true,
-    content: fs.readFileSync(pathname, "utf8"),
+    content: decodeUtf8Input(fs.readFileSync(pathname), `File ${pathname}`),
     mode: stat.mode & 0o777,
   };
 }

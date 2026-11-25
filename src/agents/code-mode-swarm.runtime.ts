@@ -1,19 +1,12 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
+import { runAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
-import {
-  getSwarmRunByLaunchReplayKey,
-  initSubagentRegistry,
-} from "./subagents/registry/subagent-registry.js";
+import { isSubagentRunQueued } from "./subagents/registry/subagent-registry-read.js";
+import { getSwarmRunByLaunchReplayKey } from "./subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -115,9 +108,8 @@ async function runAgentSpawnBridge(params: {
     throw new ToolInputError("agents.run requires the native sessions_spawn tool.");
   }
   const spawnTool = spawnEntry.tool;
-  const assertSourceActive = captureAgentToolSourceExecutionGuard(params.signal);
-  const assertCurrent = composeSessionSourceAssertion([assertSourceActive], (assertSource) => {
-    assertSource();
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
     params.ctx.abortSignal?.throwIfAborted();
     if (
       params.ctx.catalogRef?.current !== catalog ||
@@ -130,7 +122,7 @@ async function runAgentSpawnBridge(params: {
       throw new ToolInputError("Joined collector spawn catalog is no longer active.");
     }
     runAgentToolSourceExecutionGuard(spawnTool);
-  });
+  };
   assertCurrent();
   const spawnInput: Record<PropertyKey, unknown> = {
     task: prompt.trim(),
@@ -139,6 +131,9 @@ async function runAgentSpawnBridge(params: {
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(options.cyberAccessProgram != null
+      ? { cyberAccessProgram: options.cyberAccessProgram }
+      : {}),
     ...(agentId ? { agentId } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
@@ -147,7 +142,7 @@ async function runAgentSpawnBridge(params: {
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);
-  let existing = await getSwarmRunByLaunchReplayKey(
+  const existing = await getSwarmRunByLaunchReplayKey(
     idempotencyKey,
     requesterSessionKey,
     params.ctx.agentId,
@@ -156,27 +151,12 @@ async function runAgentSpawnBridge(params: {
     if (existing.swarmLaunchRequestFingerprint !== requestFingerprint) {
       throw new ToolInputError("agents.run replay request does not match the persisted collector.");
     }
-    if (existing.swarmLaunchPending === true) {
-      if (!existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
-      // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      await initSubagentRegistry();
-      existing =
-        (await getSwarmRunByLaunchReplayKey(
-          idempotencyKey,
-          requesterSessionKey,
-          params.ctx.agentId,
-        )) ?? existing;
-      if (existing.swarmLaunchPending === true && !existing.queuedLaunch) {
-        throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
-      }
+    if (existing.swarmLaunchPending === true && !isSubagentRunQueued(existing)) {
+      throw new ToolInputError("agents.run launch is no longer active; start a new request.");
     }
-    const replay = existing;
-    return await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-      assertCurrent();
-      return replayedSpawnResult(replay);
-    });
+    params.signal?.throwIfAborted();
+    params.ctx.abortSignal?.throwIfAborted();
+    return replayedSpawnResult(existing);
   }
   Object.defineProperty(spawnInput, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
     value: idempotencyKey,

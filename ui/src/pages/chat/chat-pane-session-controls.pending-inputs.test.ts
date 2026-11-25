@@ -4,7 +4,7 @@ import { createApplicationGatewaySnapshot } from "../../test-helpers/application
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
 } from "./chat-pane-session-controls.ts";
 
@@ -13,7 +13,7 @@ const sessionKey = "agent:main:retired-inputs";
 function paneAccess(
   scopes: string[],
   sharingRole: GatewaySessionRow["sharingRole"],
-  methods = ["chat.pendingInputs.dismiss"],
+  methods = ["chat.pendingInputs.dismiss", "chat.steerNow"],
 ) {
   const session = {
     key: sessionKey,
@@ -61,12 +61,27 @@ describe("pending input dismissal access", () => {
     });
   });
 
-  it("hides dismissal from a shared-session viewer even with a broad write grant", () => {
+  it("keeps pending input actions for session writers, including with a broad write grant", () => {
     const options = { nativeConversation: true, participationBlocked: false };
     const member = paneAccess(["operator.write"], "member");
-    expect(canDismissChatPendingInputs(member.access, member.session, options)).toBe(true);
+    expect(createChatPanePendingInputControls(member.access, member.session, options)).toEqual({
+      canDismissPendingInputs: true,
+      canSteerNow: true,
+    });
+    const owner = paneAccess(["operator.sessions.write"], "owner");
+    expect(createChatPanePendingInputControls(owner.access, owner.session, options)).toEqual({
+      canDismissPendingInputs: true,
+      canSteerNow: true,
+    });
     const viewer = paneAccess(["operator.write"], "viewer");
     expect(viewer.access.pendingInputDismiss.allowed).toBe(true);
-    expect(canDismissChatPendingInputs(viewer.access, viewer.session, options)).toBe(false);
+    expect(createChatPanePendingInputControls(viewer.access, viewer.session, options)).toEqual({
+      canDismissPendingInputs: false,
+      canSteerNow: false,
+    });
+    const reader = paneAccess(["operator.read"], "owner");
+    expect(
+      createChatPanePendingInputControls(reader.access, reader.session, options).canSteerNow,
+    ).toBe(false);
   });
 });

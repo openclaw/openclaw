@@ -9,6 +9,7 @@ import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-cli
 import { listen } from "../lib/reactive/listener.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
+import { linkPreviewModifiers } from "./link-reader-hovercard-modifiers.ts";
 import type {
   HovercardProperties,
   LinkReaderHovercardProvider,
@@ -38,6 +39,7 @@ import {
   type PageHoverTarget,
   type LinkReaderTarget,
 } from "./link-reader-target.ts";
+import { updateLinkReaderDisplay } from "./markdown-link-display.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 registerLinkReaderEnglish();
@@ -208,15 +210,7 @@ export class HovercardOwner {
       }
       const target = resolveLinkReaderTarget(anchor.href, this.host.readers);
       const preview = target ? this.previews.get(target)?.preview : undefined;
-      if (!preview?.badge) {
-        delete anchor.dataset.linkReaderTone;
-        anchor.removeAttribute("aria-description");
-      } else if (anchor.getAttribute("aria-description") !== preview.badge.label) {
-        anchor.setAttribute("aria-description", preview.badge.label);
-      }
-      if (preview?.badge && anchor.dataset.linkReaderTone !== preview.badge.tone) {
-        anchor.dataset.linkReaderTone = preview.badge.tone;
-      }
+      updateLinkReaderDisplay(anchor, preview);
     }
   }
 
@@ -337,6 +331,12 @@ export class HovercardOwner {
     this.connected = true;
     this.bindMetadata();
     const stopListeners = [
+      linkPreviewModifiers.subscribe(() => {
+        const anchor = this.activeAnchor;
+        const restore = this.hovercard.card?.contains(this.host.ownerDocument.activeElement);
+        this.close();
+        this.hovercard.returnFocus(restore ? anchor : null);
+      }),
       listen(this.host, "pointerover", this.handlePointerOver),
       listen(this.host, "pointerout", this.handlePointerOut),
       listen(this.host, "focusin", this.handleFocusIn),
@@ -514,7 +514,7 @@ export class HovercardOwner {
     delay: number,
   ): void {
     // Nested providers retain their own agent scope when intent bubbles.
-    if (!this.ownsAnchor(anchor)) {
+    if (linkPreviewModifiers.suppressed || !this.ownsAnchor(anchor)) {
       return;
     }
     if (!target.reader) {

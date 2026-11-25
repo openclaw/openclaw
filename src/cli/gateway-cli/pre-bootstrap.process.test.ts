@@ -20,17 +20,13 @@ beforeEach(() => {
 });
 
 function stateManifest(root: string): Record<string, string> {
+  const files = listDirectoryTreeStrictSync(root).filter(({ dirent }) => dirent.isFile());
   return Object.fromEntries(
-    listDirectoryTreeStrictSync(root)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(root, filename),
-          createHash("sha256").update(fs.readFileSync(filename)).digest("hex"),
-        ];
-      }),
+    files.map(({ dirent }) => {
+      const filename = path.join(dirent.parentPath, dirent.name);
+      const hash = createHash("sha256").update(fs.readFileSync(filename)).digest("hex");
+      return [path.relative(root, filename), hash];
+    }),
   );
 }
 
@@ -65,6 +61,55 @@ function createFixture(prefix: string) {
   };
 }
 
+function cliEnv(root: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_HIDE_BANNER: "1",
+    OPENCLAW_GATEWAY_TOKEN: "synthetic-startup-allowance-token",
+    XDG_CONFIG_HOME: path.join(root, "xdg-config"),
+    XDG_DATA_HOME: path.join(root, "xdg-data"),
+    XDG_STATE_HOME: path.join(root, "xdg-state"),
+    XDG_CACHE_HOME: path.join(root, "cache"),
+    NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"),
+    NO_COLOR: "1",
+  };
+}
+
+// Keep parsing, environment selection, preaction, and config admission real.
+// Replace only the final Gateway action; the built rig proves listener startup.
+function gatewayRunCliScript(args: string[]): string {
+  return `
+      import { registerHooks } from "node:module";
+      const calls = globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")] = [];
+      registerHooks({
+        resolve(specifier, context, nextResolve) {
+          if (specifier === "./run.js" && /\\/cli\\/gateway-cli\\/run-command\\.(?:ts|js)$/.test(context.parentURL ?? "")) {
+            return {
+              shortCircuit: true,
+              url: "data:text/javascript," + encodeURIComponent(
+                'export async function runGatewayCommand(opts) {' +
+                'globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")].push({' +
+                'dev: opts.dev === true, allowUnconfigured: opts.allowUnconfigured === true }); }'
+              ),
+            };
+          }
+          return nextResolve(specifier, context);
+        },
+      });
+      const { runCli } = await import("./src/cli/run-main.ts");
+      const { ExitError } = await import("./src/runtime.ts");
+      process.argv = [process.execPath, "openclaw", "gateway", "run", ...${JSON.stringify(args)}];
+      try {
+        await runCli(process.argv);
+      } catch (error) {
+        // Test runtimes throw instead of exiting; keep the CLI's exit code observable.
+        if (!(error instanceof ExitError)) throw error;
+        process.exitCode = error.code;
+      }
+      process.stdout.write("__RESULT__" + JSON.stringify(calls) + "\\n");
+    `;
+}
+
 function readResult(result: Awaited<ReturnType<typeof runIsolatedModuleScript>>) {
   const output = `${result.stdout}\n${result.stderr}`;
   const lines = result.stdout.split("\n").filter((line) => line.startsWith("__RESULT__"));
@@ -95,7 +140,7 @@ describe("Gateway config selection before migration admission", () => {
       const { ExitError } = await import("./src/runtime.ts");
       const runtime = { log() {}, error: console.error, exit(code) { throw new ExitError(code); } };
       const params = { opts: {}, runtime };
-      await runDoctorConfigPreflight({ repairPrefixedConfig: true, doctorOnlyStateMigrations: true });
+      await runDoctorConfigPreflight({ repairPrefixedConfig: true, migrateState: false });
       const repairedBytes = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
       if (!await selectGatewayRunEnvironment(params)) throw new Error("selection refused");
       if (!await prepareGatewayRunBootstrap(params)) throw new Error("preparation refused");
@@ -343,61 +388,64 @@ describe("Gateway config selection before migration admission", () => {
     90_000,
   );
 
-  it.each([
-    { flag: "--allow-unconfigured", dispatch: "fast" },
-    { flag: "--allow-unconfigured", dispatch: "Commander" },
-    { flag: "--dev", dispatch: "fast" },
-    { flag: "--dev", dispatch: "Commander" },
+  it.each<[string[], number, (string | RegExp)?, string?]>([
+    [["--allow-unconfigured"], 0],
+    [["--allow-unconfigured", "--"], 0],
+    [["--dev"], 0],
+    [["--dev", "--"], 0],
+    [["--port", "abc"], 1, "Use a port number from 1 to 65535, for example 18789."],
+    [["--bind", "bogus"], 1, 'Use "loopback", "lan", "tailnet", "auto", or "custom".'],
+    [["--auth", "bogus"], 1, 'Use "none", "token", "password", or "trusted-proxy".'],
+    [["--tailscale", "bogus"], 1, 'Use "off", "serve", or "funnel".'],
+    [["--ws-log", "bogus"], 1, 'Use "auto", "full", or "compact".'],
+    [[], 78, /plugins\.entries\.schema-probe\.config\S*: .*endpoint/, "schema-probe"],
   ])(
-    "passes $flag through $dispatch startup admission without config",
-    async ({ flag, dispatch }) => {
-      const suffix = dispatch === "Commander" ? ["--"] : [];
-      const dev = flag === "--dev";
-      const { root, configPath, env, options } = createFixture("openclaw-startup-allowance-");
-      const allowanceEnv = {
-        ...env,
-        OPENCLAW_HIDE_BANNER: "1",
-        OPENCLAW_GATEWAY_TOKEN: "synthetic-startup-allowance-token",
-        XDG_CONFIG_HOME: path.join(root, "xdg-config"),
-        XDG_DATA_HOME: path.join(root, "xdg-data"),
-        XDG_STATE_HOME: path.join(root, "xdg-state"),
-        XDG_CACHE_HOME: path.join(root, "cache"),
-        NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"),
-        NO_COLOR: "1",
-      };
-      // Keep parsing, environment selection, preaction, and config admission real.
-      // Replace only the final Gateway action; the built rig proves listener startup.
-      const result = await runIsolatedModuleScript(
-        allowanceEnv,
-        `
-      import { registerHooks } from "node:module";
-      const calls = globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")] = [];
-      registerHooks({
-        resolve(specifier, context, nextResolve) {
-          const parent = context.parentURL ?? "";
-          if (specifier === "./run.js" &&
-              (parent.endsWith("/cli/gateway-cli/run-command.ts") || parent.endsWith("/cli/gateway-cli/run-command.js"))) {
-            return {
-              shortCircuit: true,
-              url: "data:text/javascript," + encodeURIComponent(
-                'export async function runGatewayCommand(opts) {' +
-                'globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")].push({' +
-                'dev: opts.dev === true, allowUnconfigured: opts.allowUnconfigured === true }); }'
-              ),
-            };
-          }
-          return nextResolve(specifier, context);
-        },
-      });
-      const { runCli } = await import("./src/cli/run-main.ts");
-      process.argv = [process.execPath, "openclaw", "gateway", "run", "--port", "18736", ${JSON.stringify(flag)}, ...${JSON.stringify(suffix)}];
-      await runCli(process.argv);
-      process.stdout.write("__RESULT__" + JSON.stringify(calls) + "\\n");
-    `,
+    "applies CLI startup admission for %j (exit %i)",
+    async (args, code, error, plugin) => {
+      const { root, configPath, env, options } = createFixture("openclaw-startup-admission-");
+      if (plugin) {
+        const pluginDir = path.join(root, "plugins", plugin);
+        fs.mkdirSync(pluginDir, { recursive: true });
+        writeJson(path.join(pluginDir, "package.json"), {
+          name: `@openclaw/${plugin}`,
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        });
+        fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
+        writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+          id: plugin,
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["endpoint"],
+            properties: { endpoint: { type: "string" } },
+          },
+        });
+        // Core schema accepts this config; only the plugin's own schema rejects it.
+        writeJson(configPath, {
+          gateway: { mode: "local" },
+          plugins: { load: { paths: [pluginDir] }, entries: { [plugin]: { config: {} } } },
+        });
+      }
+      const invocation = runIsolatedModuleScript(
+        cliEnv(root, env),
+        gatewayRunCliScript(["--port", "18736", ...args]),
         options,
       );
-      expect(readResult(result)).toEqual([{ dev, allowUnconfigured: !dev }]);
-      expect(fs.existsSync(configPath)).toBe(false);
+      if (error) {
+        const stderr =
+          typeof error === "string"
+            ? expect.stringContaining(`Invalid ${args[0]}. ${error}`)
+            : expect.stringMatching(error);
+        await expect(invocation).rejects.toMatchObject({ code, stderr });
+        await expect(invocation).rejects.not.toMatchObject({
+          stderr: expect.stringContaining("Missing config"),
+        });
+      } else {
+        const dev = args.includes("--dev");
+        expect(readResult(await invocation)).toEqual([{ dev, allowUnconfigured: !dev }]);
+      }
+      expect(fs.existsSync(configPath)).toBe(Boolean(plugin));
     },
     75_000,
   );

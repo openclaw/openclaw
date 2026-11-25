@@ -33,7 +33,7 @@ async function fixture() {
     return out;
   };
   const entities = async (id: any) =>
-    (await service.record({ id, includeMetadata: true }, owner)).record!.metadata!.entities;
+    (await service.record_detail({ id, includeMetadata: true }, owner)).record!.metadata!.entities;
   return { service, owner, operator, page, remember, relink, entities };
 }
 
@@ -77,12 +77,15 @@ it("relink links unique mentions, leaves ambiguous and unnamed claims, and a rep
   expect(await f.entities(both), "Two named entities stay unlinked").toBe(undefined);
   expect(await f.entities(none)).toBe(undefined);
   expect(await f.entities(meeting), "A meeting page is not a claim subject").toBe(undefined);
-  const read = await f.service.record({ id: atlas, includeMetadata: true }, f.owner);
+  const read = await f.service.record_detail({ id: atlas, includeMetadata: true }, f.owner);
   expect(read.record!.body).toBe("Atlas Labs moved its launch to March.");
   expect(read.record!.lifecycle).toBe("active");
   expect(read.record!.revision).toBe(2);
-  const claims = await f.service.connections({ id: atlasPage.id, direction: "claims" }, f.owner);
-  expect(claims.connections.map((c) => c.record.id)).toStrictEqual([atlas]);
+  const claims = await f.service.connections_detail(
+    { id: atlasPage.id, direction: "claims" },
+    f.owner,
+  );
+  expect(claims.connections.map((c: any) => c.id)).toStrictEqual([atlas]);
 
   const again = await f.relink({});
   expect(
@@ -118,7 +121,7 @@ it("relink uses a recorded source entity page, pages with a cursor, and only run
   // A claim annotated with an entity source page links through the page tier,
   // even when its text names nothing.
   const quiet = (await f.remember("Nothing named here.")).items[0]!.id;
-  const r = (await f.service.record({ id: quiet }, f.owner)).record;
+  const r = (await f.service.record_detail({ id: quiet }, f.owner)).record;
   await f.service.annotate(
     {
       requestId: randomUUID(),
@@ -217,7 +220,8 @@ it("a saver's subject hint links claims whose text names no page, at save time a
   expect(tier(vague.id)!.outcome, "A hint naming two pages links nothing").not.toBe("linked");
   expect(await f.entities(later.id)).toStrictEqual([reload.id]);
   expect(await f.entities(rival.id)).toStrictEqual([reload.id]);
-  const saved = (await f.service.record({ id: later.id, includeMetadata: true }, f.owner)).record!;
+  const saved = (await f.service.record_detail({ id: later.id, includeMetadata: true }, f.owner))
+    .record!;
   expect(saved.metadata!.subject_hint).toBe("hot reload, PR #180466");
 
   // With the page present, the hint links at save time with no lookup by the agent.

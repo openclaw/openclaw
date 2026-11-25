@@ -21,10 +21,18 @@ import {
   resolveRuntimeFileRelocator,
 } from "./update-runtime-relocation.js";
 
-const isLinkUnsupported = (error: unknown) =>
-  ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
+const linkUnsupportedCode = (error: unknown) =>
+  ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].find((code) =>
     hasNodeErrorCode(error, code),
   );
+
+export type RetainedRuntimeCounts = {
+  linked: number;
+  /** Published without a hard link; the copy requests a clone, and the two are not told apart. */
+  copied: number;
+  /** Files the filesystem refused to hard-link, with the first refusal's errno. */
+  linkFallback?: { count: number; code: string };
+};
 
 /**
  * Retain the admitted tree by hard-linking its files into the private directory.
@@ -39,7 +47,7 @@ export async function linkUpdateCandidatePluginTrees(
     candidateRoot: string;
     assertCurrent: () => void;
   },
-): Promise<{ linked: number; copied: number } | { unusableReason: string }> {
+): Promise<RetainedRuntimeCounts | { unusableReason: string }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   const pluginFiles = collectPluginSafetyInspectedFiles(plan.entries);
@@ -77,7 +85,7 @@ export async function linkUpdateCandidatePluginTrees(
       await fs.chmod(destination, entry.mode);
     }
   };
-  const counts = { linked: 0, copied: 0 };
+  const counts: RetainedRuntimeCounts = { linked: 0, copied: 0 };
   let unusableReason: string | undefined;
   const directories: Array<Extract<UpdateCandidatePluginEntry, { kind: "directory" }>> = [];
   const materialize = async (entry: UpdateCandidatePluginEntry) => {
@@ -103,16 +111,24 @@ export async function linkUpdateCandidatePluginTrees(
         { privateRoot, candidateRoot },
       );
     } else {
-      let copy = pluginFiles.has(entry.path) || Boolean(resolveRuntimeFileRelocator(destination));
+      // Recovery objects can also live in dist. Retaining owner-private bytes
+      // must not change the source's link count or sealed recovery fingerprint.
+      let copy =
+        (entry.mode & 0o077) === 0 ||
+        pluginFiles.has(entry.path) ||
+        Boolean(resolveRuntimeFileRelocator(destination));
       if (!copy) {
         params.assertCurrent();
         try {
           await fs.link(entry.path, destination);
         } catch (error) {
-          if (!isLinkUnsupported(error)) {
+          const code = linkUnsupportedCode(error);
+          if (!code) {
             throw error;
           }
           copy = true;
+          counts.linkFallback ??= { count: 0, code };
+          counts.linkFallback.count += 1;
         }
       }
       if (copy) {

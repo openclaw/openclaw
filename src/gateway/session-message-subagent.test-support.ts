@@ -5,9 +5,9 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subage
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { waitForSessionEvent } from "./session-message-event.test-support.js";
-import { writeSessionStore } from "./test-helpers.server.js";
+import { rpcReq, writeSessionStore } from "./test-helpers.server.js";
 
-export function registerRecoveredSubagentSessionEventTest({
+export function registerTerminalSubagentSessionEventTest({
   createSessionStoreFile,
   withOperatorSessionSubscriber,
   expectNoMessageWithin,
@@ -22,7 +22,7 @@ export function registerRecoveredSubagentSessionEventTest({
   }) => Promise<void>;
   expectRecordFields: (value: unknown, expected: Record<string, unknown>) => void;
 }) {
-  test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
+  test("broadcasts a subagent terminal session to a subscribed gateway exactly once", async () => {
     const storePath = await createSessionStoreFile();
     const identity = {
       sessionId: "sess-recovered-subscriber",
@@ -69,20 +69,26 @@ export function registerRecoveredSubagentSessionEventTest({
       confirmProvisionalKill: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
-      runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
+      runSubagentAnnounceFlow: vi.fn(async () => "undelivered" as const),
       maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
       warn: vi.fn(),
     });
     const completion = {
       runId: entry.runId,
       endedAt: 4_000,
-      outcome: { status: "error" as const, error: "restart interrupted run" },
+      outcome: { status: "error" as const, error: "subagent run failed" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       triggerCleanup: false,
-      recoverInterrupted: true,
     } satisfies Parameters<typeof controller.completeSubagentRun>[0];
 
     await withOperatorSessionSubscriber(async (ws) => {
+      // Establish the seeded row before testing its terminal update rather than discovery.
+      expect(
+        await rpcReq(ws, "sessions.describe", { key: entry.childSessionKey, agentId: "main" }),
+      ).toMatchObject({
+        ok: true,
+        payload: { session: { key: entry.childSessionKey, sessionId: identity.sessionId } },
+      });
       const waitForRecoveredTerminal = (timeoutMs?: number) =>
         waitForSessionEvent(
           ws,
@@ -101,7 +107,7 @@ export function registerRecoveredSubagentSessionEventTest({
       expectRecordFields(event.payload, {
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",
-        status: "interrupted",
+        status: "failed",
         endedAt: completion.endedAt,
         spawnedBy: entry.requesterSessionKey,
       });

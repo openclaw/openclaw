@@ -55,12 +55,16 @@ export const AGENT_SCHEMA_COMPATIBILITY = {
     ),
   ],
   allowedColumnDefinitions: {
+    // Historical import evidence remains stored but never grants replay authority.
+    "session_pending_inputs.recovery_intent_json": ["recovery_intent_json TEXT"],
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
   allowedMissingIndexes: [
     "idx_agent_transcript_context_pending",
     "idx_agent_session_nodes_label",
     "idx_agent_session_nodes_entry_not_valid",
+    "idx_agent_session_input_completions_session_key",
+    "idx_agent_conversation_deliveries_source_session",
   ],
   optionalCanonicalTriggerGroups: [
     {

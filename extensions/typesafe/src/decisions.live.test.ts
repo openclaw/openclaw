@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { validateDecisionResultV2, type DecisionBatchV2 } from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import { expect, it } from "vitest";
+import { registeredPreparedDecisionProvider } from "./transport.test-support.js";
 
 it
   .runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.TYPESAFE_API_KEY))
@@ -30,16 +28,7 @@ it
         },
       },
     };
-    const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-    const api = createTestPluginApi({ id: "typesafe", registerDecisionProvider });
-    api.runtime.config = {
-      current: () => config,
-      mutateConfigFile: vi.fn(),
-      replaceConfigFile: vi.fn(),
-    };
-    plugin.register(api);
-    const provider = registerDecisionProvider.mock.calls[0]?.[0];
-    assert(provider?.contractVersion === 2);
+    const provider = registeredPreparedDecisionProvider(() => config);
     const batch: DecisionBatchV2 = {
       state:
         kind === "image"

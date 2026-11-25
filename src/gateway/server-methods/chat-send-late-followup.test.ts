@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 
 function createFixture(originatingChannel = "webchat") {
@@ -30,14 +31,27 @@ function batch(runId: string, originatingChannel = "webchat") {
 }
 
 describe("chat.send late queued follow-up disposition", () => {
-  it("keeps progress open and includes its payloads in terminal delivery", async () => {
+  it("retains progress and drop warnings without replaying queue acceptance", async () => {
     const { deliver, disposition } = createFixture();
     expect(disposition.deliver.ownsCompletion("webchat")).toBe(false);
     disposition.recordQueued();
     expect(disposition.deliver.ownsCompletion("discord")).toBe(false);
+    const retained = [
+      { text: "working", mediaUrl: "https://example.test/progress.png" },
+      setReplyPayloadMetadata(
+        { text: "queue full", isStatusNotice: true },
+        { queueAdmissionNotice: true },
+      ),
+    ];
     const progress = {
       ...batch("followup-run"),
-      payloads: [{ text: "working", mediaUrl: "https://example.test/progress.png" }],
+      payloads: [
+        setReplyPayloadMetadata(
+          { text: "queued", isStatusNotice: true },
+          { queueAdmissionNotice: "queued" },
+        ),
+        ...retained,
+      ],
       completion: { kind: "progress" as const },
     };
     await disposition.deliver(progress);
@@ -54,7 +68,7 @@ describe("chat.send late queued follow-up disposition", () => {
         runId: "followup-run",
         clientRunId: "original-run",
         completion: { kind: "completed" },
-        payloads: [...progress.payloads, { text: "done" }],
+        payloads: [...retained, { text: "done" }],
       }),
     );
     expect(disposition.deliver.ownsCompletion("webchat")).toBe(false);

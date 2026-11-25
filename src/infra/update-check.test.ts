@@ -13,7 +13,6 @@ import {
 } from "./update-check-package-target.js";
 import {
   checkUpdateStatus,
-  compareSemverStrings,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -105,21 +104,6 @@ afterEach(() => {
 });
 
 it.each([
-  ["2026.6.5", "2026.6.6-beta.1", -1],
-  ["2026.6.6", "2026.6.6-beta.1", 1],
-  ["2026.6.6-beta.2", "2026.6.6-beta.1", 1],
-  ["v2026.6.6", "2026.6.6", 0],
-  ["2026.6.6.beta.2", "2026.6.6-beta.1", 1],
-  ["2026.5.3", "2026.5.3-1", -1],
-  ["2026.5.3-1", "2026.5.3", 1],
-  ["2026.5.3-2", "2026.5.3-1", 1],
-  ["1.0", "1.0.0", null],
-  ["latest", "1.0.0", null],
-] as const)("compares %s against %s as %s", (a, b, expected) => {
-  expect(compareSemverStrings(a, b)).toBe(expected);
-});
-
-it.each([
   { version: "2026.7.1", packageName: "@example/openclaw", expected: undefined },
   { version: "2026.7.1", schemaVersions: null, expected: undefined },
 ])(
@@ -149,6 +133,20 @@ it.each([
     expect(npm.schemaVersions).toEqual(expected);
   },
 );
+
+it("reads the target's unpacked size from both metadata readers", async () => {
+  mockHttp.intercept({
+    url: "https://registry.npmjs.org/openclaw/2026.11.9",
+    reply: { json: { name: "openclaw", version: "2026.11.9", dist: { unpackedSize: 275525970 } } },
+  });
+  const registry = await fetchNpmPackageTargetStatus({ target: "2026.11.9" });
+  const npm = await fetchNpmPackageTargetStatus({
+    target: "2026.11.9",
+    runCommand: async () => commandResult({ version: "2026.11.9", "dist.unpackedSize": 275525970 }),
+  });
+  expect(registry.unpackedSize).toBe(275525970);
+  expect(npm.unpackedSize).toBe(275525970);
+});
 
 it("normalizes npm 12 singleton-array metadata", async () => {
   const schemaVersions = { state: 3, agent: 11 };

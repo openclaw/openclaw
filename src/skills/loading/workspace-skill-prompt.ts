@@ -161,7 +161,7 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
       if (!unavailableNames.has(name)) {
         filteredBody += block;
       }
-      cursor = (match.index ?? 0) + block.length;
+      cursor = match.index + block.length;
     }
     const tail = catalogBody.slice(cursor);
     if (tail.trim()) {

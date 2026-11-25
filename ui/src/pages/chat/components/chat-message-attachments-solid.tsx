@@ -2,10 +2,10 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
-import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
@@ -28,14 +28,14 @@ import {
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
+import { resolveAttachmentImageKind } from "./chat-message-media-projection.ts";
 import {
-  resolveAttachmentImageKind,
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
@@ -76,6 +76,7 @@ type AttachmentProps = {
 export type MessageAttachmentProps = AttachmentProps & {
   item: AssistantAttachmentItem;
   presentation?: "inline" | "card" | "preview";
+  onPlay?: () => void;
 };
 
 export function AssistantAttachments(
@@ -143,7 +144,7 @@ export function AssistantAttachments(
         <SentCommentAttachments
           comments={comments()}
           inline={props.inlineComments && files().length === 0}
-          options={props.options}
+          options={{ ...props.options, onMediaChange: refreshComments }}
           resolve={(item) => commentSources().get(item)!}
         />
         <For each={files()} keyed={false}>
@@ -151,9 +152,7 @@ export function AssistantAttachments(
             const presentation = (): "inline" | "card" => {
               const current = item();
               return props.inlinePlayback !== false ||
-                (current.type === "attachment" &&
-                  current.attachment.kind === "audio" &&
-                  current.attachment.isVoiceNote)
+                (current.type === "attachment" && current.attachment.kind === "audio")
                 ? "inline"
                 : "card";
             };
@@ -173,6 +172,27 @@ export function AssistantAttachments(
   );
 }
 
+function attachmentFileSearch(
+  item: AssistantAttachmentItem,
+  options: ImageRenderOptions,
+): (() => void) | undefined {
+  if (
+    item.type !== "attachment_error" ||
+    item.attachment.code !== "file-too-large" ||
+    !item.attachment.label.trim() ||
+    !options.sessionKey ||
+    !options.onFindWorkspaceFile
+  ) {
+    return undefined;
+  }
+  return () =>
+    options.onFindWorkspaceFile?.({
+      name: item.attachment.label,
+      sessionKey: options.sessionKey,
+      agentId: options.agentId,
+    });
+}
+
 export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Element {
   return (
     <Show
@@ -182,6 +202,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
           label={props.item.attachment.label}
           mimeType={props.item.attachment.mimeType}
           badge={t("chat.attachments.notSent")}
+          onFindWorkspaceFile={attachmentFileSearch(props.item, props.options)}
           reason={
             props.item.type === "attachment_error"
               ? attachmentFailureReason(props.item.attachment.code)
@@ -198,6 +219,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
             onOpenSidebar={props.onOpenSidebar}
             onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
             presentation={props.presentation}
+            onPlay={props.onPlay}
             admission={admission}
           />
         );
@@ -348,6 +370,7 @@ function AttachmentContent(
   props: AttachmentProps & {
     item: AttachmentItem;
     presentation?: "inline" | "card" | "preview";
+    onPlay?: () => void;
     admission?: AttachmentAdmission;
   },
 ): SolidJSX.Element {
@@ -363,10 +386,12 @@ function AttachmentContent(
       label={attachment().label}
       mimeType={attachment().mimeType}
       sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+      durationMs={props.onPlay ? (model().media?.durationMs ?? attachment().durationMs) : undefined}
+      onPlay={props.onPlay}
       downloadHref={model().safeAttachmentUrl}
       downloadPending={Boolean(props.admission && !model().media)}
       downloadPendingFocusable={Boolean(props.admission)}
-      onExpand={model().openAttachmentSidebar}
+      onExpand={props.onPlay ? undefined : model().openAttachmentSidebar}
       voiceNote={attachment().isVoiceNote === true}
       elementRef={props.admission?.observeElement}
       onFocus={props.admission?.onAdmit}
@@ -481,6 +506,7 @@ function AttachmentContent(
           prop:sizeBytes={model().media?.sizeBytes}
           prop:mediaWidth={model().media?.width}
           prop:mediaHeight={model().media?.height}
+          prop:autoplay={Boolean(props.onPlay)}
           prop:onExpand={model().openVideoOverlay}
           prop:onFallbackExpand={model().openAttachmentSidebar}
           prop:onMediaLoaded={props.onAssistantAttachmentLoaded}
@@ -512,7 +538,7 @@ function AttachmentContent(
           ])}
           src={model().safeAttachmentUrl!}
           label={attachment().label}
-          onOpen={() => model().openAttachmentSidebar?.()}
+          onOpen={() => (props.onPlay ?? model().openAttachmentSidebar)?.()}
           fallback={card()}
         />
       </Match>
@@ -532,6 +558,7 @@ export function MessageAttachmentAction(
       when={props.item.type === "attachment" && props.item}
       fallback={props.render(() => ({
         pending: false,
+        onFindWorkspaceFile: attachmentFileSearch(props.item, props.options),
         reason:
           props.item.type === "attachment_error"
             ? attachmentFailureReason(props.item.attachment.code)

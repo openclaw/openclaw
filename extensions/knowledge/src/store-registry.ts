@@ -19,14 +19,16 @@ import {
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import { registerIdentity, SqliteIdentityStore } from "./identity-store.js";
 import { registrySchema, type RegistryTables } from "./registry-schema.js";
 import { ensureKnowledgeSchema, UnrecognizedSchema } from "./storage-schema.js";
 import { Manifest, checkpointKey } from "./store-manifest.js";
-import { canonicalJson } from "./stores-config.js";
-import type { StoreState } from "./stores-contract.js";
+import { canonicalJson, grantsRevision, type ConversationGrants } from "./stores-config.js";
+import type { GrantAccess, StoreState } from "./stores-contract.js";
 
 const BUSY_TIMEOUT_MS = 5000;
 
@@ -59,6 +61,8 @@ export type RegistrySnapshot = {
   labels: Record<string, string>;
   reconciled: { section: string; revision: string } | null;
   pending: OperationRow | null;
+  /** Owner conversation grants, keyed by conversation session key. */
+  grants: ConversationGrants;
 };
 export class RegistryRecoveryRequired extends Error {}
 
@@ -110,7 +114,7 @@ export class StoreRegistry {
     // A missing sentinel is written and an empty one (interrupted creation) is
     // completed; one naming another registry is refused.
     if (writeOnce(sentinel, id + "\n")) {
-      fsyncDir(stateRoot);
+      syncKnowledgeDirectory(stateRoot);
     }
     if (readFileSync(sentinel, "utf8").trim() !== id) {
       this.db.close();
@@ -149,7 +153,7 @@ export class StoreRegistry {
     return raw ? JSON.parse(raw) : null;
   }
 
-  private tx<T>(run: () => T): T {
+  private tx<T>(run: SynchronousSqliteCallback<T>): T {
     return runSqliteImmediateTransactionSync(this.db, run);
   }
   private meta(key: string): string | null {
@@ -236,7 +240,35 @@ export class StoreRegistry {
             .prepare("SELECT * FROM operations WHERE state='pending' ORDER BY updated_at LIMIT 1")
             .get(),
         ) ?? null,
+      grants: this.grants(),
     };
+  }
+  // Only grant() writes this value, so it is trusted as written.
+  private grants(): ConversationGrants {
+    const raw = this.meta("conversation_grants");
+    return raw ? JSON.parse(raw) : {};
+  }
+
+  /** Set or remove ("none") one conversation's grant, only if the grants are
+   * still at `expectedRevision`. A caller detects a conflict by the returned
+   * grants' revision. */
+  grant(sessionKey: string, access: GrantAccess | "none", expectedRevision: string) {
+    this.tx(() => {
+      const grants = this.grants();
+      if (grantsRevision(grants) !== expectedRevision) {
+        return;
+      }
+      if (access === "none") {
+        delete grants[sessionKey];
+      } else {
+        grants[sessionKey] = access;
+      }
+      this.setMeta(
+        "conversation_grants",
+        Object.keys(grants).length ? canonicalJson(grants) : null,
+      );
+    });
+    return this.snapshot();
   }
 
   /** Lazily create the store behind a logical binding (spec §5.2). The
@@ -275,8 +307,8 @@ export class StoreRegistry {
     };
     mkdirSync(path.join(reserved.root, "private"), { recursive: true, mode: 0o700 });
     writeOnce(path.join(reserved.root, "vault.json"), JSON.stringify(manifest, null, 2) + "\n");
-    fsyncDir(reserved.root);
-    fsyncDir(path.dirname(reserved.root));
+    syncKnowledgeDirectory(reserved.root);
+    syncKnowledgeDirectory(path.dirname(reserved.root));
     const store = new SqliteIdentityStore(reserved.statePath);
     store.withDatabase((db) =>
       registerIdentity(db, checkpointKey(reserved.vaultId), JSON.stringify(manifest)),
@@ -524,12 +556,4 @@ function writeOnce(file: string, text: string): boolean {
     closeSync(fd);
   }
   return true;
-}
-function fsyncDir(dir: string) {
-  const fd = openSync(dir, constants.O_RDONLY);
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
 }

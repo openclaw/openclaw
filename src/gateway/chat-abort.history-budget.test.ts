@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { TranscriptPreambleSource } from "../config/sessions/transcript-tool-preamble.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import type { RpcSourceAdapter, RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
 import {
@@ -8,8 +9,13 @@ import {
 } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { boundInFlightRunSnapshotForChatHistory } from "./chat-history-budget.js";
+import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
-import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import { SerializedJsonArray } from "./serialized-json.js";
+import {
+  readChatRunProgressEvents,
+  updateChatRunProgressSnapshot,
+} from "./server-chat-progress-snapshot.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -31,7 +37,7 @@ it.each([2, 50])("keeps the newest %i progress events with bounded serialization
       },
     });
   }
-  const events = progress?.events ?? [];
+  const events = readChatRunProgressEvents(progress) ?? [];
   expect(events).toHaveLength(50);
   const snapshot = { runId: "run-budget", text: "x".repeat(200_000), startedAt: 1_000, events };
   const original = JSON.stringify(snapshot);
@@ -56,6 +62,124 @@ it.each([2, 50])("keeps the newest %i progress events with bounded serialization
   expect(JSON.stringify(snapshot)).toBe(original);
   expect(serializedBytes).toBeLessThan(inputBytes * 3);
 });
+
+it.each(["", " The tool returned amber."])(
+  "refers only the evicted pre-tool prefix to its delivered native row (suffix: %j)",
+  (suffix) => {
+    const runId = "run";
+    const text = "Amber marks the first swatch.";
+    const user = { role: "user", __openclaw: { idempotencyKey: runId + ":user" } };
+    const nativeMeta = { importedFrom: "claude-cli" };
+    const preambleMeta = { ...nativeMeta, id: "native-preamble" };
+    const native = { role: "assistant", provider: "claude-cli", __openclaw: nativeMeta };
+    const preamble = {
+      ...native,
+      __openclaw: preambleMeta,
+      content: [{ type: "text", text }],
+    };
+    const call = { ...native, content: [{ type: "toolcall", id: "read-1", name: "read" }] };
+    const event = {
+      runId,
+      seq: 1,
+      ts: 2,
+      stream: "tool",
+      data: { phase: "start", toolCallId: "read-1", bufferEnd: text.length },
+    };
+    const snapshot = { runId, text: text + suffix, startedAt: 1, events: [event] };
+    const full = [user, preamble, call];
+    const explicit = { ...snapshot, events: [] };
+    const budget = (
+      rows: unknown[],
+      source: InFlightRunSnapshot = snapshot,
+      expectOpaque = false,
+    ) => {
+      const encoded = new SerializedJsonArray(Buffer.from(JSON.stringify(rows)));
+      const parse = vi.spyOn(encoded, "materialize");
+      const projected = boundInFlightRunSnapshotForChatHistory({
+        snapshot: source,
+        messages: encoded,
+        getMessagesBytes: () => encoded.byteLength,
+        maxBytes: encoded.byteLength + jsonUtf8Bytes(explicit),
+      });
+      if (expectOpaque) {
+        expect(parse).not.toHaveBeenCalled();
+      }
+      return projected;
+    };
+    expect(budget(full)).toEqual({ ...explicit, text: suffix, textFromMessage: 1 });
+    let source: TranscriptPreambleSource | undefined;
+    const minimum = { runId, text: "", events: [] };
+    const packed = boundInFlightRunSnapshotForChatHistory({
+      snapshot,
+      messages: full,
+      maxBytes: jsonUtf8Bytes(full) + jsonUtf8Bytes(minimum),
+      onPreambleBudgetMiss(bytes, proof) {
+        expect(bytes).toBe(jsonUtf8Bytes({ ...minimum, textFromMessage: 1 }));
+        source = proof;
+      },
+    });
+    expect(packed).toEqual(minimum);
+    expect(source).toEqual({ runId, toolCallId: "read-1", messageId: "native-preamble" });
+    const retry = (rows: unknown[], fresh: InFlightRunSnapshot = snapshot) =>
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: fresh,
+        messages: rows,
+        maxBytes: 4096,
+        preambleSource: source,
+      });
+    expect(retry([preamble, call])).toEqual({ ...snapshot, textFromMessage: 0, text: suffix });
+    const replacement = { ...snapshot, runId: "next", events: [{ ...event, runId: "next" }] };
+    expect(retry([preamble, call], replacement)).toBe(replacement);
+    const restarted = { ...snapshot, events: [{ ...event, seq: 2 }] };
+    expect(retry([preamble, call], restarted)).toEqual({
+      ...restarted,
+      textFromMessage: 0,
+      text: suffix,
+    });
+    expect(retry([{ ...preamble, __openclaw: { ...preambleMeta, id: "other" } }, call])).toBe(
+      snapshot,
+    );
+    for (const rows of [
+      [preamble, call],
+      [user, call],
+      [user, preamble],
+      [user, preamble, { ...call, content: [{ type: "toolcall", id: "read-2", name: "read" }] }],
+      [user, preamble, { ...call, provider: "other" }],
+      [user, { ...preamble, __openclaw: { ...nativeMeta, runId: "another-run" } }, call],
+      [user, { ...preamble, content: [{ type: "text", text: "Different preamble." }] }, call],
+    ]) {
+      expect(budget(rows)).toEqual(explicit);
+    }
+    for (const other of [
+      { ...event, runId: "another-run" },
+      { ...event, data: { ...event.data, parentToolCallId: "parent" } },
+    ]) {
+      expect(budget(full, { ...snapshot, events: [other] }, true)).toEqual(explicit);
+    }
+    for (const offset of [undefined, 0, 0.5, snapshot.text.length + 1]) {
+      const unmarked = { ...event, data: { ...event.data, bufferEnd: offset } };
+      expect(budget(full, { ...snapshot, events: [unmarked] }, true)).toEqual(explicit);
+    }
+    const earlierStart = {
+      ...event,
+      data: { phase: "start", toolCallId: "read-1", textLengthBeforeTool: text.length },
+    };
+    expect(budget(full, { ...snapshot, events: [earlierStart] }, true)).toEqual(explicit);
+    expect(budget(full, explicit, true)).toEqual(explicit);
+    const legacy = { runId, text: snapshot.text, startedAt: 1 };
+    expect(budget(full, { ...legacy, text: "x".repeat(300) }, true)).toEqual({
+      ...legacy,
+      text: "",
+    });
+    expect(
+      boundInFlightRunSnapshotForChatHistory({
+        snapshot: legacy,
+        messages: full,
+        maxBytes: jsonUtf8Bytes(full) + jsonUtf8Bytes(legacy),
+      }),
+    ).toBe(legacy);
+  },
+);
 
 describe("resolveInFlightRunSnapshot", async () => {
   const inFlightEntry = async (
@@ -100,8 +224,8 @@ describe("resolveInFlightRunSnapshot", async () => {
   // the requested key unless a case exercises the requested/canonical split.
   const resolveSnap = (p: {
     sources: Map<string, RpcSourceRef>;
-    chatRunBuffers: Map<string, string>;
-    chatRunPlanSnapshots?: Map<string, ChatRunPlanSnapshot>;
+    buffers?: Record<string, string>;
+    plans?: Record<string, ChatRunPlanSnapshot>;
     sessionKey: string;
     canonicalSessionKey?: string;
     agentId?: string;
@@ -110,10 +234,10 @@ describe("resolveInFlightRunSnapshot", async () => {
   }) => {
     rpcSourceTesting.reset(p.sources);
     const chatRunState = createChatRunState();
-    for (const [runId, buffer] of p.chatRunBuffers ?? []) {
+    for (const [runId, buffer] of Object.entries(p.buffers ?? {})) {
       chatRunState.getOrCreate(runId).buffer = buffer;
     }
-    for (const [runId, plan] of p.chatRunPlanSnapshots ?? []) {
+    for (const [runId, plan] of Object.entries(p.plans ?? {})) {
       chatRunState.getOrCreate(runId).planSnapshot = plan;
     }
     return resolveInFlightRunSnapshot({
@@ -169,17 +293,19 @@ describe("resolveInFlightRunSnapshot", async () => {
     expect(resolve()).toBeUndefined();
   });
 
-  it("omits execution timing until a queued source actually starts", async () => {
+  it.each([-600_000, 0, 600_000])("starts timing after wall step %i", async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const source = createRpcSourceForTest(
       { projectSessionActive: true },
       { runId: "queued-clock", sessionKey: "agent:main:queued-clock" },
     );
     rpcSourceTesting.reset(new Map([["queued-clock", source]]));
-    initializeRpcSourceTiming(source, { timeoutMs: 60_000 });
+    initializeRpcSourceTiming(source, { timeoutMs: 60_000, onQueueTimeout: () => {} });
     await claimRpcSourceForTest(source);
+    await vi.advanceTimersByTimeAsync(1_000);
+    vi.setSystemTime(Date.now() + step);
     const params = {
       sources: new Map([["queued-clock", source]]),
-      chatRunBuffers: new Map<string, string>(),
       sessionKey: "agent:main:queued-clock",
     };
     expect(resolveSnap(params)).toEqual({ runId: "queued-clock", text: "" });
@@ -193,28 +319,24 @@ describe("resolveInFlightRunSnapshot", async () => {
     expect(resolveSnap(params)?.startedAt).toBeGreaterThanOrEqual(now);
   });
 
-  it("returns an explicit empty plan snapshot for dismissal", async () => {
-    expect(
-      snap({
-        sources: new Map([["run-1", await inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map(),
-        chatRunPlanSnapshots: new Map([["run-1", { steps: [] }]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run-1", text: "", plan: { steps: [] } });
-  });
-
-  it("matches a run stored under the canonical key when requested with a different key", async () => {
-    // Abort entry holds the canonical store key; the client requests history with
-    // a different (requested) key for the same logical session.
-    const result = snap({
-      sources: new Map([["run-1", await inFlightEntry("agent:main:main")]]),
-      chatRunBuffers: new Map([["run-1", "partial"]]),
-      sessionKey: "main",
-      canonicalSessionKey: "agent:main:main",
-    });
-    expect(result).toEqual({ runId: "run-1", text: "partial" });
-  });
+  it.each([
+    { requested: "agent:main:main", text: "", plan: { steps: [] } },
+    { requested: "main", text: "partial" },
+    { requested: "agent:main:main", text: "NO_" },
+  ])(
+    "returns the active buffer and explicit plan for $requested: %j",
+    async ({ requested, text, plan }) => {
+      const canonicalSessionKey = "agent:main:main";
+      const snapshot = snap({
+        sources: new Map([["run", await inFlightEntry(canonicalSessionKey)]]),
+        buffers: text ? { run: text } : undefined,
+        plans: plan && { run: plan },
+        sessionKey: requested,
+        canonicalSessionKey,
+      });
+      expect(snapshot).toEqual({ runId: "run", text, ...(plan && { plan }) });
+    },
+  );
 
   it("ignores aborted, completed, hidden, internal agent, and other-session runs", async () => {
     const variants: RpcSourceRef[] = [
@@ -228,21 +350,11 @@ describe("resolveInFlightRunSnapshot", async () => {
       expect(
         snap({
           sources: new Map([["run", entry]]),
-          chatRunBuffers: new Map([["run", "text"]]),
+          buffers: { run: "text" },
           sessionKey: "agent:main:s",
         }),
       ).toBeUndefined();
     }
-  });
-
-  it("preserves literal partial control-token text from the live buffer", async () => {
-    expect(
-      snap({
-        sources: new Map([["run", await inFlightEntry("agent:main:s")]]),
-        chatRunBuffers: new Map([["run", "NO_"]]),
-        sessionKey: "agent:main:s",
-      }),
-    ).toEqual({ runId: "run", text: "NO_" });
   });
 
   it.each([
@@ -255,15 +367,10 @@ describe("resolveInFlightRunSnapshot", async () => {
         ["run-main", await inFlightEntry("global", { agentId: "main", startedAtMs: 1_000 })],
         ["run-work", await inFlightEntry("global", { agentId: "work", startedAtMs: 2_000 })],
       ]);
-      const buffers = new Map([
-        ["run-main", "main global text"],
-        ["run-work", "work global text"],
-      ]);
-
       expect(
         snap({
           sources: controllers,
-          chatRunBuffers: buffers,
+          buffers: { "run-main": "main global text", "run-work": "work global text" },
           sessionKey: "global",
           agentId,
           defaultAgentId,
@@ -272,48 +379,29 @@ describe("resolveInFlightRunSnapshot", async () => {
     },
   );
 
-  it("prefers the newest startedAtMs across the requested and canonical session keys", async () => {
-    const storePath = "/synthetic/history-aliases/sessions.db";
-    const controllers = new Map<string, RpcSourceRef>([
-      ["run-old", await inFlightEntry("agent:main:requested", { startedAtMs: 1_000, storePath })],
-      ["run-new", await inFlightEntry("agent:main:canonical", { startedAtMs: 2_000, storePath })],
-    ]);
-    const buffers = new Map([
-      ["run-old", "stale partial"],
-      ["run-new", "current partial"],
-    ]);
-    expect(
-      snap({
-        sources: controllers,
-        chatRunBuffers: buffers,
-        sessionKey: "agent:main:requested",
-        canonicalSessionKey: "agent:main:canonical",
-        storePath,
-      }),
-    ).toEqual({ runId: "run-new", text: "current partial" });
-  });
-
-  it.each([false, true])(
-    "breaks startedAtMs ties by runId (reverse insertion=%s)",
-    async (reverse) => {
-      const storePath = "/synthetic/history-tie/sessions.db";
-      const buffers = new Map([
-        ["run-a", "a"],
-        ["run-b", "b"],
-      ]);
+  it.each([
+    [2_000, false, "a"],
+    [500, false, "b"],
+    [1_000, false, "b"],
+    [1_000, true, "b"],
+  ] as const)(
+    "selects the newest alias run, breaking ties by ID (%i, reverse=%s)",
+    async (at, reverse, winner) => {
+      const sessionKey = "agent:main:requested";
+      const canonicalSessionKey = "agent:main:canonical";
+      const storePath = "/synthetic/history-aliases/sessions.db";
       const entries: [string, RpcSourceRef][] = [
-        ["run-a", await inFlightEntry("agent:main:requested", { startedAtMs: 5_000, storePath })],
-        ["run-b", await inFlightEntry("agent:main:canonical", { startedAtMs: 5_000, storePath })],
+        ["run-a", await inFlightEntry(sessionKey, { startedAtMs: at, storePath })],
+        ["run-b", await inFlightEntry(canonicalSessionKey, { startedAtMs: 1_000, storePath })],
       ];
-      expect(
-        snap({
-          sources: new Map(reverse ? entries.toReversed() : entries),
-          chatRunBuffers: buffers,
-          sessionKey: "agent:main:requested",
-          canonicalSessionKey: "agent:main:canonical",
-          storePath,
-        }),
-      ).toEqual({ runId: "run-b", text: "b" });
+      const snapshot = snap({
+        sources: new Map(reverse ? entries.toReversed() : entries),
+        buffers: { "run-a": "a", "run-b": "b" },
+        sessionKey,
+        canonicalSessionKey,
+        storePath,
+      });
+      expect(snapshot).toEqual({ runId: "run-" + winner, text: winner });
     },
   );
 
@@ -326,80 +414,51 @@ describe("resolveInFlightRunSnapshot", async () => {
           ["local", local],
           ["foreign", foreign],
         ]),
-        chatRunBuffers: new Map([
-          ["local", "local partial"],
-          ["foreign", "foreign partial"],
-        ]),
+        buffers: { local: "local partial", foreign: "foreign partial" },
         sessionKey: "agent:main:s",
         storePath: local.input.target!.storeScope,
       }),
     ).toEqual({ runId: "local", text: "local partial" });
   });
 
-  it("drops startedAt when the former minimal fallback exactly fills the budget", async () => {
+  const minimum = { runId: "run-1", text: "" };
+  const start = {
+    runId: minimum.runId,
+    seq: 2,
+    stream: "tool",
+    ts: 1_000,
+    data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
+  };
+  const plan = (status: ChatRunPlanSnapshot["steps"][number]["status"]) => ({
+    steps: [{ step: "x".repeat(1_000), status }],
+  });
+  const emptyPlan = { steps: [] };
+  it.each([
+    {
+      name: "only run adoption fits",
+      snapshot: { ...minimum, text: "x", startedAt: 1_000 },
+      expected: minimum,
+    },
+    {
+      name: "short text outlives an oversized plan",
+      snapshot: { ...minimum, text: "short answer", plan: plan("pending") },
+      expected: { ...minimum, text: "short answer", plan: emptyPlan },
+    },
+    {
+      name: "progress wins over text and plan",
+      snapshot: { ...minimum, text: "x".repeat(1_000), events: [start], plan: plan("in_progress") },
+      expected: { ...minimum, events: [start], plan: emptyPlan },
+    },
+    {
+      name: "evicted events are explicitly empty",
+      snapshot: { ...minimum, events: [start] },
+      expected: { ...minimum, events: [] },
+    },
+  ])("bounds history when $name", ({ snapshot, expected }) => {
     const messages = [{ role: "user", content: "near budget" }];
-    const minimal = { runId: "run-1", text: "" };
-    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(minimal);
-    const result = boundInFlightRunSnapshotForChatHistory({
-      snapshot: { runId: "run-1", text: "x", startedAt: 1_000 },
-      messages,
-      maxBytes,
-    });
-    expect(result).toEqual(minimal);
-    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(result)).toBeLessThanOrEqual(maxBytes);
-  });
-
-  it("keeps small buffered text and clears an oversized plan explicitly", async () => {
-    // Absence means legacy-gateway unknown to clients; a budget drop must send
-    // an explicit empty plan so retained stale checklists cannot survive.
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: {
-          runId: "run-1",
-          text: "short answer",
-          plan: {
-            steps: [{ step: "x".repeat(500), status: "pending" }],
-          },
-        },
-        messages: [],
-        maxBytes: 200,
-      }),
-    ).toEqual({ runId: "run-1", text: "short answer", plan: { steps: [] } });
-  });
-
-  it("prioritizes active progress and explicitly clears budget-dropped projections", async () => {
-    const event = {
-      runId: "run-1",
-      seq: 2,
-      stream: "tool" as const,
-      ts: 1_000,
-      data: { phase: "start", name: "read", toolCallId: "tool-1", args: {} },
-    };
-    const expected = {
-      runId: "run-1",
-      text: "",
-      events: [event],
-      plan: { steps: [] },
-    };
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: {
-          runId: "run-1",
-          text: "x".repeat(1_000),
-          events: [event],
-          plan: { steps: [{ step: "y".repeat(1_000), status: "in_progress" }] },
-        },
-        messages: [],
-        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes(expected),
-      }),
-    ).toEqual(expected);
-
-    expect(
-      boundInFlightRunSnapshotForChatHistory({
-        snapshot: { runId: "run-1", text: "", events: [event] },
-        messages: [],
-        maxBytes: jsonUtf8Bytes([]) + jsonUtf8Bytes({ runId: "run-1", text: "", events: [] }),
-      }),
-    ).toEqual({ runId: "run-1", text: "", events: [] });
+    const maxBytes = jsonUtf8Bytes(messages) + jsonUtf8Bytes(expected);
+    const actual = boundInFlightRunSnapshotForChatHistory({ snapshot, messages, maxBytes });
+    expect(actual).toEqual(expected);
+    expect(jsonUtf8Bytes(messages) + jsonUtf8Bytes(actual)).toBeLessThanOrEqual(maxBytes);
   });
 });

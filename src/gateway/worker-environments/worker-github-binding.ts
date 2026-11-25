@@ -1,4 +1,6 @@
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   onManagedGitHubProfileChanged,
   resolveConfiguredGitHubToolIdentity,
@@ -6,12 +8,7 @@ import {
 import type { PreparedGitHubPublicationIdentity } from "../../agents/github-tool-identity.types.js";
 import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
-import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  onUserProfilesChanged,
-  onUserProfileEmailBindingChanged,
-} from "../../state/user-profile-events.js";
 import {
   parseWorkerGitHubLaunchBinding,
   type WorkerGitHubLaunchBinding,
@@ -22,8 +19,8 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   prepareGitHubPublicationWorkspaceOwner,
   sameGitHubPublicationWorkspace,
-  type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
+import type { PublicationSessionIdentity } from "../github-publication-session.types.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
@@ -130,6 +127,7 @@ const log = createSubsystemLogger("gateway/worker-github");
 /** Discovery prepared the account off the turn path; admission binds only local live authority. */
 async function prepareWorkerGitHubBindingGrant(
   params: PublicationSessionIdentity & {
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     github: WorkerGitHubLaunchBinding;
     identity: PreparedGitHubPublicationIdentity;
     workspaceKey: string;
@@ -138,8 +136,15 @@ async function prepareWorkerGitHubBindingGrant(
     assertCurrent: () => void;
   },
 ): Promise<WorkerGitHubBindingGrant> {
+  if (params.operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(params.operatorAuthority);
+  }
   const controller = new AbortController();
-  const signal = AbortSignal.any([params.signal, controller.signal]);
+  const signal = AbortSignal.any([
+    params.signal,
+    controller.signal,
+    ...(params.operatorAuthority?.signal ? [params.operatorAuthority.signal] : []),
+  ]);
   const assertRun = () => {
     signal.throwIfAborted();
     params.assertCurrent();
@@ -191,33 +196,21 @@ async function prepareWorkerGitHubBindingGrant(
   const assertCurrent = () => {
     try {
       assertRun();
-      if (
-        !sameGitHubPublicationWorkspace(initial, workspace.current()) ||
-        !matchesCurrentGitHubPublicationIdentity({
-          agentId: params.agentId,
-          identity: params.identity,
-        })
-      ) {
-        throw new Error("Worker GitHub credential authority changed");
+      if (!sameGitHubPublicationWorkspace(initial, workspace.current())) {
+        throw new Error("Worker GitHub workspace changed. Start a new turn.");
       }
     } catch (error) {
       controller.abort(error);
       throw error;
     }
   };
-  const changed = () => {
-    try {
-      assertCurrent();
-    } catch {
-      /* Abort owns cleanup. */
-    }
-  };
   try {
+    const releaseOperator = params.operatorAuthority?.retain?.();
+    if (releaseOperator) {
+      stops.push(releaseOperator);
+    }
     signal.addEventListener("abort", onAbort, { once: true });
     stops.push(
-      registerConfigWriteListener(changed),
-      onUserProfilesChanged(changed),
-      onUserProfileEmailBindingChanged(changed),
       onManagedGitHubProfileChanged(({ profileDir, kind }) => {
         if (profileDir === params.identity.env.GH_CONFIG_DIR) {
           if (kind === "removed") {
@@ -308,6 +301,7 @@ async function prepareWorkerGitHubBindingGrant(
 
 /** Attach the background fact to this admitted turn without running identity discovery. */
 export async function bindWorkerGitHubTurn(params: {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   session: PublicationSessionIdentity;
   fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>;
   sessionTarget: AgentRunSessionTarget;
@@ -326,6 +320,7 @@ export async function bindWorkerGitHubTurn(params: {
   }
   const preparing = prepareWorkerGitHubBindingGrant({
     ...params.session,
+    operatorAuthority: params.operatorAuthority,
     github,
     identity,
     workspaceKey: expectedWorkspace,

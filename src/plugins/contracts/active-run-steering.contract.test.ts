@@ -28,7 +28,7 @@ const sessionKey = "agent:main:steering-test";
 const sessionId = "steering-session";
 const steered = { steered: true, runId: "steered-run" };
 
-function createApi(allowPromptInjection = true, config: OpenClawConfig = {}) {
+function createApi(allowPromptModification = true, config: OpenClawConfig = {}) {
   const runtime = createPluginRuntime();
   runtime.config.current = () => config;
   const builder = createPluginRegistry({
@@ -41,7 +41,7 @@ function createApi(allowPromptInjection = true, config: OpenClawConfig = {}) {
     origin: "bundled",
   });
   builder.registry.plugins.push(record);
-  const api = builder.createApi(record, { config: {}, hookPolicy: { allowPromptInjection } });
+  const api = builder.createApi(record, { config: {}, hookPolicy: { allowPromptModification } });
   setActivePluginRegistry(builder.registry);
   return {
     record,
@@ -139,16 +139,13 @@ describe("plugin active-run steering", () => {
       if (delivery === "successor-run" || delivery === "successor-run-receipt") {
         startRun(queueMessage, true, "successor-run", target.storePath);
       }
-      expect(await (second ?? steer(input))).toEqual(
-        delivery === "successor-run" ? { steered: false, reason: "duplicate" } : steered,
-      );
+      // The controller stamps the accepted target run, so a replay names it.
+      expect(await (second ?? steer(input))).toEqual(steered);
       expect(await readTranscriptMessages(target)).toEqual([
         expect.objectContaining({
           content: input.text,
           idempotencyKey: input.idempotencyKey,
-          ...(delivery !== "successor-run"
-            ? { __openclaw: expect.objectContaining({ steerTargetRunId: "steered-run" }) }
-            : {}),
+          __openclaw: expect.objectContaining({ steerTargetRunId: "steered-run" }),
         }),
       ]);
       expect(modelInput).toEqual([input.text]);
@@ -253,7 +250,7 @@ describe("plugin active-run steering", () => {
       }
       const reasons = {
         legacy: "active runtime does not support guarded steering",
-        disabled: "blocked by plugins.entries.steering-plugin.hooks.allowPromptInjection=false",
+        disabled: "blocked by plugins.entries.steering-plugin.hooks.allowPromptModification=false",
       };
       await expect(steer()).resolves.toEqual({
         steered: false,

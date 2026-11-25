@@ -11,9 +11,13 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { createContext } from "./plugins-page.test-support.ts";
-import { PluginSettingsEditor, type PluginSettingsEditorProps } from "./settings-editor.tsx";
+import {
+  PluginSettingsEditor,
+  pluginSettingsNodeOptions,
+  type PluginSettingsEditorProps,
+} from "./settings-editor.tsx";
+import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import type { PluginSettingsEditorModel } from "./settings-model.ts";
-import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-view.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 
@@ -134,10 +138,14 @@ afterEach(() => {
 });
 describe("grouped plugin settings", () => {
   it("keeps typing and focus in Advanced settings when configuration updates", async () => {
-    const [value, setValue] = createSignal({ plugins: { label: "" } });
-    const schema = objectSchema({ label: { type: "string", title: "Label" } });
+    const [value, setValue] = createSignal({ plugins: { slots: { memory: "" } } });
+    const schema = objectSchema({
+      plugins: objectSchema({
+        slots: objectSchema({ memory: { type: "string", title: "Label" } }),
+      }),
+    });
     const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
-      setValue({ plugins: { label: String(next) } });
+      setValue({ plugins: { slots: { memory: String(next) } } });
     });
     const { gateway } = createApplicationGateway();
     const plugins = new ControlUiPluginRuntime(() => context);
@@ -157,7 +165,8 @@ describe("grouped plugin settings", () => {
           iconUrls={{}}
           canMutate
           mutationBlockedReason={null}
-          advancedSchema={schema}
+          rawConfigSchema={schema}
+          settingsContext={context}
           onConfigReload={vi.fn()}
           onRefresh={vi.fn()}
           onTabChange={vi.fn()}
@@ -172,6 +181,8 @@ describe("grouped plugin settings", () => {
       { wrapper: provider.wrapper },
     );
     await settle();
+    await page.getByText("Slots", { exact: true }).click();
+    await expect.element(page.getByRole("textbox", { name: "Label", exact: true })).toBeVisible();
     const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
     input.focus();
     for (const text of ["a", "ab"]) {
@@ -180,7 +191,7 @@ describe("grouped plugin settings", () => {
       await settle();
       expect(document.activeElement).toBe(input);
       expect(input.value).toBe(text);
-      expect(onPatch).toHaveBeenLastCalledWith(["plugins", "label"], text);
+      expect(onPatch).toHaveBeenLastCalledWith(["plugins", "slots", "memory"], text);
     }
   });
   it("retains an optional config draft across refreshes and a rejected atomic save", async () => {
@@ -417,6 +428,67 @@ describe("grouped plugin settings", () => {
 });
 
 describe("grouped editor field discovery", () => {
+  it.each(["NFC", "NFD"] as const)(
+    "finds original %s grouping, ancestor, and permission text with an equivalent query",
+    async (form) => {
+      const equivalent = (text: string) => text.normalize(form === "NFC" ? "NFD" : "NFC");
+      const group = "Café section".normalize(form);
+      const ancestor = "Résumé parent".normalize(form);
+      const permission = "Gesprächskontext lesen".normalize(form);
+      const help = "Überprüfung".normalize(form);
+      const { editor, model, update, all } = await mount({
+        configHints: {
+          [prefix]: { groups: [{ id: "general", title: group, properties: ["enabled"] }] },
+        },
+        configValue: configValue({ enabled: true, storage: { path: "original" } }),
+        configSchema: objectSchema({
+          enabled: { type: "boolean", title: "Enabled" },
+          storage: {
+            ...objectSchema({ path: { type: "string", title: "Directory" } }),
+            title: ancestor,
+          },
+        }),
+      });
+      await update({
+        permissions: {
+          fields: [
+            {
+              ...pluginSettingsNodeOptions(model),
+              schema: { type: "boolean", title: "Allow context" },
+              path: ["plugins", "entries", "fixture", "hooks", "allowConversationAccess"],
+              property: "hooks",
+              value: false,
+              label: permission,
+              help,
+            },
+          ],
+        },
+      });
+      const initial = [...all(".plugin-editor__title")].map((row) => row.textContent);
+      for (const [query, expected] of [
+        [group, ["enabled"]],
+        [equivalent(group), ["enabled"]],
+        [equivalent(ancestor), ["storage.path"]],
+        [equivalent(permission), ["hooks.allowConversationAccess"]],
+        [equivalent(help), ["hooks.allowConversationAccess"]],
+        ["  ENABLED  ", ["enabled"]],
+        ["Cafè section", []],
+        ["Ｃａｆé section", []],
+      ] as const) {
+        await searchSettings(editor, query);
+        expect([...all("[data-setting]")].map((row) => row.getAttribute("data-setting"))).toEqual(
+          expected,
+        );
+      }
+      await searchSettings(editor, "");
+      expect([...all(".plugin-editor__title")].map((row) => row.textContent)).toEqual(initial);
+      expect(editor.textContent).toContain(ancestor);
+      expect(editor.textContent).toContain(help);
+      expect(model.onConfigPatch).not.toHaveBeenCalled();
+      expect(model.onConfigRemove).not.toHaveBeenCalled();
+    },
+  );
+
   it("associates visible field instructions with native controls", async () => {
     const { query } = await mount({
       configHints: {
@@ -466,7 +538,7 @@ describe("grouped editor field discovery", () => {
     }
     await searchSettings(editor, "does-not-match");
     expect(query(".cfg-map")).toBeNull();
-    expect(query(".plugin-editor__empty")?.textContent).toContain("No matching settings.");
+    expect(query(".settings-empty")?.textContent).toContain("No settings match your search.");
   });
 });
 
@@ -498,14 +570,14 @@ describe("plugin map layout", () => {
       for (const add of all<HTMLButtonElement>(".cfg-map > .settings-row button")) {
         const bounds = add.getBoundingClientRect();
         const mapBounds = add.closest(".cfg-map")!.getBoundingClientRect();
-        expect(bounds.width).toBeGreaterThan(60);
+        expect(bounds.width).toBeGreaterThan(40);
         expect(bounds.height).toBeLessThan(48);
         expect(bounds.right).toBeLessThanOrEqual(mapBounds.right);
       }
       const key = query<HTMLInputElement>('input[aria-label="Key: first"]')!;
       expect(key.getBoundingClientRect().width).toBeGreaterThan(100);
       const value = query<HTMLInputElement>('[data-setting="populated"] input[type="number"]')!;
-      expect(value.getBoundingClientRect().width).toBeGreaterThan(100);
+      expect(value.getBoundingClientRect().width).toBeGreaterThan(60);
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(

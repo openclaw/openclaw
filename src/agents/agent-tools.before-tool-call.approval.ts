@@ -24,6 +24,7 @@ import {
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
 } from "../plugins/types.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { isPlainObject } from "../utils.js";
 import { resolveToolErrorDiagnostic } from "./agent-tools.before-tool-call.diagnostics.js";
 import type {
@@ -37,7 +38,6 @@ import { registerActiveEmbeddedRunHumanInputWaitForRun } from "./embedded-agent-
 import { hasInProcessGatewayToolCaller } from "./tools/gateway-caller-availability.js";
 import {
   getGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
 } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -222,7 +222,7 @@ async function requestPluginToolApproval(params: PluginToolApprovalParams): Prom
   // NTP step or wall-clock adjustment cannot prematurely end the wait or
   // hold the lane indefinitely while the approval is still genuinely pending.
   const deadlineMonotonicMs =
-    performance.now() +
+    monotonicNow() +
     (addTimerTimeoutGraceMs(resolvePluginToolApprovalTimeoutMs(params.approval), 10_000) ??
       DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000);
   let pending = true;
@@ -230,7 +230,7 @@ async function requestPluginToolApproval(params: PluginToolApprovalParams): Prom
   const release = params.ctx?.runId
     ? registerActiveEmbeddedRunHumanInputWaitForRun(
         params.ctx.runId,
-        () => pending && params.signal?.aborted !== true && performance.now() < deadlineMonotonicMs,
+        () => pending && params.signal?.aborted !== true && monotonicNow() < deadlineMonotonicMs,
       )
     : undefined;
   try {
@@ -282,7 +282,6 @@ async function requestPluginToolApprovalDecision(
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
   const watchdogAttempt =
     params.ctx?.watchdogAttempt ?? getGatewayToolCallerIdentity()?.watchdogAttempt;
-  const assertCurrent = captureGatewayToolCallerAssertion();
   let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
   const beginApprovalWait = (deadlineAtMs: number) => {
     watchdogWait?.close();
@@ -291,7 +290,6 @@ async function requestPluginToolApprovalDecision(
       deadlineAtMs,
       isCurrent: () => {
         params.signal?.throwIfAborted();
-        assertCurrent?.();
         return true;
       },
     });

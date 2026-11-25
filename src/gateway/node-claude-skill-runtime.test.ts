@@ -9,7 +9,7 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,7 +22,7 @@ import { resolveNodeHostGatewayPlatformIdentity } from "../node-host/gateway-pla
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "../node-host/invoke-agent-cli-claude.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -34,6 +34,7 @@ import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js"
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
+import { decideTurnGrant } from "./operator-admission.js";
 import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
@@ -133,7 +134,11 @@ async function fixture(
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "test");
   const admitted = await admission.admit("plugin-harness");
   const capability = options.authoring
-    ? await prepareGatewaySkillAuthoring(owner, sessionKey, true)
+    ? await prepareGatewaySkillAuthoring(
+        owner,
+        sessionKey,
+        decideTurnGrant(owner.client?.connect.scopes ?? []),
+      )
     : undefined;
   capability?.bind(admitted);
   const snapshot = options.managed
@@ -155,7 +160,7 @@ async function fixture(
   // Use the real admission/capability; the factory only supplies irrelevant CLI defaults.
   context.params.admittedRunContext = admitted;
   context.params.skillLibraryAuthoring = capability;
-  context.nodeSkillWorkshop = capability ? createLibrarySkillWorkshopTool(capability) : undefined;
+  context.nodeSkillWorkshop = capability ? createSkillLibraryTool(capability) : undefined;
   const controller = new AbortController();
   const tasks: Promise<void>[] = [];
   let endpoint: ReturnType<typeof createNodeDuplexEndpoint> | undefined;
@@ -283,8 +288,8 @@ async function fixture(
   );
   let output = "";
   const execute = (stdin = "hello") =>
-    withPluginRuntimeGatewayRequestScope(
-      { context: gateway, client: owner.client, isWebchatConnect: () => true },
+    withPluginRuntimeGatewayContextResolver(
+      () => gateway,
       () =>
         executeNodeClaudeRun({
           context,
@@ -419,46 +424,6 @@ it("keeps the original request and raw progress for turns without managed skills
   expect(JSON.parse(f.output())).toEqual({ type: "result", result: "hello", args: ["-p"] });
 });
 
-it("refuses retired request authority after managed-skill pairing awaits", async () => {
-  const pairingStarted = createDeferredCore();
-  const pairing = createDeferredCore<{ identity: string; generation: string }>();
-  const f = await fixture(
-    "console.log(JSON.stringify({type:'result',result:'unexpected dispatch'}));",
-    {
-      managed: true,
-      resolveCurrentPairingState: async () => {
-        pairingStarted.resolve();
-        return await pairing.promise;
-      },
-    },
-  );
-  const retired = new Error("request authority retired while resolving node pairing");
-  let current = true;
-  f.context.params.assertCurrent = () => {
-    if (!current) {
-      throw retired;
-    }
-  };
-  const running = f.execute();
-  const outcome = Promise.allSettled([running]);
-  try {
-    await awaitGateBeforeSettlement(
-      pairingStarted.promise,
-      running,
-      "Node turn completed before pairing resolution",
-    );
-    current = false;
-    pairing.resolve({ identity: "node-1", generation: "generation-1" });
-
-    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-    expect(f.requests).toEqual([]);
-  } finally {
-    pairing.resolve({ identity: "node-1", generation: "generation-1" });
-    await outcome;
-    await f[Symbol.asyncDispose]();
-  }
-});
-
 it("requires the additive node capability before dispatching a selected bundle", async () => {
   await using f = await fixture("process.exit(99)", { managed: true, capability: false });
   await expect(f.execute()).rejects.toThrow("Upgrade OpenClaw on the paired node");
@@ -470,9 +435,9 @@ const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.arg
 async function call(method,params,id){const r=await fetch(config.mcpServers.openclaw.url,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id,method,params})});return r.json();}
 (async()=>{await call('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'synthetic-claude',version:'1'}},1);
  const listed=await call('tools/list',{},2);
- const created=await call('tools/call',{name:'skill_workshop',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
+ const created=await call('tools/call',{name:'skill_library',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
  const receipt=JSON.parse(created.result.content[0].text);
- const updated=await call('tools/call',{name:'skill_workshop',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
+ const updated=await call('tools/call',{name:'skill_library',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
  console.log(JSON.stringify({type:'result',listed,created,updated}));
 })().catch(e=>{console.error(String(e));process.exitCode=1;});`;
 
@@ -481,7 +446,7 @@ it("authors through the node MCP proxy using the actual host capability without 
   expect((await f.execute()).result.exitCode).toBe(0);
   const tools = JSON.parse(f.output()).listed.result.tools;
   expect(tools).toHaveLength(1);
-  expect(tools[0]).toMatchObject({ name: "skill_workshop" });
+  expect(tools[0]).toMatchObject({ name: "skill_library" });
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);

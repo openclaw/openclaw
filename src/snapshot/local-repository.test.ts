@@ -928,7 +928,7 @@ describe("local SQLite snapshot repository", () => {
 
   it("bounds manifest reads before parsing untrusted snapshot metadata", async () => {
     const { verify, file } = await snapshotFixture();
-    await fs.writeFile(file(SNAPSHOT_MANIFEST_FILENAME), Buffer.alloc(1024 * 1024 + 1, 0x20));
+    await fs.truncate(file(SNAPSHOT_MANIFEST_FILENAME), 1024 * 1024 + 1);
 
     await expect(verify()).rejects.toThrow(/1048576 bytes/u);
   });

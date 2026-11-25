@@ -27,16 +27,27 @@ import { runUpdateRunAdmission } from "./update-run-admission.js";
 import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {
   inspectUpdateRunDriver,
-  readUpdateRunDriver,
+  readRecordedUpdateRunDriver,
+  type RecordedUpdateRunDriver,
   sameUpdateRunDriver,
+  toUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import type { UpdateRunPatch as RunPatch } from "./update-run-mutation.types.js";
+import {
+  selectUpdateOwedSteps,
+  UPDATE_OWED_STEP_HISTORY,
+  updateOwedStepRow,
+  updateRunOwesSteps,
+  type UpdateOwedStep,
+  type UpdateOwedStepId,
+} from "./update-run-owed-step.js";
 import {
   decodeRun,
   hasStoredUpdateRecovery,
   readUpdateRunRecord as readRun,
 } from "./update-run-read.kernel.js";
+import { listUpdateRuns } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
@@ -48,6 +59,7 @@ import {
 } from "./update-run-record.js";
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { inspectRecoveryRows } from "./update-run-recovery-store.js";
+import { upsertStep } from "./update-run-step-upsert.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   applyUpdateRunPhase,
@@ -58,7 +70,6 @@ import {
   persistRun,
   UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS,
   updateRunLedgerSchema as schema,
-  upsertStep,
 } from "./update-run-write.js";
 import { readWindowsUserSid } from "./windows-user-sid.js";
 
@@ -183,8 +194,11 @@ export function createUpdateRun(
 }
 
 /** Adoption is explicit: reading or reserving an existing run does not make this process its driver. */
-export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): UpdateRunRecord {
-  const driver = readUpdateRunDriver();
+export function adoptUpdateRun(
+  runId: string,
+  options: LedgerOptions & { managedHandoffParent?: UpdateRunDriver } = {},
+): UpdateRunRecord {
+  const driver = readRecordedUpdateRunDriver();
   let identityUnavailable = false;
   const adopted = mutateRun(
     runId,
@@ -204,8 +218,18 @@ export function adoptUpdateRun(runId: string, options: LedgerOptions = {}): Upda
         }
         return;
       }
-      const previousDrivers: UpdateRunDriver[] = [];
-      for (const previous of recordedUpdateRunDrivers(record)) {
+      if (options.managedHandoffParent) {
+        record.origin.managedHandoff = {
+          parent: options.managedHandoffParent,
+          helper: toUpdateRunDriver(driver),
+        };
+      }
+      // Retained drivers keep the boot each one recorded.
+      const previousDrivers: RecordedUpdateRunDriver[] = [];
+      for (const previous of [
+        ...(record.origin.driver ? [record.origin.driver] : []),
+        ...(record.origin.previousDrivers ?? []),
+      ]) {
         if (
           !sameUpdateRunDriver(previous, driver) &&
           !previousDrivers.some((retained) => sameUpdateRunDriver(retained, previous)) &&
@@ -337,6 +361,52 @@ export function recordUpdateRunStep(
     );
     return undefined;
   }
+}
+
+export function readOwedUpdateSteps(options: LedgerOptions = {}): UpdateOwedStep[] {
+  return selectUpdateOwedSteps(listUpdateRuns({ limit: UPDATE_OWED_STEP_HISTORY }, options));
+}
+
+/** An owed step outlives its run: a finished update that kept its result still accepts one. */
+export function recordUpdateRunOwedStep(
+  runId: string,
+  id: UpdateOwedStepId,
+  reason: string,
+  options: LedgerOptions = {},
+): boolean {
+  let recorded = false;
+  mutateRun(
+    runId,
+    (record) => {
+      if (updateRunOwesSteps(record)) {
+        upsertStep(record, updateOwedStepRow(id, reason));
+        recorded = true;
+      }
+    },
+    options,
+  );
+  return recorded;
+}
+
+/** Settles only a row that is still owed; a missing row is not completed work. */
+export function settleUpdateRunOwedStep(
+  runId: string,
+  id: string,
+  options: LedgerOptions = {},
+): boolean {
+  let settled = false;
+  mutateRun(
+    runId,
+    (record) => {
+      const row = updateOwedStepRow(id);
+      if (record.steps.some((step) => step.step === row.step && step.status === "skipped")) {
+        upsertStep(record, row);
+        settled = true;
+      }
+    },
+    options,
+  );
+  return settled;
 }
 
 export function recordUpdateRunRepairContinuation(

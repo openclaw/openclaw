@@ -1,3 +1,4 @@
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleImpact, lifecycleRecord } from "./lifecycle.js";
 import { mergeRedirects } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
@@ -34,7 +35,7 @@ export function planSupersede(
       !r.valid ||
       r.kind !== "claim" ||
       r.revision !== fence.expectedRevision ||
-      r.hash !== fence.expectedHash
+      !hashMatches(r.hash, fence.expectedHash)
     ) {
       throw new Error(
         `${role} claim unavailable, not a claim, invalid or changed: ${fence.id}. Reread it with knowledge_record and retry with a new request. No publication accepted.`,
@@ -90,6 +91,14 @@ export function planSupersede(
   });
   // Dependents of every superseded claim, once each; the claims themselves are receipt items.
   const impacts = ids.map((id) => lifecycleImpact(data.records, id));
+  // Retrieval hides dependents of inactive records, so the replacement must not be one of them.
+  const hidden = impacts.findIndex((i) => i.items.some((item) => item.id === by.id));
+  if (hidden !== -1) {
+    const r = changes[hidden]!.before;
+    throw new Error(
+      `${by.title} (${by.id}) depends on ${r.title} (${r.id}), directly or through its dependents, so superseding it would hide the replacement too. Supersede by a claim that does not depend on it. No publication accepted.`,
+    );
+  }
   const items = [
     ...new Map(
       impacts

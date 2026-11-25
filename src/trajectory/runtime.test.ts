@@ -391,7 +391,7 @@ describe("trajectory runtime", () => {
 
   it("bounds oversized prompts before compact preservation", async () => {
     const parsed = await captureEvent("context.compiled", {
-      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+      prompt: "x".repeat(65_537),
     });
     expectBoundedCapture();
     expect(parsed.data.truncated).toBeUndefined();
@@ -403,7 +403,7 @@ describe("trajectory runtime", () => {
     const data = {
       finalPromptText: "inspect",
       prompt: "inspect",
-      systemPrompt: "system prompt",
+      systemPrompt: "x".repeat(65_536),
       messages: [{ role: "user", content: "inspect" }],
       messagesSnapshot: [{ role: "assistant", content: "done" }],
       imagesCount: 0,
@@ -426,6 +426,26 @@ describe("trajectory runtime", () => {
     expect(parsed.data).toEqual(data);
     expect(JSON.stringify(parsed.data)).toBe(JSON.stringify(data));
     expect(parsed.data.truncated).toBeUndefined();
+  });
+
+  it("omits replay state before inspecting its contents", async () => {
+    const recorder = await createCapturedRuntimeRecorder();
+    const readReplay = vi.fn(() => ({ data: "opaque replay" }));
+    const message = {
+      role: "assistant",
+      content: "done",
+      get providerReplay() {
+        return readReplay();
+      },
+    };
+    recorder.recordEvent("context.compiled", { messages: [message] });
+    recorder.recordEvent("tool.result", { result: message, success: true });
+    expect(captured().data).toEqual({ messages: [{ role: "assistant", content: "done" }] });
+    expect(captured(1).data).toEqual({
+      result: { role: "assistant", content: "done" },
+      success: true,
+    });
+    expect(readReplay).not.toHaveBeenCalled();
   });
 
   it("preserves non-JSON leaves and custom JSON results in captured events", async () => {
@@ -625,7 +645,9 @@ describe("trajectory runtime", () => {
   it("drops repeated conversation fields in priority order", async () => {
     const prompt = "summarize the incident timeline";
     const messageBlocks = oversizedMessages();
-    const parsed = await captureEvent("context.compiled", {
+    const recorder = await createCapturedRuntimeRecorder();
+    const stringify = vi.spyOn(JSON, "stringify");
+    recorder.recordEvent("context.compiled", {
       prompt,
       messagesSnapshot: messageBlocks,
       messages: messageBlocks,
@@ -635,7 +657,12 @@ describe("trajectory runtime", () => {
         description: "x".repeat(32_760),
       })),
     });
-
+    const fullEvents = stringify.mock.calls.filter(
+      ([value]) => value?.traceSchema && value.data?.messagesSnapshot,
+    ).length;
+    stringify.mockRestore();
+    expect(fullEvents).toBe(0);
+    const parsed = captured();
     expect(parsed.data.prompt).toBe(prompt);
     expect(parsed.data.tools).toHaveLength(7);
     expect(parsed.data.messagesSnapshot).toBeUndefined();

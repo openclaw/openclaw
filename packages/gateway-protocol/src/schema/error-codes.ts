@@ -29,9 +29,9 @@ export {
   type SessionWorkspaceRecoveryRequiredErrorDetails,
   type TaskWorktreeSourceRequiredErrorDetails,
   type ClawHubRiskAcknowledgementRequiredErrorDetails,
-  type ClawReviewRequiredErrorDetails,
+  type TemplateReviewRequiredErrorDetails,
   readClawHubRiskAcknowledgementRequiredError,
-  readClawReviewRequiredError,
+  readTemplateReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   readCronJobNotFoundError,
   isMcpAppViewExpiredError,
@@ -113,8 +113,8 @@ export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject
   warning: NonEmptyString,
 });
 
-export const ClawReviewRequiredErrorDetailsSchema = closedObject({
-  code: Type.Literal(GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED),
+export const TemplateReviewRequiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED),
   kind: stringLiteralUnion(["plugin", "skill"]),
 });
 
@@ -138,7 +138,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   SessionWorkspaceRecoveryRequiredErrorDetailsSchema,
   TaskWorktreeSourceRequiredErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
-  ClawReviewRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY) }),

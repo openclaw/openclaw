@@ -10,12 +10,12 @@
  * allocation and CPU per event. This measures the owner, not whole-Gateway latency.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { isTerminalResponse } from "../../extensions/codex/src/app-server/inference-dispatch.js";
 import { isJsonObject } from "../../extensions/codex/src/app-server/protocol.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -115,10 +115,6 @@ function countParses(detector: (bytes: Buffer) => boolean, traffic: readonly Buf
   return parses;
 }
 
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
-
 const arms = [
   { name: "base", detect: baseline },
   { name: "candidate", detect: isTerminalResponse },
@@ -183,7 +179,7 @@ try {
         const wallMs = performance.now() - start;
         const cpu = process.cpuUsage(cpuBefore);
         const allocationBytes = inspector
-          ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+          ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
           : undefined;
         assert.equal(terminals, expectedTerminals);
         results.push({

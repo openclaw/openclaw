@@ -35,6 +35,7 @@ struct NativeConversationDraftTests {
             webConversation: owner, activeAgentId: "main", sessionRoutingContract: "per-sender|main|main",
             transcriptCache: store, outbox: store, modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { model.detachTransport() }
+        await settleComposerDraft(model)
         model.input = "Keep this unsent draft in A"
         #expect(await model.hasPendingNativeConversationWork())
 
@@ -49,6 +50,7 @@ struct NativeConversationDraftTests {
 
         model.switchSession(to: "agent:main:thread-a")
         await model.bootstrapTask?.value
+        await settleComposerDraft(model)
         #expect(owner.mode == .web)
         #expect(model.input == "Keep this unsent draft in A")
         #expect(await model.hasPendingNativeConversationWork())
@@ -56,7 +58,9 @@ struct NativeConversationDraftTests {
         #expect(await model.hasPendingNativeConversationWork() == false)
     }
 
-    @Test @MainActor func `web links inspect the destination native draft before changing selection`() throws {
+    @Test @MainActor func `web links inspect the destination native draft before changing selection`() async throws {
+        let (store, _, directory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let suite = "NativeConversationDraftTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -64,26 +68,28 @@ struct NativeConversationDraftTests {
         owner.mode = .native
         let model = OpenClawChatViewModel(
             sessionKey: "agent:main:thread-a", transport: OutboxTestTransport(healthy: false),
-            webConversation: owner, activeAgentId: "main", modelPickerStore: ChatModelPickerStore(defaults: defaults))
+            webConversation: owner, activeAgentId: "main", transcriptCache: store, outbox: store,
+            modelPickerStore: ChatModelPickerStore(defaults: defaults))
         defer { model.detachTransport() }
         let destination = NativeConversationContext(agentId: "main", sessionKey: model.sessionKey)
+        await settleComposerDraft(model)
         model.input = "Draft waiting in A"
         model.switchSession(to: "agent:main:thread-b")
         model.setWebConversationMode(.web)
 
         #expect(model.input.isEmpty)
-        #expect(model.hasPendingNativeConversationInput(for: destination))
-        #expect(!model.hasPendingNativeConversationInput(for: .init(
+        #expect(await model.hasPendingNativeConversationInput(for: destination))
+        #expect(await !model.hasPendingNativeConversationInput(for: .init(
             agentId: "main", sessionKey: "agent:main:thread-c")))
-        #expect(!model.hasPendingNativeConversationInput(for: .init(
+        #expect(await !model.hasPendingNativeConversationInput(for: .init(
             agentId: "research", sessionKey: "agent:research:thread-a")))
         #expect(model.sessionKey == "agent:main:thread-b")
 
         model.acceptWebRoute(destination)
+        #expect(await model.hasPendingNativeConversationInput(for: destination))
         #expect(model.input == "Draft waiting in A")
-        #expect(model.hasPendingNativeConversationInput(for: destination))
         model.input = ""
-        #expect(!model.hasPendingNativeConversationInput(for: destination))
+        #expect(await !model.hasPendingNativeConversationInput(for: destination))
     }
 
     @Test @MainActor func `attachment staging keeps native ownership while a web pane is selected`() async throws {

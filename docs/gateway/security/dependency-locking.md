@@ -57,13 +57,15 @@ Neither path publishes a lockfile:
 
 ### Archive compression
 
-OpenClaw's runtime builds bundle `tar` so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
+OpenClaw imports the public `tar/raw` entry and bundles it so installed packages carry the same archive implementation as source builds. The pinned `minizlib` dependency is patched to let Node's zlib concatenate its output without temporarily replacing the global `Buffer.concat` function. This preserves gzip backup and artifact support in runtimes with read-only built-ins, and avoids a process-wide patch on Node and Bun.
 
-The `tar` patch selects its published unbundled entry points so its embedded copy of `minizlib` cannot bypass that repair. Remove both patches when an upstream release provides the same behavior; keep the runtime bundling until the published dependency also contains the fix.
+The `tar/raw` entry uses the separate `minizlib` dependency instead of the copy embedded in tar's default minified entry. This removes the need to patch tar's package manifest. Keep the `minizlib` patch and runtime bundling until an upstream release provides the same behavior.
 
 ## Validate npm dependency graphs
 
 The npm-lock checker generates `package-lock.json` in a temporary directory, applies workspace overrides, and rejects any generated registry version absent from `pnpm-lock.yaml`. It preserves `optional` metadata and verifies that every declared `os`, `cpu`, and `libc` constraint matches the pnpm lock. It does not write a lockfile into the checkout.
+
+When a registry mirror supplies only SHA1 metadata, the generator carries the unique SHA512 pin for the exact resolved package name and version from `pnpm-lock.yaml` into the temporary npm lock. Missing or ambiguous pins fail; conflicting strong hashes are not replaced. This preserves the expected archive hash for subsequent download validation, rather than treating the mirror's SHA1 metadata as proof of the archive bytes.
 
 ```bash
 # Root and every publishable package

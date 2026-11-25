@@ -32,10 +32,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
 import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
-import {
-  addSessionMember,
-  removeSessionMember,
-} from "../../config/sessions/session-sharing-store.native.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
@@ -61,6 +58,7 @@ import {
   resolveMessageActionTurnAuthorization,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
+import * as repositoryDispatch from "../repository-dispatch.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -154,8 +152,8 @@ const admissionScenarios = [
   "narrow-first-send",
   "dashboard",
   "dashboard-writer",
+  "dashboard-handed-off",
   "dashboard-credential-revoked",
-  "dashboard-member-revoked",
   "dashboard-unattested",
   "dashboard-internal",
 ] as const;
@@ -166,8 +164,9 @@ it.each(admissionScenarios)(
     const dashboard = scenario.startsWith("dashboard");
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
-    const membershipRequired = scenario === "dashboard-member-revoked";
-    const createsDashboardSession = dashboardReadAllowed && !membershipRequired;
+    const handedOff = scenario === "dashboard-handed-off";
+    const writer = scenario === "dashboard-writer" || handedOff;
+    const createsSession = (dashboardReadAllowed && !handedOff) || scenario === "queued";
     const closure =
       scenario === "narrow-first-send"
         ? "rotated"
@@ -180,7 +179,11 @@ it.each(admissionScenarios)(
       await loadOrCreateProcessDeviceIdentityAsync();
       setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
-      const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
+      const sessionKey = handedOff
+        ? "agent:main:dashboard:binding"
+        : scenario === "dashboard"
+          ? "agent:main:main"
+          : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -196,19 +199,18 @@ it.each(admissionScenarios)(
             entry.sessionId === "unrelated-session",
         ).length;
       const profile = ensureProfileForEmail("authoring-binding@example.test");
-      const owner = membershipRequired
-        ? ensureProfileForEmail("authoring-owner@example.test")
-        : profile;
-      const initialSessionId = membershipRequired ? "member-session" : runId;
-      const createdActor = { type: "human", source: "profile", id: owner.id } as const;
-      if (membershipRequired) {
+      const initialSessionId = runId;
+      const createdActor = { type: "human", source: "profile", id: profile.id } as const;
+      if (handedOff) {
         await upsertSessionEntryCore(scope, {
           sessionId: initialSessionId,
           updatedAt: Date.now(),
-          visibility: "suggest",
           createdActor,
+          createdVia: "spawn",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          spawnDepth: 1,
         });
-        addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
       }
       const connection = new AbortController();
       const hasCurrentClientAuthority = vi.fn(() => true);
@@ -217,11 +219,11 @@ it.each(admissionScenarios)(
         signal: connection.signal,
         dashboard,
         attested: scenario !== "dashboard-unattested",
-        admin: scenario !== "dashboard-writer" && !membershipRequired,
+        admin: !writer,
         scopes:
           scenario === "narrow-first-send"
             ? ["operator.sessions.write"]
-            : scenario === "dashboard-writer" || membershipRequired
+            : writer
               ? ["operator.write"]
               : dashboard
                 ? ["operator.admin"]
@@ -235,6 +237,7 @@ it.each(admissionScenarios)(
         hold: holdDispatch,
       } = holdProjectedChatDispatch();
       const context = createBindingContext();
+      const repositoryScope = vi.spyOn(repositoryDispatch, "withRepositoryChatDispatch");
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       let reply: ReturnType<typeof createReplyOperation> | undefined;
       let options: DispatchOptions | undefined;
@@ -273,6 +276,7 @@ it.each(admissionScenarios)(
         options = await entered.promise;
         const dashboardRead = options.replyOptions?.dashboardReadAdmission;
         expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
+        expect(repositoryScope).toHaveBeenCalledTimes(dashboardReadAllowed ? 1 : 0);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         expect(Boolean(readUserTurnPromptReactionSource(owned?.userTurn.recorder))).toBe(
           dashboardReadAllowed,
@@ -299,9 +303,8 @@ it.each(admissionScenarios)(
           sessionId: dashboard ? initialSessionId : "committed-session",
           updatedAt: Date.now(),
           createdActor,
-          ...(membershipRequired ? { visibility: "suggest" as const } : {}),
         };
-        if (createsDashboardSession) {
+        if (createsSession) {
           const creationScope = { ...scope, storePath: owned.session.storePath };
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;
@@ -346,14 +349,7 @@ it.each(admissionScenarios)(
           expect(dashboardRead.assertCurrent).not.toThrow();
           if (scenario === "dashboard-credential-revoked") {
             hasCurrentClientAuthority.mockReturnValue(false);
-            expect(dashboardRead.assertCurrent).toThrow(
-              "Dashboard message read admission is no longer active.",
-            );
-          } else if (membershipRequired) {
-            removeSessionMember(scope, profile.id, undefined, binding.sessionId);
-            expect(admission.activeRunAbort.controller.signal.aborted).toBe(false);
-            expect(hasCurrentClientAuthority()).toBe(true);
-            expect(dashboardRead.assertCurrent).toThrow("session is suggest for this connection");
+            expect(dashboardRead.assertCurrent).not.toThrow();
           }
         }
 
@@ -425,14 +421,12 @@ it.each(admissionScenarios)(
         }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
-          if (membershipRequired) {
-            // The pre-ACK commit survives revocation; replay cannot append to the successor.
-            await expect(userTurn.persist()).resolves.toMatchObject({
-              admission: { sessionId: binding.sessionId, sessionKey },
-              message: { role: "user", content: "Keep this user turn in its session" },
-            });
-          } else if (closure === "released") {
-            await expect(userTurn.persist()).rejects.toThrow("Chat input actor admission ended");
+          if (closure === "released") {
+            await expect(userTurn.persist()).rejects.toThrow(
+              handedOff
+                ? "Chat admission ended or was cancelled"
+                : "Chat input actor admission ended",
+            );
           } else {
             await userTurn.persist();
           }
@@ -462,13 +456,72 @@ it.each(admissionScenarios)(
         releaseAuthorization?.();
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
+        repositoryScope.mockRestore();
         clone.mockRestore();
       }
     });
   },
 );
 
-const reactionSourceScenarios = ["allowed", "credential-revoked", "member-revoked"] as const;
+it("grants skill authoring to the first message typed after a Control UI reconnect", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    setRuntimeConfigSnapshot({});
+    const runId = "reconnect-resume-authoring";
+    const sessionId = "resumed-session";
+    const profile = ensureProfileForEmail("reconnect-authoring@example.test");
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      },
+    );
+    const client = createBindingClient({
+      profileId: profile.id,
+      signal: new AbortController().signal,
+      dashboard: true,
+      admin: true,
+      scopes: ["operator.admin"],
+    });
+    const { entered, release, observe, hold } = holdProjectedChatDispatch();
+    let options: DispatchOptions | undefined;
+    let releaseAuthorization: (() => void) | undefined;
+    try {
+      const params = {
+        sessionKey: "main",
+        sessionId,
+        __controlUiReconnectResume: true,
+        message: "Save this workflow as a skill",
+        idempotencyKey: runId,
+      };
+      const request = await prepareBindingRequest(params, client, createBindingContext());
+      releaseAuthorization = request.sessionMutationAuthorization?.release;
+      await handleDirectExternalChatSend({ ...request, hasCurrentClientAuthority: () => true });
+      expect(request.respond.mock.calls[0]?.[0], JSON.stringify(request.respond.mock.calls)).toBe(
+        true,
+      );
+      options = await entered.promise;
+      expect(options.replyOptions?.skillLibraryAuthoring).toBeDefined();
+    } finally {
+      release.resolve();
+      await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      const owned = observe.mock.calls.at(-1)?.[0];
+      if (owned) {
+        await owned.admission.sourceRef.input.settlement.promise;
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+        owned.admission.cleanupAdmittedRun();
+        clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
+      }
+      releaseAuthorization?.();
+      hold.mockRestore();
+      observe.mockRestore();
+    }
+  });
+});
+
+const reactionSourceScenarios = ["allowed", "credential-revoked"] as const;
 
 it.each(
   (["queued", "steered"] as const).flatMap((mode) =>
@@ -541,14 +594,19 @@ it.each(
         let token: string | undefined;
         let queuedReaction: ReturnType<typeof createQueueTestRun> | undefined;
         let probe: ReturnType<typeof sqliteWorkerOwnerProbe.admission> | undefined;
-        async function sendPrompt(runId: string, message: string) {
+        async function sendPrompt(runId: string, message: string, queueMode?: "steer") {
           const source: Source = {
             entered: createDeferred<DispatchOptions>(),
             release: createDeferred(),
             finished: createDeferred(),
           };
           sources.set(runId, source);
-          const params = { sessionKey, message, idempotencyKey: runId };
+          const params = {
+            sessionKey,
+            message,
+            idempotencyKey: runId,
+            ...(queueMode ? { queueMode } : {}),
+          };
           const request = await prepareBindingRequest(params, client, context);
           source.releaseAuthorization = request.sessionMutationAuthorization?.release;
           const { respond } = request;
@@ -656,7 +714,7 @@ it.each(
             );
           let prompt = initialRecorder;
           if (mode === "steered") {
-            const steering = await sendPrompt("reaction-steered-source", "Steered prompt");
+            const steering = await sendPrompt("reaction-steered-source", "Steered prompt", "steer");
             prompt = steering.owned.userTurn.recorder;
             expect(prompt.getAdmissionReceipt()).toBeUndefined();
             expect((await react({ dryRun: true })).details).toMatchObject({
@@ -698,7 +756,6 @@ it.each(
           connection.abort();
           readUserTurnPromptReactionSource(prompt)?.assertCurrent();
           let commitRequests = 0;
-          let preparationRevoked = false;
           probe = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
             if (request.stage === "commit") {
               commitRequests++;
@@ -706,56 +763,31 @@ it.each(
                 client.invalidated = true;
               }
             }
-            if (
-              request.stage === "prepare" &&
-              outcome === "member-revoked" &&
-              !preparationRevoked
-            ) {
-              // Remove membership before the reaction worker takes BEGIN IMMEDIATE;
-              // deleting from the same database at its commit checkpoint would deadlock.
-              preparationRevoked = true;
-              expect(removeSessionMember(scope, profile.id, undefined, sessionId)).not.toBeNull();
-            }
             admit(request, grant);
           });
-          if (outcome === "allowed") {
-            expect((await react()).details).toMatchObject({ messageId, changed: true });
-            expect(commitRequests).toBeGreaterThan(0);
-            expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
-              {
-                emoji: "👍",
-                count: 2,
-                identities: expect.arrayContaining([
-                  { id: profile.id, label: "Human" },
-                  { id: "agent:main", label: expect.any(String) },
-                ]),
-              },
-            ]);
-            expect(reactionEvents()).toEqual([
-              [
-                "session.reaction",
-                expect.objectContaining({
-                  messageId,
-                  action: "added",
-                  actor: expect.objectContaining({ type: "agent", id: "main" }),
-                }),
-                { sessionKeys: [sessionKey], agentId: "main" },
-              ],
-            ]);
-          } else {
-            await expect(react()).rejects.toThrow(
-              outcome === "credential-revoked"
-                ? "Dashboard message read admission is no longer active."
-                : "session is suggest for this connection",
-            );
-            if (outcome === "credential-revoked") {
-              expect(commitRequests).toBeGreaterThan(0);
-            } else {
-              expect(preparationRevoked).toBe(true);
-            }
-            expect(listSessionReactions(scope, { sessionId })).toEqual(before);
-            expect(reactionEvents()).toEqual([]);
-          }
+          expect((await react()).details).toMatchObject({ messageId, changed: true });
+          expect(commitRequests).toBeGreaterThan(0);
+          expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
+            {
+              emoji: "👍",
+              count: 2,
+              identities: expect.arrayContaining([
+                { id: profile.id, label: "Human" },
+                { id: "agent:main", label: expect.any(String) },
+              ]),
+            },
+          ]);
+          expect(reactionEvents()).toEqual([
+            [
+              "session.reaction",
+              expect.objectContaining({
+                messageId,
+                action: "added",
+                actor: expect.objectContaining({ type: "agent", id: "main" }),
+              }),
+              { sessionKeys: [sessionKey], agentId: "main" },
+            ],
+          ]);
           probe.mockRestore();
           if (outcome === "allowed") {
             await react({ remove: true });

@@ -5,7 +5,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPluginInPackageBundledRoots } from "../plugins/bundled-dir.js";
 import { discoverConfiguredPluginLoadPaths } from "../plugins/discovery.js";
-import { inspectPluginSourceDependencies } from "../plugins/plugin-generation-source-inspection.js";
+import { inspectPluginSourceDependenciesAsync } from "../plugins/plugin-generation-worker.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
@@ -14,8 +15,9 @@ import {
   resolveUpdateCandidatePluginPath,
   resolveUpdateCandidatePluginSourcePath,
 } from "./update-candidate-paths.js";
+import { selectUpdateCandidatePluginFileAssets } from "./update-candidate-plugin-file-assets.js";
 import {
-  inspectUpdateCandidatePluginSource,
+  inspectUpdateCandidatePluginSourceAsync,
   resolveUpdateCandidatePluginSourceEntries,
 } from "./update-candidate-plugin-sources.js";
 import {
@@ -38,10 +40,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     return { copiedFiles: 0, warnings };
   }
   const privateRoot = await fs.realpath(rehearsalRoot);
-  const assertPrivate = (file: string) => {
+  const signal = getAsyncWorkSignal();
+  const assertContained = (file: string, roots = [privateRoot]) => {
+    signal?.throwIfAborted();
+    const resolved = resolvePathViaExistingAncestorSync(file);
     if (
-      !isPathInside(privateRoot, path.resolve(file)) ||
-      !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
+      !roots.some((root) => isPathInside(root, path.resolve(file)) && isPathInside(root, resolved))
     ) {
       throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
@@ -74,6 +78,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   if (!candidateRoot) {
     throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
+  const dependencyRoots = [privateRoot, await fs.realpath(candidateRoot)];
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
     deduplicate: true,
@@ -87,13 +92,13 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     ),
     params.config,
   );
-  const originals: Array<ReturnType<typeof inspectPluginSourceDependencies>> = [];
+  const originals: Array<Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>> = [];
   const project = (source: string) =>
     resolveUpdateCandidatePluginPath(privateRoot, privateRoot, source);
   for (const entry of entries) {
-    assertPrivate(entry.rootDir);
-    assertPrivate(entry.entryFile);
-    const copiedGraph = inspectUpdateCandidatePluginSource(entry, warnings, {
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
+    const copiedGraph = await inspectUpdateCandidatePluginSourceAsync(entry, warnings, {
       root: privateRoot,
       onUnresolvable: (name, importer) => {
         if (warnings.length < UPDATE_RUN_DIAGNOSTIC_LIMIT) {
@@ -106,14 +111,16 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
         }
       },
     });
+    assertContained(entry.rootDir);
+    assertContained(entry.entryFile);
     if (!copiedGraph) {
       continue;
     }
     for (const reference of copiedGraph.references) {
-      // Explicit external imports retain their source semantics. Lookups naming
-      // private paths must not escape through a symlink, including absolute paths.
+      // Only the private plugin copy is constrained. Explicit external imports
+      // and the trusted candidate's own dependency resolution retain their semantics.
       if (isPathInside(privateRoot, reference.source) && isPrivateLookup(reference.specifier)) {
-        assertPrivate(reference.target);
+        assertContained(reference.target, dependencyRoots);
       }
     }
     const unresolvedPrivate = copiedGraph.unresolved.filter(
@@ -145,10 +152,12 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
-    let available: ReturnType<typeof inspectPluginSourceDependencies>;
+    let available: Awaited<ReturnType<typeof inspectPluginSourceDependenciesAsync>>;
     try {
-      available = inspectPluginSourceDependencies([{ rootDir, entryFile }]);
+      available = await inspectPluginSourceDependenciesAsync([{ rootDir, entryFile }]);
+      signal?.throwIfAborted();
     } catch (error) {
+      signal?.throwIfAborted();
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
       warnings.push(
@@ -179,17 +188,20 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     targetStateDir: privateRoot,
     candidateRoot,
   });
+  const normalizedAssets = selectUpdateCandidatePluginFileAssets(plan);
   const missing: typeof plan.entries = [];
   for (const entry of plan.entries) {
     const destination = project(entry.path);
-    assertPrivate(destination);
+    assertContained(destination);
     const existing = await fs.lstat(destination).catch(ignoreMissingUpdateCandidateFile);
     if (!existing) {
       missing.push(entry);
     } else if (
       (entry.kind === "directory" && !existing.isDirectory()) ||
       (entry.kind === "file" && !existing.isFile()) ||
-      (entry.kind === "symlink" && !existing.isSymbolicLink())
+      (entry.kind === "symlink" &&
+        !existing.isSymbolicLink() &&
+        !(normalizedAssets.has(entry.path) && existing.isFile()))
     ) {
       throw new Error(
         `Plugin dependency conflicts with the existing update snapshot: ${destination}`,
@@ -197,13 +209,16 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     }
   }
   if (missing.length > 0) {
-    await copyUpdateCandidatePluginTrees(
-      { ...plan, entries: missing },
-      {
-        targetStateDir: privateRoot,
-        candidateRoot,
-      },
-    );
+    await copyUpdateCandidatePluginTrees(plan, {
+      targetStateDir: privateRoot,
+      candidateRoot,
+      onlyPaths: new Set(missing.map((entry) => entry.path)),
+    });
   }
-  return { copiedFiles: missing.filter((entry) => entry.kind === "file").length, warnings };
+  return {
+    copiedFiles: missing.filter(
+      (entry) => entry.kind === "file" || normalizedAssets.has(entry.path),
+    ).length,
+    warnings,
+  };
 }

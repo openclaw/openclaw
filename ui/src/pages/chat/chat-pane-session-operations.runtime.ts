@@ -1,22 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionsRecoverParams } from "../../../../packages/gateway-protocol/src/index.js";
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import {
-  readSessionMethodAccess,
-  type SessionMethodAccess,
-} from "../../lib/session-method-access.ts";
+import { t } from "../../i18n/index.ts";
+import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
-import type { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_CREATE_FAILED_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-  preparePaneSessionHandoff,
-} from "./chat-pane-shared.ts";
+import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
 
@@ -29,75 +19,38 @@ type SessionOperation = {
   onSessionChange: (nextSessionKey: string) => boolean | void;
 };
 
-export async function recoverCapturedChatSession({
-  state,
-  context,
-  sessions,
-  paneId,
-  isCurrent,
-  onSessionChange,
-  params,
-  sourceSessionKey,
-  generation,
-  creation,
-}: SessionOperation & {
-  params: SessionsRecoverParams;
+export type HarnessUpdateSessionTarget = {
+  agentId: string;
+  /** The failed conversation; an incognito source keeps the recovery session incognito. */
   sourceSessionKey: string;
-  generation: number;
-  creation: ChatPaneSessionCreation["sessionCreation"];
-}): Promise<boolean> {
-  if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
+  /** The failed conversation's effective model, as `provider/model`. */
+  model: string | undefined;
+  create: ApplicationContext["sessions"]["createResult"];
+  open: (key: string) => boolean | void;
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+};
+
+export async function createHarnessUpdateSession(
+  target: HarnessUpdateSessionTarget,
+  summary: string,
+) {
+  if (target.signal.aborted || !target.isCurrent()) {
     return false;
   }
-  const access = readSessionMethodAccess(context.gateway.snapshot, {
-    method: "sessions.recover",
-    params,
-  });
-  if (!access.allowed) {
-    setChatError(state, access.reason);
+  const result = await target.create(
+    {
+      agentId: target.agentId,
+      ...(isIncognitoSessionKey(target.sourceSessionKey) ? { incognito: true } : {}),
+      ...(target.model ? { model: target.model, agentRuntime: "openclaw" as const } : {}),
+      message: t("chat.recovery.harnessUpdatePrompt", { summary }),
+    },
+    { signal: target.signal },
+  );
+  if (!result || target.signal.aborted || !target.isCurrent()) {
     return false;
   }
-  const recovery = await sessions.recover(params);
-  if (!isCurrent() || state.sessionKey !== sourceSessionKey) {
-    return false;
-  }
-  if (!recovery) {
-    setChatError(state, state.sessionsError ?? NEW_SESSION_CREATE_FAILED_MESSAGE);
-    return false;
-  }
-  if (recovery.continuation.status === "rejected") {
-    if (
-      params.mode === "in-place" &&
-      params.sessionId &&
-      params.recoveryCycleId &&
-      recovery.key === sourceSessionKey &&
-      recovery.sessionId === params.sessionId &&
-      isRecord(recovery.continuation.error.details) &&
-      recovery.continuation.error.details.reason === "restart-safe-tools-unavailable"
-    ) {
-      creation.restartFallback = {
-        key: sourceSessionKey,
-        sessionId: params.sessionId,
-        recoveryCycleId: params.recoveryCycleId,
-        generation,
-      };
-    }
-    setChatError(state, formatUiError(recovery.continuation.error.message));
-    return false;
-  }
-  creation.restartFallback = null;
-  const nextSessionKey = recovery.key;
-  if (areUiSessionKeysEquivalent(nextSessionKey, sourceSessionKey)) {
-    return true;
-  }
-  if (onSessionChange(nextSessionKey) === false) {
-    return false;
-  }
-  preparePaneSessionHandoff(context, paneId, nextSessionKey, {
-    attachments: [],
-    draft: "",
-  });
-  return true;
+  return target.open(result.key) !== false;
 }
 
 export async function createCapturedChatSession({
@@ -134,7 +87,7 @@ export async function createCapturedChatSession({
     return false;
   }
   if (!canCreateChatSession(state)) {
-    setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+    setChatError(state, t("chat.sendErrors.newSessionBusy"));
     return false;
   }
   const currentAccess = readCreateAccess();
@@ -160,8 +113,8 @@ export async function createCapturedChatSession({
         state,
         state.sessionsError ??
           (state.sessionsLoading
-            ? NEW_SESSION_LIST_LOADING_MESSAGE
-            : NEW_SESSION_CREATE_FAILED_MESSAGE),
+            ? t("chat.sendErrors.newSessionLoading")
+            : t("chat.sendErrors.newSessionFailed")),
       );
     }
     return false;

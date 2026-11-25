@@ -25,6 +25,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
   commandResult,
+  overrideCommands,
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { updateGitHubToolIdentityConfig } from "./github-tool-identity-config.js";
@@ -34,7 +35,15 @@ import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/conn
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 const mocks = githubPublicationTestMocks();
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // Mocked fetch normally skips DNS. Retain real guarded preflight with the isolated lookup.
 vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
@@ -100,11 +109,10 @@ async function evidenceFixture(imported = false) {
     "../agents/github-tool-identity.js",
   );
   mocks.matchesIdentity.mockImplementation(actualIdentity.matchesPreparedGitHubPublicationIdentity);
-  const previous = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv, options) =>
+  overrideCommands((argv) =>
     argv.includes(`repos/${f.publication.repository}`) && argv.includes(".id")
       ? commandResult("12345")
-      : previous(argv, options),
+      : undefined,
   );
   if (imported) {
     await syncCanonicalGitHubIdentity({
@@ -148,19 +156,18 @@ async function evidenceFixture(imported = false) {
       base: { repo, ref: base.branch, sha: base.commit },
       head: { repo, ref: head.branch, sha: head.commit },
     });
-    const transport = mocks.runCommand.getMockImplementation()!;
-    mocks.runCommand.mockImplementation(async (argv, options) => {
-      if (argv.includes("GET")) {
-        if (argv.at(-1) === `repos/${repo.full_name}`) {
-          return commandResult(JSON.stringify(repo));
-        }
-        if (argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`) {
-          return commandResult(
-            JSON.stringify({ name: head.branch, commit: { sha: head.commit }, protected: false }),
-          );
-        }
+    overrideCommands((argv) => {
+      if (argv.includes("GET") && argv.at(-1) === `repos/${repo.full_name}`) {
+        return commandResult(JSON.stringify(repo));
       }
-      return await transport(argv, options);
+      if (
+        argv.includes("GET") &&
+        argv.at(-1) === `repos/${repo.full_name}/branches/${encodeURIComponent(head.branch)}`
+      ) {
+        const branch = { name: head.branch, commit: { sha: head.commit }, protected: false };
+        return commandResult(JSON.stringify(branch));
+      }
+      return undefined;
     });
   }
   let beforeLookup: (() => Promise<void>) | undefined;
@@ -411,7 +418,7 @@ describe("workspace evidence through the guest tool and registered publication a
       expect(admission.authorization).toBeDefined();
       admission.authorization!.assertCurrent();
       await expect(f.upload({}, client)).rejects.toThrow(
-        "The original GitHub publication requester is no longer authorized.",
+        "This requester is not authorized to publish from this conversation.",
       );
       expect(f.fetch).not.toHaveBeenCalled();
     } finally {
@@ -419,7 +426,7 @@ describe("workspace evidence through the guest tool and registered publication a
     }
   });
 
-  it("rechecks PR head and the guest's current role after evidence preparation", async () => {
+  it("rechecks PR head after evidence preparation", async () => {
     const f = await evidenceFixture();
     let reads = 0;
     f.onRead(async () => {
@@ -428,14 +435,6 @@ describe("workspace evidence through the guest tool and registered publication a
       }
     });
     await expect(f.upload()).rejects.toThrow("head changed");
-    f.state.head.sha = f.publication.headCommit;
-    reads = 0;
-    f.onRead(async () => {
-      if (++reads === 2) {
-        await f.revoke();
-      }
-    });
-    await expect(f.upload()).rejects.toThrow("Your operator role changed");
     expect(f.fetch).not.toHaveBeenCalled();
   });
 

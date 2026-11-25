@@ -20,7 +20,6 @@ export function createFailedQueuedRun(
       outcome: { status: "error", error, endedAt: finishedAt },
       ...(!ownedSession ? { suppressSessionEffects: true } : {}),
     },
-    queuedLaunch: undefined,
     collectorLaunchCleanupPending: true,
     completion: { required: false, resultText: error, capturedAt: finishedAt },
   };
@@ -30,6 +29,7 @@ export type RegisterSubagentRunParams = {
   runId: string;
   requesterTurnRunId?: string;
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  requiresCompletionAuthority?: SubagentRunRecord["requiresCompletionAuthority"];
   subagentProfile?: SubagentRunRecord["subagentProfile"];
   childSessionKey: string;
   childAgentId: string;
@@ -62,7 +62,6 @@ export type RegisterSubagentRunParams = {
   swarmLaunchRequestFingerprint?: string;
   groupId?: string;
   outputSchema?: Record<string, unknown>;
-  queuedLaunch?: SubagentRunRecord["queuedLaunch"];
   queued?: boolean;
   gatewayContextResolver?: GatewayContextResolver;
 };
@@ -88,6 +87,7 @@ export function createSubagentRegistrationRecord(
   return normalizeSubagentRunState({
     runId,
     taskRunId: runId,
+    requiresCompletionAuthority: registerParams.requiresCompletionAuthority,
     ...(requesterTurnRunId ? { requesterTurnRunId } : {}),
     ...(registerParams.nativePluginOwner
       ? { nativePluginOwner: { ...registerParams.nativePluginOwner } }
@@ -133,7 +133,6 @@ export function createSubagentRegistrationRecord(
     swarmLaunchPending: registerParams.collect === true,
     groupId: registerParams.groupId,
     outputSchema: registerParams.outputSchema,
-    queuedLaunch: registerParams.queuedLaunch,
     generation,
     createdAt: now,
     execution: {

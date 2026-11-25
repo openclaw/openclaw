@@ -28,7 +28,7 @@ import {
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError as ProjectionUnavailable } from "./session-transcript-projection-error.js";
 import {
-  prepareSessionTranscriptProjection as prepareProjection,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
   appendPreparedSessionTranscriptProjectionChunkInTransaction as appendProjectionChunk,
@@ -37,6 +37,11 @@ import {
 } from "./session-transcript-projection-rebuild.js";
 import { waitForSessionTranscriptIndexReconcile as reconcile } from "./session-transcript-reconcile.js";
 import { messageEvent } from "./transcript-message.test-support.js";
+
+function prepareProjection(...args: Parameters<typeof prepareStreamingProjection>) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const sessionId = "eligibility";
 const entries = [
@@ -79,7 +84,7 @@ function projectionFixture(env: NodeJS.ProcessEnv) {
     return prepared;
   };
   const publish = (
-    prepared: PreparedSessionTranscriptProjection,
+    prepared: NonNullable<ReturnType<typeof prepareProjection>>,
     partial = false,
     run: (action: () => void) => void = (action) => action(),
   ) => {
@@ -171,6 +176,11 @@ it("converges an older current-watermark rebuild and a following append without 
     const db = open();
     const expectedRows = projectionRows(db);
     expect(expectedRows.map((row) => row.context_eligible)).toEqual([1, 1, 0, 1]);
+    expect(
+      db
+        .prepare("SELECT * FROM session_transcript_active_event_facts WHERE session_id = ?")
+        .all(sessionId),
+    ).toHaveLength(4);
     expect(readRecentSessionTranscriptActiveEvents(scope, 3)).toEqual([
       entries[0],
       entries[1],
@@ -197,7 +207,7 @@ it("converges an older current-watermark rebuild and a following append without 
     expect(needsReconcile(db, sessionId)).toBe(false);
     expect(rawRows(db).slice(0, before.length)).toEqual(before);
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
-    expect(readStats(scope).eventCount).toBe(4);
+    expect(readStats(scope).eventCount).toBe(3);
     expect(readMessagePage(scope, { offset: 0, maxMessages: 10 }).totalMessages).toBe(4);
   }));
 
@@ -218,7 +228,12 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
         rewriteEvents(database, scope, [{ seq: 2, event, expectedEventJson }]);
       }, scope);
       expect(projectionRows(db)[2]?.context_eligible).toBe(excludeFromContext ? 0 : 1);
-      expect(readStats(scope).eventCount).toBe(excludeFromContext ? 3 : 4);
+      expect(
+        db
+          .prepare("SELECT * FROM session_transcript_active_event_facts WHERE session_id = ?")
+          .all(sessionId),
+      ).toHaveLength(4);
+      expect(readStats(scope).eventCount).toBe(excludeFromContext ? 2 : 3);
       expect(readMessagePage(scope, { offset: 0, maxMessages: 10 }).totalMessages).toBe(3);
       expect(rawRows(db).filter((entry) => entry.seq !== 2)).toEqual(
         before.filter((entry) => entry.seq !== 2),
@@ -227,6 +242,11 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
     await replaceTranscriptEvents(scope, []);
     expect(projectionRows(db)).toEqual([]);
     expect(rawRows(db)).toEqual([]);
+    expect(
+      db
+        .prepare("SELECT * FROM session_transcript_active_event_facts WHERE session_id = ?")
+        .all(sessionId),
+    ).toEqual([]);
     expect(readStats(scope)).toEqual({ eventCount: 0, sizeBytes: 0 });
   }));
 
@@ -242,7 +262,7 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", () =
     });
     expect(() => readStats(f.scope)).toThrow(ProjectionUnavailable);
     await reconcile(f.scope);
-    expect(readStats(f.scope).eventCount).toBe(4);
+    expect(readStats(f.scope).eventCount).toBe(3);
   }));
 
 it.each(["interrupted", "rewrite", "delete"])(
@@ -275,7 +295,7 @@ it.each(["interrupted", "rewrite", "delete"])(
       await reconcile(scope);
       expect(needsReconcile(db, sessionId)).toBe(false);
       expect(readStats(scope).eventCount).toBe(
-        change === "delete" ? 0 : change === "rewrite" ? 4 : 3,
+        change === "delete" ? 0 : change === "rewrite" ? 3 : 2,
       );
       expect(projectionRows(db).every((row) => row.context_eligible !== null)).toBe(true);
     }),
@@ -372,3 +392,38 @@ it.each(["append", "reset", "branch", "generation", "claim"])(
       expect(fixture.status()).toEqual({ needs_rebuild: 1 });
     }),
 );
+
+it("clears payload facts on an index-preserving rewrite and restores them on rollback", () =>
+  withState({ label: "transcript-facts-rewrite" }, async (state) => {
+    const f = projectionFixture(state.env);
+    await replaceTranscriptEvents(f.scope, [...entries]);
+    const db = f.db();
+    const facts = () =>
+      db
+        .prepare(
+          "SELECT * FROM session_transcript_active_event_facts WHERE session_id = ? ORDER BY seq",
+        )
+        .all(sessionId);
+    const before = facts();
+    expect(before).toHaveLength(4);
+    const rewrite = (database: Parameters<typeof rewriteEvents>[0]) =>
+      rewriteEvents(database, f.scope, [
+        {
+          seq: 3,
+          expectedEventJson: JSON.stringify(entries[3]),
+          event: { ...entries[3], message: { ...entries[3].message, model: "rewritten-model" } },
+        },
+      ]);
+    expect(() =>
+      f.write((database) => {
+        rewrite(database);
+        expect(f.indexState()).toEqual({ needs_rebuild: 0 });
+        expect(facts()).toHaveLength(3);
+        throw new Error("rollback facts");
+      }),
+    ).toThrow("rollback facts");
+    expect(facts()).toEqual(before);
+    f.write(rewrite);
+    expect(facts().map((row) => row.seq)).toEqual([0, 1, 2]);
+    expect(readStats(f.scope).eventCount).toBe(2);
+  }));

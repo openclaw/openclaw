@@ -6,9 +6,9 @@ import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
-import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.79.2";
+export const CRABBOX_MIN_VERSION = "0.83.2";
 export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -60,6 +60,8 @@ export async function probeCrabboxVersion(
       ...(signal ? { signal } : {}),
     });
   } catch (error) {
+    signal?.throwIfAborted();
+    const { crabboxExecutionError } = await import("./crabbox-worker-command.js");
     signal?.throwIfAborted();
     return {
       status: "indeterminate",
@@ -348,6 +350,8 @@ const acquisitions = new Map<string, Acquisition>();
 export async function ensureManagedCrabboxBinary(
   params: {
     binary?: string;
+    /** Current deployment discovery, tried only after the preferred candidate is rejected. */
+    fallbackBinary?: string;
     cwd?: string;
     runCommand?: CrabboxCommandRunner;
     env?: NodeJS.ProcessEnv;
@@ -368,10 +372,20 @@ export async function ensureManagedCrabboxBinary(
   if (preferred.status === "supported") {
     return { binary: candidate, version: preferred.version };
   }
-  const report = (selected: CrabboxBinary): CrabboxBinary => ({
+  const report = (
+    selected: CrabboxBinary,
+    source: "managed" | "current deployed" = "managed",
+  ): CrabboxBinary => ({
     ...selected,
-    rejected: `Crabbox configured binary "${candidate}" was not used (${describeRejectedProbe(preferred)}); using managed binary "${selected.binary}" (${selected.version}) instead.`,
+    rejected: `Crabbox configured binary "${candidate}" was not used (${describeRejectedProbe(preferred)}); using ${source} binary "${selected.binary}" (${selected.version}) instead.`,
   });
+  const fallback = params.fallbackBinary;
+  if (fallback && fallback !== candidate && path.resolve(params.cwd ?? ".", fallback) !== binary) {
+    const deployed = await probeCrabboxVersion(fallback, runCommand, signal);
+    if (deployed.status === "supported") {
+      return report({ binary: fallback, version: deployed.version }, "current deployed");
+    }
+  }
   const cached = await findManagedCrabboxBinary({ env: params.env, runCommand, signal });
   if (cached) {
     return report(cached);

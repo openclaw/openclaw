@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createSandboxedReadTool } from "../agent-tools.read.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
@@ -23,12 +22,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const marker = "OMITTED_RESPONSE_MARKER";
 const fullText = `${"line of fetched content\n".repeat(1_000)}${marker}\n`;
 
-function context(
-  root: string,
-  session: string,
-  assertInvocationCurrent?: () => void,
-  bridge = createHostSandboxFsBridge(root),
-) {
+function context(root: string, session: string, bridge = createHostSandboxFsBridge(root)) {
   bindSandboxInputStager(
     bridge,
     createSandboxInputStager({ root, bridge, assertCurrent: () => {} }),
@@ -38,7 +32,6 @@ function context(
     sandboxRoot: root,
     sandboxFsBridge: bridge,
     agentSessionKey: session,
-    assertInvocationCurrent,
     config: { tools: { web: { fetch: { maxChars: 1_000, cacheTtlMinutes: 1 } } } },
   };
   return {
@@ -130,7 +123,7 @@ it.runIf(process.platform !== "win32")("stages read-only output", async () => {
   const sandbox = sandboxContext(root, "ro");
   const backend = { runShellCommand: createLocalRemoteShellScriptRunner() };
   const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
-  const native = context(root, "native-read-only", undefined, bridge);
+  const native = context(root, "native-read-only", bridge);
   await expect(
     bridge.createFileExclusive!({ filePath: "guest-write.txt", data: "denied" }),
   ).rejects.toThrow("read-only");
@@ -173,26 +166,4 @@ it("returns bounded content without a false host-file promise when a backend can
   const retry = await fetch(context(root, "unavailable").fetch, "unavailable");
   expect(retry.cached).toBeUndefined();
   expect(retry.spill).toBeDefined();
-});
-
-it("does not stage a response or reuse a cache after requester authority ends", async () => {
-  const response = createDeferred<ReturnType<typeof mockResponse>>();
-  fetchMock.mockReturnValueOnce(response.promise).mockImplementation(async () => mockResponse());
-  const root = tempDirs.make("web-fetch-authority-");
-  let current = true;
-  const sandbox = context(root, "authority", () => {
-    if (!current) {
-      throw new Error("requester ended");
-    }
-  });
-  const pending = fetch(sandbox.fetch, "authority");
-  const rejection = expect(pending).rejects.toThrow("requester ended");
-  current = false;
-  response.resolve(mockResponse());
-  await rejection;
-  expect(await fs.readdir(root)).toEqual([]);
-  current = true;
-  expect((await fetch(sandbox.fetch, "authority")).cached).toBeUndefined();
-  current = false;
-  await expect(fetch(sandbox.fetch, "authority")).rejects.toThrow("requester ended");
 });

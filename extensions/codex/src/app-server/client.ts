@@ -201,7 +201,9 @@ export class CodexAppServerClient {
     child.once("exit", (code, signal) => {
       this.transportExited = true;
       this.closeWithError(
-        child.startupFailure?.error ?? buildCodexAppServerExitError(code, signal, this.stderrTail),
+        child.startupFailure?.error ??
+          child.exitError ??
+          buildCodexAppServerExitError(code, signal, this.stderrTail),
       );
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
@@ -259,7 +261,8 @@ export class CodexAppServerClient {
     }
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
+  /** Wraps an externally owned transport, including worker duplex connections. */
+  static fromTransport(child: CodexAppServerTransport): CodexAppServerClient {
     return new CodexAppServerClient(child);
   }
 
@@ -512,8 +515,8 @@ export class CodexAppServerClient {
     return () => this.child.off?.("exit", onExit);
   }
 
-  close(): void {
-    this.closeWithError(new Error("codex app-server client is closed"));
+  close(options?: { forceKillDelayMs?: number }): void {
+    this.closeWithError(new Error("codex app-server client is closed"), options);
   }
 
   async closeAndWait(options?: {
@@ -656,9 +659,10 @@ export class CodexAppServerClient {
     this.notificationDispatch.dispatch(notification);
   }
 
-  private closeWithError(error: Error): void {
+  private closeWithError(error: Error, options?: { forceKillDelayMs?: number }): void {
     if (this.markClosed(error)) {
       closeCodexAppServerTransport(this.child, {
+        ...options,
         drainStdio: !this.initialized && this.child.startupFailure !== undefined,
         gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
       });

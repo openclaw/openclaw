@@ -7,7 +7,12 @@ import {
   assertPublishedAssignments,
 } from "../../scripts/e2e/lib/upgrade-survivor/native-assignments.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readJson, successSummary, writeJson } from "./upgrade-survivor-shard.test-support.js";
+import {
+  backupRollbackProof,
+  readJson,
+  successSummary,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const owner = {
   parentThreadId: "native-upgrade-parent",
@@ -100,36 +105,25 @@ it("rejects a no-op import, dropped result, changed owner, and mutated source", 
 it("requires package-bound proof before publishing a successful retirement cell", () => {
   const versions = { baselineVersion: "2026.9.4", candidateVersion: "2026.9.6" };
   const digest = "a".repeat(64);
+  // The native lane completes 66 phases, including overlapping and repeated spans.
+  const phases = [
+    ["prepare-native-assignment-proof", "started"],
+    ["repeated-phase", "started"],
+    ["prepare-native-assignment-proof", "passed"],
+    ["repeated-phase", "passed"],
+    ...Array.from({ length: 64 }, () => [
+      ["repeated-phase", "started"],
+      ["repeated-phase", "passed"],
+    ]).flat(),
+  ].map(([phase, status], index) => ({
+    phase,
+    status,
+    at: new Date(Date.UTC(2026, 8, 4) + index).toISOString(),
+  }));
   const snapshot = {
     ...successSummary(versions.baselineVersion, versions.candidateVersion),
-    backupRollback: {
-      status: "passed",
-      ...versions,
-      runtime: {
-        version: "2026.9.4",
-        schemaVersions: { state: 16, agent: 19 },
-        manifestSha256: digest,
-        entrySha256: digest,
-      },
-      candidateSchemaVersions: { state: 17, agent: 21 },
-      archive: { sha256: digest },
-      before: {
-        databases: [
-          {
-            kind: "agent",
-            agentId: "main",
-            present: true,
-            userVersion: 19,
-            contentVersion: 19,
-            sessions: [{ key: "synthetic", sessionId: "synthetic" }],
-            tables: [{ table: "transcript_events", rows: 1, sha256: digest }],
-          },
-        ],
-        files: [],
-      },
-      preflights: [{ agentId: "main", status: "exact", foundVersion: 19, targetVersion: 19 }],
-      sessionReads: [{ agentId: "main", count: 1 }],
-    },
+    phases,
+    backupRollback: backupRollbackProof(versions.baselineVersion, versions.candidateVersion),
     nativeAssignmentEligibility: {
       status: "required",
       candidateVersion: "2026.9.6",
@@ -161,6 +155,7 @@ it("requires package-bound proof before publishing a successful retirement cell"
     },
   };
   const report = publish(snapshot);
+  expect(report.phases).toEqual(phases);
   expect(report.logs["native-assignment-server.log"]).toBe("native fixture diagnostic");
   expect(report.nativeAssignments).toMatchObject({
     status: "passed",
@@ -186,4 +181,10 @@ it("requires package-bound proof before publishing a successful retirement cell"
       "Invalid native assignment preservation",
     );
   }
+  const invalidPhases = [...phases];
+  invalidPhases[131] = { ...invalidPhases[131]!, status: "omitted" };
+  for (const invalid of [undefined, {}, invalidPhases]) {
+    expect(() => publish({ ...snapshot, phases: invalid })).toThrow();
+  }
+  expect(() => publish({ ...snapshot, padding: "x".repeat(256 * 1024) })).toThrow();
 });

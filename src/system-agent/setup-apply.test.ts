@@ -17,13 +17,16 @@ import {
 } from "./setup-apply.test-harness.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import * as configModule from "../config/config.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isDisposableEntrypoint } from "../daemon/durable-service-entrypoint.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import { VERSION } from "../version.js";
 import { projectInferenceRoute } from "./inference-route.js";
 import { applySystemAgentSetup } from "./setup-apply.js";
 
@@ -59,8 +62,12 @@ const expectWorkspace = (directory = workspace, agentId = "main") =>
     expect.objectContaining({ agentId }),
   );
 function start(config = mainAgentModelConfig(), hash: string | null = "probe", source = config) {
-  const initial = snapshot(hash, source, config);
-  setSetupCommitState(config, initial);
+  const initial = snapshot(
+    hash,
+    source,
+    materializeRuntimeConfig(config, { manifestRegistry: { plugins: [] } }),
+  );
+  setSetupCommitState(source, initial);
   return initial;
 }
 function startAbsent() {
@@ -75,15 +82,19 @@ function persistedReads(
   materialize: (config: OpenClawConfig) => OpenClawConfig,
 ) {
   const persisted = () => {
-    const config = mocks.state.persistedConfig ?? initial.config;
-    return { ...snapshot("persisted", config), runtimeConfig: materialize(config) };
+    const config = mocks.state.persistedConfig ?? initial.sourceConfig;
+    return snapshot("persisted", config, materialize(config));
   };
   mocks.readVerifiedSnapshot.mockImplementation(snapshotSequence(initial, initial, persisted));
   return persisted;
 }
 
 describe("applySystemAgentSetup transaction boundaries", () => {
-  beforeEach(resetSetupApplyMocks);
+  beforeEach(() => {
+    resetSetupApplyMocks();
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+  });
 
   it("rejects a config created after the initial inference check before writing", async () => {
     mocks.state.initialSnapshot = snapshot("present", {}, { agents: { entries: { main: {} } } });
@@ -93,11 +104,13 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
   it("preserves the pre-roster verified route while creating a team", async () => {
     const runtimeConfig = agentConfig("/agents/main");
-    start(runtimeConfig, "probe", { agents: { defaults: { model: "openai/gpt-5.5" } } });
+    const initial = start(runtimeConfig, "probe", {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+    });
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     await apply({
       expectedConfigHash: "probe",
-      expectedInferenceRoute: await projectInferenceRoute(runtimeConfig),
+      expectedInferenceRoute: await projectInferenceRoute(initial.config),
       firstAgent: firstTeam,
     });
     expect(mocks.state.persistedConfig?.agents?.entries).toHaveProperty("coordinator");
@@ -255,7 +268,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       mocks.state.initialSnapshot = snapshot("probe", source);
       mocks.readVerifiedSnapshot.mockResolvedValue(snapshot("probe", current));
       await reject(
-        { expectedInferenceRoute: await projectInferenceRoute(verified) },
+        { expectedInferenceRoute: await projectInferenceRoute(snapshot("probe", verified).config) },
         routeChanged,
         ["commit"],
       );
@@ -270,7 +283,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     await reject(
       {
         finalizeConfig: () => mainAgentModelConfig("anthropic/claude-opus-4-8"),
-        expectedInferenceRoute: await projectInferenceRoute(initial),
+        expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.config),
       },
       "no longer preserves the exact verified inference route",
       ["ensureWorkspace"],
@@ -310,7 +323,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       mocks.events.push("commit");
       return committed(result, "hash-2");
     });
-    const expectedInferenceRoute = await projectInferenceRoute(initial);
+    const expectedInferenceRoute = await projectInferenceRoute(initialSnapshot.config);
 
     await apply({ expectedInferenceRoute, surface: "cli" });
 
@@ -344,7 +357,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     });
 
     await reject(
-      { expectedInferenceRoute: await projectInferenceRoute(initial) },
+      { expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.config) },
       "changed after the config write",
     );
 
@@ -364,10 +377,11 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const initialSnapshot = {
-      ...snapshot("probe", sourceConfig),
-      runtimeConfig: materializePluginDefaults(sourceConfig, pluginMetadataSnapshot),
-    };
+    const initialSnapshot = snapshot(
+      "probe",
+      sourceConfig,
+      materializePluginDefaults(sourceConfig, pluginMetadataSnapshot),
+    );
     setSetupCommitState(sourceConfig, initialSnapshot);
     const persistedSnapshot = persistedReads(initialSnapshot, (config) =>
       materializePluginDefaults(config, pluginMetadataSnapshot),
@@ -377,7 +391,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       pluginMetadataSnapshot,
     }));
     await apply({
-      expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.runtimeConfig),
+      expectedInferenceRoute: await projectInferenceRoute(initialSnapshot.config),
     });
 
     expect(mocks.ensureWorkspace).toHaveBeenCalledOnce();
@@ -397,7 +411,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
 
     try {
       await reject(
-        { expectedInferenceRoute: await projectInferenceRoute(sourceConfig) },
+        { expectedInferenceRoute: await projectInferenceRoute(verifiedSnapshot.config) },
         "materialized inference route",
       );
     } finally {
@@ -438,6 +452,23 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "chooses full",
+      {},
+      "Tool profile: full (tools.profile). This profile allows every tool, including files, commands, the web and plugins.",
+    ],
+    [
+      "keeps messaging",
+      { tools: { profile: "messaging" } },
+      'Tool profile: messaging (tools.profile). This profile allows chat, messages and sessions, but not files, commands or the web. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set tools.profile to "full".',
+    ],
+  ] as const)("says what the tool profile allows when setup %s", async (_case, tools, line) => {
+    start({ ...mainAgentModelConfig(), ...tools });
+    const result = await apply();
+    expect(result.lines).toContain(line);
+  });
+
   it("reports explicitly skipped service installation", async () => {
     const gateway = { status: "skipped", reason: "explicit" };
     mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
@@ -469,6 +500,35 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       });
     },
   );
+
+  it("npx skipped service installation prints a runnable foreground command", async () => {
+    const root = testTempDirs.make("openclaw-setup-entrypoint-");
+    const entrypoint = path.join(
+      root,
+      ".npm",
+      "_npx",
+      "testhash",
+      "node_modules",
+      "openclaw",
+      "openclaw.mjs",
+    );
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.writeFile(entrypoint, "");
+    const originalArgv = [...process.argv];
+    process.argv = [process.execPath, await fs.realpath(entrypoint)];
+    onTestFinished(() => {
+      process.argv = originalArgv;
+    });
+    expect(await isDisposableEntrypoint(process.argv[1]!)).toBe(true);
+
+    const gateway = { status: "skipped", reason: "explicit" };
+    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+    const result = await apply({ surface: "cli", installDaemon: false });
+
+    expect(result.lines).toContain(
+      `Gateway: service installation skipped. Run \`npx openclaw@${VERSION} gateway run\` to start it in the foreground.`,
+    );
+  });
 
   it("keeps setup incomplete when the installed gateway never becomes reachable", async () => {
     mocks.ensureGatewayService.mockResolvedValueOnce({

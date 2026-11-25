@@ -36,13 +36,11 @@ import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
-  checkGatewayHttpRequestAuth,
   getHeader,
-  resolveSharedSecretHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
+import { operatorSessionCap } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSessionHistoryUnavailableMessage } from "./session-history-error.js";
 import {
@@ -55,7 +53,7 @@ import {
   type PreparedSessionSourceFacts,
   type SessionFactsRead,
 } from "./session-sharing-preparation.js";
-import { prepareProjectedSessionSharing } from "./session-sharing.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 import { resolveSessionStoreIdentity, resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
@@ -145,7 +143,10 @@ function resolveSessionHistoryHttpClient(
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
     preparedSessionProfile: requestAuth.preparedSessionProfile,
-    internal: { operatorRoleActor: requestAuth.operatorRoleActor },
+    internal: {
+      operatorRoleActor: requestAuth.operatorRoleActor,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
+    },
   };
 }
 
@@ -220,6 +221,7 @@ async function serveAuthorizedSessionHistory(
   assertSourceCurrent: () => void,
 ): Promise<boolean> {
   const { cfg, requestAuth, operatorScopes } = authResult;
+  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
   let sharing: SessionFactsRead<PreparedSessionSourceFacts> | undefined;
   using sharingLifetime = {
     transferred: false,
@@ -243,6 +245,14 @@ async function serveAuthorizedSessionHistory(
         store: entry ? { [sessionKey]: entry } : {},
         readSource: { agentId: source.agentId, path: source.path },
       };
+      if (operatorSessionCap(historyClient, cfg) === "invited") {
+        sharing = await prepareSessionMutationFacts({
+          cfg,
+          agentId: source.agentId,
+          sessionKey,
+          allowMissing: true,
+        });
+      }
     } else {
       const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
       sharing = await prepareSessionMutationFacts({
@@ -284,15 +294,30 @@ async function serveAuthorizedSessionHistory(
         message: `Session not found: ${sessionKey}`,
       },
     });
-  const historyClient = resolveSessionHistoryHttpClient(requestAuth, operatorScopes);
-  if (
-    !entry?.sessionId ||
-    prepareProjectedSessionSharing({
-      cfg,
-      client: historyClient,
-      isMember: () => false,
-    }).entryFilter?.(target.canonicalKey, entry) === false
-  ) {
+  const canReadHistory = (
+    client: GatewayClient | null,
+    currentCfg: OpenClawConfig,
+    selected: {
+      agentId: string;
+      canonicalKey: string;
+      storePath: string;
+      entry: NonNullable<typeof entry>;
+    },
+  ) => {
+    const current = sharing?.readCurrent(currentCfg);
+    const membership =
+      current?.target?.storePath === selected.storePath &&
+      current.target.entry.sessionId === selected.entry.sessionId
+        ? current.membership
+        : undefined;
+    return (
+      createSessionListEntryFilter({ client, cfg: currentCfg, membership })?.(
+        selected.canonicalKey,
+        selected.entry,
+      ) !== false
+    );
+  };
+  if (!entry?.sessionId || !canReadHistory(historyClient, cfg, { ...target, entry })) {
     sendSessionNotFound();
     return true;
   }
@@ -327,35 +352,6 @@ async function serveAuthorizedSessionHistory(
     } catch {
       return false;
     }
-    const cfgLocal = getRuntimeConfig();
-    const currentRequestAuth = await checkGatewayHttpRequestAuth({
-      ...opts,
-      req,
-      auth: opts.getResolvedAuth?.() ?? opts.auth,
-      trustedProxies: cfgLocal.gateway?.trustedProxies,
-      allowRealIpFallback: cfgLocal.gateway?.allowRealIpFallback,
-      cfg: cfgLocal,
-    });
-    if (!currentRequestAuth.ok || !requestAuth.hasCurrentClientAuthority()) {
-      return false;
-    }
-    if (
-      currentRequestAuth.requestAuth.authenticatedUserProfile?.profileId !==
-      requestAuth.authenticatedUserProfile?.profileId
-    ) {
-      return false;
-    }
-    const requestedScopes = resolveSharedSecretHttpOperatorScopes(
-      req,
-      currentRequestAuth.requestAuth,
-    );
-    if (!authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed) {
-      return false;
-    }
-    const currentClient = resolveSessionHistoryHttpClient(
-      currentRequestAuth.requestAuth,
-      requestedScopes,
-    );
     const currentConfig = getRuntimeConfig();
     try {
       assertSourceCurrent();
@@ -388,12 +384,7 @@ async function serveAuthorizedSessionHistory(
       currentTarget.entry.sessionId !== historyTarget.sessionId ||
       currentTarget.entry.lifecycleRevision !== entry.lifecycleRevision ||
       (entry.sessionStartedAt !== undefined &&
-        currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt) ||
-      prepareProjectedSessionSharing({
-        cfg: currentConfig,
-        client: currentClient,
-        isMember: () => false,
-      }).entryFilter?.(currentTarget.canonicalKey, currentTarget.entry) === false
+        currentTarget.entry.sessionStartedAt !== entry.sessionStartedAt)
     ) {
       return false;
     }
@@ -402,7 +393,7 @@ async function serveAuthorizedSessionHistory(
       prepareOperatorModelPresentation({
         cfg: currentConfig,
         policyConfig: opts.getCommittedRuntimeConfig?.() ?? currentConfig,
-        client: currentClient,
+        client: historyClient,
       }),
     );
     return true;

@@ -17,28 +17,34 @@ import {
   createAgentRunRestartAbortError,
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { ChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.core.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-projection.js";
+import { reports, seed, target } from "../../gateway/session-lifecycle-run-failure.test-support.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support.js";
 import {
-  createRunResult,
   GENERIC_RUN_FAILURE_TEXT,
   createRunAgentTurnParams,
   createFollowupRun,
-  createMockReplyOperation,
-  requireMockCall,
   createMinimalRunAgentTurnParams,
   createTestFallbackSummaryError,
   type EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -105,6 +111,73 @@ it.each([
     ]);
   },
 );
+
+it("records a revoked queued request for the owner without channel delivery", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await seed();
+    const secret = "synthetic-revoked-request-secret";
+    const notice =
+      "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new ChannelRunAuthorizationError(
+        new Error("private policy detail", { cause: new Error(secret) }),
+      ),
+    );
+    const deliver = vi.fn(async () => {});
+    const deliverPrepared = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver, deliverPrepared });
+    const result = await runRawTurn({
+      sessionKey: target.sessionKey,
+      followupRun: createFollowupRun(target),
+      sessionCtx: { Provider: "discord", ChatType: "channel", MessageSid: "queued-request" },
+      opts: {
+        onBlockReply: async (payload) => {
+          dispatcher.sendBlockReply(payload);
+        },
+        onPreparedBlockReply: async (plan) => {
+          dispatcher.sendPreparedReply("block", plan);
+        },
+        onToolResult: async (payload) => {
+          dispatcher.sendToolResult(payload);
+        },
+      },
+    });
+    assert(result.outcome.kind === "rejected");
+    const terminals = terminalEvents(result.runId);
+    expect(terminals).toHaveLength(1);
+    const terminal = { ...terminals[0]!, ts: 2_000 };
+    expect(terminal.data).toMatchObject({ phase: "error", errorNotice: notice });
+    dispatcher.sendFinalReply(result.outcome.payload);
+    await dispatcher.waitForIdle();
+
+    await patchSessionEntryCore(target, () => ({
+      lifecycleRunId: result.runId,
+      activeWriterRunId: result.runId,
+    }));
+    await persistGatewaySessionLifecycleEvent({ ...target, event: terminal });
+    expect(await reports()).toHaveLength(1);
+    await persistGatewaySessionLifecycleEvent({ ...target, event: terminal });
+    expect(await reports()).toEqual([
+      expect.objectContaining({
+        customType: "run-failed-before-reply",
+        display: true,
+        content: notice,
+        details: expect.objectContaining({ runId: result.runId }),
+      }),
+    ]);
+    const history = projectChatDisplayMessages(
+      await readSessionMessagesAsync(target, { mode: "full", reason: "revoked channel refusal" }),
+    );
+    expect(history.at(-1)).toMatchObject({
+      openclawRunError: { runId: result.runId, summary: notice },
+    });
+    expect(terminal.data.errorNotice).not.toContain(secret);
+    expect(JSON.stringify(history)).not.toContain(secret);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(deliverPrepared).not.toHaveBeenCalled();
+  });
+});
 
 it("preserves disabled retry exhaustion through returned provider payloads", async () => {
   const rawError = "429 rate limit exceeded. Please try again in 221ms.";
@@ -200,22 +273,21 @@ it("keeps the provider reset hint when the chain summary exceeds the length guar
   expect(rendered).not.toContain("API rate limit reached. Please try again later.");
 });
 
-it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
-  const { replyOperation, failMock } = createMockReplyOperation();
-  state.runWithModelFallbackMock.mockRejectedValueOnce(
-    exhausted(new GatewayDrainingError(), "gateway draining"),
-  );
-
-  const payload = await finalPayload({
-    ...createRunAgentTurnParams(createFollowupRun()),
-    replyOperation,
-    opts: {},
+it("ends quietly when fallback exhaustion wraps a drain error", async () => {
+  const replyOperation = runningOperation("wrapped-drain-error");
+  state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+    markGatewayRestartDraining();
+    throw exhausted(new GatewayDrainingError(), "gateway draining");
   });
 
-  expect(payload.text).toBe("⚠️ Gateway is restarting. Please wait a few seconds and try again.");
-  const failCall = requireMockCall(failMock, 0, "reply operation fail");
-  expect(failCall[0]).toBe("gateway_draining");
-  expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
+  try {
+    const result = await runRawTurn({ replyOperation });
+    expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+    expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+  } finally {
+    resetGatewayWorkAdmission();
+    replyOperation.complete();
+  }
 });
 
 it("preserves controller restart cancellation when fallback exhaustion wraps its abort", async () => {
@@ -237,7 +309,7 @@ it("preserves controller restart cancellation when fallback exhaustion wraps its
   }
 });
 
-it("retains automatic recovery when restart admission refuses an active turn", async () => {
+it("quietly cancels when restart admission refuses an active turn", async () => {
   const replyOperation = runningOperation("restart-refusal");
   state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
     await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -266,7 +338,12 @@ it("retains automatic recovery when restart admission refuses an active turn", a
         entry: { updatedAt: 1, startedAt: 1 },
         event: { ...terminals[0]!, ts: 2 },
       }),
-    ).toMatchObject({ status: "interrupted", abortedLastRun: true });
+    ).toMatchObject({
+      status: "killed",
+      abortedLastRun: true,
+      suppressErrorNotice: true,
+      lastRunError: undefined,
+    });
   } finally {
     resetGatewayWorkAdmission();
     replyOperation.complete();
@@ -361,7 +438,6 @@ it.each([
       const result = await runRawTurn({
         replyOperation,
         opts: { abortSignal: upstreamAbort.signal },
-        isRestartRecoveryArmed: async () => true,
       });
 
       expect(result.outcome).toEqual({ kind: "aborted", reason });
@@ -448,44 +524,6 @@ it.for([false, true])(
   },
 );
 
-it("settles a completed result after awaiting restart recovery", async () => {
-  const result = createRunResult("completed before the restart marker was observed");
-  const runId = "armed-restart-settled-result";
-  const { replyOperation, failMock } = createMockReplyOperation();
-  let operationResult: typeof replyOperation.result = null;
-  const abortForRestart = vi.fn(() => {
-    operationResult = { kind: "aborted", code: "aborted_for_restart" };
-    return true;
-  });
-  const complete = vi.fn(() => {
-    operationResult ??= { kind: "completed" };
-  });
-  const restartReplyOperation = {
-    ...replyOperation,
-    get result() {
-      return operationResult;
-    },
-    abortForRestart,
-    complete,
-  } satisfies typeof replyOperation;
-  state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-
-  const execution = await runRawTurn({
-    replyOperation: restartReplyOperation,
-    opts: { runId },
-    isRestartRecoveryArmed: async () => true,
-  });
-
-  expect(execution).toEqual({
-    runId,
-    outcome: { kind: "aborted", reason: "restart" },
-  });
-  expect(abortForRestart).toHaveBeenCalledOnce();
-  expect(complete).not.toHaveBeenCalled();
-  expect(restartReplyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-  expect(failMock).not.toHaveBeenCalled();
-});
-
 it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
   const recoveryText =
     "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
@@ -530,7 +568,7 @@ it("warns that interrupted CLI background work may have completed", () => {
 
   expect(payload?.text).toContain("Some work may have completed");
   expect(payload?.text).toContain("Check its results before trying again");
-  expect(payload?.text).toContain("task time limit in the Control UI settings");
+  expect(payload?.text).toContain("task time limit in the OpenClaw app settings");
 });
 
 it("surfaces Codex app-server bridge failures instead of generic copy", async () => {

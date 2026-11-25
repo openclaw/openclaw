@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "../../e2e/sidebar-customization.test-support.ts";
-import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import type { ControlUiSessionFixture } from "../../test-helpers/control-ui-session-fixtures.ts";
 import { assertSessionSectionCountAlignment } from "../../test-helpers/control-ui-session-section-layout.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
@@ -48,7 +48,7 @@ suite.define(() => {
             worktree: worktree("attention"),
           }),
         );
-        await installMockGateway(page, {
+        await installNativePluginMockGateway(page, {
           ...workboardUi,
           sessions,
           sessionGroups: ["infra", "fixes"],
@@ -63,7 +63,7 @@ suite.define(() => {
         const rail = sidebar.locator(".sidebar-rail__pins");
         const workboard = rail.getByRole("link", { name: "Workboard", exact: true });
         await workboard.waitFor();
-        await button(sidebar, "Sessions").click();
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
         await workboard.hover();
         await workboard.click();
@@ -75,11 +75,11 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toMatch(/^\/chat(?:\/|$)/u);
         await workboard.hover();
         const newConversation = sidebar.getByRole("link", {
-          name: "New conversation",
+          name: "New session",
           exact: true,
         });
         if (!(await sidebar.locator(".sidebar-session-toolbar").isVisible())) {
-          await button(sidebar, "Sessions").click();
+          await sidebar.locator('[data-navigation-view="sessions"]').click();
         }
         await newConversation.click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
@@ -103,7 +103,7 @@ suite.define(() => {
           }),
         );
         const centerY = expect.closeTo(indicators[0]!.centerY, 1);
-        expect(indicators).toMatchObject([{ centerY }, { centerY }, { centerY }]);
+        expect(indicators).toMatchObject([{ centerY }, { centerY }]);
         const ordered = indicators.toSorted((left, right) => left.left - right.left);
         for (let index = 1; index < ordered.length; index++) {
           expect(ordered[index]!.left).toBeGreaterThanOrEqual(ordered[index - 1]!.right);

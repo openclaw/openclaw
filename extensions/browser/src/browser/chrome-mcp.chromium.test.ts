@@ -12,9 +12,11 @@ import {
   takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
 import {
+  buildAiSnapshotFromChromeMcpSnapshot,
   flattenChromeMcpSnapshotToAriaResult,
   type ChromeMcpSnapshotNode,
 } from "./chrome-mcp.snapshot.js";
+import { REDACTED_FIELD_VALUE } from "./sensitive-field-values.js";
 import { getFreePort } from "./test-port.js";
 
 async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<string, unknown>) {
@@ -35,6 +37,33 @@ function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): s
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
   "pinned Chrome MCP in Chromium",
   () => {
+    it("redacts sensitive field values while preserving a benign input", async () => {
+      await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
+        await page.setContent(`<!doctype html>
+        <input aria-label="Email" autocomplete="username" value="visible@example.test">
+        <input aria-label="Code" autocomplete="one-time-code" value="123456">
+        <input aria-label="Card" autocomplete="cc-number" value="4242424242424242">
+        <input aria-label="Security code" autocomplete="cc-csc" value="123">`);
+        const [tab] = await listChromeMcpTabs(profileName, profile, { timeoutMs: 30_000 });
+        const root = await takeChromeMcpSnapshot({
+          profileName,
+          profile,
+          targetId: tab!.targetId,
+          timeoutMs: 10_000,
+        });
+        const nodes = flattenChromeMcpSnapshotToAriaResult(root).nodes;
+        const value = (name: string) => nodes.find((node) => node.name === name)?.value;
+
+        expect(value("Email")).toBe("visible@example.test");
+        expect(value("Code")).toBe(REDACTED_FIELD_VALUE);
+        expect(value("Card")).toBe(REDACTED_FIELD_VALUE);
+        expect(value("Security code")).toBe(REDACTED_FIELD_VALUE);
+        const ai = buildAiSnapshotFromChromeMcpSnapshot({ root }).snapshot;
+        expect(ai).toContain("visible@example.test");
+        expect(ai).not.toMatch(/123456|4242424242424242|value="123"/);
+      });
+    }, 120_000);
+
     it("preserves native input, option values, and operation outcomes", async () => {
       await fixture.withMcpBrowser(async ({ page, profile, profileName }) => {
         await page.setContent(`<!doctype html>

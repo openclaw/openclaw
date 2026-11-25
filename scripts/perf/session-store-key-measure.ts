@@ -13,11 +13,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -94,9 +94,6 @@ const elapsedMs = performance.now() - started;
 const cpu = process.threadCpuUsage(cpuStart);
 const allocation = await inspector?.post("HeapProfiler.stopSampling");
 inspector?.disconnect();
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const digest = createHash("sha256");
 for (let index = 0; index < inputs.length; index++) {
   digest.update(resolve(index)).update("\n");
@@ -112,7 +109,7 @@ console.log(
     checksum,
     hostLoad,
     ...(allocation
-      ? { sampledBytes: allocated(allocation.profile.head) }
+      ? { sampledBytes: sumSampledHeapBytes(allocation.profile.head) }
       : {
           cpuMs: (cpu.user + cpu.system) / 1000,
           elapsedMs,

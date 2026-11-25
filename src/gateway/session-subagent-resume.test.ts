@@ -24,6 +24,11 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
 import {
   assertParentSubagentResumeCurrent,
   assertParentSubagentResumeSuccessorCurrent,
@@ -194,7 +199,17 @@ it.each(["identity", "revision"] as const)(
     });
     const announce = fixture.announce.mockResolvedValue("delivered");
     const adopt = await state.prepare({ resume });
-    await expect(adopt()).resolves.toBe(previousRunId);
+    const client = createOperatorClient({
+      profileName: "paused-task-resumer",
+      scopes: ["operator.admin"],
+    });
+    const context = createContext([], () => state.cfg);
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        { client, context, isWebchatConnect: () => false },
+        adopt,
+      ),
+    ).resolves.toBe(previousRunId);
     expect(subagentRuns.get(nextRunId)).toMatchObject({
       taskRunId: previousRunId,
       requesterSessionKey: parent,

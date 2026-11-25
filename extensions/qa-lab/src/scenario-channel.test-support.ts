@@ -60,12 +60,13 @@ export async function dispatchScenarioFinal(
   final?: Parameters<ReturnType<typeof createReplyDispatcher>["sendFinalReply"]>[0],
 ) {
   const dispatcher = createReplyDispatcher(options);
+  let settledReceipt: Awaited<ReturnType<typeof settleReplyDispatcher>>;
   try {
     if (final !== undefined) {
       dispatcher.sendFinalReply(final);
     }
   } finally {
-    await settleReplyDispatcher({ dispatcher });
+    settledReceipt = await settleReplyDispatcher({ dispatcher });
   }
-  return { queuedFinal: final !== undefined, counts: dispatcher.getQueuedCounts() };
+  return { queuedFinal: final !== undefined, counts: dispatcher.getQueuedCounts(), settledReceipt };
 }

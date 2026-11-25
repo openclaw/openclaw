@@ -85,7 +85,14 @@ export function mountBoardPanel(
     ...view,
     draw: () => {
       const source = pane.boardPanelSource(pane.resolveBoardView(), layout);
-      setContent(source ? buildChatBoardPanel(source) : null);
+      setContent(
+        source
+          ? buildChatBoardPanel(
+              source,
+              source.board.provider.widgetFrameUrl.bind(source.board.provider),
+            )
+          : null,
+      );
       flush();
     },
   };
@@ -100,14 +107,16 @@ export type TestChatPane = HTMLElement &
       "attach" | "composerDraft" | "composerPersistence" | "createRenderLifecycle"
     >;
     state: ChatPageHost;
+    restorePaneSidebarLayout: (
+      layout: ChatPageHost["sidebarLayout"],
+    ) => ChatPageHost["sidebarLayout"];
     connectedClient: GatewayBrowserClient | null;
     applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
     catalogLoadGeneration: number;
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
     forkFromMessage: (entryId: string) => Promise<void>;
+    retireHeaderSessionMutations: () => void;
     createSession: () => Promise<boolean>;
-    recoverSession: () => Promise<boolean>;
-    restartRecoveryComposerBanner: ChatPaneRuntime["restartRecoveryComposerBanner"];
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
     copyTaskSuggestionPrompt: ChatPaneRuntime["copyTaskSuggestionPrompt"];
@@ -137,9 +146,9 @@ export type TestChatPane = HTMLElement &
     handleTranscriptScroll: (event: Event) => void;
     handleTranscriptHistoryIntent: (event: Event) => void;
     historyAutoLoadBlocked: boolean;
-    historyObserverArmed: boolean;
+    historyReaderIntent: boolean;
     transcriptScrollTop: number | null;
-    syncHistoryObserver: () => void;
+    evaluateHistoryEdge: () => void;
     loadCatalogSession: ChatPaneRuntime["loadCatalogSession"];
     prependUniqueCatalogMessages: (messages: unknown[]) => unknown[];
     loadOlderMessages: (readerIntent?: boolean) => Promise<boolean>;

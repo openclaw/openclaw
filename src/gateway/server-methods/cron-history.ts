@@ -37,7 +37,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     respondError(
       respond,
       ErrorCodes.UNAVAILABLE,
-      "The recorded cron transcript is unavailable. Refresh the run and try again.",
+      "The chat for this run is unavailable. Refresh the run and try again.",
     );
   const sessionVisibility = createCronSessionVisibility(client, context);
   const assertAllowed = (sessionKey?: string, agentId?: string) => {
@@ -60,7 +60,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
       throw new Error("Cron job not found");
     }
     if (sessionKey && visibility && !visibility(sessionKey, agentId)) {
-      throw new Error("Cron transcript not found");
+      throw new Error("Chat for this run not found");
     }
   };
   try {
@@ -166,7 +166,7 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
           !Value.Check(CronHistoryResultSchema, result) ||
           Buffer.byteLength(JSON.stringify(result)) > MAX_CRON_HISTORY_BYTES
         ) {
-          throw new Error("Invalid cron transcript page");
+          throw new Error("Invalid run chat history page");
         }
         // The shared retained-transcript owner still holds current sharing facts here.
         assertCurrent(physical.sessionKey);

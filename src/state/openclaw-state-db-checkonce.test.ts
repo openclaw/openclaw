@@ -240,9 +240,10 @@ it("readmits startup checkpoint storage after a tracked header change", () => {
 });
 
 it("validates a replacement file before reusing a shared-state pathname", () => {
-  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
+  const { env } = replacedState(`PRAGMA user_version = ${SCHEMA_VERSION + 1};
+    UPDATE schema_meta SET app_version = '2026.10.8' WHERE meta_key = 'primary'`);
   const observation = observeSqliteReadSql(StatementSync.prototype);
-  expect(() => openState({ env })).toThrow(/newer schema version/iu);
+  expect(() => openState({ env })).toThrow(/OpenClaw 2026\.10\.8;.*doctor --fix/isu);
   expect(validationStatements(observation.queries).length).toBeGreaterThan(0);
 });
 

@@ -18,12 +18,6 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import {
-  ensureCompletionState,
-  ensureDeliveryState,
-  getDeliveryLastError,
-} from "./subagent-delivery-state.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
@@ -39,11 +33,9 @@ import type {
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
   finalizeResumedAnnounceGiveUp,
-  finalizeResumedAnnounceGiveUpInBackground,
   resumeSubagentAfterDrain,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
-  hasPendingRequesterSettlement,
   retireSubagentObligationsInContext,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -54,6 +46,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { hasPendingRequesterSettlement } from "./subagent-registry-requester-wake-mutation.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   commitRequesterTransfer,
@@ -71,6 +64,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 
@@ -194,7 +188,7 @@ export class SubagentLifecycleController {
     return (
       (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
       this.newerGenerationOwnsSession(entry) ||
-      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
+      shouldSuppressSubagentSessionEffects(current ?? entry)
     );
   }
 
@@ -464,43 +458,8 @@ export class SubagentLifecycleController {
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
     resumeAncestorCleanup(this, settledEntry);
 
-  static discardTerminalDelivery(this: void, entry: SubagentRunRecord, completedAt: number): void {
-    const delivery = ensureDeliveryState(entry);
-    const payload = delivery.payload;
-    delivery.discardedAt = completedAt;
-    delivery.discardReason = "expired";
-    delivery.discardedPayloadSummary = {
-      requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
-      childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
-      childRunId: payload?.childRunId ?? entry.runId,
-      endedAt: payload?.endedAt ?? entry.execution.endedAt,
-      status: payload?.outcome?.status ?? entry.execution.outcome?.status,
-      lastError: getDeliveryLastError(entry) ?? null,
-    };
-    Object.assign(delivery, {
-      status: "discarded",
-      queueId: undefined,
-      payload: undefined,
-      createdAt: undefined,
-      lastError: undefined,
-      announcedAt: undefined,
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-    });
-    Object.assign(entry, { wakeOnDescendantSettle: undefined, cleanupHandled: true });
-    const completion = ensureCompletionState(entry);
-    Object.assign(completion, { fallbackResultText: undefined, fallbackCapturedAt: undefined });
-    entry.cleanupCompletedAt = completedAt;
-  }
-
   finalizeResumedAnnounceGiveUp = (params: Parameters<typeof finalizeResumedAnnounceGiveUp>[1]) =>
     finalizeResumedAnnounceGiveUp(this, params);
-
-  finalizeResumedAnnounceGiveUpInBackground = (
-    runId: string,
-    entry: SubagentRunRecord,
-    reason: "expiry" | "permanent_failure",
-  ) => finalizeResumedAnnounceGiveUpInBackground(this, runId, entry, reason);
 
   resumeAfterDrain = (
     runId: string,

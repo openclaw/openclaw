@@ -8,6 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import { prepareParticipationTestRun } from "../../agents/participation-ceiling.test-support.js";
 import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -69,6 +70,53 @@ describe("worker turn launcher local placement", () => {
   });
   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "refuses participating %s before a worker claim, credentials, or local fallback",
+    async (executionMode) => {
+      await fx.seedActivePlacement(executionMode);
+      const original = fx.placements.get(fx.SESSION_ID);
+      const environments = fx.unusedEnvironments();
+      vi.mocked(environments.get).mockReturnValue(fx.attachedEnvironment());
+      const provider = createLauncher({ environments });
+      const runLocal = vi.fn(localResult);
+      const input = {
+        ...fx.turn("participant-worker"),
+        ...prepareParticipationTestRun({
+          kind: "send",
+          profileId: "guest",
+          sessionKey: fx.SESSION_KEY,
+        }),
+      };
+      await expect(provider.executeTurn(runIdentity(input.runId), input, runLocal)).rejects.toThrow(
+        "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.",
+      );
+      expect(fx.placements.get(fx.SESSION_ID)).toEqual(original);
+      expectUncalled(
+        runLocal,
+        environments.acquireTurnCredential,
+        environments.startTunnel,
+        environments.ensureRetainedRunning,
+        environments.inspectTurnLease,
+      );
+    },
+  );
+
+  it("keeps participating Gateway-local turns on their own admitted execution path", async () => {
+    const runLocal = vi.fn(localResult);
+    const input = {
+      ...fx.turn("participant-local"),
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: fx.SESSION_KEY,
+      }),
+    };
+    await expect(
+      localProvider.executeTurn(runIdentity(input.runId), input, runLocal),
+    ).resolves.toEqual(await localResult());
+    expect(runLocal).toHaveBeenCalledOnce();
+  });
+
   it("reads absent sandbox placement without caller-thread SQL", async () => {
     using cleanup = new DisposableStack();
     cleanup.defer(installSessionPlacementAdmissionProvider(localProvider));
@@ -79,7 +127,7 @@ describe("worker turn launcher local placement", () => {
     sql.expectIdle();
     await fx.seedActivePlacement("remote-exec");
     sql.clear();
-    expect(prepared.assertCurrent).toThrow("placement authority changed");
+    expect(prepared.assertCurrent).toThrow("placement changed");
     sql.expectIdle();
   });
 
@@ -251,7 +299,7 @@ describe("worker turn launcher local placement", () => {
           expect(await fx.placements.listAsync()).toEqual([]);
         } else {
           await expect(operation).rejects.toThrow(
-            change === "placement publication" ? "placement authority changed" : refusal.message,
+            change === "placement publication" ? "placement changed" : refusal.message,
           );
           expect(runLocal).not.toHaveBeenCalled();
         }
@@ -318,7 +366,6 @@ describe("worker turn launcher local placement", () => {
         sessionKey: claim.sessionKey,
         sessionId: operation.sessionId,
         admission: undefined,
-        recoveryOwnerLease: undefined,
         databaseClaim,
       });
       using projection = vi.spyOn(fx.placements, "readProjection");
@@ -574,11 +621,7 @@ describe("worker turn launcher local placement", () => {
   it("rejects an active worker turn assigned to a configured CLI runtime", async () => {
     const runtimeId = "claude-cli";
     await fx.seedActivePlacement();
-    const getEnvironment = vi.fn(() => undefined);
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: getEnvironment,
-    };
+    const environments = fx.unusedEnvironments();
     const provider = createLauncher({ environments });
     const runLocal = vi.fn(localResult);
     const runId = `run-${runtimeId}`;
@@ -618,6 +661,7 @@ describe("worker turn launcher local placement", () => {
               inlineProviderModels: [],
               configuredCatalogEntries: [],
             },
+            run: <T>(run: () => T): T => run(),
             [Symbol.asyncDispose]: release,
           };
         }),
@@ -628,7 +672,12 @@ describe("worker turn launcher local placement", () => {
       `Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`,
     );
 
-    expectUncalled(runLocal, getEnvironment);
+    expectUncalled(
+      runLocal,
+      environments.ensureRetainedRunning,
+      environments.acquireTurnCredential,
+      environments.startTunnel,
+    );
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -679,7 +728,7 @@ describe("worker turn launcher local placement", () => {
       if (scenario !== "current") {
         await expect(provider.prepareSandbox(sandboxInput())).rejects.toThrow(
           scenario === "placement-replaced"
-            ? "placement authority changed"
+            ? "placement changed"
             : "environment changed while preparing its sandbox",
         );
         return;

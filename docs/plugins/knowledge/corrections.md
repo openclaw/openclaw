@@ -86,9 +86,10 @@ new version of it. Correct or withdraw that replacement instead.
 
 ## Impact and visibility
 
-Correction, withdrawal, and supersession receipts include `operation`,
-`targetId`, `replacementId` (for corrections and supersessions), `reason`, and
-`impact`. `impact.items` lists authorized direct and
+Agent receipts for corrections, withdrawals, and supersessions return the
+changed records and `impact`; the complete receipt from `knowledge_mutation`
+also includes `operation`, `targetId`, `replacementId` (for corrections and
+supersessions), and `reason`. `impact.items` lists authorized direct and
 transitive dependents through `dependencies`, `entities`, `owner`, and
 relationship endpoints. These are unresolved impacts, not automatic repairs.
 Nothing rewrites prose copies, cascades, or deletes. Follow up by inspecting and
@@ -128,7 +129,8 @@ or a source states it), merge them instead of correcting each claim:
   the survivor.
 - The survivor gains the absorbed title and aliases, tags, evidence, and fields
   it lacks. Its own field values win; conflicts are reported. Bodies are never
-  merged automatically; supply `body` to write a combined one.
+  merged automatically; supply `body` to write a combined one. A combined body
+  is subject to the [page budget](/plugins/knowledge/tools#page-budgets).
 - New writes that reference a merged page are rejected with the survivor's ID.
 - Chains resolve up to 8 hops to an active page. Cycles, dead ends, and longer
   chains are invalid, and records that name them are hidden.

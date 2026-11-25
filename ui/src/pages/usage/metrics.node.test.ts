@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { i18n } from "../../i18n/index.ts";
 import {
   buildUsageCostWindows,
   formatAnalysisCost,
@@ -9,17 +10,34 @@ import {
 } from "./metrics.ts";
 
 describe("usage metrics date labels", () => {
-  it("uses the host's default locale and UTC calendar date", () => {
-    const date = new Date("2026-01-01T00:00:00Z");
-    expect([formatDayLabel("2026-01-01"), formatFullDate("2026-01-01")]).toEqual([
-      date.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }),
-      date.toLocaleDateString(undefined, {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        timeZone: "UTC",
-      }),
-    ]);
+  it("uses the active UI locale and UTC calendar date after locale switches", () => {
+    const localeSpy = vi.spyOn(i18n, "getLocale");
+    onTestFinished(() => localeSpy.mockRestore());
+    for (const locale of ["fr", "de", "en"] as const) {
+      localeSpy.mockReturnValue(locale);
+      const date = new Date("2026-01-01T00:00:00Z");
+      expect([formatDayLabel("2026-01-01"), formatFullDate("2026-01-01")]).toEqual([
+        date.toLocaleDateString(i18n.getLocale(), {
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC",
+        }),
+        date.toLocaleDateString(i18n.getLocale(), {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+          timeZone: "UTC",
+        }),
+      ]);
+      expect(formatUsageCost(1234.5678, 4)).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 4,
+          maximumFractionDigits: 4,
+        }).format(1234.5678),
+      );
+    }
   });
 
   it("leaves invalid day labels unchanged", () => {
@@ -77,30 +95,29 @@ describe("usage fixed-precision costs", () => {
   it("preserves grouping, sign and precision across interleaved calls", () => {
     const costs = [
       [1234.5, 2, "$1,234.50"],
-      [-0, 4, "$-0.0000"],
+      [-0, 4, "-$0.0000"],
       [0.000001, 6, "$0.000001"],
-      [-1234.5, 2, "$-1,234.50"],
+      [-1234.5, 2, "-$1,234.50"],
       [0.0001, 4, "$0.0001"],
       [0, 6, "$0.000000"],
       [Number.NaN, 2, "$NaN"],
       [Number.POSITIVE_INFINITY, 4, "$∞"],
-      [Number.NEGATIVE_INFINITY, 6, "$-∞"],
+      [Number.NEGATIVE_INFINITY, 6, "-$∞"],
       [1234.5, 2, "$1,234.50"],
     ] as const;
     for (const [value, decimals, expected] of costs) {
       expect(formatUsageCost(value, decimals)).toBe(expected);
     }
     expect(formatUsageCost(1.5)).toBe("$1.50");
-    expect(formatUsageCost(1.5, 2, { state: "unavailable" })).toBe("≥ $1.50");
   });
 
   it("keeps analysis scale boundaries and small negative amounts", () => {
     for (const [value, expected] of [
       [0, "$0.00"],
       [0.01, "$0.01"],
-      [-0.01, "$-0.01"],
+      [-0.01, "-$0.01"],
       [0.0001, "$0.0001"],
-      [-0.0001, "$-0.0001"],
+      [-0.0001, "-$0.0001"],
       [0.000001, "$0.000001"],
     ] as const) {
       expect(formatAnalysisCost(value)).toBe(expected);

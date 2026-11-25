@@ -24,6 +24,7 @@ import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coord
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -37,6 +38,65 @@ afterEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
+});
+
+it("keeps a long exec processing when a queued steer finishes dispatching", async () => {
+  const ref = { sessionKey: "agent:main:steering-exec", sessionId: "steering-exec" };
+  const message = () =>
+    createDiagnosticMessageLifecycle({
+      ...ref,
+      enabled: true,
+      channel: "test",
+      source: "dispatch",
+      trackSessionState: true,
+    });
+  const original = message();
+  original.markProcessing();
+  const operation = createReplyOperation({ ...ref, resetTriggered: false });
+  operation.setPhase("running");
+  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+  const finishTool = attempt.beginTool({
+    toolName: "exec",
+    toolCallId: "held-exec",
+    deadlineAtMs: 600_000,
+  });
+  const steer = message();
+  steer.markProcessing();
+  // Another input is still waiting; completing one dispatch must preserve the active turn.
+  message().markProcessing();
+  steer.markIdle("message_completed");
+  const events: DiagnosticEventPayload[] = [];
+  onDiagnosticEvent((event) => events.push(event));
+  vi.setSystemTime(216_000);
+  const clock = createGatewaySchedulerClock(216_000);
+  startGatewayDiagnosticHeartbeat(
+    createTestGatewayScheduler(clock.clock),
+    { diagnostics: { enabled: true } },
+    { sampleLiveness: () => null },
+  );
+  vi.setSystemTime(246_000);
+  await clock.advanceTo(246_000);
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForDiagnosticEventsDrained();
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "session.long_running",
+      state: "processing",
+      queueDepth: 1,
+      reason: "tool_execution_wait",
+      activeWorkKind: "tool_call",
+      activeToolName: "exec",
+    }),
+  );
+  finishTool();
+  original.markIdle("message_completed");
+  operation.complete();
+  await waitForDiagnosticEventsDrained();
+  expect(events.findLast((event) => event.type === "session.state")).toMatchObject({
+    state: "idle",
+    reason: "reply_operation_ended",
+    queueDepth: 1,
+  });
 });
 
 it("reports a 54-second stall without requesting recovery from an observing controller", async () => {

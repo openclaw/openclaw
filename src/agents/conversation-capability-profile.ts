@@ -12,6 +12,7 @@ import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
@@ -57,8 +58,11 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
+  pluginExecutionAuthority?: AdmittedRunOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
+  /** Captured policy owner; null excludes ambient request authority. */
+  operatorAuthority?: AdmittedRunOperatorAuthority | null;
   /** Original authenticated conversation, independent of the execution session route. */
   conversationId?: string | null;
   chatType?: string;
@@ -136,6 +140,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
         agentId: effective.agentId,
       }),
       senderIsOwner,
+      authority: params.operatorAuthority,
     });
   const trustedGroup = resolveTrustedGroupId(params);
   // Group channel/space labels have no session-bound counterpart to verify
@@ -219,6 +224,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
+    operatorAuthority: params.pluginExecutionAuthority,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,
@@ -243,6 +249,12 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
     explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
     explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+    // A fixed listing builds plugins past sender, group and run denies; the turn policy gates calls.
+    sessionToolDenylist: collectExplicitDenylist(
+      explicitToolAllowlistPolicies.filter(
+        (policy) => ![groupPolicy, senderPolicy, runtimeToolPolicy].includes(policy),
+      ),
+    ),
     runtimePluginToolGrant: params.runtimePluginToolGrant,
   };
 }

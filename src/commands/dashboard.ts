@@ -6,6 +6,7 @@ import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -124,11 +125,11 @@ async function ensureDashboardTargetReady(params: {
   allowRecovery?: boolean;
 }) {
   const { runtime, yes, allowRecovery } = params;
-  const probeUrl = params.target.probeUrl;
   const gatherStatus = async () => {
     const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
     return gatherDaemonStatus({
-      rpc: probeUrl ? { url: probeUrl } : {},
+      rpc: {},
+      dashboardTarget: { port: params.target.port, probeUrl: params.target.probeUrl },
       probe: true,
       requireRpc: false,
       deep: false,
@@ -152,11 +153,11 @@ async function ensureDashboardTargetReady(params: {
   const prompt = shouldInstall
     ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
     : "The background Gateway service is not running. Start it to open the dashboard?";
-  const approved =
-    yes || (allowRecovery !== false && process.stdin.isTTY && (await promptYesNo(prompt, true)));
+  const interactive = allowRecovery !== false && process.stdin.isTTY;
+  const approved = yes || (interactive && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(runtime, reason);
-    return { ready: false as const, reason };
+    return { ready: false as const, reason, declined: interactive };
   }
 
   if (shouldInstall) {
@@ -223,11 +224,16 @@ export async function dashboardCommand(
         return;
       }
 
+      const documentSignal = getAsyncWorkSignal();
       const document = await waitForControlUiDocument({
         url: target.documentUrl,
         tlsConfig: target.tlsConfig,
         waitForPending: false,
+        ...(documentSignal ? { signal: documentSignal } : {}),
       });
+      if (documentSignal?.aborted) {
+        return;
+      }
       if (!document.ready) {
         dashboardJsonFailure(runtime, document.reason);
         return;
@@ -276,6 +282,9 @@ export async function dashboardCommand(
     yes: options.yes,
   });
   if (!readiness.ready) {
+    if (!readiness.declined) {
+      runtime.exit(1);
+    }
     return;
   }
 
@@ -290,6 +299,7 @@ export async function dashboardCommand(
       allowRecovery: false,
     });
     if (!finalReadiness.ready) {
+      runtime.exit(1);
       return;
     }
   }
@@ -298,13 +308,19 @@ export async function dashboardCommand(
       "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
     );
     runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
+    runtime.exit(1);
     return;
   }
+  const documentSignal = getAsyncWorkSignal();
   const document = await waitForControlUiDocument({
     url: target.documentUrl,
     tlsConfig: target.tlsConfig,
     onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
+    ...(documentSignal ? { signal: documentSignal } : {}),
   });
+  if (documentSignal?.aborted) {
+    return;
+  }
   if (!document.ready) {
     runtime.error(document.reason);
     runtime.log("Run `openclaw gateway status --deep` for details.");
@@ -319,15 +335,17 @@ export async function dashboardCommand(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
     );
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
+    runtime.exit(1);
     return;
   }
-  const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;
+  const { port, basePath, links, tlsConfig } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
-  runtime.log("One-time browser pairing included in browser/clipboard URL.");
 
   const copied = await copyToClipboard(browserUrl).catch(() => false);
-  runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
+  runtime.log(
+    copied ? "One-time browser pairing URL copied to clipboard." : "Copy to clipboard unavailable.",
+  );
 
   let opened = false;
   let hint: string | undefined;
@@ -351,28 +369,26 @@ export async function dashboardCommand(
         ? undefined
         : copied
           ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
-          : "Browser launch failed. Open the Dashboard URL above manually.";
+          : "Browser launch failed.";
     }
   } else {
-    hint = copied
-      ? "Browser launch disabled (--no-open). One-time browser pairing URL copied to clipboard."
-      : "Browser launch disabled (--no-open). Use the URL above.";
+    hint = "Browser launch disabled (--no-open).";
   }
 
   const handoffDeliveryFailed = !copied && !opened;
-  const suppressNoOpenHint = options.noOpen === true && handoffDeliveryFailed;
 
   if (opened) {
-    runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
-  } else if (hint && !suppressNoOpenHint) {
+    runtime.log(
+      "Opened the one-time browser pairing URL in your browser. Keep that tab to control OpenClaw.",
+    );
+  } else if (hint) {
     runtime.log(hint);
   }
 
   if (handoffDeliveryFailed) {
     runtime.log(
-      includeTokenInUrl
-        ? "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate."
-        : "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
     );
+    runtime.log("Treat `browserUrl` as a credential; do not share it in logs or support requests.");
   }
 }

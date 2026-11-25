@@ -108,7 +108,11 @@ it("stages and reads separate node definitions for two profiles beside the defau
     for (const profile of [undefined, "work", "other"]) {
       const label = profile ? `ai.openclaw.node.${profile}` : "ai.openclaw.node";
       const file = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
-      await expect(fs.readFile(file, "utf8")).resolves.toContain(`<string>${label}</string>`);
+      const plist = await fs.readFile(file, "utf8");
+      expect(plist).toContain(`<string>${label}</string>`);
+      // launchd supervisor logs share ~/Library/Logs/openclaw, so each profile needs its own file.
+      const log = profile ? `node-${profile}.log` : "node.log";
+      expect(plist).toContain(`Library/Logs/openclaw/${log}</string>`);
       const command = await service.readCommand({ ...process.env, OPENCLAW_PROFILE: profile });
       expect(command).toMatchObject({
         sourcePath: file,

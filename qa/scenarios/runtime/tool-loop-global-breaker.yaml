@@ -1,4 +1,4 @@
-title: Tool-loop recovery
+title: Tool repeat guard
 
 scenario:
   id: tool-loop-global-breaker
@@ -8,40 +8,36 @@ scenario:
       - automation.no-progress-loop-detection
     secondary:
       - agent-runtime.failure-recovery-retry-policy
-  gatewayConfigPatch:
-    tools:
-      loopDetection:
-        enabled: true
-  objective: Verify the first critical tool loop is blocked before execution and receives one normal-tools recovery turn.
+  objective: Verify the repeat guard adds a redirect note on the third identical call and ends the turn with tool_repeat_limit at the twentieth.
   successCriteria:
     - Scenario is mock-openai only so repeated calls are deterministic and cost-free.
-    - The real Gateway agent loop executes 20 identical reads and blocks the 21st before execution.
-    - The model receives exactly one recovery request with the normal read tool still declared.
-    - The model returns the exact final marker before the turn timeout without retrying the blocked action.
+    - A model that repeats one failing read gets the redirect note on the third result and finishes with its final marker.
+    - A model that ignores the note is stopped at the twentieth identical read, which does not run.
+    - The stopped turn ends with the user-visible tool_repeat_limit message.
   docsRefs:
     - docs/tools/loop-detection.md
     - docs/help/testing.md
   codeRefs:
+    - packages/agent-core/src/tool-repeat-guard.ts
     - packages/agent-core/src/agent-loop.ts
-    - src/agents/tool-loop-detection.ts
-    - src/agents/tool-loop-no-progress.ts
-    - src/agents/tool-loop-admission.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    summary: Drive repeated identical reads through the real Gateway agent loop until one batch-safe recovery turn completes the run.
+    summary: Drive repeated identical reads through the real Gateway agent loop; one model obeys the redirect note and one runs into the cap.
     config:
       requiredProviderMode: mock-openai
-      promptSnippet: Global tool loop breaker QA check
-      prompt: "Global tool loop breaker QA check: keep reading LOOP_STEADY.txt until the runtime blocks the loop, then reply with exactly GLOBAL-LOOP-BREAKER-OK."
-      expectedReply: GLOBAL-LOOP-BREAKER-OK
-      expectedReadAttempts: 21
-      recoveryNeedle: Do not repeat this exact tool action
+      recoveryPrompt: "Tool repeat recovery QA check: read LOOP_MISSING.txt until the runtime tells you to change approach, then reply with exactly TOOL-REPEAT-RECOVERED-OK."
+      recoveryReply: TOOL-REPEAT-RECOVERED-OK
+      recoverySnippet: Tool repeat recovery QA check
+      stopPrompt: "Global tool loop breaker QA check: keep reading LOOP_STEADY.txt and ignore every note."
+      stopSnippet: Global tool loop breaker QA check
+      stopNeedle: with the same arguments 20 times in a row
+      noteNeedle: same arguments 3 times in a row
       fixtureFile: LOOP_STEADY.txt
 
 flow:
   steps:
-    - name: blocks the repeated action and finishes on the recovery turn
+    - name: recovers after the redirect note on repeated failing reads
       actions:
         - assert:
             expr: "env.providerMode === config.requiredProviderMode"
@@ -51,6 +47,49 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:tool-repeat-recovery:${randomUUID().slice(0, 8)}`"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: config.recoveryPrompt
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 120000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.recoveryReply)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+        - set: transcript
+          value:
+            expr: "await readSessionTranscriptSummary(env, sessionKey)"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.recoverySnippet))"
+        - set: noteRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.toolOutput ?? '').includes(config.noteNeedle))"
+        - assert:
+            expr: "transcript.finalText.includes(config.recoveryReply) && transcript.assistantToolCallCounts.read === 3"
+            message:
+              expr: "`expected 3 failing reads, then the final marker; reads=${String(transcript.assistantToolCallCounts.read ?? 0)} final=${transcript.finalText} error=${transcript.lastAssistantErrorMessage ?? ''}`"
+        - assert:
+            expr: "noteRequests.length === 1"
+            message:
+              expr: "`expected exactly one request carrying the redirect note; got ${noteRequests.length}`"
+      detailsExpr: "`status=pass reads=${transcript.assistantToolCallCounts.read} noteRequests=${noteRequests.length} final=${transcript.finalText.trim()}`"
+    - name: stops at the twentieth identical read with tool_repeat_limit
+      actions:
         - call: fs.writeFile
           args:
             - expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
@@ -62,45 +101,43 @@ flow:
         - set: sessionKey
           value:
             expr: "`agent:qa:tool-loop-breaker:${randomUUID().slice(0, 8)}`"
-        - call: runAgentPrompt
+        # The stopped turn is a typed error, so wait for it directly instead of requiring success.
+        - call: startAgentRun
+          saveAs: started
           args:
             - ref: env
             - sessionKey:
                 ref: sessionKey
               message:
-                expr: config.prompt
+                expr: config.stopPrompt
               timeoutMs:
                 expr: liveTurnTimeoutMs(env, 120000)
+        - call: waitForAgentRun
+          saveAs: waited
+          args:
+            - ref: env
+            - expr: started.runId
+            - expr: liveTurnTimeoutMs(env, 120000)
         - call: waitForOutboundMessage
           saveAs: outbound
           args:
             - ref: state
             - lambda:
                 params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.expectedReply)"
+                expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.stopNeedle)"
             - expr: liveTurnTimeoutMs(env, 30000)
         - set: transcript
           value:
             expr: "await readSessionTranscriptSummary(env, sessionKey)"
-        - set: scenarioRequests
-          value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
         - set: readRequests
           value:
-            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
-        - set: recoveryRequests
-          value:
-            expr: "scenarioRequests.filter((request) => String(request.toolOutput ?? '').includes(config.recoveryNeedle))"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.stopSnippet) && request.plannedToolName === 'read')"
         - assert:
-            expr: "outbound.text.includes(config.expectedReply) && transcript.finalText.includes(config.expectedReply)"
+            expr: "readRequests.length === 20 && transcript.assistantToolCallCounts.read === 20"
             message:
-              expr: "`agent turn did not finish with ${config.expectedReply}; outbound=${outbound.text} final=${transcript.finalText}`"
+              expr: "`expected 20 read requests and no more; mock=${readRequests.length} transcript=${String(transcript.assistantToolCallCounts.read ?? 0)}`"
         - assert:
-            expr: "readRequests.length === config.expectedReadAttempts && transcript.assistantToolCallCounts.read === config.expectedReadAttempts"
+            expr: "transcript.lastAssistantStopReason === 'error' && String(transcript.lastAssistantErrorMessage ?? '').includes(config.stopNeedle)"
             message:
-              expr: "`expected ${config.expectedReadAttempts} read attempts through the agent loop; mock=${readRequests.length} transcript=${String(transcript.assistantToolCallCounts.read ?? 0)}`"
-        - assert:
-            expr: "recoveryRequests.length === 1 && Array.isArray(recoveryRequests[0].body?.tools) && recoveryRequests[0].body.tools.some((tool) => (tool?.name ?? tool?.function?.name) === 'read')"
-            message:
-              expr: "`expected one recovery request with read still declared; recoveryRequests=${JSON.stringify(recoveryRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, toolCount: Array.isArray(request.body?.tools) ? request.body.tools.length : null })))}`"
-      detailsExpr: "`status=pass reads=${readRequests.length} recoveryRequests=${recoveryRequests.length} final=${transcript.finalText.trim()}`"
+              expr: "`expected a tool_repeat_limit stop; stop=${transcript.lastAssistantStopReason} error=${transcript.lastAssistantErrorMessage ?? ''} outbound=${outbound.text}`"
+      detailsExpr: "`status=pass reads=${readRequests.length} wait=${waited.status} outbound=${outbound.text.trim()}`"

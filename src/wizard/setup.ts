@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { gatewayCredentialScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
@@ -106,7 +107,7 @@ async function runSetupWizardOnce(
     if (snapshot.issues.length > 0) {
       await prompter.note(
         [
-          ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+          ...snapshot.issues.map((iss) => terminalText`- ${iss.path}: ${iss.message}`),
           "",
           "Docs: https://docs.openclaw.ai/gateway/configuration",
         ].join("\n"),
@@ -490,7 +491,7 @@ async function runSetupWizardOnce(
     workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE,
   );
 
-  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
+  const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig, describeSetupToolProfile } =
     await import("../commands/onboard-config.js");
   const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
@@ -603,6 +604,8 @@ async function runSetupWizardOnce(
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
     const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
+    const { storeChannelSetupCredentials } =
+      await import("../commands/channels/plugin-config-persistence.js");
     const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
@@ -610,6 +613,7 @@ async function runSetupWizardOnce(
             .filter((plugin) => plugin.meta.quickstartAllowFrom)
             .map((plugin) => plugin.id)
         : [];
+    const configBeforeChannels = nextConfig;
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowIMessageInstall: true,
       allowSignalInstall: true,
@@ -620,6 +624,10 @@ async function runSetupWizardOnce(
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
       onPostWriteHook: channelSetup.onPostWriteHook,
+    });
+    nextConfig = await storeChannelSetupCredentials({
+      cfg: nextConfig,
+      previousConfig: configBeforeChannels,
     });
     const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
     await channelSetup.runPostWriteHooks(committed.path);
@@ -713,6 +721,10 @@ async function runSetupWizardOnce(
   nextConfig = committed.nextConfig;
   onboardingTarget = resolveOnboardingSetupTarget(nextConfig);
   await commitAppRecommendationResult?.();
+  const toolProfileLine = describeSetupToolProfile(nextConfig, onboardingTarget.agentId);
+  if (toolProfileLine) {
+    await prompter.note(toolProfileLine, "Tool profile");
+  }
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
   const finalizeResult = await finalizeSetupWizard({

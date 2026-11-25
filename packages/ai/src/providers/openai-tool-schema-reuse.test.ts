@@ -1,3 +1,4 @@
+import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
@@ -121,6 +122,7 @@ it("publishes detached immutable schemas while source edits require a new public
 });
 
 it("reuses published provider variants without changing current strict or compatibility options", () => {
+  using stringify = vi.spyOn(normalization, "stableStringify");
   const source = actionSchema();
   Reflect.deleteProperty(source, "additionalProperties");
   const projection = publishRuntimeToolInputSchema(source);
@@ -138,6 +140,7 @@ it("reuses published provider variants without changing current strict or compat
   expect(stripped).not.toHaveProperty("properties.action.enum");
   expect(normalizePrepared(tools, stripEnumCompat)).toBe(stripped);
   expect(payloadSchema(tools, true)).toHaveProperty("properties.action.enum", ["read"]);
+  expect(stringify).not.toHaveBeenCalled();
 });
 
 it("keeps current provider options isolated", () => {

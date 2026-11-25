@@ -2,89 +2,93 @@ import * as Checks from "../compiled/protocol.generated/validators-workspaces.js
 import { createProtocolValidator } from "../protocol-validator.js";
 import * as S from "../schema-modules.js";
 
-export const validateClawsCatalogSearchParams = createProtocolValidator(
-  S.ClawsCatalogSearchParamsSchema,
-  Checks.isClawsCatalogSearchParams,
+export const validateTemplatesCatalogSearchParams = createProtocolValidator(
+  S.TemplatesCatalogSearchParamsSchema,
+  Checks.isTemplatesCatalogSearchParams,
 );
-export const validateClawDraftDocument = createProtocolValidator(
-  S.ClawDraftDocumentSchema,
-  Checks.isClawDraftDocument,
+export const validateTemplateDraftDocument = createProtocolValidator(
+  S.TemplateDraftDocumentSchema,
+  Checks.isTemplateDraftDocument,
 );
-export const validateClawsDraftsCreateParams = createProtocolValidator(
-  S.ClawsDraftsCreateParamsSchema,
-  Checks.isClawsDraftsCreateParams,
+export const validateTemplatesDraftsCreateParams = createProtocolValidator(
+  S.TemplatesDraftsCreateParamsSchema,
+  Checks.isTemplatesDraftsCreateParams,
 );
-export const validateClawsDraftsReadParams = createProtocolValidator(
-  S.ClawsDraftsReadParamsSchema,
-  Checks.isClawsDraftsReadParams,
+export const validateTemplatesDraftsReadParams = createProtocolValidator(
+  S.TemplatesDraftsReadParamsSchema,
+  Checks.isTemplatesDraftsReadParams,
 );
-export const validateClawsDraftsSaveParams = createProtocolValidator(
-  S.ClawsDraftsSaveParamsSchema,
-  Checks.isClawsDraftsSaveParams,
+export const validateTemplatesDraftsSaveParams = createProtocolValidator(
+  S.TemplatesDraftsSaveParamsSchema,
+  Checks.isTemplatesDraftsSaveParams,
 );
-export const validateClawsDraftsReviewParams = createProtocolValidator(
-  S.ClawsDraftsReviewParamsSchema,
-  Checks.isClawsDraftsReviewParams,
+export const validateTemplatesDraftsSignInParams = createProtocolValidator(
+  S.TemplatesDraftsSignInParamsSchema,
+  Checks.isTemplatesDraftsSignInParams,
 );
-export const validateClawsDraftsPublishParams = createProtocolValidator(
-  S.ClawsDraftsPublishParamsSchema,
-  Checks.isClawsDraftsPublishParams,
+export const validateTemplatesDraftsReviewParams = createProtocolValidator(
+  S.TemplatesDraftsReviewParamsSchema,
+  Checks.isTemplatesDraftsReviewParams,
 );
-export const validateClawsCatalogSearchResult = createProtocolValidator(
-  S.ClawsCatalogSearchResultSchema,
-  Checks.isClawsCatalogSearchResult,
+export const validateTemplatesDraftsPublishParams = createProtocolValidator(
+  S.TemplatesDraftsPublishParamsSchema,
+  Checks.isTemplatesDraftsPublishParams,
 );
-export const validateClawsCatalogDetailParams = createProtocolValidator(
-  S.ClawsCatalogDetailParamsSchema,
-  Checks.isClawsCatalogDetailParams,
+export const validateTemplatesCatalogSearchResult = createProtocolValidator(
+  S.TemplatesCatalogSearchResultSchema,
+  Checks.isTemplatesCatalogSearchResult,
 );
-export const validateClawsCatalogDetailResult = createProtocolValidator(
-  S.ClawsCatalogDetailResultSchema,
-  Checks.isClawsCatalogDetailResult,
+export const validateTemplatesCatalogDetailParams = createProtocolValidator(
+  S.TemplatesCatalogDetailParamsSchema,
+  Checks.isTemplatesCatalogDetailParams,
 );
-export const validateClawsCatalogPreviewParams = createProtocolValidator(
-  S.ClawsCatalogPreviewParamsSchema,
-  Checks.isClawsCatalogPreviewParams,
+export const validateTemplatesCatalogDetailResult = createProtocolValidator(
+  S.TemplatesCatalogDetailResultSchema,
+  Checks.isTemplatesCatalogDetailResult,
 );
-export const validateClawsCatalogPreviewResult = createProtocolValidator(
-  S.ClawsCatalogPreviewResultSchema,
-  Checks.isClawsCatalogPreviewResult,
+export const validateTemplatesCatalogPreviewParams = createProtocolValidator(
+  S.TemplatesCatalogPreviewParamsSchema,
+  Checks.isTemplatesCatalogPreviewParams,
 );
-export const validateClawsStatusParams = createProtocolValidator(
-  S.ClawsStatusParamsSchema,
-  Checks.isClawsStatusParams,
+export const validateTemplatesCatalogPreviewResult = createProtocolValidator(
+  S.TemplatesCatalogPreviewResultSchema,
+  Checks.isTemplatesCatalogPreviewResult,
 );
-export const validateClawsStatusResult = createProtocolValidator(
-  S.ClawsStatusResultSchema,
-  Checks.isClawsStatusResult,
+export const validateTemplatesStatusParams = createProtocolValidator(
+  S.TemplatesStatusParamsSchema,
+  Checks.isTemplatesStatusParams,
 );
-export const validateClawsAddPlanParams = createProtocolValidator(
-  S.ClawsAddPlanParamsSchema,
-  Checks.isClawsAddPlanParams,
+export const validateTemplatesStatusResult = createProtocolValidator(
+  S.TemplatesStatusResultSchema,
+  Checks.isTemplatesStatusResult,
 );
-export const validateClawsAddApplyParams = createProtocolValidator(
-  S.ClawsAddApplyParamsSchema,
-  Checks.isClawsAddApplyParams,
+export const validateTemplatesAddPlanParams = createProtocolValidator(
+  S.TemplatesAddPlanParamsSchema,
+  Checks.isTemplatesAddPlanParams,
 );
-export const validateClawsUpdatePlanParams = createProtocolValidator(
-  S.ClawsUpdatePlanParamsSchema,
-  Checks.isClawsUpdatePlanParams,
+export const validateTemplatesAddApplyParams = createProtocolValidator(
+  S.TemplatesAddApplyParamsSchema,
+  Checks.isTemplatesAddApplyParams,
 );
-export const validateClawsUpdateApplyParams = createProtocolValidator(
-  S.ClawsUpdateApplyParamsSchema,
-  Checks.isClawsUpdateApplyParams,
+export const validateTemplatesUpdatePlanParams = createProtocolValidator(
+  S.TemplatesUpdatePlanParamsSchema,
+  Checks.isTemplatesUpdatePlanParams,
 );
-export const validateClawsRemovePlanParams = createProtocolValidator(
-  S.ClawsRemovePlanParamsSchema,
-  Checks.isClawsRemovePlanParams,
+export const validateTemplatesUpdateApplyParams = createProtocolValidator(
+  S.TemplatesUpdateApplyParamsSchema,
+  Checks.isTemplatesUpdateApplyParams,
 );
-export const validateClawsRemoveApplyParams = createProtocolValidator(
-  S.ClawsRemoveApplyParamsSchema,
-  Checks.isClawsRemoveApplyParams,
+export const validateTemplatesRemovePlanParams = createProtocolValidator(
+  S.TemplatesRemovePlanParamsSchema,
+  Checks.isTemplatesRemovePlanParams,
 );
-export const validateClawLifecyclePlanResult = createProtocolValidator(
-  S.ClawLifecyclePlanResultSchema,
-  Checks.isClawLifecyclePlanResult,
+export const validateTemplatesRemoveApplyParams = createProtocolValidator(
+  S.TemplatesRemoveApplyParamsSchema,
+  Checks.isTemplatesRemoveApplyParams,
+);
+export const validateTemplateLifecyclePlanResult = createProtocolValidator(
+  S.TemplateLifecyclePlanResultSchema,
+  Checks.isTemplateLifecyclePlanResult,
 );
 export const validateCanvasDocumentPreviewParams = createProtocolValidator(
   S.CanvasDocumentPreviewParamsSchema,
@@ -117,6 +121,18 @@ export const validateProjectsSearchRemoteParams = createProtocolValidator(
 export const validateProjectsRemoveParams = createProtocolValidator(
   S.ProjectsRemoveParamsSchema,
   Checks.isProjectsRemoveParams,
+);
+export const validateProjectsMoveSessionOptionsParams = createProtocolValidator(
+  S.ProjectsMoveSessionOptionsParamsSchema,
+  Checks.isProjectsMoveSessionOptionsParams,
+);
+export const validateProjectsMoveSessionParams = createProtocolValidator(
+  S.ProjectsMoveSessionParamsSchema,
+  Checks.isProjectsMoveSessionParams,
+);
+export const validateProjectsRenameParams = createProtocolValidator(
+  S.ProjectsRenameParamsSchema,
+  Checks.isProjectsRenameParams,
 );
 export const validateWorktreesListParams = createProtocolValidator(
   S.WorktreesListParamsSchema,

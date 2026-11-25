@@ -5,7 +5,11 @@ export {
 } from "../cli/cli-process-child.test-helpers.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
-export { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
+export {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  PROXY_FIXTURE_SERVER_CERTIFICATE,
+} from "../test-helpers/proxy-tls-fixture.js";
 export {
   PROXY_FIXTURE_HOST,
   PROXY_FIXTURE_PAYLOAD,
@@ -21,6 +25,7 @@ export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js
 export { createMockServerResponse } from "../test-utils/mock-http-response.js";
 export { acquireTestPortBlock } from "../test-utils/port-claims.js";
 export { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+export { expectCollected, forceFullGc } from "../test-utils/retention.js";
 export { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 export { withTempDir } from "../test-utils/temp-dir.js";

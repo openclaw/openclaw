@@ -58,14 +58,16 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   });
   expect(bootstrap).toMatchObject({
     profileId: "synthetic-viewer",
-    config: { ui: { prefs: { locale: "de" } }, tts: { maxTextLength: 1234 } },
+    config: {
+      ui: { prefs: { locale: "de" } },
+      gateway: { controlUi: { experimental: { templates: true } } },
+      tts: { maxTextLength: 1234 },
+    },
     entries: {
       "ui.themeMode": "light",
-      "ui.personalSessionGroups": [
-        { id: "focus", label: "Focus", sessionKeys: ["agent:main:work"] },
-      ],
     },
   });
+  expect(bootstrap?.entries).not.toHaveProperty(["ui.personalSessionGroups"]);
   expect(getCanonicalUserPreferences).toHaveBeenCalledWith(
     "synthetic-viewer",
     expect.arrayContaining(["ui.themeMode", "ui.railShortcuts"]),

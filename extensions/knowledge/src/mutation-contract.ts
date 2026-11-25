@@ -1,6 +1,8 @@
 import { Type, type Static } from "typebox";
+import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
 import { text, name, Evidence, Envelope, id, strings, RecordAnnotations, Recall } from "./model.js";
+import { PageBudget } from "./page-budget.js";
 export const requestId = Type.String({
   pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
 });
@@ -35,7 +37,7 @@ export const SavePage = Type.Object(
     id: Type.Optional(Type.String({ pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{7,95}$" })),
     expectedVaultId: Type.Optional(requestId),
     expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
-    expectedHash: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+    expectedHash: Type.Optional(ExpectedHash),
     expectedOntologyFingerprint: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
     aliases: Type.Optional(strings),
     tags: Type.Optional(strings),
@@ -104,7 +106,7 @@ const target = {
   requestId,
   id,
   expectedRevision: Type.Integer({ minimum: 1 }),
-  expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  expectedHash: ExpectedHash,
   expectedVaultId: Type.Optional(requestId),
   reason: Type.String({ minLength: 1, maxLength: 2000 }),
 };
@@ -132,7 +134,7 @@ const pageFence = (description: string) =>
     {
       id,
       expectedRevision: Type.Integer({ minimum: 1 }),
-      expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+      expectedHash: ExpectedHash,
     },
     { additionalProperties: false, description },
   );
@@ -184,6 +186,50 @@ export const UnmergeInput = Type.Object(
   { additionalProperties: false },
 );
 export type UnmergeInput = Static<typeof UnmergeInput>;
+export const ExtractSectionInput = Type.Object(
+  {
+    requestId,
+    expectedVaultId: requestId,
+    expectedOntologyFingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    source: pageFence("The page that keeps a summary line; current revision and hash."),
+    sectionStart: Type.Integer({
+      minimum: 0,
+      description:
+        "UTF-16 offset of the section's heading line in the source body, from a page-budget rejection or a fresh full read. The section runs to the next heading of the same or a higher level.",
+    }),
+    destination: Type.Union([
+      pageFence(
+        "An existing page connected to the source by a body link or typed relationship. The section is appended to its body.",
+      ),
+      Type.Object(
+        {
+          title: Type.String({ minLength: 1, maxLength: 200 }),
+          type: name,
+          aliases: Type.Optional(strings),
+        },
+        { additionalProperties: false, description: "Create a new page holding the section." },
+      ),
+    ]),
+    summary: Type.String({
+      minLength: 1,
+      maxLength: 500,
+      pattern: "^(?=.*\\S)[^\\r\\n]+$",
+      description:
+        "One line that replaces the section body on the source page, followed by a link to the destination.",
+    }),
+    reason: Type.String({ minLength: 1, maxLength: 2000 }),
+    evidence: Type.Optional(
+      Type.Array(Evidence, {
+        minItems: 1,
+        maxItems: 100,
+        description:
+          "Extra retained citations for the destination. Source-page evidence whose quote, path or filename appears in the section is carried automatically.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+export type ExtractSectionInput = Static<typeof ExtractSectionInput>;
 export const SupersedeInput = Type.Object(
   {
     ...mergeCommon,
@@ -228,7 +274,7 @@ const recallTarget = {
   requestId,
   id,
   expectedRevision: Type.Integer({ minimum: 1 }),
-  expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  expectedHash: ExpectedHash,
 };
 const RecallSet = Type.Object(
   {
@@ -320,6 +366,7 @@ export const Receipt = Type.Object(
       Type.Literal("accepted"),
       Type.Literal("published"),
       Type.Literal("conflict"),
+      Type.Literal("rejected"),
     ]),
     id: text(96),
     path: text(500),
@@ -333,6 +380,7 @@ export const Receipt = Type.Object(
         Type.Literal("withdraw"),
         Type.Literal("merge"),
         Type.Literal("unmerge"),
+        Type.Literal("extract"),
         Type.Literal("supersede"),
         Type.Literal("unsupersede"),
       ]),
@@ -352,7 +400,19 @@ export const Receipt = Type.Object(
     reason: Type.Optional(text(2000)),
     impact: Type.Optional(LifecycleImpact),
     indexed: Type.Literal(false),
+    ontologyFingerprint: Type.Optional(
+      Type.String({
+        maxLength: 64,
+        description:
+          "The ontology fingerprint this write was validated against; pass it as the next write's expectedOntologyFingerprint.",
+      }),
+    ),
     git: Type.Optional(GitCheckpoint),
+    budget: Type.Optional({
+      ...PageBudget,
+      description:
+        "Present when state is rejected: nothing was saved because these page bodies would grow past their budget. id/path/revision/hash then describe the unchanged target (empty when it would have been created).",
+    }),
   },
   { additionalProperties: false },
 );

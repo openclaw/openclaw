@@ -9,6 +9,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import {
   directSessionReq,
@@ -23,7 +24,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
   const profileId = ensureProfileForEmail("session-creator@example.test").id;
   const profile = { profileId, displayName: "Test Operator" };
   const client = {
-    connect: { scopes: ["operator.read", "operator.write"] },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
     authenticatedUserProfile: { ...profile, hasAvatar: false, updatedAt: 1 },
   };
   attachGatewayLocalUserIngress(
@@ -39,7 +40,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
     directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
   const syntheticClient = (sessionCreation?: TrustedSessionCreation) => ({
     client: {
-      connect: { scopes: ["operator.write"] },
+      connect: gatewayConnect(["operator.write"]),
       internal: { syntheticClient: true, sessionCreation },
     } as never,
   });

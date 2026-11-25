@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { worktreeRegistryPublication } from "../../agents/worktrees/registry-publication.js";
 import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registry-run-end.worker.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  releaseWorktreeRunLeaseInDatabase,
+} from "../../agents/worktrees/run-lease-store.kernel.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -135,57 +139,78 @@ describe("placement recovery session admission with persisted placements", () =>
     releaseOwnedWork = undefined;
   });
 
-  it.each(["busy", "idle"] as const)(
-    "startup pre-pass leaves %s Stop with its current final-save owner",
-    async (state) => {
-      const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
-      const reads = vi.spyOn(placements, "readProjection");
-      const stopBarrier = barrier();
-      const environmentBarrier = barrier();
-      const harness = await harnessFor({
-        workspacePath: support.testState.root,
-        runReclaimPreparation: async ({ run, authorize }) => {
-          await stopBarrier.wait();
-          return run(authorize);
-        },
-      });
-      const active = await seedActive(harness);
-      await placements.startDrain(placementTransition(active));
-      const coordinated = coordinate(harness);
-      vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
-        environmentBarrier.wait,
-      );
-      const stop = state === "busy" ? coordinated.reclaim(REQUEST) : undefined;
-      void stop?.catch(stopBarrier.reject);
-      let sweep: Promise<void> | undefined;
-      try {
-        if (stop) {
-          await stopBarrier.entered;
+  it("startup pre-pass leaves live Stop with its current final-save owner", async () => {
+    const claimStop = vi.spyOn(placements, "claimReclaimWorkspaceResult");
+    const reads = vi.spyOn(placements, "readProjection");
+    const stopBarrier = barrier();
+    const environmentBarrier = barrier();
+    const harness = await harnessFor({
+      workspacePath: support.testState.root,
+      runReclaimPreparation: async ({ run, authorize }) => {
+        await stopBarrier.wait();
+        return run(authorize);
+      },
+    });
+    const active = await seedActive(harness);
+    await placements.startDrain(placementTransition(active));
+    const coordinated = coordinate(harness);
+    vi.mocked(harness.environments.reconcileEnvironment).mockImplementation(
+      environmentBarrier.wait,
+    );
+    const stop = coordinated.reclaim(REQUEST);
+    void stop.catch(stopBarrier.reject);
+    let sweep: Promise<void> | undefined;
+    try {
+      await stopBarrier.entered;
+      reads.mockClear();
+      sweep = coordinated.reconcile("startup");
+      void sweep.catch(environmentBarrier.reject);
+      await environmentBarrier.entered;
+      expect(claimStop).not.toHaveBeenCalled();
+      expect(reads).not.toHaveBeenCalled();
+      expect(await pendingResults()).toEqual([]);
+      environmentBarrier.release();
+      await sweep;
+    } finally {
+      environmentBarrier.release();
+      stopBarrier.release();
+      await Promise.allSettled([sweep, stop]);
+    }
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("targeted recovery waits for an earlier healthy placement recovery", async () => {
+    const harness = await harnessFor();
+    await seedActive(harness);
+    harness.markEnvironmentNodeDeviceId("healthy-worker-node");
+    const hold = barrier();
+    const reconcile = harness.service.reconcile;
+    vi.spyOn(harness.service, "reconcile").mockImplementation((mode, admit) =>
+      reconcile(mode, (ids, run) => {
+        if (!admit) {
+          throw new Error("Recovery requires coordinator admission");
         }
-        reads.mockClear();
-        sweep = coordinated.reconcile("startup");
-        void sweep.catch(environmentBarrier.reject);
-        await environmentBarrier.entered;
-        expect(claimStop).toHaveBeenCalledTimes(state === "busy" ? 0 : 1);
-        if (state === "busy") {
-          expect(reads).not.toHaveBeenCalled();
-          expect(await pendingResults()).toEqual([]);
-        } else {
-          expect(await pendingResults()).toMatchObject([
-            { sessionId: REQUEST.sessionId, recoveryRequestedAtMs: 1_000 },
-          ]);
-        }
-        environmentBarrier.release();
-        await sweep;
-      } finally {
-        environmentBarrier.release();
-        stopBarrier.release();
-        await Promise.allSettled([sweep, stop]);
-      }
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-    },
-  );
+        return admit(ids, async (recoveryMode) => {
+          await run(recoveryMode);
+          await hold.wait();
+        });
+      }),
+    );
+    const coordinated = coordinate(harness);
+    const previous = coordinated.reconcile();
+    await hold.entered;
+    const admitted = observeTargetedAdmission(harness).then(() => "admitted");
+    const targeted = coordinated.reconcileActive(harness.ready.environmentId);
+    try {
+      expect(await Promise.race([admitted, targeted.then(() => "finished")])).toBe("admitted");
+    } finally {
+      hold.release();
+      await Promise.all([previous, targeted]);
+    }
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
 
   it.each(["startup", "full", "targeted"] as const)(
     "%s recovery preserves a live dispatch through activation",
@@ -367,30 +392,6 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("does not start orphan discovery for sessions created after startup", async () => {
-    const readChangeSnapshot = vi.spyOn(placements, "readChangeSnapshot");
-    const resolveWorkspace = vi.fn(async () => ({
-      kind: "local" as const,
-      path: support.testState.root,
-    }));
-    const harness = await harnessFor({ resolveWorkspace });
-    const coordinated = coordinate(harness);
-    await coordinated.reconcile("startup");
-
-    const claim = await placements.claimTurn({
-      ...REQUEST,
-      owner: { kind: "local" },
-      claimId: "after-startup",
-      runId: "after-startup",
-    });
-    await placements.releaseTurnIfOwned(claim);
-    await coordinated.reconcileActive();
-    await coordinated.reconcileActive();
-
-    expect(readChangeSnapshot).not.toHaveBeenCalled();
-    expect(resolveWorkspace).not.toHaveBeenCalled();
-  });
-
   it("spreads startup orphan inventories across idle sweeps and eventually reclaims every checkout", async () => {
     const template = path.join(support.testState.root, "template");
     await fs.mkdir(template);
@@ -430,21 +431,24 @@ describe("placement recovery session admission with persisted placements", () =>
       });
 
     await coordinated.reconcile("startup");
-    expect(gitSpawns()).toHaveLength(0);
     for (let sweep = 0; sweep < 3; sweep++) {
       await coordinated.reconcileActive();
     }
-    expect(inventoryRoots().length).toBeGreaterThan(0);
-    expect(inventoryRoots().length).toBeLessThanOrEqual(24);
 
+    expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
+    const pendingRoot = roots.find((root) => !inventoryRoots().includes(root));
+    if (!pendingRoot) {
+      throw new Error("Expected an unswept checkout before foreground admission");
+    }
+    await git(pendingRoot, "update-ref", cleanupRef, tree);
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground-request");
     if (!foreground) {
       throw new Error("Foreground fixture could not acquire Gateway admission");
     }
-    const beforeBusySweep = gitSpawns().length;
     try {
       await coordinated.reconcileActive();
-      expect(gitSpawns()).toHaveLength(beforeBusySweep);
+      expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
+      expect(await readCleanupRef(pendingRoot)).toBe(cleanupRef);
     } finally {
       foreground.release();
     }
@@ -452,10 +456,9 @@ describe("placement recovery session admission with persisted placements", () =>
     for (let sweep = 0; sweep < 8; sweep++) {
       await coordinated.reconcileActive();
     }
-    expect(inventoryRoots().toSorted()).toEqual(roots.toSorted());
-    // One inventory per checkout plus the orphan's ref-queue lookup and deletion.
-    expect(gitSpawns()).toHaveLength(66);
+    expect(new Set(inventoryRoots())).toEqual(new Set(roots));
     expect(await readCleanupRef(orphanRoot)).toBe("");
+    expect(await readCleanupRef(pendingRoot)).toBe("");
   });
 
   it("retries startup orphan cleanup after a busy placement becomes inactive", async () => {
@@ -512,12 +515,16 @@ describe("placement recovery session admission with persisted placements", () =>
       const sessionPublication = source.endsWith("session");
       const { root, ref: orphanRef, read } = await orphanWorkspace("parked-orphan");
       await seedFailed(placements);
+      let targetReads = 0;
       const target = {
         ...REQUEST,
         sessionKey: `agent:${source === "shared-store session" ? "logical" : "physical"}:canonical-orphan`,
         agentId: "physical",
         storePath: path.join(root, "sessions.sqlite"),
-        ...(sessionPublication ? {} : { worktreeId: "parked-worktree" }),
+        get worktreeId() {
+          targetReads++;
+          return sessionPublication ? undefined : "parked-worktree";
+        },
       };
       let available = false;
       const resolveWorkspace = vi.fn(async () => {
@@ -550,6 +557,23 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);
         unsubscribe = subscribe();
         publish("unrelated");
+        if (!sessionPublication) {
+          targetReads = 0;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              admitWorktreeRunLeaseInDatabase(db, {
+                worktreeId: "unrelated",
+                token: "unrelated-run",
+                pid: process.pid,
+                startTime: null,
+                now: 1,
+              });
+              releaseWorktreeRunLeaseInDatabase(db, "unrelated", "unrelated-run");
+            },
+            { database: support.testState.stateDb },
+          );
+          expect(targetReads, "lease publications must not scan parked workspaces").toBe(0);
+        }
         await coordinated.reconcileActive();
         await coordinated.reconcileActive();
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);

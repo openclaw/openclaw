@@ -252,6 +252,15 @@ describe("accepted context-engine turn finalization", () => {
     database.db
       .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
       .run(facts.boundary.admission.logicalTurnId);
+    for (let index = 0; index < 16; index += 1) {
+      const sessionId = `orphaned-admission-${index}`;
+      enqueue({
+        ...facts.boundary.admission,
+        logicalTurnId: sessionId,
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+      });
+    }
     const retrySessionId = "retry-ready";
     enqueueContextEngineTurnCommit({
       database,
@@ -261,15 +270,6 @@ describe("accepted context-engine turn finalization", () => {
         messages: [],
       },
     });
-    for (let index = 0; index < 15; index += 1) {
-      const sessionId = `orphaned-admission-${index}`;
-      enqueue({
-        ...facts.boundary.admission,
-        logicalTurnId: sessionId,
-        sessionId,
-        sessionKey: `agent:main:${sessionId}`,
-      });
-    }
     enqueue();
 
     await finalize();

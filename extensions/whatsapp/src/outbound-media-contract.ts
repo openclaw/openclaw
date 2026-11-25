@@ -150,15 +150,7 @@ export async function prepareWhatsAppOutboundMedia(
       ? (filenameMimeType ?? normalizedContentType)
       : normalizedContentType;
   const kind = inferWhatsAppMediaKind(media, resolvedContentType);
-  // Match the existing URL/filename voice rule used by the transcode decision;
-  // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.
-  const nativeVoice =
-    kind === "audio" &&
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    });
+  const nativeVoice = kind === "audio" && isWhatsAppNativeVoiceAudio(media.buffer);
   const mimetype = nativeVoice
     ? WHATSAPP_VOICE_MIMETYPE
     : (resolvedContentType ?? "application/octet-stream");
@@ -196,18 +188,17 @@ export async function prepareWhatsAppOutboundMedia(
   };
 }
 
-function isWhatsAppNativeVoiceAudio(params: {
-  contentType?: string;
-  fileName?: string;
-  mediaUrl?: string;
-}): boolean {
-  const contentType = normalizeMimeType(params.contentType);
-  if (contentType === "audio/ogg" || contentType === "audio/opus") {
-    return true;
+function isWhatsAppNativeVoiceAudio(buffer: Buffer): boolean {
+  const segmentCount = buffer[26];
+  if (!segmentCount || buffer.toString("latin1", 0, 4) !== "OggS") {
+    return false;
   }
-  const fileName = params.fileName ?? deriveWhatsAppDocumentFileName(params.mediaUrl) ?? "";
-  const ext = path.extname(fileName).toLowerCase();
-  return ext === ".ogg" || ext === ".opus";
+  // RFC 7845: the first Ogg page contains only the Opus identification packet.
+  const packetOffset = 27 + segmentCount;
+  return (
+    buffer.length >= packetOffset + 19 &&
+    buffer.toString("latin1", packetOffset, packetOffset + 8) === "OpusHead"
+  );
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {

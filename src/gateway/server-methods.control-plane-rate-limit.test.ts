@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../agents/operational-run-instance.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -107,4 +109,22 @@ it("blocks a startup-gated method before dispatch with a retryable startup error
       details: { reason: "startup-sidecars", method },
     }),
   ]);
+});
+
+it("admits current run tools during startup", async () => {
+  const method = "sessions.list";
+  const { context, handler, request } = setup();
+  context.unavailableGatewayMethods = new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+  await withGatewayToolCallerIdentity(
+    {
+      agentId: "main",
+      sessionKey: "agent:main:startup-tools",
+      operationalRunInstance: createOperationalRunInstanceRef("startup-tools"),
+      receiptAuthority: () => true,
+    },
+    async () => {
+      expect(await request(method)).toHaveBeenCalledWith(true, undefined, undefined);
+      expect(handler).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -4,6 +4,42 @@ Run against an already built production renderer. This is an opt-in memory
 workload, not part of routine UI tests. Playwright runs on Node; the application
 uses the production Solid runtime, native clocks, and synthetic Gateway data.
 
+For a mixed working-day soak in one page lifetime in both engines, use the
+cross-engine harness:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts --steps memory-working-day --engines chromium,webkit --viewport desktop --output .artifacts/memory-working-day
+```
+
+It switches through 200 distinct sessions, completes 50 streamed turns, visits
+the workspace and Settings pages, refreshes Board and Usage, opens/dismisses the
+model picker and command dialog, and reconnects ten times. Each round ends on New
+Session before the existing retirement drain and two GCs. Compare rounds 5–10:
+the target is at most 10% heap and DOM growth, with stable active resources.
+Chromium reports native DOM/listener counts and heap detachedness; WebKit reports
+reachable heap bytes, DOM wrappers and their resolved connectedness, and engine
+memory categories. WebKit wrapper counts are not total native DOM counts, and
+neither engine's forced-GC samples simulate operating-system memory pressure.
+The mock releases closed transports while preserving connection-history metadata;
+its request history is cleared at each checkpoint.
+
+For a retained-heap owner census, select `--steps memory-owner-census`. It samples
+empty Chat, 400 and 2,000 messages, native route entry and retirement, and twenty
+distinct session switches in one document. `memory-workboard-visit` and
+`memory-mcp-relay-visit` sample plugin entry/retirement with their own fixtures;
+redirects do not represent extra pages.
+Select `--steps memory-transcript-0,memory-transcript-400,memory-transcript-2000`
+for fresh-document transcript measurements with only the requested session in
+the fixture. The cumulative census intentionally keeps earlier panes cached.
+
+Both workloads include browser-resident synthetic Gateway data and injected
+script source. Attribute those separately from decoded product messages, cached
+Markdown, projections, and loaded modules before interpreting total heap. DOM
+windowing bounds mounted rows, not all transcript data. Chromium runtime heap,
+Chromium snapshot self sizes (including external backing), and WebKit snapshot
+self sizes are different measurements; compare each metric within its engine.
+Firefox does not expose forced GC or heap snapshots through this harness.
+
 The bounded dependency probe does not need an application build. It bundles the
 installed runtime in production, development, and observe modes and uses a fresh
 Chromium document for each, so the first-select retention cannot hide behind a

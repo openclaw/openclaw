@@ -138,6 +138,7 @@ export function pollLocatorText(locator: Locator) {
 export function createNewSessionPageE2eSuite() {
   return createControlUiE2eSuite({
     name: "Control UI new-session page mocked Gateway E2E",
+    trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is unavailable at ${executablePath}`,
   });
@@ -179,42 +180,6 @@ export async function expectPastedPngImage(image: Locator) {
   expect(decoded).toEqual({ width: 1, height: 1, base64: ONE_PIXEL_PNG_B64 });
 }
 
-export async function expectPendingNewSessionPresentation(page: Page) {
-  const presentation = await page.locator(".new-session-page__starting").evaluate((thread) => {
-    const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
-    const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
-    const text = bubble.classList.contains("chat-bubble--with-images")
-      ? bubble.querySelector<HTMLElement>(".chat-text")!
-      : bubble;
-    const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
-    const textStyle = getComputedStyle(text);
-    const clawStyle = getComputedStyle(claw);
-    return {
-      direction: getComputedStyle(user).flexDirection,
-      width: thread.getBoundingClientRect().width,
-      rightGap: Math.abs(user.getBoundingClientRect().right - bubble.getBoundingClientRect().right),
-      padding: [textStyle.paddingTop, textStyle.paddingRight],
-      images: bubble.classList.contains("chat-bubble--with-images"),
-      background: textStyle.backgroundColor,
-      clawSize: [clawStyle.width, clawStyle.height],
-      animation: clawStyle.animationName,
-      reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
-    };
-  });
-  expect(presentation).toMatchObject({
-    direction: "row-reverse",
-    clawSize: ["18px", "18px"],
-    padding: presentation.images ? ["10px", "14px"] : ["16px", "16px"],
-  });
-  expect(presentation.width).toBeLessThanOrEqual(768);
-  expect(presentation.rightGap).toBeLessThanOrEqual(1);
-  expect(presentation.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(presentation.animation).toEqual(
-    presentation.reducedMotion ? "none" : expect.stringContaining("chatWorkingClawFlex"),
-  );
-  return presentation;
-}
-
 export function createdSessionListResult(sessionKey: string) {
   return {
     count: 1,
@@ -244,7 +209,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   expect(page.url()).toContain(controlUiSessionPath(sessionKey));
   const startupStatus = page.locator('.chat-thread .chat-working-indicator[role="status"]');
   await pollCount(startupStatus).toBe(1);
-  await pollLocatorText(startupStatus).toContain("Provisioning environment…");
+  await pollLocatorText(startupStatus).toContain("Provisioning environment");
   expect(await page.locator(".chat-cloud-startup, .agent-chat__composer-status-band").count()).toBe(
     0,
   );
@@ -331,12 +296,21 @@ export async function waitForCommittedNewSessionDraft(
   page: Page,
   expectedText: string | null,
   expectedAttachments: number | readonly string[],
+  permissionMode?: string,
 ): Promise<void> {
   const params = new URL(page.url()).searchParams;
   const scopeKey = JSON.stringify(
     ["agent", "catalog", "group"].map((key) => params.get(key)?.trim() ?? ""),
   );
-  await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+  await waitForCommittedComposerDraft(
+    page,
+    scopeKey,
+    expectedText,
+    expectedAttachments,
+    undefined,
+    undefined,
+    permissionMode,
+  );
 }
 
 export async function waitForGatewayRecoveryScope(page: Page, ready = true) {

@@ -12,7 +12,7 @@ Plugin resolution stays with Bun's native/Jiti loader and `Bun.plugin` on Bun, e
 
 ## Requirements
 
-Node fallback and build processes require Node **24.22.1+ or 26.12.1+** for the eMudhra compromised-key rejection fix. Updating Node does not change Bun's independent TLS verifier or its release qualification.
+Node fallback and build processes accept Node **24.16.0+ on 24.x, or 26.1.0+**. Node **24.22.1+/26.12.1+** is strongly recommended for the eMudhra compromised-key rejection fix; compatible older Node warns at startup, during updates, and in Doctor and security audit instead of being refused solely for the missing security patch. Updating Node does not change Bun's independent TLS verifier or its release qualification.
 
 OpenClaw supports only the **latest stable Bun release (currently 1.4.4)** and the **pinned OpenClaw Bun fork**. Older stock releases are rejected before CLI or Gateway work, even if their SQLite checks pass. Both supported runtimes require an available **`node:sqlite`** API and the same [WAL-safe SQLite floor as Node](/install/node-compatibility#why-the-floors-exist).
 
@@ -93,7 +93,7 @@ No supported SQLite library for Bun on macOS (<arch>); unusable: <path> (<reason
 
 An x64 Bun running under Rosetta cannot load an arm64-only Homebrew library. Point `OPENCLAW_SQLITE_LIBRARY` at a universal or x86_64 build, such as the one `scripts/build-mac-sqlite.sh universal <runtime-directory>` produces from a source checkout.
 
-SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
+SQLite storage workers inherit the main process's selected library. A read-only subprocess receives the same library path when a request uses a limited set of environment variables. Opening another database or restarting a storage worker reuses the selection without repeating Bun's one-shot library initialization in the same process.
 
 Package-update recovery retains the library selected during Bun admission. On macOS, copy the printed recovery command including its `OPENCLAW_SQLITE_LIBRARY` prefix; it works from a fresh shell without the service environment or custom `HOMEBREW_PREFIX`. If recovery cannot meet the SQLite safety floor, it refuses before opening the journal and names the recorded library input to restore. The version-1 recovery journal format is unchanged.
 
@@ -303,6 +303,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 
 | Release                            | Change                                                                                                                                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unreleased (main)                  | Restores Node fallback/build compatibility to 24.16.0+/26.1.0+ and reports missing Node security patches as update/audit warnings. Bun requirements and fork provisioning are unchanged.              |
 | Unreleased (main)                  | Adopts the signed OpenClaw fork release with current-trust checks for saved TLS sessions and QUIC early data. Stock Bun 1.4.4 retains the separately documented session/early-data gaps.              |
 | Unreleased (main)                  | Requires stock Bun 1.4.4+ at startup and package preinstall, and refreshes stock acquisition pins.                                                                                                    |
 | Unreleased (main)                  | Refuses Apple's system SQLite on macOS when discovery finds no supported library, naming unloadable candidates such as an arm64 Homebrew library under x64 Rosetta Bun.                               |

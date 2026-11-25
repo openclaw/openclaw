@@ -1,6 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { isImageWithMediaPayload } from "./media-payload.js";
-import { resolveModelBoundThinkingReplayMode } from "./providers/anthropic-model-contract.js";
+import { prepareModelBoundThinkingReplay } from "./providers/anthropic-model-contract.js";
 import {
   FAILED_ASSISTANT_REPLAY_TEXT,
   resolveFailedAssistantReplay,
@@ -8,7 +8,7 @@ import {
 import { OPENAI_RESPONSES_APIS } from "./transports/openai-responses-contracts.js";
 import type {
   Api,
-  AssistantMessage,
+  AssistantHistoryMessage,
   ImageContent,
   Message,
   Model,
@@ -45,24 +45,17 @@ function replaceImagesWithPlaceholder(
 }
 
 function transformAssistant<TApi extends Api>(
-  message: AssistantMessage,
+  message: AssistantHistoryMessage,
   model: Model<TApi>,
   toolCallIdMap: Map<string, string>,
-  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
-): AssistantMessage {
-  const replayMode = resolveModelBoundThinkingReplayMode({
-    source: {
-      provider: message.provider,
-      api: message.api,
-      modelId: message.model,
-      responseModelId: message.responseModel,
-    },
-    target: {
-      provider: model.provider,
-      api: model.api,
-      modelId: model.id,
-      modelParams: model.params,
-    },
+  thinkingReplay: ReturnType<typeof prepareModelBoundThinkingReplay>,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantHistoryMessage) => string,
+): AssistantHistoryMessage {
+  const replayMode = thinkingReplay({
+    provider: message.provider,
+    api: message.api,
+    modelId: message.model,
+    responseModelId: message.responseModel,
   });
   const sameModel =
     replayMode === "preserve" ||
@@ -116,13 +109,14 @@ function transformAssistant<TApi extends Api>(
 export function transformMessages<TApi extends Api>(
   messages: Message[],
   model: Model<TApi>,
-  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantHistoryMessage) => string,
 ): Message[] {
   const toolCallIdMap = new Map<string, string>();
+  const thinkingReplay = prepareModelBoundThinkingReplay(model);
   // Other model contracts require ordinary adjacent call/results. Preserve real
   // delayed outcomes before stripping the source model's async capability.
-  const asyncOwners = new Map<string, AssistantMessage>();
-  const relocated = new Map<AssistantMessage, Message[]>();
+  const asyncOwners = new Map<string, AssistantHistoryMessage>();
+  const relocated = new Map<AssistantHistoryMessage, Message[]>();
   const movedResults = new Set<Message>();
   for (const message of messages) {
     if (message.role === "assistant") {
@@ -193,7 +187,13 @@ export function transformMessages<TApi extends Api>(
     }
     if (message.role === "assistant") {
       const failedReplay = resolveFailedAssistantReplay(message, { pairingAware: false });
-      message = transformAssistant(message, model, toolCallIdMap, normalizeToolCallId);
+      message = transformAssistant(
+        message,
+        model,
+        toolCallIdMap,
+        thinkingReplay,
+        normalizeToolCallId,
+      );
       flushToolCalls();
       if (failedReplay === "drop") {
         continue;

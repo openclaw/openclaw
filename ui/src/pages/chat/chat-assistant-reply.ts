@@ -5,10 +5,13 @@ import {
 } from "../../../../src/shared/chat-message-content.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
+import {
+  isKeyedAssistantStreamFallbackMessage,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
 import { assistantGroupIsIndependentBoundary } from "./chat-turn-boundary.ts";
-import { extractMessageMediaText } from "./components/chat-message-media.ts";
-import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
+import { extractMessageMediaText } from "./components/chat-message-media-projection.ts";
+import { isLiveTerminalForRun, readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 /** Host-stamped provider speech is a call transcript, not a backing-agent answer. */
 export function isProviderVoiceTranscript(message: unknown): boolean {
@@ -17,6 +20,16 @@ export function isProviderVoiceTranscript(message: unknown): boolean {
     record?.role === "assistant" &&
     asRecord(record["__openclaw"])?.voiceTranscript === "provider-owned"
   );
+}
+
+/** Run cancellation comes from its owner, not a provider's generic abort reason. */
+export function explicitlyAbortedRunId(message: unknown): string | undefined {
+  const disposition = readLiveTerminalDisposition(message);
+  if (disposition !== null) {
+    return disposition === "aborted" ? transcriptRunId(message) : undefined;
+  }
+  const abort = asRecord(asRecord(message)?.openclawAbort);
+  return abort?.aborted === true && typeof abort.runId === "string" ? abort.runId : undefined;
 }
 
 export function assistantMessageIsInterrupted(message: unknown): boolean {
@@ -59,19 +72,12 @@ export function resolveAssistantReplyPhase(message: unknown) {
  * `explicitOnly` additionally requires an explicit answer phase or `stop`.
  */
 export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly = false): boolean {
-  return (
-    Boolean(extractTextCached(message)?.trim() || extractMessageMediaText(message)) &&
-    assistantMessageCanCompleteTurn(message, explicitOnly)
-  );
-}
-
-/** Completion eligibility also applies to visible outcomes without action text (e.g. canvas). */
-export function assistantMessageCanCompleteTurn(message: unknown, explicitOnly = false): boolean {
   const record = asRecord(message);
   const phase = resolveAssistantReplyPhase(message);
   const stopReason = record?.stopReason;
   const metadata = asRecord(record?.["__openclaw"]);
   if (
+    !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
     assistantMessageIsInterrupted(message) ||
     isProviderVoiceTranscript(message) ||
     phase === "commentary" ||
@@ -82,6 +88,27 @@ export function assistantMessageCanCompleteTurn(message: unknown, explicitOnly =
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+export function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
+  const record = asRecord(message);
+  const metadata = asRecord(record?.["__openclaw"]);
+  if (
+    isLiveTerminalForRun(message, runId) ||
+    metadata?.runTerminal === true ||
+    assistantMessageIsInterrupted(message) ||
+    record?.stopReason === "error"
+  ) {
+    return true;
+  }
+  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
+  const phase = resolveAssistantReplyPhase(message);
+  return (
+    !isProviderVoiceTranscript(message) &&
+    phase !== "commentary" &&
+    metadata?.mirrorOrigin !== "codex-app-server" &&
+    (phase === "final_answer" || record?.stopReason === "stop")
+  );
 }
 
 export function assistantMessageKind(
@@ -104,10 +131,8 @@ export function assistantMessageKind(
 /** A group holding the message that ended its run in failure; it marks where the run stopped. */
 export function groupEndsRunInFailure(group: MessageGroup): boolean {
   return group.messages.some(
-    ({ message, actionMessage, presentationOwnsTerminalStatus }) =>
-      presentationOwnsTerminalStatus !== false &&
-      (assistantMessageIsInterrupted(actionMessage ?? message) ||
-        asRecord(actionMessage ?? message)?.stopReason === "error"),
+    ({ message }) =>
+      assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
   );
 }
 

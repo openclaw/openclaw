@@ -1,8 +1,10 @@
 // Preemptive compaction tests cover token-pressure estimates before prompt
 // submission and the route chosen to compact, truncate, or proceed.
+import type { ToolResultMessage } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
@@ -12,6 +14,7 @@ let estimateToolSchemaTokenPressure: typeof import("./preemptive-compaction.js")
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+let resolveProjectedRequestPressure: typeof import("./preemptive-compaction.js").resolveProjectedRequestPressure;
 
 beforeAll(async () => {
   // Import after the session-token mock is installed so token estimates match
@@ -24,6 +27,7 @@ beforeAll(async () => {
     estimateToolSchemaTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
+    resolveProjectedRequestPressure,
   } = await import("./preemptive-compaction.js"));
 });
 
@@ -90,7 +94,7 @@ function makeUnavailableAssistant(params: {
   } as AgentMessage;
 }
 
-function makeToolResultMessage(...texts: string[]): AgentMessage {
+function makeToolResultMessage(...texts: string[]): ToolResultMessage {
   return {
     role: "toolResult",
     toolCallId: `call_${timestamp}`,
@@ -98,7 +102,7 @@ function makeToolResultMessage(...texts: string[]): AgentMessage {
     content: texts.map((text) => ({ type: "text", text })),
     isError: false,
     timestamp: timestamp++,
-  } as AgentMessage;
+  };
 }
 
 function makeJsonToolResultMessage(payload: unknown): AgentMessage {
@@ -130,6 +134,110 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
 }
 
 describe("preemptive-compaction", () => {
+  it("admits a fresh request with a large description-heavy tool catalog", () => {
+    const tools = Array.from({ length: 101 }, (_, index) => ({
+      name: "knowledge_record_" + index,
+      description:
+        "Read and update evidence-backed records in the selected knowledge store. Keep source references and use the supplied fields to identify the record. ".repeat(
+          9,
+        ),
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries(
+          Array.from({ length: 8 }, (_property, field) => [
+            "record_field_" + field,
+            {
+              type: "string",
+              description:
+                "The record value to search for or retain with the source evidence. Omit this field when it does not apply to the requested operation.",
+            },
+          ]),
+        ),
+        required: ["record_field_0"],
+        additionalProperties: false,
+      },
+    }));
+    const systemPrompt =
+      "Use the configured tools to answer the request from the current conversation. ".repeat(380);
+    const prompt = "BUDGET-QA-PING";
+    const projected = resolveProjectedRequestPressure({
+      context: { systemPrompt, tools, messages: [{ role: "user", content: prompt, timestamp: 1 }] },
+      contextTokenBudget: 110_000,
+      reserveTokens: 0,
+    });
+    const preflight = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt,
+      prompt,
+      toolSchemaTokens: estimateToolSchemaTokenPressure(tools),
+      contextTokenBudget: 110_000,
+      reserveTokens: 0,
+    });
+    // gpt-tokenizer 3.4.0/o200k_base: 57,572 schema tokens and 4,941 system tokens.
+    expect(projected.estimatedPromptTokens).toBeGreaterThanOrEqual(62_513);
+    expect(projected.route).toBe("fits");
+    expect(preflight.route).toBe("fits");
+  });
+
+  it.each([
+    ["synthetic tool result ", 11_051, true],
+    ["a9f32c078db41e65", 50_215, false],
+  ] as const)(
+    "admits prose but protects dense pending data: %s",
+    (pattern, measuredTokens, fits) => {
+      // gpt-4.1-mini input counts from the real Responses serializer, with a
+      // 107-token prior response and five 16,031-character synthetic result blocks.
+      const text = pattern.repeat(Math.ceil(16_031 / pattern.length)).slice(0, 16_031);
+      const decision = resolveProjectedRequestPressure({
+        context: { messages: [makeToolResultMessage(...Array<string>(5).fill(text))] },
+        previousRequest: { requestIndex: 1, messageCount: 0, contextTokens: 107 },
+        contextTokenBudget: 32_768,
+        reserveTokens: 0,
+      });
+      expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(measuredTokens);
+      expect(decision.route === "fits").toBe(fits);
+    },
+  );
+
+  it("rejects short-key JSON that exceeds the measured provider window", () => {
+    // Real Responses input count: 26,806 tokens, versus 114 with an empty result.
+    const text = '{"id":123,"ok":false,"path":"src/a.ts","value":[1,2,3]}\n'
+      .repeat(1300)
+      .slice(0, 65_000);
+    const decision = resolveProjectedRequestPressure({
+      context: { messages: [makeToolResultMessage(text)] },
+      previousRequest: { requestIndex: 1, messageCount: 0, contextTokens: 107 },
+      contextTokenBudget: 20_000,
+      reserveTokens: 0,
+    });
+    expect(decision.estimatedPromptTokens).toBeGreaterThanOrEqual(26_806);
+    expect(decision.route).not.toBe("fits");
+  });
+
+  it("routes predicted overflow from already-sent tool results to compaction", () => {
+    const sentOutput = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages = [
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "read previous reports" }] }),
+      ...Array.from({ length: 8 }, () => makeToolResultMessage(sentOutput)),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "reports received" }] }),
+    ];
+    const decision = resolveProjectedRequestPressure({
+      context: { messages },
+      previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
+    });
+
+    expect(decision).toMatchObject({
+      pressureSource: "provider_context_usage",
+      promptBudgetBeforeReserve: 40_000,
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+    // The request estimator adds 12 framing tokens to the synthetic usage anchor.
+    expect([decision.estimatedPromptTokens, decision.overflowTokens]).toEqual([41_012, 1_012]);
+  });
+
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
   const verboseSystem =
@@ -347,13 +455,14 @@ describe("preemptive-compaction", () => {
       prompt: "continue",
     });
 
-    expect(estimatedPromptTokens).toBeGreaterThan(80_000);
+    // The bodies alone contain 180k characters, beyond this 40k-token window.
+    expect(estimatedPromptTokens).toBeGreaterThan(40_000);
 
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
-      contextTokenBudget: 96_000,
+      contextTokenBudget: 40_000,
       reserveTokens: 20_000,
     });
 
@@ -505,11 +614,13 @@ describe("preemptive-compaction", () => {
     const toolSchemaTokens = estimateToolSchemaTokenPressure(
       Array.from({ length: 79 }, (_, i) => ({
         name: `tool_${i}`,
-        description: "x".repeat(4000),
+        description: "a9f32c078db41e65".repeat(400),
         parameters: { type: "object", properties: { arg: { type: "string" } } },
       })),
     );
 
+    // gpt-tokenizer 3.4.0/o200k_base counts 317,977 tokens for this dense catalog.
+    expect(toolSchemaTokens).toBeGreaterThanOrEqual(317_977);
     expect(toolSchemaTokens).toBeGreaterThan(contextTokenBudget - reserveTokens);
 
     const withTools = shouldPreemptivelyCompactBeforePrompt({

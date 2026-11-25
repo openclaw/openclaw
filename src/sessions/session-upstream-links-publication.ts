@@ -3,6 +3,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createKeyedStateDomainPublication } from "../state/state-domain-publication.js";
 
@@ -77,14 +78,9 @@ export function withSessionUpstreamPublication(
         publication.committed(facts.upstreamPresence);
       }
     });
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        publication.finish(owner.admission.settlement?.kind === "completed", true);
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      publication.finish(owner.admission.settlement?.kind === "completed", true);
+    });
     return owner;
   };
 }

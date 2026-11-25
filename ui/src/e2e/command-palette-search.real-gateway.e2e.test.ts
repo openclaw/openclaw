@@ -454,7 +454,7 @@ suite.define(() => {
           await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
           const input = palette.getByRole("textbox", {
-            name: "Search or start a task…",
+            name: "Search…",
             exact: true,
           });
           const results = palette.locator(".cmd-palette__results");
@@ -488,7 +488,10 @@ suite.define(() => {
             // The sidebar can fetch lineage concurrently; identify this query
             // by its metadata-search intent, not by arrival time alone.
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
-            const metadata = listRequests.filter((entry) => entry.params.search === query);
+            const queryLists = listRequests.filter((entry) => entry.params.search === query);
+            const metadata = queryLists.filter((entry) => entry.params.archived === undefined);
+            // Archived titles are a separate best-effort lookup (#200301).
+            const archived = queryLists.filter((entry) => entry.params.archived === true);
             const visibleResults = await results.getByRole("option").count();
             queryCount++;
             // Capture the settled state before assertions too, retaining useful
@@ -503,9 +506,16 @@ suite.define(() => {
             expect(response.archivedTranscriptsExcluded).toBe(0);
             expect(response.sessionKeys?.length).toBeLessThanOrEqual(25);
             expect(new Set(response.sessionKeys)).toEqual(new Set(response.resultKeys));
-            // The query owns one bounded metadata lookup. The scoped transcript
-            // request above cannot be limited by any background roster window.
+            // The query owns one bounded live metadata lookup and one archived title lookup.
+            // The scoped transcript request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
+            expect(archived).toHaveLength(1);
+            expect(archived[0]!.params).toMatchObject({
+              search: query,
+              source: "command-palette",
+              archived: true,
+              searchTitlesOnly: true,
+            });
             const metadataResponse = metadata[0]!;
             const previous = metadataReceipts.get(query);
             const { ifRowsRevision: requestedRevision, ...metadataParams } =
@@ -549,7 +559,9 @@ suite.define(() => {
               revision,
               keys: metadataKeys,
             });
-            expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
+            expect(notices).toEqual(
+              noMatches ? [expect.stringContaining("No results match your search.")] : [],
+            );
             expect(
               await palette
                 .getByText(/Search notices|incomplete|unavailable|indexing older/i)
@@ -624,9 +636,7 @@ suite.define(() => {
           const absent = await search("copperfinch absentconstellation", 0, "05-no-match.png");
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
-          await emptyState
-            .getByRole("heading", { name: "No results found", exact: true })
-            .waitFor();
+          await emptyState.getByText("No results match your search.", { exact: true }).waitFor();
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");
           await results.getByRole("option").filter({ hasText: targetLabel }).click();

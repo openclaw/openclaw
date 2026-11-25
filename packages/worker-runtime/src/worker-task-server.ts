@@ -43,6 +43,10 @@ export type WorkerTaskChannel = {
 };
 
 export type WorkerTaskServerHost<TaskContext> = {
+  /** A logical endpoint in a shared host isolate serves this port instead of parentPort. */
+  startupPort?: MessagePort;
+  /** Replaces the isolate exit code when the host, not this server, owns isolate exit. */
+  onRetired?: () => void;
   selectStartupPort?: (message: unknown) => MessagePort | undefined;
   initialize: (port: MessagePort) => void;
   onReady?: () => void;
@@ -61,22 +65,29 @@ export type WorkerTaskHandler<Output, Input = unknown> = (
   control: WorkerTaskControl,
 ) => Output | Promise<Output>;
 
+/** No async cleanup, channels, database access, native mutations, or retained task resources. */
+export type SynchronousWorkerTaskHandler<Output, Input = unknown> = {
+  synchronousStateless: (input: Input) => Exclude<Output, PromiseLike<unknown>>;
+};
+
 /** Pool dispatch is serial per worker; resource closures and handlers settle before successors. */
 export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
-  handler: WorkerTaskHandler<Output, Input>,
+  handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource: (key?: string) => void | Promise<void>;
+    /** Keys whose cleanup cannot touch the running task's resources skip waiting for that task. */
+    closesBesideExecution?: (key?: string) => boolean;
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
   },
   host: WorkerTaskServerHost<TaskContext>,
 ): void {
-  if (!parentPort) {
+  const startupPort = host.startupPort ?? parentPort;
+  if (!startupPort) {
     return;
   }
-  const startupPort = parentPort;
   let port = startupPort;
   let receivedStartup = false;
   let retiring = false;
@@ -84,7 +95,76 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
   let active: WorkerConversation | undefined;
   let execution = Promise.resolve();
   let resourceClosures = Promise.resolve();
+  let pendingResourceClosures = 0;
   let cancelledResponse: { taskId: number; responseId: number } | undefined;
+  const synchronousHandler =
+    typeof handler === "function" ? undefined : handler.synchronousStateless;
+  const runHandler = typeof handler === "function" ? handler : handler.synchronousStateless;
+  const reply = (task: WorkerConversation, value: Output) => {
+    postTaskMessage(
+      port,
+      {
+        status: "ok",
+        value,
+        taskId: task.taskId,
+        ...(host.collectTaskDiagnostics ? { diagnostics: host.collectTaskDiagnostics() } : {}),
+      },
+      task.progressSignal,
+      options.transferList?.(value) ?? [],
+    );
+  };
+  const fail = (task: WorkerConversation, error: unknown) => {
+    if (options.retireOnError) {
+      retiring = true;
+      return;
+    }
+    postTaskMessage(
+      port,
+      {
+        status: "failed",
+        taskId: task.taskId,
+        error: error instanceof Error ? error.message : String(error),
+        ...(host.collectTaskDiagnostics ? { diagnostics: host.collectTaskDiagnostics() } : {}),
+      },
+      task.progressSignal,
+    );
+  };
+  const finish = () => {
+    if (!retiring) {
+      // Admitted cleanup may still retain resources after the task reply.
+      if (pendingResourceClosures === 0) {
+        host.onIdle();
+      }
+      return;
+    }
+    // Queued resource receipts depend on execution. Join them after returning,
+    // not from inside the execution they are waiting for.
+    const retire = async () => {
+      try {
+        await resourceClosures;
+      } finally {
+        try {
+          await host.onRetire?.();
+        } finally {
+          if (host.onRetired) {
+            host.onRetired();
+          } else {
+            process.exitCode = 1;
+          }
+          try {
+            port.close();
+          } finally {
+            if (port !== startupPort) {
+              startupPort.close();
+            }
+          }
+        }
+      }
+    };
+    void retire().catch(() => {
+      process.exitCode = 1;
+    });
+  };
   port.on(
     "message",
     function receive(message: {
@@ -119,7 +199,10 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
       host.onMessage(message.sampleMemory === true);
       if (message.closeResource && message.resourcePort) {
         const receipt = message.resourcePort;
-        const precedingExecution = execution;
+        const precedingExecution = options.closesBesideExecution?.(message.key)
+          ? undefined
+          : execution;
+        pendingResourceClosures++;
         resourceClosures = resourceClosures
           .then(() => precedingExecution)
           .then(async () => {
@@ -141,7 +224,8 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           })
           .finally(() => {
             receipt.close();
-            if (!active && !retiring) {
+            pendingResourceClosures--;
+            if (!active && !retiring && pendingResourceClosures === 0) {
               host.onIdle();
             }
           });
@@ -205,15 +289,40 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           pending.reject(error);
         },
       };
-      const control = createWorkerTaskControl(nativeSections, () => active === task);
+      const cancellation = new AbortController();
+      const control = createWorkerTaskControl(
+        nativeSections,
+        () => active === task,
+        cancellation.signal,
+      );
       active = task;
-      const stopObserving = message.interactive
-        ? observeWorkerTaskCancellation(
-            nativeSections,
-            () => active === task,
-            () => task.cancelPending(new Error("worker task cancelled")),
-          )
-        : undefined;
+      // A stateless synchronous read cannot observe cancellation while its event
+      // loop is occupied. The host still joins physical worker exit on cancellation.
+      // Pending resource closes keep the original execution/receipt ordering path.
+      if (synchronousHandler && !message.interactive && pendingResourceClosures === 0) {
+        try {
+          control.throwIfCancelled();
+          host.installTaskContext(message.taskContext);
+          const value = synchronousHandler(message.input);
+          active = undefined;
+          reply(task, value);
+        } catch (error) {
+          active = undefined;
+          fail(task, error);
+        } finally {
+          finish();
+        }
+        return;
+      }
+      const stopObserving = observeWorkerTaskCancellation(
+        nativeSections,
+        () => active === task,
+        () => {
+          const error = new Error("worker task cancelled");
+          cancellation.abort(error);
+          task.cancelPending(error);
+        },
+      );
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
             notify: (value) => {
@@ -269,75 +378,16 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
             return await withWorkerTaskNativeSectionScope(
               nativeSections,
               () => active === task,
-              () => handler(message.input, channel, control),
+              () => runHandler(message.input, channel, control),
             );
           } finally {
             await stopObserving?.();
             active = undefined;
           }
         })
-        .then((value) => {
-          postTaskMessage(
-            port,
-            {
-              status: "ok",
-              value,
-              taskId: task.taskId,
-              ...(host.collectTaskDiagnostics
-                ? { diagnostics: host.collectTaskDiagnostics() }
-                : {}),
-            },
-            task.progressSignal,
-            options.transferList?.(value) ?? [],
-          );
-        })
-        .catch((error: unknown) => {
-          if (options.retireOnError) {
-            retiring = true;
-            return;
-          }
-          postTaskMessage(
-            port,
-            {
-              status: "failed",
-              taskId: task.taskId,
-              error: error instanceof Error ? error.message : String(error),
-              ...(host.collectTaskDiagnostics
-                ? { diagnostics: host.collectTaskDiagnostics() }
-                : {}),
-            },
-            task.progressSignal,
-          );
-        })
-        .finally(() => {
-          if (!retiring) {
-            host.onIdle();
-            return;
-          }
-          // Queued resource receipts depend on this execution. Join them after
-          // returning, not from inside the execution they are waiting for.
-          const retire = async () => {
-            try {
-              await resourceClosures;
-            } finally {
-              try {
-                await host.onRetire?.();
-              } finally {
-                process.exitCode = 1;
-                try {
-                  port.close();
-                } finally {
-                  if (port !== startupPort) {
-                    startupPort.close();
-                  }
-                }
-              }
-            }
-          };
-          void retire().catch(() => {
-            process.exitCode = 1;
-          });
-        });
+        .then((value) => reply(task, value))
+        .catch((error: unknown) => fail(task, error))
+        .finally(finish);
     },
   );
   host.onReady?.();

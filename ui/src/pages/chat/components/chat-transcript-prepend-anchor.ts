@@ -9,11 +9,14 @@ export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
   committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
-  private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
+  private pending:
+    | (ChatTranscriptPrependAnchor & { measured: boolean; prepended: boolean })
+    | null = null;
 
   constructor(
     private readonly messageElements: ReadonlyMap<string, HTMLElement>,
     private readonly onLayoutCorrection: (before: number, after: number) => void,
+    private readonly measurePrependedRows: () => boolean,
   ) {}
 
   /** Stable message identity used to resolve its row in the committed projection. */
@@ -50,39 +53,61 @@ export class TranscriptPrependAnchor {
     commanded: boolean,
     readingProjectionChanged = false,
   ): void {
+    if (commanded) {
+      this.pending = null;
+    }
+    if (!commanded && (this.hasPrepend || readingProjectionChanged)) {
+      this.retainReader(element);
+    }
+    this.firstMessageKey = this.messageKeys.keys().next().value;
+  }
+
+  /** Retain current geometry without admitting a candidate message projection. */
+  retainReader(element: HTMLDivElement | null): boolean {
     // A second projection may commit before measurement settles. Keep the
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
-      !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ??
-          captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values()))
-        : null;
+      retained ??
+      captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values());
     if (anchor) {
-      this.pending = { ...anchor, measured: false };
+      this.pending = {
+        ...anchor,
+        measured: false,
+        prepended: this.hasPrepend || retained?.prepended === true,
+      };
+      return true;
     }
-    this.firstMessageKey = this.messageKeys.keys().next().value;
+    return false;
   }
 
-  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
+  /** Prefix insertion must land before paint; warm replacement joins the native batch. */
   update(
-    element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => boolean,
+    rowsMeasured: () => boolean,
+    committed = false,
   ): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
-    const changed = measureRows();
+    const ready = anchor.prepended || rowsMeasured();
+    if (!ready && !committed) {
+      return false;
+    }
+    const changed = anchor.prepended && this.measurePrependedRows();
     const moved = restoreTranscriptPrependAnchor(
       anchor,
-      element,
+      virtualizer.scrollElement,
       virtualizer,
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
+    // Committed geometry can move before all row receipts arrive; retain its target meanwhile.
+    if (!ready) {
+      return moved;
+    }
     if (anchor.measured && !changed && !moved) {
       this.pending = null;
     }
@@ -125,7 +150,11 @@ function captureTranscriptPrependAnchor(
   // viewport and messages removed by the new projection are not candidates.
   // Prepended refs register after retained ones; choose by DOM order, not insertion order.
   const bubbles = [...messageElements]
-    .filter((bubble) => scrollElement.contains(bubble))
+    .filter(
+      (bubble) =>
+        scrollElement.contains(bubble) &&
+        !bubble.closest('.chat-virtual-row[data-prepared-row="true"]'),
+    )
     .toSorted((left, right) => {
       const position = left.compareDocumentPosition(right);
       if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
@@ -183,9 +212,9 @@ function restoreTranscriptPrependAnchor(
   if (Math.abs(offset - before) <= 1) {
     return false;
   }
-  // Commit one measured message target through the scroll owner. This also
-  // retires deferred row corrections already represented by the measured DOM.
+  // The scroll owner retires deferred row corrections represented by the DOM.
+  // An ignored native write must not keep the measurement loop alive.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });
   onLayoutCorrection(before, scrollElement.scrollTop);
-  return true;
+  return scrollElement.scrollTop !== before;
 }

@@ -2,10 +2,9 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareChannelSenderAdmission } from "../../gateway/operator-admission.js";
 import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
-import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
@@ -383,17 +382,22 @@ async function resolveChannelMessageIngressForOwner(
             senderId: subject.identifiers[0].value,
           }
         : undefined;
-    const requester =
-      verifiedPrincipal && participantGatewayContext
-        ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
+    const gateway = participantGatewayContext;
+    const sender = verifiedPrincipal
+      ? ({ ...verifiedPrincipal, authentication: "verified" } as const)
+      : subject.identifiers[0]?.authentication === "asserted" && senderId
+        ? ({
+            channelId,
+            accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+            senderId,
+            authentication: "asserted",
+          } as const)
         : undefined;
-    const commandOwnerAuthority =
-      verifiedPrincipal && participantGatewayContext
-        ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
-            identity: verifiedPrincipal,
-            prepared: requester,
-          })
+    const admitted =
+      sender && gateway
+        ? await prepareChannelSenderAdmission(sender, () => gateway.getRuntimeConfig())
         : undefined;
+    const requester = admitted?.requester;
     participantInput = {
       identity: participant
         ? {
@@ -422,7 +426,9 @@ async function resolveChannelMessageIngressForOwner(
             isCurrent: requester.isCurrent,
           }
         : undefined,
-      commandOwnerAuthority,
+      operatorAuthority: admitted?.operatorAuthority,
+      commandOwnerAuthority: admitted?.commandOwnerAuthority,
+      commandOwnerPrincipal: admitted?.commandOwnerPrincipal,
       promptedAt,
       owner: participantOwner,
       gatewayContext: participantGatewayContext,

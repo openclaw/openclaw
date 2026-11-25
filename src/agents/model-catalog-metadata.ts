@@ -1,3 +1,4 @@
+import { ownsThinkingProfile } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   PREPARED_THINKING_POLICY,
   type ThinkingCatalogPolicyCarrier,
@@ -52,8 +53,33 @@ function clearRouteBoundCatalogMetadata(
     inference: _inference,
     ...routeNeutral
   } = entry;
-  // Losing route provenance must not promote a declared typed route to legacy chat.
-  return { ...routeNeutral, ...(entry.inference ? { inference: { chat: false } } : {}) };
+  return routeNeutral;
+}
+
+type ThinkingLevelMap = Partial<Record<string, string | null>>;
+type ThinkingFacts = {
+  thinkingLevelMap?: ThinkingLevelMap;
+  compat?: { defaultThinkingLevel?: string; thinkingLevels?: readonly string[] } | null;
+};
+
+/**
+ * Merges a configured thinking map over a catalog row's, per key. When the catalog row owns its
+ * thinking profile (`ownsThinkingProfile`) and the configured row does not, config can only
+ * exclude levels: a map written for the earlier provider hook must not widen the profile.
+ */
+export function mergeConfiguredThinkingLevelMap(
+  base: ThinkingFacts,
+  configured: ThinkingFacts,
+): ThinkingLevelMap | undefined {
+  const exclusionsOnly =
+    ownsThinkingProfile(base.compat) && !ownsThinkingProfile(configured.compat);
+  const overlay =
+    exclusionsOnly && configured.thinkingLevelMap
+      ? Object.fromEntries(
+          Object.entries(configured.thinkingLevelMap).filter(([, value]) => value === null),
+        )
+      : configured.thinkingLevelMap;
+  return base.thinkingLevelMap || overlay ? { ...base.thinkingLevelMap, ...overlay } : undefined;
 }
 
 export function overlayCatalogMetadata(
@@ -77,13 +103,14 @@ export function overlayCatalogMetadata(
       : routeChanged;
   const routeBase = clearBaseCapabilities ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogFields(routeBase.params, overlay.params);
-  const thinkingLevelMap = overlay.thinkingLevelMap ?? routeBase.thinkingLevelMap;
+  const thinkingLevelMap = mergeConfiguredThinkingLevelMap(routeBase, overlay);
   // Options + default are one normalized unit (default ∈ options): an overlay
   // that replaces the options list must also own the default, or a base default
   // absent from the new list would leak through the field-by-field merge.
   const {
     contextWindows: _baseContextWindows,
     contextWindowDefault: _baseContextWindowDefault,
+    inference: _baseInference,
     ...selectionNeutralBase
   } = routeBase;
   const replacesContextWindows = overlay.contextWindows !== undefined;
@@ -93,11 +120,17 @@ export function overlayCatalogMetadata(
     : (overlay.contextWindowDefault ?? routeBase.contextWindowDefault) || undefined;
   const applyRoute = !options?.preserveBaseRoute;
   const inferenceRouteChanged = !modelTransportRoutesMatch(base, overlay);
+  // Losing route provenance keeps only an explicit chat veto, so a typed-only row never
+  // becomes legacy chat and Decision facts never reach another route.
   const inference =
     !applyRoute && inferenceRouteChanged
       ? base.inference
       : (overlay.inference ??
-        (inferenceRouteChanged && base.inference ? { chat: false } : base.inference));
+        (!inferenceRouteChanged
+          ? base.inference
+          : base.inference?.chat === false
+            ? { chat: false }
+            : undefined));
   return {
     ...selectionNeutralBase,
     ...(contextWindows !== undefined ? { contextWindows } : {}),

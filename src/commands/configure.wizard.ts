@@ -1,6 +1,7 @@
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   listAgentIds,
   tryResolveAmbientOwnerAgentId,
@@ -23,6 +24,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { storeChannelSetupCredentials } from "./channels/plugin-config-persistence.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -144,7 +146,7 @@ async function promptWebToolsConfig(
       if (enableCodexNative) {
         configureManagedProvider = await prompts.confirm({
           message: existingSearch?.provider
-            ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+            ? terminalText`Change the separate web search provider (currently ${existingSearch.provider})?`
             : "Also configure a separate web search provider for other models?",
           initialValue: Boolean(existingSearch?.provider),
         });
@@ -248,7 +250,7 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
       if (!snapshot.valid && snapshot.issues.length > 0) {
         note(
           [
-            ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+            ...snapshot.issues.map((iss) => terminalText`- ${iss.path}: ${iss.message}`),
             "",
             "Docs: https://docs.openclaw.ai/gateway/configuration",
           ].join("\n"),
@@ -327,8 +329,8 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
             hint: !remoteUrl
               ? "No remote URL configured yet"
               : remoteProbe?.ok
-                ? `Gateway reachable (${remoteUrl})`
-                : `Configured but unreachable (${remoteUrl})`,
+                ? terminalText`Gateway reachable (${remoteUrl})`
+                : terminalText`Configured but unreachable (${remoteUrl})`,
           },
         ],
       });
@@ -413,6 +415,10 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
         command: "configure",
         mode: metadataMode,
       });
+      nextConfig = await storeChannelSetupCredentials({
+        cfg: nextConfig,
+        previousConfig: mergeBaseConfig,
+      });
 
       const committed = await writeWizardConfigFile(nextConfig, {
         mergeBase: mergeBaseConfig,
@@ -445,7 +451,7 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
         if (hasExistingContent) {
           note(
             [
-              `Existing workspace detected at ${workspaceDir}`,
+              terminalText`Existing workspace detected at ${workspaceDir}`,
               "Existing files are preserved. Missing templates may be created, never overwritten.",
             ].join("\n"),
             "Existing workspace",
@@ -703,13 +709,13 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
       ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
-        : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+        : terminalText`Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
     const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({ bind });
 
     note(
       [
-        `Web UI: ${displayLinks.httpUrl}`,
-        `Gateway WS: ${displayLinks.wsUrl}`,
+        terminalText`Web UI: ${displayLinks.httpUrl}`,
+        terminalText`Gateway WS: ${displayLinks.wsUrl}`,
         gatewayStatusLine,
         ...windowsFirewallLines,
         "Docs: https://docs.openclaw.ai/web/control-ui",

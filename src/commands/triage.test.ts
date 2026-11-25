@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -335,7 +336,7 @@ describe("triageCommand", () => {
     expect(mocks.confirm).not.toHaveBeenCalled();
   });
 
-  it("preserves local diagnostics and redacted snapshot failures while the Gateway is offline", async () => {
+  it("keeps separate-installation diagnostics without inspecting the host service", async () => {
     const { writeDiagnosticSupportExport } = await vi.importActual<
       typeof import("../logging/diagnostic-support-export.js")
     >("../logging/diagnostic-support-export.js");
@@ -370,7 +371,8 @@ describe("triageCommand", () => {
     const diagnostics = JSON.parse(await zip.file("diagnostics.json")!.async("string"));
     expect(diagnostics.config).toMatchObject({ exists: true, parseOk: true });
     expect(diagnostics.health).toMatchObject({ status: "failed" });
-    expect(diagnostics.status).toMatchObject({ status: "failed" });
+    expect(diagnostics.status).toMatchObject({ status: "skipped" });
+    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     const entries = await Promise.all(
       Object.values(zip.files)
         .filter((entry) => !entry.dir)
@@ -508,6 +510,33 @@ describe("triageCommand", () => {
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
+
+  it("stops before starting an agent when the terminal hangs up during Doctor collection", async () => {
+    const signals = await import("../cli/signal-exit-barrier.js");
+    const staging = await import("../infra/sqlite-snapshot-staging.js");
+    mocks.resolveExecutablePath.mockImplementation((binary: string) => `/usr/local/bin/${binary}`);
+    const root = tempDirs.make("triage-hangup-snapshots-");
+    const exitCode = process.exitCode;
+    const releaseSignals = signals.installCliSignalExitHandlers();
+    signals.installCliDoctorSignalExitHandlers();
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    mocks.collectDoctorFindings.mockImplementation(async () => {
+      // Doctor's inspection still holds its private snapshot copy when the hangup arrives.
+      staging.createSqliteSnapshotStagingDirectorySync(root);
+      process.emit("SIGHUP", "SIGHUP");
+      return [];
+    });
+    const runtime = createTriageRuntime();
+    try {
+      await withTriageTerminal(true, () => triageCommand(runtime, { noExport: true }));
+      expect(await signals.waitForCliSignalExit()).toBe(129);
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(fsSync.readdirSync(root)).toEqual([]);
+    } finally {
+      releaseSignals();
+      process.exitCode = exitCode;
+    }
+  });
 
   it("reports a failed launch without trying another installed agent", async () => {
     mocks.resolveExecutablePath.mockImplementation((binary: string) => `/usr/local/bin/${binary}`);

@@ -1,5 +1,6 @@
 import { toErrorObject } from "@openclaw/normalization-core";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import {
   captureSessionWorkspaceNavigation,
@@ -34,6 +35,8 @@ export function openWorkspaceItem<T>(
     intent?: "navigate";
     line?: number | null;
     revalidate?: boolean;
+    /** Document links must validate their captured source before even a dirty tab is selected. */
+    revalidateBeforeSelect?: boolean;
     label: string;
     resolveLabel?: (result: T) => string | undefined;
     resolveKey?: (result: T) => string | undefined;
@@ -187,7 +190,8 @@ export function openWorkspaceItem<T>(
     sessionWorkspaceForHost(state).publish();
     return read.settled;
   };
-  if (options.disposition && !known) {
+  if ((options.disposition && !known) || options.revalidateBeforeSelect) {
+    const previousActiveId = workspace.activeId;
     workspace.pendingPreview = intent;
     workspace.activeId = itemId;
     setSessionWorkspaceError(workspace, null);
@@ -204,12 +208,24 @@ export function openWorkspaceItem<T>(
         if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
           return undefined;
         }
+        if (options.revalidateBeforeSelect && result == null) {
+          throw new Error(missingMessage);
+        }
         return begin(
           () => Promise.resolve(result),
           result == null ? undefined : options.resolveKey?.(result),
         );
       } catch (error) {
         if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
+          return undefined;
+        }
+        if (options.revalidateBeforeSelect) {
+          workspace.pendingPreview = undefined;
+          workspace.activeId = previousActiveId;
+          const message = options.resolveError?.(error) ?? formatUiError(error);
+          setSessionWorkspaceError(workspace, message, read);
+          sessionWorkspaceForHost(state).publish();
+          showToast({ message, severity: "error" });
           return undefined;
         }
         return begin(() => Promise.reject(toErrorObject(error, formatUiError(error))));

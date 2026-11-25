@@ -1,19 +1,33 @@
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceState } from "../cron/service/state.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import { broadcastFor, createBroadcastPeer } from "./server-broadcast.test-support.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { AddCronJob, CronFixture } from "./server-cron.context.test-support.js";
+import { createSessionMutationTestContext } from "./server-methods/sessions-mutations.owner.test-support.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 type CronPublicationHarness = {
   createCronConfig: (name: string) => OpenClawConfig;
   withCronService: (
     cfg: OpenClawConfig,
     run: (state: CronFixture) => void | Promise<void>,
-    overrides?: { broadcast: GatewayBroadcastFn },
+    overrides?: {
+      broadcast: GatewayBroadcastFn;
+      resolveGatewayContext?: () => GatewayRequestContext | undefined;
+    },
   ) => Promise<void>;
   addAgentTurnJob: AddCronJob;
   getCronDeps: (service: CronFixture) => Pick<CronServiceState["deps"], "onEvent">;
@@ -69,6 +83,160 @@ export function registerGatewayCronPublicationTests({
       },
       { broadcast },
     );
+  });
+
+  it("delivers global binding changes only to currently authorized physical-session viewers", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {
+        ...rolePolicyConfig(),
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {}, research: {} },
+        },
+        session: { scope: "global" },
+        cron: { enabled: false, triggers: { enabled: false } },
+      };
+      let context: GatewayRequestContext | undefined;
+      let connection: ReturnType<typeof createGatewayConnectionState> | undefined;
+      await withCronService(
+        cfg,
+        async (state) => {
+          const recipient = (role: "none" | "view", label: string) => {
+            const peer = createBroadcastPeer<Record<string, unknown>>(label, true);
+            const profileClient = roleClient(role, label);
+            // The profile owner's subscription must refresh the registered client itself.
+            const client = Object.assign(profileClient, {
+              connId: peer.client.connId,
+              socket: peer.client.socket,
+              usesSharedGatewayAuth: false,
+              authenticatedUserProfile: {
+                ...profileClient.authenticatedUserProfile!,
+                avatarRevision: "test",
+              },
+            });
+            let received = createDeferred();
+            const send = peer.socket.send.getMockImplementation();
+            if (!send) {
+              throw new Error("Missing fixture socket transport");
+            }
+            peer.socket.send.mockImplementation((...args) => {
+              send(...args);
+              const frame = peer.frames.at(-1);
+              if (frame?.event === "sessions.changed" && frame.payload?.reason === "cron-binding") {
+                received.resolve();
+              }
+            });
+            return {
+              ...peer,
+              client,
+              next: () => received.promise,
+              reset: () => {
+                peer.frames.length = 0;
+                received = createDeferred();
+              },
+            };
+          };
+          const opsOwner = recipient("none", "ops-owner");
+          const opsReader = recipient("view", "ops-reader");
+          const researchOwner = recipient("none", "research-owner");
+          const peers = [opsOwner, opsReader, researchOwner];
+          for (const [agentId, peer, visibility] of [
+            ["ops", opsOwner, "shared"],
+            ["research", researchOwner, "draft"],
+          ] as const) {
+            await upsertSessionEntryCore(
+              { agentId, sessionKey: "global" },
+              {
+                sessionId: `${agentId}-global`,
+                updatedAt: 1,
+                visibility,
+                createdActor: {
+                  type: "human",
+                  source: "profile",
+                  id: peer.client.authenticatedUserProfile!.profileId,
+                },
+              },
+            );
+          }
+          const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          const activeConnection = createGatewayConnectionState({
+            cfg,
+            bootId: "cron-binding-recipients",
+            scheduler: createTestGatewayScheduler(),
+          });
+          connection = activeConnection;
+          const detach = activeConnection.attachSessionRowProjection(projection);
+          peers.forEach(({ client }) => activeConnection.clients.add(client));
+          context = bindSessionRowProjection(
+            Object.assign(createSessionMutationTestContext(cfg), {
+              resolveGatewayContext: () => context,
+            }),
+            activeConnection.getSessionRowProjection,
+          );
+          const frames = () =>
+            peers.map((peer) =>
+              peer.frames
+                .filter(
+                  (frame) =>
+                    frame.event === "sessions.changed" && frame.payload?.reason === "cron-binding",
+                )
+                .map(({ payload }) => [payload.sessionKey, payload.agentId]),
+            );
+          try {
+            const job = await addAgentTurnJob(state, "Global review", "Review the plan", {
+              agentId: "ops",
+              enabled: false,
+              sessionTarget: "session:global",
+              schedule: { kind: "every", everyMs: 3_600_000 },
+            });
+            await Promise.all([opsOwner.next(), opsReader.next()]);
+            expect(frames()).toEqual([[["global", "ops"]], [["global", "ops"]], []]);
+            peers.forEach((peer) => peer.reset());
+            await state.cron.update(job.id, { agentId: "research" });
+            await Promise.all([opsOwner.next(), researchOwner.next()]);
+            expect(frames()).toEqual([
+              [["global", "ops"]],
+              [["global", "ops"]],
+              [["global", "research"]],
+            ]);
+            peers.forEach((peer) => peer.reset());
+            const entered = createDeferred();
+            const resume = createDeferred();
+            const materialize = projection.ensureMaterialized.bind(projection);
+            using held = vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+              entered.resolve();
+              await resume.promise;
+              await materialize();
+            });
+            try {
+              await state.cron.update(job.id, { agentId: "ops" });
+              await entered.promise;
+              expect(frames()).toEqual([[], [], []]);
+              setUserProfileRole(opsReader.client.authenticatedUserProfile!.profileId, "none");
+              expect(opsReader.client.preparedSessionProfile?.role).toBe("none");
+              resume.resolve();
+              await Promise.all([opsOwner.next(), researchOwner.next()]);
+              expect(frames()).toEqual([[["global", "ops"]], [], [["global", "research"]]]);
+            } finally {
+              resume.resolve();
+              held.mockRestore();
+              await materialize();
+            }
+          } finally {
+            context = undefined;
+            detach();
+            projection.dispose();
+            await activeConnection.mentionInbox.dispose();
+            connection = undefined;
+          }
+        },
+        {
+          broadcast: (...args) => connection?.broadcast(...args),
+          resolveGatewayContext: () => context,
+        },
+      );
+    });
   });
 
   it("invalidates cron readers without disclosing a retargeted job to its former audience", async () => {

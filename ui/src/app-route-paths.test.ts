@@ -9,14 +9,14 @@ import {
   agentRouteFromPath,
   APP_ROUTE_IDS,
   APP_ROUTE_OFFLINE_PREFIXES,
-  clawCatalogPackageNameFromPath,
+  templateCatalogPackageNameFromPath,
   CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   dynamicRouteFromPath,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
   pathForAgentPanel,
-  pathForClawCatalogEntry,
+  pathForTemplateCatalogEntry,
   pathForPluginSettings,
   pathForPluginCatalogEntry,
   pluginCatalogIdFromPath,
@@ -123,6 +123,43 @@ function createStartupContext(basePath = ""): ApplicationContext {
 }
 
 describe("Dynamic route startup bridge", () => {
+  it.each(["", "/ui", "/portable/control"])(
+    "canonicalizes the index document at %s on startup and history navigation",
+    async (basePath) => {
+      const history = createHistory(`${basePath}/index.html`, "?draft=hello", "#first");
+      const { router, route } = createTestRouter("chat");
+      route.loader = vi.fn(() => ({}));
+      await startApplicationRouter(router, history, basePath, createStartupContext(basePath));
+      expect(history.location()).toEqual({
+        pathname: `${basePath}/chat`,
+        search: "?draft=hello",
+        hash: "#first",
+      });
+      expect(router.getState().status).toBe("success");
+      history.visit({ pathname: `${basePath}/INDEX.HTML`, search: "?draft=next", hash: "#second" });
+      await vi.waitFor(() => {
+        expect(router.getState().location).toEqual({
+          pathname: `${basePath}/chat`,
+          search: "?draft=next",
+          hash: "#second",
+        });
+        expect(router.getState().status).toBe("success");
+      });
+      expect(history.location()).toEqual(router.getState().location);
+    },
+  );
+
+  it.each(["/ui/unknown/index.html", "/ui/other.html", "/ui/beam/unfinished-share-5"])(
+    "preserves explicit non-entry document %s",
+    async (pathname) => {
+      const history = createHistory(pathname, "?draft=hello", "#anchor");
+      const { router } = createTestRouter("chat");
+      await startApplicationRouter(router, history, "/ui", createStartupContext("/ui"));
+      expect(history.location()).toEqual({ pathname, search: "?draft=hello", hash: "#anchor" });
+      expect(router.getState().status).toBe("notFound");
+    },
+  );
+
   it("defers a cold slug until hello and loads each tab at its real pathname", async () => {
     const history = createHistory("/ui/reports", "?p.range=week", "#latest");
     const replace = history.replace;
@@ -304,9 +341,9 @@ describe("Route path contracts", () => {
     [pluginCatalogIdFromPath, "/plugins/openclaw/..", ""],
     [pluginSettingsIdFromPath, "/settings/plugins/discover", ""],
     [pluginSettingsIdFromPath, "/settings/plugins/calendar/extra", ""],
-    [clawCatalogPackageNameFromPath, "/claws/@openclaw/workflow-operator/extra", ""],
-    [clawCatalogPackageNameFromPath, "/claws/packages/@maker/travel-planner", ""],
-    [clawCatalogPackageNameFromPath, "/claws/packages/%ZZ", ""],
+    [templateCatalogPackageNameFromPath, "/templates/@openclaw/workflow-operator/extra", ""],
+    [templateCatalogPackageNameFromPath, "/templates/packages/@maker/travel-planner", ""],
+    [templateCatalogPackageNameFromPath, "/templates/packages/%ZZ", ""],
     [routeIdFromPath, "/agents", ""],
     [terminalSessionIdFromPath, "/terminal/%ZZ", ""],
     [routeIdFromPath, "/terminal/%ZZ", ""],
@@ -391,20 +428,20 @@ describe("Route path contracts", () => {
   it.each(["@openclaw/workflow-operator", "@community/travel-planner", "personal-claw"])(
     "round trips the public package identity %s",
     (packageName) => {
-      const pathname = pathForClawCatalogEntry(packageName, "/ui");
-      expect(pathname).toBe(`/ui/claws/packages/${encodeURIComponent(packageName)}`);
-      expect(clawCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
-      expect(routeIdFromPath(pathname, "/ui")).toBe("claws");
+      const pathname = pathForTemplateCatalogEntry(packageName, "/ui");
+      expect(pathname).toBe(`/ui/templates/packages/${encodeURIComponent(packageName)}`);
+      expect(templateCatalogPackageNameFromPath(pathname, "/ui")).toBe(packageName);
+      expect(routeIdFromPath(pathname, "/ui")).toBe("templates");
       expect(dynamicRouteFromPath(pathname, "/ui")).toEqual([
-        "claws",
-        "__openclawClawsPath",
+        "templates",
+        "__openclawTemplatesPath",
         pathname,
       ]);
     },
   );
 
   it("preserves existing official detail links", () => {
-    expect(clawCatalogPackageNameFromPath("/claws/workflow-operator")).toBe(
+    expect(templateCatalogPackageNameFromPath("/templates/workflow-operator")).toBe(
       "@openclaw/workflow-operator",
     );
   });
@@ -412,9 +449,13 @@ describe("Route path contracts", () => {
   it.each(["@maker/../private", "@Maker/claw", "../private", "@maker/claw/extra"])(
     "rejects invalid package identity %s",
     (packageName) => {
-      expect(() => pathForClawCatalogEntry(packageName)).toThrow("Invalid Claw package name");
+      expect(() => pathForTemplateCatalogEntry(packageName)).toThrow(
+        "Invalid Template package name",
+      );
       expect(
-        clawCatalogPackageNameFromPath(`/claws/packages/${encodeURIComponent(packageName)}`),
+        templateCatalogPackageNameFromPath(
+          `/templates/packages/${encodeURIComponent(packageName)}`,
+        ),
       ).toBeNull();
     },
   );

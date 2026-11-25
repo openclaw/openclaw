@@ -11,6 +11,8 @@ const CANCELED_JSON = JSON.stringify("Code Mode tool canceled.");
 
 export type CodeModeReplyLease = {
   settle: (ok: boolean, value: unknown) => void;
+  /** JSON already normalized by the result-store owner or settle(). */
+  settleJson: (ok: boolean, json: string) => void;
   take: () => SettledBridgeRequest;
   release: () => void;
   cancel: () => void;
@@ -64,9 +66,15 @@ export class CodeModeProgramDataInbox {
         if (this.closed || state !== "pending") {
           return;
         }
-        const json = stringifyCodeModeJsonSafe(
-          ok ? value : normalizeReplyError(value, this.errorBytes),
+        lease.settleJson(
+          ok,
+          stringifyCodeModeJsonSafe(ok ? value : normalizeReplyError(value, this.errorBytes)),
         );
+      },
+      settleJson: (ok, json) => {
+        if (this.closed || state !== "pending") {
+          return;
+        }
         const required = Buffer.byteLength(json, "utf8");
         if (required > this.maxBytes - this.bytes) {
           reply = { id, ok: false, json: INBOX_FULL_JSON };

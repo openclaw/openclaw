@@ -1,6 +1,5 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
@@ -27,9 +26,11 @@ import { registerChatAbortController } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import { createChannelThawScenario } from "./server-maintenance.thaw.test-support.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
+import * as worktreeMaintenance from "./worktree-maintenance.js";
 
 const {
   cleanOldMediaMock,
@@ -37,12 +38,14 @@ const {
   prunePlaybackTranscodeCacheMock,
   cleanupManagedOutgoingMediaRecordsMock,
   startDevicePairSetupMaintenanceMock,
+  pruneToolUsageMock,
 } = vi.hoisted(() => ({
   cleanOldMediaMock: vi.fn(async () => {}),
   pruneOutboundMediaMock: vi.fn(async () => {}),
   prunePlaybackTranscodeCacheMock: vi.fn(async () => {}),
   cleanupManagedOutgoingMediaRecordsMock: vi.fn(async () => {}),
   startDevicePairSetupMaintenanceMock: vi.fn(async () => 0),
+  pruneToolUsageMock: vi.fn(async (_input: { now: number; assertCurrent: () => void }) => {}),
 }));
 
 // mock-isolation: In-memory maintenance timers must not start the device expiry worker.
@@ -65,6 +68,11 @@ vi.mock("./managed-image-attachments.js", () => ({
   cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingMediaRecordsMock,
 }));
 
+// mock-isolation: The scheduler owns cadence and cancellation; worker retention has its database-boundary proof.
+vi.mock("../config/sessions/tool-usage.js", () => ({
+  pruneRegisteredAgentToolUsage: pruneToolUsageMock,
+}));
+
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 const fixtureSources: RpcSourceRef[] = [];
 
@@ -74,9 +82,11 @@ function createActiveRun(sessionKey: string, kind?: RpcSourceRef["adapter"]["kin
   return ref;
 }
 
-function createMaintenanceTimerDeps() {
+function createMaintenanceTimerDeps(
+  restartRunningChannels?: (shouldContinue: () => boolean) => Promise<boolean>,
+) {
   return {
-    ...createGatewayMaintenanceStateForTest(),
+    ...createGatewayMaintenanceStateForTest({ restartRunningChannels }),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
@@ -85,13 +95,22 @@ function createMaintenanceTimerDeps() {
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
 
 async function createThawScenario() {
+  // Thaw timing assertions exclude unrelated root work and admission waiters.
+  vi.spyOn(worktreeMaintenance, "startWorktreeMaintenance").mockReturnValue({
+    request: vi.fn(),
+    notifyArchive: vi.fn(),
+    stop: async () => {},
+  });
   const clock = createGatewaySchedulerClock();
   let nowMs = 0;
   let cpuUsage = { user: 0, system: 0 };
   vi.spyOn(process, "cpuUsage").mockImplementation(() => cpuUsage);
   const state: { restartReason?: "active-work" | "channel-restart-incomplete" } = {};
   let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
-  const base = createMaintenanceTimerDeps();
+  const restartRunningChannels = vi.fn(
+    async (_shouldContinue: () => boolean) => state.restartReason !== "channel-restart-incomplete",
+  );
+  const base = createMaintenanceTimerDeps(restartRunningChannels);
   const deps = {
     ...base,
     scheduler: createTestGatewayScheduler(clock.clock),
@@ -99,10 +118,7 @@ async function createThawScenario() {
     activeWorkInspectors: {
       getChatRuns: vi.fn(() => (state.restartReason === "active-work" ? 1 : 0)),
     },
-    restartRunningChannels: vi.fn(
-      async (_mode: "new-thaw" | "deferred-retry", _shouldContinue?: () => boolean) =>
-        state.restartReason !== "channel-restart-incomplete",
-    ),
+    restartRunningChannels,
     refreshGatewayHealthSnapshot: vi.fn<
       (opts?: { probe?: boolean; includeSensitive?: boolean }) => Promise<HealthSummary>
     >(base.refreshGatewayHealthSnapshot),
@@ -197,6 +213,96 @@ describe("startGatewayMaintenanceTimers", () => {
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue(undefined);
   });
 
+  it.each(["deferred", "same-clock", "health-first"] as const)(
+    "preserves another owner's replacement during %s thaw recovery",
+    async (order) => {
+      const harness = await createChannelThawScenario(
+        createMaintenanceTimerDeps(),
+        order === "health-first",
+      );
+      try {
+        const original = harness.signals.get("first");
+        const originalStart =
+          harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt;
+        const recoveryOrder: string[] = [];
+        if (order === "health-first") {
+          const stop = harness.manager.stopChannel;
+          vi.spyOn(harness.manager, "stopChannel").mockImplementation((...args) => {
+            recoveryOrder.push(`stop:${args[1] ?? "all"}`);
+            return stop(...args);
+          });
+          const capture = harness.manager.captureAccountRestart;
+          vi.spyOn(harness.manager, "captureAccountRestart").mockImplementation((...args) => {
+            recoveryOrder.push(`${args[2]}-capture:${args[1]}`);
+            return capture(...args);
+          });
+        }
+        await harness.advance(210_000);
+        if (order === "health-first") {
+          expect([...recoveryOrder]).toEqual([
+            "health-monitor-capture:first",
+            "stop:first",
+            "host-thaw-capture:first",
+            "host-thaw-capture:second",
+          ]);
+        } else {
+          expect(harness.stops).toEqual([]);
+          if (order === "same-clock") {
+            harness.wallClock.mockReturnValue(originalStart!);
+          }
+          await harness.manager.stopChannel("discord", "first", { manual: false });
+          await harness.manager.startChannel("discord", "first", { reason: "health-monitor" });
+        }
+        const replacement = harness.signals.get("first");
+        expect(original?.aborted).toBe(true);
+        expect(replacement).not.toBe(original);
+        if (order === "same-clock") {
+          expect(
+            harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt,
+          ).toBe(originalStart);
+        }
+        expect(harness.stops).toEqual(["first"]);
+        expect(harness.starts).toEqual(["first", "second", "first"]);
+        // Settle the startup cleanup queued by the first wake before testing idle recovery.
+        await harness.advance(0);
+        harness.state.busy = false;
+        await harness.advance(TICK_INTERVAL_MS);
+        expect(harness.stops).toEqual(["first", "second"]);
+        expect(harness.starts).toEqual(["first", "second", "first", "second"]);
+        expect(replacement?.aborted).toBe(false);
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it("retires a failed thaw target recovered elsewhere and captures current lifetimes on a new gap", async () => {
+    const harness = await createChannelThawScenario(createMaintenanceTimerDeps());
+    try {
+      harness.state.busy = false;
+      harness.failedStops.add("second");
+      await harness.advance(75_000);
+      expect(harness.starts).toEqual(["first", "second", "first"]);
+      harness.failedStops.clear();
+      await harness.manager.stopChannel("discord", "second", { manual: false });
+      await harness.manager.startChannel("discord", "second", { reason: "health-monitor" });
+      const replacement = harness.signals.get("second");
+      harness.starts.length = 0;
+      harness.stops.length = 0;
+      await harness.advance(TICK_INTERVAL_MS);
+      expect(harness.starts).toEqual([]);
+      expect(harness.stops).toEqual([]);
+      expect(replacement?.aborted).toBe(false);
+
+      await harness.advance(75_000);
+      expect(harness.starts).toEqual(["first", "second"]);
+      expect(harness.stops).toEqual(["first", "second"]);
+      expect(replacement?.aborted).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("does not recover channels after a CPU-busy timing gap", async () => {
     const harness = await createThawScenario();
     try {
@@ -255,11 +361,6 @@ describe("startGatewayMaintenanceTimers", () => {
         harness.state.restartReason = undefined;
         await harness.advance(TICK_INTERVAL_MS);
         harness.expectRecoveryCount(1, reason === "active-work" ? 1 : 3);
-        expect(harness.deps.restartRunningChannels.mock.calls.map(([mode]) => mode)).toEqual(
-          reason === "active-work"
-            ? ["deferred-retry"]
-            : ["new-thaw", "deferred-retry", "deferred-retry"],
-        );
         expect(harness.restartLogs("deferred")).toEqual([
           [
             reason === "active-work"
@@ -353,17 +454,14 @@ describe("startGatewayMaintenanceTimers", () => {
     resetGatewayWorkAdmission();
     let activeChatRuns = 1;
     let restartSucceeds = false;
-    const restartRunningChannels = vi.fn(
-      async (_mode: "new-thaw" | "deferred-retry", shouldContinue?: () => boolean) => {
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(shouldContinue?.()).toBe(true);
-        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-        return restartSucceeds;
-      },
-    );
+    const restartRunningChannels = vi.fn(async (shouldContinue: () => boolean) => {
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(shouldContinue?.()).toBe(true);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      return restartSucceeds;
+    });
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
-      restartRunningChannels,
+      ...createMaintenanceTimerDeps(restartRunningChannels),
       activeWorkInspectors: {
         getChatRuns: () => activeChatRuns,
       },
@@ -387,10 +485,6 @@ describe("startGatewayMaintenanceTimers", () => {
       restartSucceeds = true;
       await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
       expect(restartRunningChannels).toHaveBeenCalledTimes(2);
-      expect(restartRunningChannels.mock.calls.map(([mode]) => mode)).toEqual([
-        "deferred-retry",
-        "deferred-retry",
-      ]);
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
       expect(phases).toEqual([
@@ -416,9 +510,8 @@ describe("startGatewayMaintenanceTimers", () => {
     const logHealth = { info: vi.fn(), error: vi.fn() };
     let inspectionFails = true;
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
+      ...createMaintenanceTimerDeps(restartRunningChannels),
       logHealth,
-      restartRunningChannels,
       activeWorkInspectors: {
         getChatRuns: () => {
           if (inspectionFails) {
@@ -443,6 +536,27 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(restartRunningChannels).toHaveBeenCalledOnce();
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("prunes tool usage while the lab and media cleanup are disabled, then revokes maintenance", async () => {
+    const clock = createGatewaySchedulerClock();
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      scheduler: createTestGatewayScheduler(clock.clock),
+      getRuntimeConfig: () => ({}),
+    });
+    for (let tick = 0; tick < 4; tick++) {
+      await clock.advanceBy(30_000);
+    }
+    await clock.advanceBy(10_000);
+    expect(pruneToolUsageMock).toHaveBeenCalledTimes(1);
+    const lifetime = pruneToolUsageMock.mock.calls[0]![0];
+    expect(() => lifetime.assertCurrent()).not.toThrow();
+    await timers.stopMediaCleanup();
+    expect(() => lifetime.assertCurrent()).toThrow();
+    await clock.advanceBy(60 * 60_000);
+    expect(pruneToolUsageMock).toHaveBeenCalledTimes(1);
     await stopMaintenanceTimers(timers);
   });
 
@@ -483,7 +597,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
+  it("starts worktree cleanup immediately and joins slow sweeps across hourly ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const deps = createMaintenanceTimerDeps();
@@ -492,8 +606,6 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
 
     await Promise.resolve();
-    expect(deps.worktreeGc).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
     expect(deps.worktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
     expect(deps.worktreeGc).toHaveBeenCalledTimes(1);
@@ -893,7 +1005,7 @@ describe("startGatewayMaintenanceTimers", () => {
     },
   );
 
-  it("leaves stalled terminal persistence and recovery ownership with the controller", async () => {
+  it("leaves stalled terminal persistence with the controller", async () => {
     const { deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -902,25 +1014,11 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
     terminalRun.adapter.projectSessionTerminalPersistence = new Promise<void>(() => {});
     rpcSourceTesting.set(runId, terminalRun);
-    const target = expectDefined(terminalRun.input.target, "Expected captured fixture target");
-    const recoveryCandidate = {
-      storePath: target.storeScope,
-      agentId: target.agentId,
-      runId,
-      sourceRunId: "source-terminal-persistence",
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: terminalRun.adapter.projectSessionTerminalObservedAt,
-    };
-    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
-
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(terminalRun.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
-    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

@@ -20,6 +20,7 @@ import { expectSchemaVersion } from "./openclaw-state-schema-version-assert.test
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -79,6 +80,7 @@ function legacyTaskDatabase(previousVersion: 22 | 23, refusePublication = false)
   mkdirSync(path.dirname(pathname), { recursive: true });
   using db = new DatabaseSync(pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
   for (const [name] of replacementIndexes) {
     db.exec(`DROP INDEX IF EXISTS ${name}`);

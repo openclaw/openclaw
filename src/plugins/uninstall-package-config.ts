@@ -1,7 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
+import { canonicalizeContainmentRootSync } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 import { resetPluginSlotsToDefaults, resolveRetainedContextEngineIds } from "./slots.js";
@@ -41,12 +41,18 @@ function createEmptyConfigUninstallActions(): PluginConfigUninstallActions {
   };
 }
 
-/** Resolve canonically when present, otherwise preserve an absolute lexical path. */
-export { resolveRealpathOrAbsolute as resolveComparableUninstallPath };
+/**
+ * Recorded install, load, and root paths compare in the containment owner's spelling, so a
+ * missing install under an aliased state dir still matches its canonical root.
+ */
+export { canonicalizeContainmentRootSync as resolveComparableUninstallPath };
 
 /** Check whether a managed uninstall target stays inside its owning root. */
 export function isUninstallPathInsideOrEqual(parent: string, child: string): boolean {
-  return isPathInside(resolveRealpathOrAbsolute(parent), resolveRealpathOrAbsolute(child));
+  return isPathInside(
+    canonicalizeContainmentRootSync(parent),
+    canonicalizeContainmentRootSync(child),
+  );
 }
 
 /** Resolve channel config keys owned by a plugin during uninstall. */
@@ -62,7 +68,7 @@ export function resolveUninstallChannelConfigKeys(
 function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
   return (
     loadPath === installPath ||
-    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
+    canonicalizeContainmentRootSync(loadPath) === canonicalizeContainmentRootSync(installPath)
   );
 }
 

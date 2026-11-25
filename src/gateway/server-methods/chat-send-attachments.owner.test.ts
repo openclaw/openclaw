@@ -3,7 +3,11 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import * as sandboxWorkspace from "../../agents/sandbox/context.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
@@ -13,6 +17,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
+import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,6 +32,7 @@ import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
 import * as attachments from "../chat-attachments.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import * as workspaceStore from "../worker-environments/local-workspace-store.js";
 import { readLocalWorkspaceProjection } from "../worker-environments/local-workspace-store.test-support.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
@@ -35,7 +41,6 @@ import {
   prepareAttachmentFixture,
 } from "./chat-send-attachments.test-support.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
-import { expectRpcError } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const it = test.extend<{ state: OpenClawTestState }>({
@@ -96,7 +101,16 @@ it("stages a non-PDF upload above 50 MiB when mediaMaxMb admits it", async ({ st
 
   expect(respond.mock.calls).toEqual([]);
   assert(result.ok, "admitted attachment was not staged");
-  const media = result.value.mediaPathOffloads[0]!;
+  const ctx: MsgContext = { media: result.value.mediaPathOffloads };
+  await staging.stageSandboxMedia({
+    ctx,
+    sessionCtx: ctx as TemplateContext,
+    cfg,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    workspaceDir: state.workspaceDir,
+  });
+  const media = ctx.media![0]!;
   expect(media.path).toMatch(/^media\/inbound\/openclaw-staged-/u);
   await expect(fs.stat(path.resolve(media.workspaceDir!, media.path!))).resolves.toMatchObject({
     size,
@@ -122,7 +136,17 @@ it.for(["off", "all"] as const)(
       });
       expect(respond.mock.calls).toEqual([]);
       assert(result.ok, "attachment preparation failed");
-      const media = result.value.mediaPathOffloads[0]!;
+      expect(preparation).not.toHaveBeenCalled();
+      const ctx: MsgContext = { media: result.value.mediaPathOffloads };
+      await staging.stageSandboxMedia({
+        ctx,
+        sessionCtx: ctx as TemplateContext,
+        cfg,
+        agentId,
+        sessionKey: "global",
+        workspaceDir: state.path(agentId),
+      });
+      const media = ctx.media![0]!;
       expect(media.fileName).toBe(fileName);
       const file = path.resolve(media.workspaceDir!, media.path!);
       expect(await fs.readFile(file, "utf8")).toBe(bytes);
@@ -138,6 +162,7 @@ it.for(["off", "all"] as const)(
 
 it("stages managed session follow-ups in their projection and rejects unrelated workspaces", async ({
   state,
+  signal: testSignal,
 }) => {
   const repository = await initializeGitFixture(state.root, "repository", "README.md", "base");
   const checkout = state.path("checkout");
@@ -171,7 +196,14 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
     worktree: { id: worktree.id, branch: worktree.branch, repoRoot: repository },
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-  for (const selection of ["cwd", "workspace", "unrelated", "revoked", "removed"] as const) {
+  for (const selection of [
+    "cwd",
+    "workspace",
+    "cancelled",
+    "unrelated",
+    "revoked",
+    "removed",
+  ] as const) {
     if (selection === "removed") {
       await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
     }
@@ -211,28 +243,87 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
       abortCleanup() {},
       context: { logGateway: createSubsystemLogger("test/managed-media") },
     });
-    revokePreparation?.mockRestore();
-    if (selection === "revoked") {
-      expect(result.ok).toBe(false);
-      expectRpcError(respond, { code: "UNAVAILABLE" });
-      expect(
-        (
-          await fs.readdir(path.join(projectionBefore!.projection_path, "media", "inbound"))
-        ).toSorted(),
-      ).toEqual(filesBefore?.toSorted());
-      continue;
-    }
-    if (selection === "unrelated" || selection === "removed") {
-      expect(result.ok).toBe(false);
-      expectRpcError(respond, {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("Local sandbox managed workspace owner changed"),
-      });
-      continue;
-    }
     expect(respond.mock.calls).toEqual([]);
-    assert(result.ok, "managed attachment preparation failed");
-    const media = result.value.mediaPathOffloads[0]!;
+    assert(result.ok, "managed attachment offload failed");
+    const ctx: MsgContext = { media: result.value.mediaPathOffloads };
+    const stage = (abortSignal?: AbortSignal) =>
+      staging.stageSandboxMedia({
+        ctx,
+        sessionCtx: ctx as TemplateContext,
+        cfg,
+        agentId: "main",
+        sessionKey,
+        workspaceDir: selectedEntry.spawnedWorkspaceDir ?? selectedEntry.spawnedCwd,
+        abortSignal,
+      });
+    if (selection === "cancelled") {
+      const acquired = createDeferred();
+      const release = createDeferred();
+      const custody = workspaceStore.withLocalWorkspaceStore(
+        { worktreeId: worktree.id },
+        async () => {
+          acquired.resolve();
+          await release.promise;
+        },
+      );
+      await acquired.promise;
+      const queued = createDeferred();
+      const withStore = workspaceStore.withLocalWorkspaceStore;
+      const spy = vi
+        .spyOn(workspaceStore, "withLocalWorkspaceStore")
+        .mockImplementation((params, run) => {
+          const pendingStore = withStore(params, run);
+          queued.resolve();
+          return pendingStore;
+        });
+      const controller = new AbortController();
+      const reason = createAgentRunDirectAbortError();
+      const pending = stage(controller.signal);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            queued.promise,
+            pending,
+            "staging bypassed reconciliation custody",
+          ),
+          testSignal,
+        );
+        controller.abort(reason);
+        // Cancellation must settle while another owner still retains the lease.
+        await withinTest(
+          expect(pending).rejects.toSatisfy(
+            (error: unknown) =>
+              error === reason || (error instanceof Error && error.cause === reason),
+          ),
+          testSignal,
+        );
+        expect(ctx.media![0]!.path).toBe(result.value.offloadedRefs[0]!.path);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([custody, pending]);
+        spy.mockRestore();
+      }
+      continue;
+    }
+    try {
+      if (selection === "revoked" || selection === "unrelated" || selection === "removed") {
+        await expect(stage()).rejects.toThrow(
+          selection === "revoked" ? undefined : /Local sandbox managed workspace owner changed/,
+        );
+        if (selection === "revoked") {
+          expect(
+            (
+              await fs.readdir(path.join(projectionBefore!.projection_path, "media", "inbound"))
+            ).toSorted(),
+          ).toEqual(filesBefore?.toSorted());
+        }
+        continue;
+      }
+      await stage();
+    } finally {
+      revokePreparation?.mockRestore();
+    }
+    const media = ctx.media![0]!;
     const projection = await readLocalWorkspaceProjection(worktree.id);
     expect(projection?.session_key).toBe(sessionKey);
     expect(media.workspaceDir).toBe(projection?.projection_path);
@@ -275,26 +366,14 @@ it.for([
   const sandboxSpy = vi.spyOn(sandboxWorkspace, "prepareSandboxWorkspaceForSession");
   try {
     const prepared = await upload.prepare();
-    if (canTransfer && stopped) {
-      expect(prepared.ok).toBe(false);
-      expect(sandboxSpy).not.toHaveBeenCalled();
-      expectRpcError(respond, { code: "UNAVAILABLE" });
-      return;
-    }
     assert(prepared.ok, "attachment preparation failed");
     const source = prepared.value.offloadedRefs[0]!.path;
     const media = prepared.value.mediaPathOffloads[0]!;
     expect(await fs.readFile(source, "utf8")).toBe("original upload");
-    if (canTransfer) {
-      expect(media).toMatchObject({ path: source, fileName: "input.txt" });
-      expect(sandboxSpy).not.toHaveBeenCalled();
-    } else {
-      expect(sandboxSpy).toHaveBeenCalled();
-      expect(media.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
-      expect(await fs.readFile(path.join(media.workspaceDir!, media.path!), "utf8")).toBe(
-        "original upload",
-      );
-    }
+    expect(media).toMatchObject({ path: source, fileName: "input.txt" });
+    expect(media.workspaceDir).toBeUndefined();
+    expect(sandboxSpy).not.toHaveBeenCalled();
+    expect(respond).not.toHaveBeenCalled();
   } finally {
     release();
     sandboxSpy.mockRestore();
@@ -302,31 +381,11 @@ it.for([
   }
 });
 
-it.for([
-  ["signal-only TXT cleanup", false, "signal", "abort", "aborted", "stage"],
-  ["managed-PDF cancellation without fallback", true, "signal", "abort", "aborted", "stage"],
-  ["ordinary TXT failure with aborted signal", false, "signal", "ordinary", "unavailable", "stage"],
-  ["RPC abort precedence over later TXT failure", false, "marker", "ordinary", "aborted", "stage"],
-  ["ordinary managed-PDF host-path fallback", true, "none", "ordinary", "fallback", "stage"],
-  ["unsandboxed cleanup before cancellation", false, "signal", "abort", "aborted", "sandbox-null"],
-  ["managed-PDF pass-through cleanup", true, "signal", "abort", "aborted", "pass-through"],
-  ["TXT failure before late abort", false, "late-marker", "ordinary", "unavailable", "stage"],
-] as const)(
-  "%s",
-  async ([_name, pdf, interruption, stageError, outcome, preparation], { state }) => {
-    const cfg = attachmentConfig(state, {
-      mode: preparation === "sandbox-null" ? "off" : "all",
-      ...(preparation === "pass-through" ? { mediaMaxMb: 51 } : {}),
-    });
+it.for(["signal", "rpc"] as const)(
+  "retains admission until abandoned offloads are deleted after %s cancellation",
+  async (interruption, { state }) => {
+    const cfg = attachmentConfig(state);
     const runId = "attachment-cancellation";
-    const bytes =
-      preparation === "pass-through"
-        ? Buffer.alloc(staging.SANDBOX_MEDIA_MAX_BYTES + 1, " ")
-        : Buffer.from(pdf ? "%PDF-1.4\n% synthetic attachment\n%%EOF\n" : "synthetic attachment");
-    if (preparation === "pass-through") {
-      bytes.write("%PDF-1.4\n% synthetic attachment\n");
-      bytes.write("%%EOF\n", bytes.length - 6);
-    }
     let inboundPath: string | undefined;
     const filesPresentAtResponse: boolean[] = [];
     const respond = vi.fn<RespondFn>(() => {
@@ -335,156 +394,82 @@ it.for([
     const upload = await createUpload(
       state,
       cfg,
-      attachmentParams(runId, pdf ? "notes.pdf" : "notes.txt", bytes, {
-        agentId: "main",
-        message: "read the attached file",
-      }),
+      attachmentParams(runId, "notes.txt", "synthetic attachment"),
       respond,
     );
-    expect(respond).not.toHaveBeenCalled();
     const { admission, context } = upload;
-    const signal = admission.activeRunAbort.controller.signal;
-    const ordinaryFailure = new Error("synthetic staging filesystem failure");
-    const stageRelease = createDeferred();
-    const cleanupRelease = createDeferred();
-    const discard = attachments.discardPreparedInboundMedia;
-    const parse = attachments.parseMessageWithAttachments;
-    const ensureSandbox = sandboxWorkspace.prepareSandboxWorkspaceForSession;
     const preparationEntered = createDeferred();
+    const parseRelease = createDeferred();
+    const cleanupEntered = createDeferred();
+    const cleanupRelease = createDeferred();
+    const parse = attachments.parseMessageWithAttachments;
     const parseSpy = vi
       .spyOn(attachments, "parseMessageWithAttachments")
       .mockImplementation(async (...args) => {
         const result = await parse(...args);
         inboundPath = result.offloadedRefs[0]?.path;
-        if (preparation === "pass-through") {
-          preparationEntered.resolve();
-          await stageRelease.promise;
-        }
+        preparationEntered.resolve();
+        await parseRelease.promise;
         return result;
       });
-    const sandboxSpy =
-      preparation === "sandbox-null"
-        ? vi
-            .spyOn(sandboxWorkspace, "prepareSandboxWorkspaceForSession")
-            .mockImplementation(async (...args) => {
-              const result = await ensureSandbox(...args);
-              if (result !== null) {
-                throw new Error("the unsandboxed fixture unexpectedly provisioned a workspace");
-              }
-              preparationEntered.resolve();
-              await stageRelease.promise;
-              return result;
-            })
-        : undefined;
+    const discard = attachments.discardPreparedInboundMedia;
     const discardSpy = vi
       .spyOn(attachments, "discardPreparedInboundMedia")
       .mockImplementation(async (...args) => {
+        cleanupEntered.resolve();
         await cleanupRelease.promise;
         await discard(...args);
       });
-    const stageSpy = vi.spyOn(staging, "stageSandboxMedia").mockImplementation(async ({ ctx }) => {
-      inboundPath = ctx.media?.[0]?.path;
-      preparationEntered.resolve();
-      await stageRelease.promise;
-      throw stageError === "abort" ? signal.reason : ordinaryFailure;
-    });
     const preparing = upload.prepare();
-    const abort = () =>
-      abortChatRunById(createChatAbortOps(context), {
-        runId,
-        sessionKey: upload.session.sessionKey,
-        stopReason: "rpc",
-      });
-
     try {
       await awaitGateBeforeSettlement(
         preparationEntered.promise,
         preparing,
-        "attachment preparation completed before reaching the held boundary",
+        "offload did not reach the held boundary",
       );
-      if (preparation !== "stage") {
-        expect(stageSpy).not.toHaveBeenCalled();
-      }
       assert(inboundPath, "the real attachment parser did not create an inbound file");
-      if (interruption === "marker") {
-        expect(abort()).toEqual({ aborted: true });
-      } else if (interruption === "signal") {
+      if (interruption === "rpc") {
+        expect(
+          abortChatRunById(createChatAbortOps(context), {
+            runId,
+            sessionKey: upload.session.sessionKey,
+            stopReason: "rpc",
+          }),
+        ).toEqual({ aborted: true });
+      } else {
         admission.activeRunAbort.controller.abort(createAgentRunDirectAbortError());
       }
-      expect(signal.aborted).toBe(interruption === "signal" || interruption === "marker");
-      expect(context.chatRunState.hasAbortMarker(runId)).toBe(interruption === "marker");
-      stageRelease.resolve();
-
-      if (outcome === "fallback") {
-        const result = await preparing;
-        assert(result.ok, "ordinary managed-PDF fallback failed");
-        expect(result.value.mediaPathOffloads).toEqual([
-          {
-            path: inboundPath,
-            contentType: "application/pdf",
-            fileName: "notes.pdf",
-            workspaceDir: path.dirname(inboundPath),
-          },
-        ]);
-        expect((await fs.readFile(inboundPath)).equals(bytes)).toBe(true);
-        expect(discardSpy).not.toHaveBeenCalled();
-        expect(respond).not.toHaveBeenCalled();
-        return;
-      }
-
-      // Cancellation must retain admission until the real abandoned-file
-      // cleanup settles; neither a PDF fallback nor an early response owns it.
-      await vi.waitFor(() => expect(discardSpy).toHaveBeenCalledOnce());
+      parseRelease.resolve();
+      await awaitGateBeforeSettlement(
+        cleanupEntered.promise,
+        preparing,
+        "cancellation bypassed media cleanup",
+      );
       expect(upload.prepared).toBeUndefined();
       expect(admission.gatewayWorkAdmission.isActive()).toBe(true);
       expect(respond).not.toHaveBeenCalled();
       expect(existsSync(inboundPath)).toBe(true);
-      if (interruption === "late-marker") {
-        expect.soft(abort()).toEqual({ aborted: false });
-        expect.soft(signal.aborted).toBe(false);
-        expect.soft(context.chatRunState.hasAbortMarker(runId)).toBe(false);
-        expect(admission.gatewayWorkAdmission.isActive()).toBe(true);
-      }
       cleanupRelease.resolve();
       expect(await preparing).toEqual({ ok: false });
       expect(admission.gatewayWorkAdmission.isActive()).toBe(false);
       expect(filesPresentAtResponse).toEqual([false]);
-      expect(respond).toHaveBeenCalledOnce();
-      if (interruption === "late-marker") {
-        expect
-          .soft(vi.mocked(context.broadcast).mock.calls.filter(([event]) => event === "chat"))
-          .toHaveLength(0);
-        expect.soft(context.logGateway.error).toHaveBeenCalledOnce();
-      }
-      if (outcome === "aborted") {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            runId,
-            status: "timeout",
-            summary: "aborted",
-            stopReason: "rpc",
-          }),
-          undefined,
-          { runId },
-        );
-        if (preparation === "stage" && stageError === "abort") {
-          expect(stageSpy).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: signal }));
-        }
-      } else {
-        expectRpcError(respond, {
-          code: "UNAVAILABLE",
-          message: expect.stringContaining(ordinaryFailure.message),
-        });
-      }
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "rpc",
+        }),
+        undefined,
+        { runId },
+      );
     } finally {
-      stageRelease.resolve();
+      parseRelease.resolve();
       cleanupRelease.resolve();
       try {
         await preparing;
       } finally {
-        stageSpy.mockRestore();
-        sandboxSpy?.mockRestore();
         parseSpy.mockRestore();
         discardSpy.mockRestore();
         await upload.cleanup();

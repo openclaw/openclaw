@@ -9,12 +9,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import {
-  claimMainSessionRecoveryOwner,
-  refreshMainSessionRecoveryOwner,
-  releaseMainSessionRecoveryOwner,
-} from "../main-session-recovery/main-session-recovery-store.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { publishEmbeddedRequestContext } from "../embedded-agent-runner/run/attempt-context-accounting.js";
 import { modelDefinition } from "../model-auth.fixtures.test-support.js";
 import { recordCliCompactionInStore } from "./session-store.js";
 import {
@@ -137,6 +133,56 @@ function accountingState(revision: number): SessionEntry {
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("publishes request occupancy during a turn and replaces it with final accounting", async ({
+    s,
+  }) => {
+    const entry = await s.seed({
+      activeWriterRunId: "context-writer",
+      lifecycleRevision: "context-generation",
+      totalTokens: 436_631,
+      totalTokensFresh: true,
+    });
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: s.storePath,
+      expectedLifecycleRevision: entry.lifecycleRevision,
+      expectedWriterRunId: entry.activeWriterRunId,
+    };
+    const attempt = {
+      runId: "context-writer",
+      inputProvenance: { kind: "internal_system" as const, sourceTool: "cron_execution" },
+      preparedSessionTarget: { target, assertCurrent: composeSessionSourceAssertion([]) },
+    };
+    for (const tokens of [810_448, 20_000]) {
+      await publishEmbeddedRequestContext(attempt, tokens);
+      expect(s.read()).toMatchObject({ totalTokens: tokens, totalTokensFresh: true, updatedAt: 1 });
+    }
+    await publishEmbeddedRequestContext(
+      {
+        ...attempt,
+        preparedSessionTarget: {
+          ...attempt.preparedSessionTarget,
+          target: { ...target, expectedWriterRunId: "retired" },
+        },
+      },
+      900_000,
+    );
+    expect(s.read()?.totalTokens).toBe(20_000);
+    await s.update({
+      preserveUserFacingSessionModelState: true,
+      compactionAccounting: {
+        ...accountingFact(s.storePath, {
+          lifecycleRevision: entry.lifecycleRevision,
+          activeWriterRunId: entry.activeWriterRunId,
+        }),
+        currentContextSnapshot: { tokens: 20_015 },
+      },
+    });
+    expect(s.read()).toMatchObject({ totalTokens: 20_015, totalTokensFresh: true });
+  });
+
   it.for(["finalizer", "cli-compaction"] as const)(
     "publishes %s cache at commit without overwriting a subsequent writer",
     async (operation, { s }) => {
@@ -256,15 +302,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
     expect(s.sessionStore[costKey]?.estimatedCostUsd).toBe(8);
   });
 
-  it("retains the replay-safe guard after abort", async ({ s }) => {
-    await s.seed({ restartRecoveryForceSafeTools: true });
-    await s.update({
-      clearRestartRecoveryForceSafeTools: true,
-      result: runResult({}, { aborted: true }),
-    });
-    s.check({ restartRecoveryForceSafeTools: true });
-  });
-
   it("preserves concurrent management and permissions", async ({ s }) => {
     const stale = await s.seed({
       label: "Old label",
@@ -357,7 +394,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     s.check({ totalTokens: 0, totalTokensFresh: false });
   });
 
-  it("uses last-call input, not cumulative billing", async ({ s }) => {
+  it("uses last-call context occupancy, not cumulative billing", async ({ s }) => {
     await s.seed();
     await s.update({
       result: runResult({
@@ -367,7 +404,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         lastCallUsage: { input: 38, output: 1, cacheRead: 120, total: 159 },
       }),
     });
-    s.check({ totalTokens: 158, totalTokensFresh: true });
+    s.check({ totalTokens: 159, totalTokensFresh: true });
   });
 
   it.for(["missing", "replaced"] as const)(
@@ -385,6 +422,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       }
       const before = s.read();
       await s.update({
+        preserveUserFacingSessionModelState: true,
         compactionAccounting: accountingFact(s.storePath, {
           lifecycleRevision: "lifecycle",
           activeWriterRunId: "previous-writer",
@@ -398,70 +436,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(s.sessionStore[sessionKey]).toBeUndefined();
     },
   );
-
-  it("retains queued recovery claims after completion", async ({ s }) => {
-    await s.seed({
-      abortedLastRun: true,
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-    });
-    const claim = (runId: string) =>
-      claimMainSessionRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        sessionId,
-        runId,
-        target: { agentId: "main", sessionKey, storePath: s.storePath },
-      });
-    const first = await claim("queued-1");
-    const second = await claim("queued-2");
-    if (first.kind !== "claimed" || second.kind !== "claimed") {
-      throw new Error("expected two foreground recovery claims");
-    }
-    // The running command has adopted its claim. A queued peer still owns the
-    // same recovery cycle after this command records successful completion.
-    s.sessionStore[sessionKey] = s.read()!;
-    await s.update();
-    await releaseMainSessionRecoveryOwner(first.lease);
-    expect(await refreshMainSessionRecoveryOwner(second.lease, "queued-2")).toBeDefined();
-    expect(s.read()?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual([second.lease.claimId]);
-    await releaseMainSessionRecoveryOwner(second.lease);
-    expect(s.read()?.mainRestartRecovery).toBeUndefined();
-    expect(s.read()?.restartRecoveryRuns).toBeUndefined();
-  });
-
-  it("clears main recovery but retains subagent recovery", async ({ s }) => {
-    const subagentRecovery = {
-      automaticAttempts: 2,
-      lastAttemptAt: 3,
-      wedgedAt: 4,
-      wedgedReason: "automatic_attempt_budget_exceeded" as const,
-    };
-    await s.seed({
-      abortedLastRun: true,
-      restartRecoveryForceSafeTools: true,
-      restartRecoveryRuns: [
-        { runId: "initial-wedged-run", lifecycleGeneration: "gen-1" },
-        { runId: "recovery-run-1", lifecycleGeneration: "gen-2" },
-      ],
-      mainRestartRecovery: { cycleId: "cycle-1", revision: 3, chargedAttempts: 2 },
-      subagentRecovery,
-    });
-    await s.update({
-      touchInteraction: false,
-      touchActivity: false,
-      preserveRuntimeModel: true,
-      clearRestartRecoveryForceSafeTools: true,
-      result: runResult({}, { aborted: false }),
-    });
-    s.check({ abortedLastRun: false }, [
-      "restartRecoveryRuns",
-      "restartRecoveryForceSafeTools",
-      "mainRestartRecovery",
-    ]);
-    for (const entry of [s.sessionStore[sessionKey], s.read()]) {
-      expect(entry?.subagentRecovery).toEqual(subagentRecovery);
-    }
-    expect(s.read()).not.toHaveProperty("mainRestartRecovery");
-  });
 
   it("preserves the visible runtime model during a heartbeat using another model", async ({
     s,

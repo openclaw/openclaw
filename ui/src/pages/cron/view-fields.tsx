@@ -20,6 +20,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
+  cronTz: "cron.form.timezoneOptional",
   staggerAmount: "cron.form.staggerWindow",
   activeHoursStart: "cron.form.activeHoursStart",
   activeHoursEnd: "cron.form.activeHoursEnd",
@@ -91,6 +92,8 @@ export function FieldRow(props: {
   stacked?: boolean;
   wide?: boolean;
   inline?: boolean;
+  /** Keep the help for assistive technology only; the row shows just its label. */
+  quietHelp?: boolean;
 }) {
   return (
     <>
@@ -111,7 +114,9 @@ export function FieldRow(props: {
                 </>
               ) : undefined}
             </span>
-            {props.help ? <span class="settings-row__desc">{props.help}</span> : undefined}
+            {props.help ? (
+              <span class={props.quietHelp ? "sr-only" : "settings-row__desc"}>{props.help}</span>
+            ) : undefined}
           </label>
           <div class="settings-row__control">
             <div class={["cron-control", { "cron-control--wide": props.wide }]}>
@@ -148,6 +153,7 @@ type CronInputOptions = {
   errorKey?: CronFieldKey;
   describeError?: boolean;
   inline?: boolean;
+  quietHelp?: boolean;
 };
 export function CronInput(props: FormProps & CronInputOptions) {
   const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
@@ -181,10 +187,61 @@ export function CronInput(props: FormProps & CronInputOptions) {
       controlId={inputIdForField(props.field)}
       required={props.required}
       help={props.help}
+      quietHelp={props.quietHelp}
       error={error()}
       errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}
       control={control}
     />
+  );
+}
+/**
+ * A labelless input for the prompt tray: the label and help become its accessible name and
+ * description, and its validation message is listed under the tray's controls.
+ */
+export function TrayInput(
+  props: FormProps &
+    Omit<CronInputOptions, "inline" | "describeError"> & { size?: "narrow" | "wide" },
+) {
+  const helpId = () => `${inputIdForField(props.field)}-help`;
+  const error = () => (props.errorKey ? props.fieldErrors[props.errorKey] : undefined);
+  const describedBy = () =>
+    [props.help ? helpId() : "", error() && props.errorKey ? errorIdForField(props.errorKey) : ""]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  return (
+    <>
+      <input
+        id={inputIdForField(props.field)}
+        class={[
+          "settings-input cron-tray-input",
+          {
+            mono: props.mono,
+            "cron-tray-input--narrow": props.size === "narrow",
+            "cron-tray-input--wide": props.size === "wide",
+          },
+        ]}
+        type={props.type}
+        aria-label={props.label}
+        title={props.help ?? props.label}
+        aria-required={props.required ? "true" : undefined}
+        value={props.form[props.field]}
+        list={props.list}
+        disabled={props.disabled ?? false}
+        aria-invalid={props.errorKey ? (error() ? "true" : "false") : undefined}
+        aria-describedby={describedBy()}
+        placeholder={props.placeholder}
+        onInput={(event) =>
+          props.onFormChange({
+            [props.field]: event.currentTarget.value,
+          })
+        }
+      />
+      {props.help ? (
+        <span id={helpId()} class="sr-only">
+          {props.help}
+        </span>
+      ) : undefined}
+    </>
   );
 }
 type CronSelectOptions = {
@@ -196,6 +253,7 @@ type CronSelectOptions = {
   value?: string;
   disabled?: boolean;
   inline?: boolean;
+  quietHelp?: boolean;
   channel?: boolean;
   errorKey?: CronFieldKey;
 };
@@ -221,6 +279,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
       label={props.label}
       controlId={inputIdForField(props.field)}
       help={props.help}
+      quietHelp={props.quietHelp}
       required={props.required}
       error={error()}
       errorId={props.errorKey ? errorIdForField(props.errorKey) : undefined}

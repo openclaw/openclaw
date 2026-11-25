@@ -1,26 +1,27 @@
 // Backup restore tests cover verified whole-archive extraction and fresh-target safety.
+import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import { gunzipSync, gzipSync } from "node:zlib";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
+import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
 import { createBackupArchive } from "../infra/backup-create.js";
+import { withIsolatedBackupState } from "../infra/backup-create.test-support.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
-import { buildBackupArchivePath } from "./backup-shared.js";
 import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const withState = (run: Parameters<typeof withOpenClawTestState>[1]) =>
-  withOpenClawTestState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
+const withState = (run: Parameters<typeof withIsolatedBackupState>[1]) =>
+  withIsolatedBackupState({ layout: "state-only", scenario: "minimal", prefix: "oc-link-" }, run);
 const DEFAULT_ARCHIVE_ROOT = "2026-08-12T00-00-00.000Z-openclaw-backup";
 const DEFAULT_PAYLOAD_PATH = buildBackupArchivePath(DEFAULT_ARCHIVE_ROOT, "/tmp/openclaw.json");
 const restore = (archive: string, target: string) =>
@@ -112,13 +113,16 @@ async function writeUnextractableArchive(archivePath: string) {
 
 describe("backupRestoreCommand", () => {
   it.skipIf(process.platform === "win32")(
-    "escapes terminal controls in restore output while preserving the restored payload",
+    "escapes terminal controls and resolves symlinked parents while preserving the payload",
     async () => {
       await withState(async (state) => {
-        const text = "café\u001b[31m\nforged\tend\rrow\u0007";
-        const archive = state.path(`${text}.tar.gz`);
+        const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
+        const archive = `${state.path("link")}/../${text}.tar.gz `;
         const target = state.path(`restored-${text}`);
-        await writeArchive({ archivePath: archive });
+        await fs.mkdir(state.path("real", "sub"), { recursive: true });
+        await fs.symlink("real/sub", state.path("link"));
+        await writeUnextractableArchive(state.path(`${text}.tar.gz `));
+        await writeArchive({ archivePath: state.path("real", `${text}.tar.gz `) });
         const runtime = createTestRuntime();
         const result = await backupRestoreCommand(runtime, { archive, target });
         const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -126,8 +130,29 @@ describe("backupRestoreCommand", () => {
         expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
         expect(report).not.toContain("\nforged");
         expect(result.targetPath).toBe(target);
-        expect(result.archivePath).toBe(archive);
+        expect(result.archivePath).toBe(
+          path.join(await fs.realpath(state.path("real")), `${text}.tar.gz `),
+        );
         expect(await fs.readFile(path.join(target, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "restores where a symlinked target folder's `..` leads, not to the lexical neighbor",
+    async () => {
+      await withState(async (state) => {
+        await fs.mkdir(state.path("physical", "nested"), { recursive: true });
+        await fs.symlink(state.path("physical", "nested"), state.path("target-link"));
+        await writeArchive({ archivePath: state.path("backup.tar.gz") });
+        const result = await backupRestoreCommand(createTestRuntime(), {
+          archive: state.path("backup.tar.gz"),
+          target: `${state.path("target-link")}/../restored`,
+        });
+        const restored = path.join(await fs.realpath(state.path("physical")), "restored");
+        expect(result.targetPath).toBe(restored);
+        expect(await fs.readFile(path.join(restored, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+        await expect(fs.stat(state.path("restored"))).rejects.toThrow();
       });
     },
   );
@@ -252,6 +277,10 @@ describe("backupRestoreCommand", () => {
       const targetPath = state.path("restored");
       await fs.mkdir(outputDir, { recursive: true });
       await state.writeText("operator-note.txt", "restore me\n");
+      // Incompressible and larger than two compression blocks, so the archive
+      // must hold several gzip members that verify and restore read as one stream.
+      const largePayload = randomBytes(9 * 1024 * 1024);
+      await fs.writeFile(state.statePath("large-payload.bin"), largePayload);
       const pluginSkillTarget = state.statePath("plugin-source", "canvas");
       if (process.platform !== "win32") {
         await fs.mkdir(pluginSkillTarget, { recursive: true });
@@ -317,6 +346,16 @@ describe("backupRestoreCommand", () => {
         expect(await listFilesystemLeafEntries(targetPath)).toEqual(
           await listArchiveLeafEntries(backup.archivePath),
         );
+        const archiveBytes = await fs.readFile(backup.archivePath);
+        const secondMember = archiveBytes.indexOf(archiveBytes.subarray(0, 10), 10);
+        expect(secondMember).toBeGreaterThan(0);
+        expect(gunzipSync(archiveBytes.subarray(secondMember)).length).toBeGreaterThan(0);
+        const largeEntry = (await listArchiveLeafEntries(backup.archivePath)).find((entry) =>
+          entry.endsWith("/large-payload.bin"),
+        );
+        expect(
+          (await fs.readFile(path.join(targetPath, largeEntry ?? ""))).equals(largePayload),
+        ).toBe(true);
         const databaseEntry = (await listArchiveLeafEntries(backup.archivePath)).find((entry) =>
           entry.endsWith("/state/openclaw.sqlite"),
         );
@@ -445,22 +484,45 @@ describe("backupRestoreCommand", () => {
   it("accepts an empty directory and refuses a non-empty target", async () => {
     await withState(async (state) => {
       const archivePath = state.path("backup.tar.gz");
-      const emptyTarget = state.path("empty-target");
-      const nonEmptyTarget = state.path("non-empty-target");
+      const empty = state.path("empty-target");
+      const nonEmpty = state.path("non-empty-target");
       await writeArchive({ archivePath });
-      await fs.mkdir(emptyTarget);
-      await fs.mkdir(nonEmptyTarget);
-      await fs.writeFile(path.join(nonEmptyTarget, "keep.txt"), "keep\n");
-
-      await expect(restore(archivePath, emptyTarget)).resolves.toMatchObject({
-        targetPath: emptyTarget,
+      await Promise.all([fs.mkdir(empty), fs.mkdir(nonEmpty)]);
+      await fs.writeFile(path.join(nonEmpty, "keep.txt"), "keep\n");
+      await expect(restore(archivePath, empty)).resolves.toMatchObject({ targetPath: empty });
+      await expect(restore(archivePath, nonEmpty)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: expect.stringMatching(/target directory must be empty/iu),
       });
-      await expect(restore(archivePath, nonEmptyTarget)).rejects.toThrow(
-        /target directory must be empty/iu,
-      );
-      await expect(fs.readFile(path.join(nonEmptyTarget, "keep.txt"), "utf8")).resolves.toBe(
-        "keep\n",
-      );
+      await expect(fs.readFile(path.join(nonEmpty, "keep.txt"), "utf8")).resolves.toBe("keep\n");
+    });
+  });
+
+  it.each([
+    ["not a name", undefined, /requires an environment variable name/u],
+    ["OC_TEST_UNSET_PG", undefined, /OC_TEST_UNSET_PG is not set; nothing was restored/u],
+    ["OC_SET_PG", "unused", /requires an archive with PostgreSQL stores; nothing was restored/u],
+  ] as const)("refuses --postgres-connection-env %s", async (env, value, msg) => {
+    await withState(async (state) => {
+      const archivePath = state.path("backup.tar.gz");
+      const target = state.path("restored");
+      await writeArchive({ archivePath });
+      delete process.env[env];
+      if (value !== undefined) {
+        process.env[env] = value;
+      }
+      try {
+        await expect(
+          backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target,
+            postgresConnectionEnv: env,
+          }),
+        ).rejects.toMatchObject({ message: expect.stringMatching(msg), name: "ExpectedCliError" });
+      } finally {
+        delete process.env[env];
+      }
+      await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -498,7 +560,7 @@ describe("backupRestoreCommand", () => {
       }));
       try {
         const refused = await restore(archivePath, refusedTarget).catch((error: unknown) => error);
-        expect(refused).toBeInstanceOf(Error);
+        expect((refused as Error).name).toBe("ExpectedCliError");
         expect((refused as Error).message).toContain(refusedTarget);
         expect((refused as Error).message).toMatch(
           /requires 256 MiB.*archive data plus 256 MiB reserve.*only 1 MiB is available/iu,
@@ -522,19 +584,23 @@ describe("backupRestoreCommand", () => {
     });
   });
 
-  it("rejects a staging target inside a configured external live agent directory", async () => {
+  it.each([
+    ["state", /outside the live OpenClaw state directory/iu],
+    ["agent", /outside the live OpenClaw agent directory/iu],
+  ] as const)("rejects a staging target inside the live %s directory", async (lane, msg) => {
     await withState(async (state) => {
       const agentDir = state.path("external-agent");
-      const targetPath = path.join(agentDir, "restore-target");
-      await fs.mkdir(agentDir, { recursive: true });
-      await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
-
+      const targetPath = path.join(lane === "state" ? state.stateDir : agentDir, "restore-target");
+      if (lane === "agent") {
+        await fs.mkdir(agentDir, { recursive: true });
+        await state.writeConfig({ agents: { entries: { main: { agentDir } } } });
+      }
       await expect(
         backupRestoreCommand(createTestRuntime(), {
           archive: state.path("missing-backup.tar.gz"),
           target: targetPath,
         }),
-      ).rejects.toThrow(/outside the live OpenClaw agent directory/iu);
+      ).rejects.toMatchObject({ message: expect.stringMatching(msg), name: "ExpectedCliError" });
       await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -554,10 +620,7 @@ describe("backupRestoreCommand", () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
       const targetPath = state.path("restore-target");
-      await writeArchive({
-        archivePath,
-        manifest: "{not-json}\n",
-      });
+      await writeArchive({ archivePath, manifest: "{not-json}\n" });
       await fs.mkdir(targetPath);
 
       await expect(restore(archivePath, targetPath)).rejects.toThrow(
@@ -658,17 +721,14 @@ describe("backupRestoreCommand", () => {
   it("cleans an incomplete fresh target when extraction fails", async () => {
     await withState(async (state) => {
       const archivePath = state.path("unextractable.tar.gz");
-      const targetPath = state.path("restore-target");
+      const target = state.path("restore-target");
       await writeUnextractableArchive(archivePath);
-
-      await expect(restore(archivePath, targetPath)).rejects.toThrow(
-        /incomplete target was cleaned/iu,
-      );
-      await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(restore(archivePath, target)).rejects.toThrow(/incomplete target was cleaned/iu);
+      await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -682,7 +742,7 @@ describe("backupRestoreCommand", () => {
 
       const restoreError = await restore(archivePath, targetPath).catch((error: unknown) => error);
 
-      expect(restoreError).toBeInstanceOf(Error);
+      expect((restoreError as Error).name).toBe("AggregateError");
       expect((restoreError as Error).message).toMatch(/cleanup denied/iu);
       expect((restoreError as Error).cause).toBeInstanceOf(Error);
       expect((restoreError as Error).cause).not.toBe(cleanupError);

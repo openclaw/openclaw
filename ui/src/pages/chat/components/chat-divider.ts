@@ -3,7 +3,15 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatSessionArchiveReason } from "../../../lib/sessions/session-archive-reason.ts";
 
-export function buildChatArchiveNotice(activeSession: GatewaySessionRow | null | undefined) {
+export function buildChatArchiveNotice(
+  activeSession:
+    | Pick<
+        GatewaySessionRow,
+        "key" | "sessionId" | "archived" | "archivedAt" | "archivedBy" | "archiveReason"
+      >
+    | null
+    | undefined,
+) {
   const archiveActor = activeSession?.archivedBy;
   const archiveLabel = archiveActor?.id
     ? t("sessionsView.archivedBy", { name: archiveActor.label ?? archiveActor.id })

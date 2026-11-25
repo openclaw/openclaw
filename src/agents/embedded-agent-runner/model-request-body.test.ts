@@ -5,6 +5,11 @@ import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  encodedModelRequestBodyStream,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../packages/ai/src/transports/openai-completions-transport.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -176,6 +181,27 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
   } finally {
     unsubscribe();
   }
+});
+
+it("reuses the owned encoding for native Fetch replay without another body copy", async () => {
+  const payload = { stream: true, input: ["Synthetic 🦞"] };
+  const encoded = serializeModelRequestBody(payload);
+  const options = {};
+  const encode = vi.fn(async () => encoded);
+  const onBytes = vi.fn();
+  Object.assign(modelRequestBodyState(options), { encode, onBytes });
+  const prepared = await prepareModelRequestBody(options)(payload);
+  expect(prepared.body).toBe(encoded.body);
+  expect(encodedModelRequestBodyStream(prepared.body)).toBe(true);
+  expect(onBytes).toHaveBeenCalledWith(encoded.body.byteLength);
+  payload.input[0] = "changed after encoding";
+  const first = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  const consumed = new Uint8Array(await first.arrayBuffer());
+  expect(new TextDecoder().decode(consumed)).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  consumed.fill(0);
+  const replay = new Request("https://provider.invalid", { method: "POST", ...prepared });
+  expect(await replay.text()).toBe('{"stream":true,"input":["Synthetic 🦞"]}');
+  expect(encode).toHaveBeenCalledTimes(1);
 });
 
 it("observes serialized values without letting the observer change request bytes or stream behavior", () => {

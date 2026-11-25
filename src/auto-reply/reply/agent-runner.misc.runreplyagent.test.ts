@@ -21,8 +21,8 @@ import {
 import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../../infra/system-events.js";
@@ -49,8 +49,12 @@ import {
   runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
+  registerRawTracePayloadTest,
   runtimeErrorMock,
+  sessionFixture,
+  sessionState,
   setupAgentRunnerTestHooks,
+  storedSession,
   tempDirs,
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
@@ -66,32 +70,6 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
 type RunWithModelFallbackParams = TestModelFallbackRunnerParams;
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function sessionFixture(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
-}
-
-function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
-  return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
-}
-
-async function storedSession(
-  overrides: Partial<SessionEntry> = {},
-  sessionKey = "main",
-  tmp = tempDirs.make("openclaw-reply-"),
-) {
-  const storePath = path.join(tmp, "sessions.json");
-  const sessionEntry = sessionFixture(overrides);
-  await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-  return {
-    tmp,
-    storePath,
-    sessionKey,
-    sessionEntry,
-    scope: { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
-    reply: { ...sessionState(sessionKey, sessionEntry), storePath },
-  };
-}
 
 function agentRun(options: BaseRunOptions = {}) {
   return createBaseRun({
@@ -211,7 +189,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       {
         totalTokens: 200_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
       "agent:main:main",
     );
@@ -221,6 +199,7 @@ describe("runReplyAgent auto-compaction token update", () => {
 
     expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+    expect(result).toMatchObject({ isError: true });
   });
 
   it.each([
@@ -238,7 +217,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       const sessionEntry = sessionFixture({
         totalTokens: 10_920,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         compactionCount: 0,
       });
       const reply = { ...sessionState(sessionKey, sessionEntry), storePath };
@@ -395,10 +374,8 @@ describe("runReplyAgent auto-compaction token update", () => {
             compactionCount: 0,
           });
           if (compactAfterFlush) {
-            expect(compactState.compactEmbeddedAgentSessionMock).toHaveBeenCalledWith(
-              expect.objectContaining({ trigger: "budget" }),
-              expect.objectContaining({ requestBudget: { ...requestBudget, pendingTokens: 0 } }),
-            );
+            // Fitting maintenance waits for the next attempt's request boundary.
+            expect(compactState.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
           }
         }
       } finally {
@@ -641,9 +618,8 @@ describe("runReplyAgent block streaming", () => {
 });
 
 it("delivers tool progress with inline on over stored full", async () => {
-  const stored = "full";
   const override = "on";
-  const { storePath, sessionKey, reply } = await storedSession({ verboseLevel: stored });
+  const { storePath, sessionKey, reply } = await storedSession({ verboseLevel: "full" });
   const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
   const onRunVerbosityResolved = vi.fn();
   runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
@@ -668,7 +644,7 @@ it("delivers tool progress with inline on over stored full", async () => {
     },
   }).run();
   expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(["Tool summary"]);
-  expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+  expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe("full");
   expectReplyText(result, "Done");
 });
 
@@ -705,143 +681,20 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
-    const { tmp, storePath, sessionKey, sessionEntry, scope, reply } = await storedSession({
-      traceLevel: "raw",
-      compactionCount: 3,
-    });
-    const transcript = await SessionManager.openAsync(scope, tmp);
-    await transcript.appendMessageAsync({ role: "user", content: "Earlier turn", timestamp: 0 });
-    await transcript.appendMessageAsync(
-      makeAssistantMessageFixture({
-        content: [{ type: "text", text: "Earlier reply" }],
-        stopReason: "stop",
-        errorMessage: undefined,
-        usage: {
-          ...createUsageFixture(200, 10, 235),
-          cacheRead: 20,
-          cacheWrite: 5,
-        },
-      }),
-    );
-
-    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
-      result: await runFallbackModelAttempt(params, "anthropic", "claude", "timeout"),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-          error: "LLM request timed out.",
-          reason: "timeout",
-          status: 408,
-        },
-      ],
-    }));
-    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      params.onCompactionAccounting?.({
-        kind: "durable",
-        count: 1,
-        currentContextSnapshot: { tokens: 1250 },
-        target: {
+  registerRawTracePayloadTest({
+    run: (sessionKey, reply) =>
+      channelRun("telegram", "chat:1", {
+        context: { CommandBody: "/trace raw show me everything" },
+        run: {
           agentId: "main",
-          sessionId: sessionEntry.sessionId,
           sessionKey,
-          storePath,
-          lifecycleRevision: sessionEntry.lifecycleRevision,
-          activeWriterRunId: undefined,
+          sessionFile: sessionKey,
+          reasoningLevel: "on",
+          thinkLevel: "low",
+          traceAuthorized: true,
         },
-      });
-      return replyResult("Visible reply", {
-        finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
-        executionTrace: {
-          winnerProvider: "anthropic",
-          winnerModel: "claude",
-          runner: "embedded",
-          fallbackUsed: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              result: "success",
-              stage: "assistant",
-              elapsedMs: 4200,
-            },
-          ],
-        },
-        toolSummary: {
-          calls: 2,
-          tools: ["active-memory", "github-search"],
-          failures: 0,
-          totalToolTimeMs: 481,
-        },
-        completion: { finishReason: "stop", stopReason: "end_turn", refusal: false },
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 1200, output: 45, cacheRead: 800, cacheWrite: 200, total: 2245 },
-          lastCallUsage: {
-            input: 1000,
-            output: 45,
-            cacheRead: 750,
-            cacheWrite: 150,
-            total: 1945,
-          },
-          promptTokens: 1250,
-          compactionCount: 1,
-        },
-      });
-    });
-
-    const result = await channelRun("telegram", "chat:1", {
-      context: { CommandBody: "/trace raw show me everything" },
-      run: {
-        agentId: "main",
-        sessionKey,
-        sessionFile: sessionKey,
-        reasoningLevel: "on",
-        thinkLevel: "low",
-        traceAuthorized: true,
-      },
-      reply,
-    }).run();
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("🔎 Usage (Session Total):");
-    expect(traceText).toContain("🔎 Usage (Last Turn Total):");
-    expect(traceText).toContain("used=1,250 tok (1.3k)");
-    expect(traceText).toContain("winner=anthropic/claude");
-    expect(traceText).toContain("fallbackUsed=yes");
-    expect(traceText).toContain("attempts=2");
-    expect(traceText).toContain("1. openai/gpt-5.5");
-    expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("status=408");
-    expect(traceText).toContain("2. anthropic/claude");
-    expect(traceText).toContain("result=success");
-    expect(traceText).toContain("thinking=low");
-    expect(traceText).toContain("reasoning=on");
-    expect(traceText).toContain("active_memory_plugin=");
-    expect(traceText).toContain("user_message=");
-    expect(traceText).toContain("tools=active-memory, github-search");
-    expect(traceText).toContain("finishReason=stop");
-    expect(traceText).toContain("stopReason=end_turn");
-    expect(traceText).toContain("refusal=no");
-    expect(traceText).toContain("sessionCompactions=4");
-    expect(traceText).toContain("lastTurnCompactions=1");
-    expect(traceText).toContain("🔎 Model Input (User Role):");
-    expect(traceText).toContain("🔎 Model Output (Assistant Role):");
-    expect(traceText).toContain("Summary: winner=claude 🧠 low fallback=yes attempts=2");
-    expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
-    expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
-    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
-    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
+        reply,
+      }).run(),
   });
 });
 
@@ -905,24 +758,56 @@ it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
 
 describe("runReplyAgent messaging tool dedupe", () => {
   it.each([
-    { state: undefined, routed: true, delivered: true },
-    { state: "missing", routed: true, delivered: false },
-    { state: undefined, routed: false, delivered: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "hello world!",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: "missing",
+      routed: true,
+      outcome: "missing",
+      text: "hello world!",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: undefined,
+      routed: false,
+      outcome: "missing",
+      text: "hello world!",
+      sourceReplyFinal: undefined,
+    },
+    { state: undefined, routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
+    { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "hello world!",
+      sourceReplyFinal: false,
+    },
   ] as const)(
-    "requires current-source evidence before suppressing a deduplicated final: $state/$routed",
-    async ({ state, routed, delivered }) => {
+    "requires current-source evidence before suppressing a deduplicated final: $state/$routed/$text/$sourceReplyFinal",
+    async ({ state, routed, outcome, text, sourceReplyFinal }) => {
       runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "hello world!" }],
+        payloads: [{ text }],
         sourceReplyDeliveryState: state,
-        messagingToolSentTexts: ["hello world!"],
+        messagingToolSentTexts: [text],
         messagingToolSentTargets: routed
-          ? [{ tool: "slack", provider: "slack", to: "channel:C1" }]
+          ? [{ tool: "slack", provider: "slack", to: "channel:C1", text, sourceReplyFinal }]
           : undefined,
         meta: {},
       });
       const result = await channelRun("slack", "channel:C1").run();
-      if (delivered) {
+      if (outcome === "deduped") {
         expect(result).toBeUndefined();
+      } else if (outcome === "reply") {
+        expect(result).toMatchObject({ text });
+        expect(result).not.toHaveProperty("isError", true);
       } else {
         expect(result).toMatchObject({ isError: true, text: expect.any(String) });
       }
@@ -977,7 +862,12 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
   if (memoryFlush) {
     const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
     const { sessionKey, reply } = await storedSession(
-      { totalTokens: 1_000_000, totalTokensFresh: true, totalTokensVersion: 1, compactionCount: 0 },
+      {
+        totalTokens: 1_000_000,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        compactionCount: 0,
+      },
       "agent:main:memory-flush-tags",
       root,
     );

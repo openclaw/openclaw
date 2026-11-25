@@ -2,12 +2,15 @@ import type { MessagePort } from "node:worker_threads";
 import type { VaultAccess } from "./access.js";
 import { catalogFacts } from "./catalog.js";
 import { inspectRecord, inspectOntology } from "./inspection.js";
+import { LiveState } from "./live-state.js";
 import { mergeCandidates as findMergeCandidates } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
+import type { Receipt } from "./mutation-contract.js";
 import type { StoreConfig } from "./real-vault.js";
 import { withinBudget } from "./response-budget.js";
 import { eligible } from "./retrieval.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
+import { PageBudgetError } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
 
 type Storage = KnowledgeStorage;
@@ -16,6 +19,17 @@ type Access = VaultAccess;
 type In<T> = T extends (input: infer I, ...rest: never[]) => unknown ? I : never;
 
 const revision = (r: Pick<LoadedRecord, "revision" | "hash">) => `${r.revision}:${r.hash}`;
+// Operations that write page prose return a page-budget rejection as their receipt.
+const budgeted = async (work: Promise<Receipt>) => {
+  try {
+    return await work;
+  } catch (error) {
+    if (error instanceof PageBudgetError) {
+      return error.receipt;
+    }
+    throw error;
+  }
+};
 const attribution = (origin?: string, who?: string) =>
   `Origin: ${origin || "not recorded"}; attribution: ${who || "not recorded"}.`;
 
@@ -27,8 +41,12 @@ export const operations = {
   verify: (s: Storage, a: Access, input: In<Storage["verify"]>) => s.verify(input, a),
   sourceCheck: (s: Storage, a: Access, input: In<Storage["sourceCheck"]>) =>
     s.sourceCheck(input, a),
-  batch: (s: Storage, a: Access, input: In<Storage["batch"]>) => s.batch(input, a, "agent"),
-  editBody: (s: Storage, a: Access, input: In<Storage["editBody"]>) => s.editBody(input, a),
+  batch: (s: Storage, a: Access, input: In<Storage["batch"]>) =>
+    budgeted(s.batch(input, a, "agent")),
+  editBody: (s: Storage, a: Access, input: In<Storage["editBody"]>) =>
+    budgeted(s.editBody(input, a)),
+  extractSection: (s: Storage, a: Access, input: In<Storage["extractSection"]>) =>
+    budgeted(s.extractSection(input, a)),
   reconcileEvidence: (s: Storage, a: Access, input: In<Storage["reconcileEvidence"]>) =>
     s.reconcileEvidence(input, a),
   annotate: (s: Storage, a: Access, input: In<Storage["annotate"]>) =>
@@ -43,7 +61,7 @@ export const operations = {
   recent: (s: Storage, a: Access, input: In<Storage["recent"]>) => s.recent(input, a),
   attach: (s: Storage, a: Access, input: In<Storage["attach"]>) => s.attach(input, a),
   save: (s: Storage, a: Access, input: { value: In<Storage["save"]>; actor: string }) =>
-    s.save(input.value, a, input.actor),
+    budgeted(s.save(input.value, a, input.actor)),
   createClaim: (
     s: Storage,
     a: Access,
@@ -65,7 +83,8 @@ export const operations = {
     s.withdraw(input, a, "agent"),
   supersede: (s: Storage, a: Access, input: In<Storage["supersede"]>) =>
     s.supersede(input, a, "agent"),
-  merge: (s: Storage, a: Access, input: In<Storage["merge"]>) => s.merge(input, a, "agent"),
+  merge: (s: Storage, a: Access, input: In<Storage["merge"]>) =>
+    budgeted(s.merge(input, a, "agent")),
   unmerge: (s: Storage, a: Access, input: In<Storage["unmerge"]>) => s.unmerge(input, a, "agent"),
   recall: (s: Storage, a: Access, input: In<Storage["recall"]>) => s.recall(input, a, "agent"),
   connections: (s: Storage, a: Access, input: In<Storage["connections"]>) =>
@@ -170,6 +189,9 @@ export const operations = {
   ) => s.memoryCandidates(input, a),
   memoryIndex: (s: Storage, a: Access, input: In<Storage["memoryIndex"]>) =>
     s.memoryIndex(input, a),
+  gateIndex: (s: Storage, a: Access) => s.gateIndex(a),
+  gateCandidates: (s: Storage, a: Access, input: In<Storage["gateCandidates"]>) =>
+    s.gateCandidates(input, a),
   memoryHealth: (s: Storage, a: Access) =>
     s.run(a, async (vault) => {
       const data = await vault.scan();
@@ -184,12 +206,24 @@ export type StorageOperations = typeof operations;
 
 /** Serve storage calls one at a time. Authority checks block this worker on a
  * shared flag while the main thread re-evaluates the caller's live authority. */
-export function serve(port: MessagePort, init: { config: StoreConfig; signal: SharedArrayBuffer }) {
+export function serve(
+  port: MessagePort,
+  init: { config: StoreConfig; signal: SharedArrayBuffer; watch?: boolean },
+) {
   const storage = new KnowledgeStorage(init.config),
+    live = new LiveState(init.config.root, () =>
+      port.postMessage({ type: "changed" } satisfies WorkerMessage),
+    ),
     signal = new Int32Array(init.signal);
+  // Linux recursive fs.watch synchronously traverses the tree. Keep setup and
+  // recovery beside the store's filesystem work, never on the Gateway thread.
+  if (init.watch) {
+    live.start();
+  }
   let queue: Promise<void> = Promise.resolve();
   port.on("message", (message: HostMessage<keyof StorageOperations>) => {
     if (message.type !== "call") {
+      live.invalidate();
       return;
     }
     queue = queue.then(async () => {
@@ -209,6 +243,9 @@ export function serve(port: MessagePort, init: { config: StoreConfig; signal: Sh
         },
       };
       try {
+        if (message.op === "catalog" && message.scope.visibility === "private") {
+          live.ensureWatching();
+        }
         // SAFETY: messages name only operations in this table, sent by StorageClient.
         const run = operations[message.op] as (s: Storage, a: Access, input: unknown) => unknown;
         port.postMessage({
@@ -218,6 +255,7 @@ export function serve(port: MessagePort, init: { config: StoreConfig; signal: Sh
           value: await storage.trackRead(access, message.op, () =>
             run(storage, access, message.input),
           ),
+          live: live.state,
         } satisfies WorkerMessage);
       } catch (error) {
         port.postMessage({

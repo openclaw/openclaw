@@ -3,16 +3,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
+import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunResult } from "../../infra/update-run-result.js";
-import { updateGitCheckout } from "../../infra/update-runner-git.js";
+import { updateGitRelease } from "../../infra/update-runner-git-release.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
+  createUpdateCommandFailureResult,
+  failUpdateCommandRun,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
@@ -61,7 +70,13 @@ it.each(["invalid-dev-target", "unsupported-package-target", "fetch-failed"])(
   },
 );
 
-it.each(["pending-recovery", "pending-recovery-cause", "run-finish", "command-finish"] as const)(
+it.each([
+  "pending-recovery",
+  "pending-recovery-cause",
+  "run-finish",
+  "command-finish",
+  "handoff-lock",
+] as const)(
   "records a public failure reason when %s receives no runner diagnostics",
   async (boundary) => {
     const { root, env } = checkout();
@@ -78,12 +93,55 @@ it.each(["pending-recovery", "pending-recovery-cause", "run-finish", "command-fi
         : undefined,
     );
     const recoveryPending = boundary.startsWith("pending-recovery");
-    const outcome = recoveryPending
+    let outcome = recoveryPending
       ? pending.result
       : boundary === "command-finish"
         ? completeUpdateCommandRun({ ...successful, status: "error", reason: "" }, run)
         : { ...successful, status: "error" as const };
-    const reason = recoveryPending ? "update-recovery-pending" : "update-failed";
+    const reason =
+      boundary === "handoff-lock"
+        ? "file_lock_timeout"
+        : recoveryPending
+          ? "update-recovery-pending"
+          : "update-failed";
+    if (boundary === "handoff-lock") {
+      const databasePath = path.join(root, "managed-update-handoffs.sqlite");
+      fs.writeFileSync(
+        databasePath + ".lock",
+        JSON.stringify({ pid: process.ppid, phase: "doctor" }),
+      );
+      recordUpdateRunPhase(run.runId, "validating", undefined, { env });
+      let failure: unknown;
+      try {
+        acquireFileLockSyncWithRetry(databasePath, {
+          timeoutMs: 20,
+          phase: "managed-handoff:writer-admission",
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      const fact = failUpdateCommandRun(failure, run);
+      outcome = completeUpdateCommandRun(
+        createUpdateCommandFailureResult({
+          mode: "unknown",
+          durationMs: 0,
+          failure: { cause: failure },
+          phase: fact?.check,
+        }),
+        run,
+      );
+      expect((await getUpdateRunStatusAsync({ env })).lastRun).toMatchObject({
+        status: "failed",
+        reason: "file_lock_timeout",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            step: "validating",
+            failureFacts: [expect.objectContaining({ code: "file_lock_timeout" })],
+          }),
+        ]),
+      });
+    }
     if (boundary === "run-finish") {
       finishUpdateRun(run.runId, { status: "failed", after: outcome.after }, { env });
     }
@@ -95,7 +153,7 @@ it.each(["pending-recovery", "pending-recovery-cause", "run-finish", "command-fi
     expectReason(
       report.body,
       reason,
-      "update",
+      boundary === "handoff-lock" ? "validating" : "update",
       boundary === "pending-recovery-cause" ? "TypeError" : reason,
     );
     for (const privateText of ["[redacted-code]", "private recovery detail", root]) {
@@ -111,7 +169,7 @@ it.each([
   const { root, env } = checkout();
   execFileSync("git", ["init", "--quiet", root]);
   const result = completeUpdateCommandRun(
-    await updateGitCheckout({
+    await updateGitRelease({
       gitRoot: root,
       runCommand: runCommandWithTimeout,
       defaultCommandEnv: env,
@@ -123,9 +181,6 @@ it.each([
         validateCandidate: async () => {},
         beforeGitMutation: async () => {
           throw new Error("Failed admission must not mutate the checkout");
-        },
-        runGitDoctor: async () => {
-          throw new Error("Failed admission must not run Doctor");
         },
       },
     }),

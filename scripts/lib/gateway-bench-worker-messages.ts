@@ -393,8 +393,8 @@ export function instrumentGatewayBenchWorkerSource(file: string, source: string)
   };
   if (file === "worker-message-metrics.ts") {
     replace(
-      "  payloadBytes?: number,\n  requestClass?: string,\n): void {",
-      "  payloadBytes?: number,\n  requestClass?: string,\n  benchmarkMessage?: unknown,\n  benchmarkScript?: string,\n): void {",
+      "  sampledAuthorityMessage?: Record<string, unknown>,\n): void {",
+      "  sampledAuthorityMessage?: Record<string, unknown>,\n  benchmarkMessage?: unknown,\n  benchmarkScript?: string,\n): void {",
     );
     replace(
       "  let directions = counters.get(kind);",
@@ -405,7 +405,11 @@ export function instrumentGatewayBenchWorkerSource(file: string, source: string)
     );
     replace(
       "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),\n      requestClass,",
-      "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),\n      requestClass,\n      message,\n      benchmarkScript,",
+      "payloadBytes === undefined ? workerMessagePayloadBytes(message) : (payloadBytes ?? undefined),\n      requestClass,\n      undefined,\n      message,\n      benchmarkScript,",
+    );
+    replace(
+      "    sampled ? message : undefined,",
+      "    sampled ? message : undefined,\n    message,",
     );
     replace(
       "  payloadBytes?: number | null,\n  requestClass?: string,\n): void {",
@@ -414,15 +418,10 @@ export function instrumentGatewayBenchWorkerSource(file: string, source: string)
     instrumented = `import { channel as benchmarkWorkerDiagnosticChannel } from "node:diagnostics_channel";
 const benchmarkWorkerMessageChannel = benchmarkWorkerDiagnosticChannel("openclaw.benchmark.worker-message");
 ${instrumented}`;
-  } else if (file === "sqlite-worker-operation-admission.ts") {
-    replace(
-      "        ? message.payloadBytes\n        : undefined,\n    );",
-      "        ? message.payloadBytes\n        : undefined,\n      undefined,\n      message,\n    );",
-    );
   } else if (file === "worker-cpu.ts") {
     replace(
       'recordWorkerMessage("other", "from_worker");',
-      'recordWorkerMessage("other", "from_worker", undefined, undefined, args[0], source.script);',
+      'recordWorkerMessage("other", "from_worker", undefined, undefined, undefined, args[0], source.script);',
     );
     replace(
       'observeWorkerMessage(args[0], "from_worker", "other", undefined, source.requestClass?.());',
@@ -430,7 +429,7 @@ ${instrumented}`;
     );
     replace(
       'recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));',
-      'recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]), undefined, args[0], source.script);',
+      'recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]), undefined, undefined, args[0], source.script);',
     );
   } else if (file === "worker-task-pool-core.ts") {
     replace(

@@ -76,7 +76,7 @@ export async function deleteSessionGroup(
   // too, so without this order the operator's lost intent would look like an
   // ordinary cancel instead of the reconnect that actually dropped it.
   if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
-    showToast({ message: t("sessionsView.deleteGroupStale", { group }) });
+    showToast({ severity: "error", message: t("sessionsView.deleteGroupStale", { group }) });
     return false;
   }
   if (!confirmed) {

@@ -7,10 +7,13 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
+import {
+  resolveOperatorRolePolicy,
+  authorizeGatewaySessionCreation,
+} from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
 import { respondRefusedCronAgent } from "./cron-job-access.js";
 import { respondError } from "./response.js";
@@ -99,7 +102,10 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
   }
   const wakeConfig = context.getRuntimeConfig();
   // Resolving a default wake agent can fail; role-free requests must retain their existing path.
-  if (wakeConfig.gateway?.roles) {
+  if (
+    isNamedOperatorRoleEnforcementEnabled(wakeConfig) ||
+    resolveOperatorRolePolicy(client, wakeConfig) !== undefined
+  ) {
     const knownWakeAgentId = resolvedAgentId ?? context.cron.getDefaultAgentId();
     const wakeAgent = knownWakeAgentId
       ? { ok: true as const, agentId: knownWakeAgentId }
@@ -126,7 +132,6 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
     text: p.text,
     commitGuard: () => {
       sessionMutationCommitGuard?.();
-      assertActiveAgentRuntimeAuthority(client, context);
     },
     ...(sessionKey ? { sessionKey } : {}),
     ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),

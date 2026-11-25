@@ -62,13 +62,7 @@ export function toSessionAccessScope(params: SessionStoreReadParams): SessionAcc
 }
 
 export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  const publicEntry = projectPublicSessionEntry(entry);
-  return {
-    ...publicEntry,
-    ...(entry.restartRecoveryRuns
-      ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
-      : {}),
-  };
+  return projectPublicSessionEntry(entry);
 }
 
 // Public results own their containers; immutable prompt strings can remain shared.

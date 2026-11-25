@@ -11,7 +11,13 @@ function outcome(operation: () => unknown) {
   try {
     return operation();
   } catch (error) {
-    return error instanceof Error ? error.message : error;
+    return error instanceof Error
+      ? {
+          name: error.name,
+          code: (error as Error & { code?: string }).code,
+          message: error.message,
+        }
+      : error;
   }
 }
 
@@ -23,6 +29,47 @@ function expectNativeBehavior(
   expect(exercise(db, true)).toEqual(exercise(native, false));
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 }
+
+it.each(["get", "all", "run", "iterate"] as const)(
+  "preserves native %s errors and closed-handle custody",
+  (method) => {
+    const execute = (
+      statement: ReturnType<ReturnType<typeof open>["prepare"]>,
+      args: unknown[],
+    ) => {
+      const result = Reflect.apply(statement[method].bind(statement), undefined, args);
+      return method === "iterate" ? [...result] : result;
+    };
+    for (const sql of ["", "; -- empty\n /* comment */", "SELECT FROM"]) {
+      expectNativeBehavior((db) => outcome(() => execute(db.prepare(sql), [])));
+    }
+    for (const argument of [undefined, {}, Symbol("invalid")]) {
+      expectNativeBehavior((db) =>
+        outcome(() => execute(db.prepare("SELECT ? AS value"), [argument])),
+      );
+    }
+    for (const warm of [false, true]) {
+      using db = open();
+      let calls = 0;
+      db.function("probe_callback", () => ++calls);
+      const statement = db.prepare("SELECT probe_callback() AS value");
+      if (warm) {
+        execute(statement, []);
+      }
+      db.close();
+      const before = calls;
+      // Observation may reject the closed database before native statement validation.
+      // Neither invalid-state path may execute callbacks or acquire pending custody.
+      expect(outcome(() => execute(statement, []))).toEqual({
+        name: "Error",
+        code: "ERR_INVALID_STATE",
+        message: expect.stringMatching(/database is not open|statement has been finalized/u),
+      });
+      expect(calls).toBe(before);
+      expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+    }
+  },
+);
 
 it.each(["exec", "all"] as const)("retains custody across failing %s callbacks", (method) => {
   using db = open();
@@ -75,6 +122,43 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   last.return?.();
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
+
+it.each(["exhaustion", "return"] as const)(
+  "releases the WAL reader after %s and keeps completed iterators terminal",
+  (completion) => {
+    const filename = path.join(tempDirs.make("sqlite-finished-reader-"), "state.sqlite");
+    using writer = open(filename);
+    writer.exec(
+      "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; " +
+        "CREATE TABLE entries (value); INSERT INTO entries VALUES (1), (2)",
+    );
+    using reader = open(filename);
+    const statement = reader.prepare("SELECT value FROM entries");
+    const rows = statement.iterate();
+    expect(rows.next().value).toEqual({ value: 1 });
+    if (completion === "return") {
+      rows.return?.();
+    } else {
+      expect([...rows]).toEqual([{ value: 2 }]);
+    }
+    const afterDone = rows.next();
+    writer.exec("INSERT INTO entries VALUES (3)");
+    const checkpoint = writer.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
+    expect(checkpoint?.checkpointed).toBe(checkpoint?.log);
+    expect(afterDone.done).toBe(true);
+    expect(reader.isTransaction).toBe(false);
+    expect(hasPendingSqliteNativeExecution(reader)).toBe(false);
+    const successor = statement.iterate();
+    expect(successor.next().value).toEqual({ value: 1 });
+    rows.return?.();
+    expect(rows.next().done).toBe(true);
+    expect([...successor]).toEqual([{ value: 2 }, { value: 3 }]);
+    expect(writer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()).toMatchObject({
+      busy: 0,
+      log: 0,
+    });
+  },
+);
 
 it.each(["all", "close"] as const)("settles RETURNING cursors on %s", (method) => {
   using db = open();

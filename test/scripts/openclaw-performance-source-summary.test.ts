@@ -240,6 +240,15 @@ describe("buildMarkdown", () => {
 
   it.each<[string, unknown, string]>([
     ["mock-hello/run-001/qa-suite-summary.json", {}, "invalid mock hello summary counts"],
+    ...[
+      "gatewayProcessRssStartBytes",
+      "gatewayProcessRssEndBytes",
+      "gatewayProcessRssDeltaBytes",
+    ].map((key): [string, unknown, string] => [
+      "mock-hello/run-001/qa-suite-summary.json",
+      { ...mockHello, metrics: { ...mockHello.metrics, [key]: null } },
+      `missing mock hello metric ${key}`,
+    ]),
     [
       "mock-hello/run-001/qa-suite-summary.json",
       { ...mockHello, scenarios: [{ id: "mock-hello", status: "fail" }] },

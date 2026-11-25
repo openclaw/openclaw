@@ -31,6 +31,12 @@ Measure every new or changed test file with
 `pnpm test <file> --maxWorkers=1`; report wall time and CI seconds once available;
 PRs state both.
 
+A PR may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+state its necessity in the PR. See the
+[test-line budget](/ci/local-proof#test-line-budget) for the record format and
+comparison rules.
+
 - Seconds-long tests must prove a contract no cheaper layer can. Long end-to-end
   compositions belong in the release-only tier.
 - Target under 5 seconds of test time per file. Above 30 seconds, explain the

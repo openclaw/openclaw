@@ -13,11 +13,13 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { buildExecRunConfig } from "../commands/agent-exec-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import type { SystemAgentConfiguredRoute } from "../system-agent/inference-route.js";
 import { settleWithCleanup } from "./error-graph-internal.js";
@@ -116,7 +118,8 @@ export async function withUpdateRepairEnvironment<T>(
 async function withRepairResources<T>(run: () => Promise<T>): Promise<T> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  const host =
+    existingHost ?? new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
@@ -336,7 +339,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     abort: (reason) => controller.abort(reason),
     isCurrent: params.isCurrent,
   });
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = monotonicDeadlineAfter(params.timeoutMs);
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
@@ -428,7 +431,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                     cleanupBundleMcpOnRunEnd: true,
                     disableTrajectory: true,
                     trigger: "manual",
-                    timeoutMs: Math.max(1, deadline - Date.now()),
+                    timeoutMs: Math.max(1, remainingMonotonicMs(deadline)),
                     abortSignal: signal,
                     lane: sessionKey,
                   });

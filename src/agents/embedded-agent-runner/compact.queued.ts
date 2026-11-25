@@ -114,7 +114,7 @@ function assertQueuedCompactionPreparationActive(
  * Use this from outside a lane context. If already inside a lane, use
  * `compactEmbeddedAgentSessionDirect` to avoid deadlocks.
  */
-export async function compactEmbeddedAgentSession(
+export async function compactQueuedEmbeddedAgentSession(
   input: CompactEmbeddedAgentSessionParams,
   options: QueuedCompactionHostOptions,
 ): Promise<EmbeddedAgentCompactResult> {
@@ -132,11 +132,7 @@ export async function compactEmbeddedAgentSession(
     const assertHostActive = options.assertActive;
     const host = {
       ...options,
-      assertActive: composeSessionSourceAssertion([
-        assertHostActive,
-        sourceAuthority.assertActive,
-        sourceAuthority.operatorAuthority?.assertCurrent,
-      ]),
+      assertActive: composeSessionSourceAssertion([assertHostActive, sourceAuthority.assertActive]),
     };
     const signals = [input.abortSignal, sourceAuthority.operatorAuthority?.signal].filter(
       (signal): signal is AbortSignal => signal !== undefined,
@@ -312,6 +308,7 @@ async function compactEmbeddedAgentSessionImpl(
     // Run them before generic model preparation so subscription-only CLI sessions do
     // not incorrectly require an OpenClaw model API credential.
     const nativeCliResult = await compactNativeCliSession({
+      sourceAuthority: host.sourceAuthority,
       runtime: runtimeSelection.selectedHarnessRuntime,
       replyOperation: host.replyOperation,
       compactParams: {
@@ -368,7 +365,7 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir: lease.snapshot.agentDir,
     };
     assertQueuedCompactionPreparationActive(inputParams, host);
-    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+    const runPreparedCompaction = async (): Promise<EmbeddedAgentCompactResult> => {
       owner.captureContext();
       await ensureContextEnginesInitialized();
       const contextEngine = await owner.resolveEngine(() =>
@@ -694,6 +691,9 @@ async function compactEmbeddedAgentSessionImpl(
         contextTokenBudget,
         attemptNativeHarnessCompaction,
       });
-    });
+    };
+    return await lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, runPreparedCompaction),
+    );
   });
 }

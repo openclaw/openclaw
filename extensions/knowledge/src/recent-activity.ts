@@ -91,29 +91,36 @@ function syncRecentProjection(db: DatabaseSync, scope: string) {
   if (!missing && !stale) {
     return;
   }
-  runSqliteImmediateTransactionSync(db, () => {
-    if (stale) {
-      for (const table of ["recent_requests_v1", "recent_records_v1"]) {
-        db.prepare(`DELETE FROM ${table} WHERE scope=? AND request NOT IN (${published})`).run(
+  runSqliteImmediateTransactionSync(
+    db,
+    () => {
+      if (stale) {
+        for (const table of ["recent_requests_v1", "recent_records_v1"]) {
+          db.prepare(`DELETE FROM ${table} WHERE scope=? AND request NOT IN (${published})`).run(
+            scope,
+            scope,
+          );
+        }
+      }
+      const kysely = getNodeSqliteKysely<StorageTables>(db);
+      for (const row of db.prepare(`SELECT m.request, m.plan, m.receipt ${fresh}`).all(scope)) {
+        const projected = projectRequest(
           scope,
-          scope,
+          String(row.request),
+          JSON.parse(String(row.plan)),
+          JSON.parse(String(row.receipt)),
+        );
+        for (const record of projected.records) {
+          executeSqliteQuerySync(db, kysely.insertInto("recent_records_v1").values(record));
+        }
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("recent_requests_v1").values(projected.request),
         );
       }
-    }
-    const kysely = getNodeSqliteKysely<StorageTables>(db);
-    for (const row of db.prepare(`SELECT m.request, m.plan, m.receipt ${fresh}`).all(scope)) {
-      const projected = projectRequest(
-        scope,
-        String(row.request),
-        JSON.parse(String(row.plan)),
-        JSON.parse(String(row.receipt)),
-      );
-      for (const record of projected.records) {
-        executeSqliteQuerySync(db, kysely.insertInto("recent_records_v1").values(record));
-      }
-      executeSqliteQuerySync(db, kysely.insertInto("recent_requests_v1").values(projected.request));
-    }
-  });
+    },
+    { operationLabel: "knowledge.recent.reconcile" },
+  );
 }
 
 /** One logical recent event: a published correction/withdrawal or a history snapshot. */
