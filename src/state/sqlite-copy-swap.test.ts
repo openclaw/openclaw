@@ -71,6 +71,10 @@ function droppedUserColumns(source: string, report: { droppedColumns: string[] }
 
 describe.each(releases)("generic rebuild of %s", (release) => {
   const stateDir = path.join(corpusDir, release, "state");
+  const manifest: {
+    verification: Record<string, Array<{ value: string; found_in?: string[] }>>;
+  } = JSON.parse(fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"));
+  const verification = Object.values(manifest.verification).flat();
   const databases = [
     { file: path.join(stateDir, "state", "openclaw.sqlite"), agentId: undefined },
     ...fs
@@ -83,7 +87,7 @@ describe.each(releases)("generic rebuild of %s", (release) => {
   ];
 
   it.each(databases.map((entry) => [path.relative(stateDir, entry.file), entry] as const))(
-    "%s keeps every row and leaves the source unchanged",
+    "%s keeps the corpus records and leaves the source unchanged",
     (_name, { file, agentId }) => {
       // The source is opened read-only; a writable copy keeps its WAL out of the fixture.
       const source = path.join(tempDir(), "source.sqlite");
@@ -111,6 +115,35 @@ describe.each(releases)("generic rebuild of %s", (release) => {
       ).toEqual([]);
       const built = new DatabaseSync(out, { readOnly: true });
       try {
+        const prefix = `${path.relative(stateDir, file).split(path.sep).join("/")}:`;
+        const field = !agentId
+          ? "cron_jobs.job_id"
+          : verification.some((entry) =>
+                entry.found_in?.includes(`${prefix}session_nodes.session_key`),
+              )
+            ? "session_nodes.session_key"
+            : "auth_profile_store.store_json";
+        const expected = [
+          ...new Set(
+            verification
+              .filter((entry) => entry.found_in?.includes(`${prefix}${field}`))
+              .map((entry) => entry.value),
+          ),
+        ];
+        expect(expected, `${release}/${prefix}${field}`).not.toHaveLength(0);
+        const [table, column] = field.split(".");
+        const actual = built
+          .prepare(`SELECT "${column}" AS value FROM "${table}" ORDER BY "${column}"`)
+          .all()
+          .map((row) => row.value);
+        if (field === "auth_profile_store.store_json") {
+          expect(actual).toHaveLength(1);
+          for (const value of expected) {
+            expect(actual[0]).toContain(value);
+          }
+        } else {
+          expect(actual).toEqual(expected.toSorted());
+        }
         expect(built.prepare("PRAGMA user_version").get()).toEqual({
           user_version: agentId ? OPENCLAW_AGENT_SCHEMA_VERSION : OPENCLAW_STATE_SCHEMA_VERSION,
         });
@@ -329,6 +362,160 @@ describe("generic rebuild data rules", () => {
 });
 
 describe("copyTree and diffTree", () => {
+  it.each([
+    ["agents/main/agent/codex-home/skills/._skill", "EACCES"],
+    ["openclaw.json.before-upgrade", "EPERM"],
+    ["openclaw.json.bak-io-error", "EIO"],
+  ])("handles unreadable optional file %s during inventory (%s)", async (name, code) => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const unreadable = path.join(live, name);
+    fs.mkdirSync(path.dirname(unreadable), { recursive: true });
+    fs.writeFileSync(unreadable, "operator data");
+    fs.writeFileSync(path.join(live, "openclaw.json"), "{}");
+    fs.symlinkSync("missing-target", path.join(live, "dangling"));
+    const originalMode = fs.statSync(unreadable).mode;
+    const error = Object.assign(new Error(code), { code });
+    const access = fs.accessSync;
+    vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+      if (file === unreadable) {
+        throw error;
+      }
+      return access(file, mode);
+    });
+    const copies = vi.spyOn(fs, "copyFileSync");
+    const shadow = path.join(root, "shadow");
+    const log = { info: vi.fn(), warn: vi.fn() };
+    if (code === "EIO") {
+      await expect(copyTree(live, shadow, () => false, new Map(), { log })).rejects.toBe(error);
+      expect(fs.existsSync(shadow)).toBe(false);
+      expect(copies).not.toHaveBeenCalled();
+      return;
+    }
+    await copyTree(live, shadow, () => false, new Map(), { log });
+    expect(fs.existsSync(path.join(shadow, name))).toBe(false);
+    expect(copies.mock.calls.some(([source]) => source === unreadable)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(unreadable));
+    expect(fs.readFileSync(path.join(shadow, "openclaw.json"), "utf8")).toBe("{}");
+    expect(fs.readlinkSync(path.join(shadow, "dangling"))).toBe("missing-target");
+    expect(fs.readFileSync(unreadable, "utf8")).toBe("operator data");
+    expect(fs.statSync(unreadable).mode).toBe(originalMode);
+  });
+
+  it.each([
+    { suffix: "", required: true },
+    { suffix: "-wal", required: true },
+    { suffix: "-journal", required: true },
+    { suffix: "-wal", required: false },
+  ])(
+    "protects an unreadable SQLite family file $suffix (required=$required)",
+    async ({ suffix, required }) => {
+      const live = tempDir();
+      const database = path.join(live, "required.sqlite");
+      {
+        using db = new DatabaseSync(database);
+        db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('kept')");
+      }
+      const unreadable = database + suffix;
+      if (suffix) {
+        fs.writeFileSync(unreadable, "retained journal data");
+      }
+      const before = hash(unreadable);
+      const access = fs.accessSync;
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        if (file === unreadable) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return access(file, mode);
+      });
+      const copy = vi.spyOn(fs, "copyFileSync");
+      const transfer = vi.spyOn(fileTransfer, "copyFileHandle");
+      const shadow = path.join(tempDir(), "shadow");
+      if (required) {
+        await expect(
+          copyTree(live, shadow, () => false, new Map(), { targets: [{ path: database }] }),
+        ).rejects.toThrow(
+          `State upgrade refused: required database file ${unreadable} is unreadable. Nothing live was changed. Run openclaw doctor --fix`,
+        );
+        expect(fs.existsSync(shadow)).toBe(false);
+      } else {
+        await copyTree(live, shadow, () => false, new Map());
+        expect(fs.readdirSync(shadow)).toEqual([]);
+      }
+      expect(copy).not.toHaveBeenCalled();
+      expect(transfer).not.toHaveBeenCalled();
+      expect(hash(unreadable)).toBe(before);
+    },
+  );
+
+  it.each([
+    ["lost+found", "EACCES"],
+    ["private-directory", "EPERM"],
+  ])("skips unreadable %s without omitting required databases (%s)", async (name, code) => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const unreadable = path.join(live, name);
+    fs.mkdirSync(unreadable, { recursive: true });
+    fs.writeFileSync(path.join(live, "config.json"), "{}");
+    const database = path.join(unreadable, "openclaw-agent.sqlite");
+    {
+      using db = new DatabaseSync(database);
+      db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('kept')");
+    }
+    const before = hash(database);
+    const mode = fs.statSync(unreadable).mode;
+    const readdir = fs.readdirSync;
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory, options) => {
+      if (directory === unreadable) {
+        throw Object.assign(new Error(`${code}: permission denied, scandir '${unreadable}'`), {
+          code,
+        });
+      }
+      // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Preserve real directory reads outside the injected permission failure.
+      return readdir(directory, options);
+    });
+    const shadow = path.join(root, "shadow");
+    const log = { info: vi.fn(), warn: vi.fn() };
+    await copyTree(live, shadow, () => false, new Map(), { log });
+    expect(fs.readFileSync(path.join(shadow, "config.json"), "utf8")).toBe("{}");
+    expect(fs.existsSync(path.join(shadow, name))).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(unreadable));
+    expect(hash(database)).toBe(before);
+    expect(fs.statSync(unreadable).mode).toBe(mode);
+
+    const requiredShadow = path.join(root, "required-shadow");
+    await expect(
+      copyTree(live, requiredShadow, () => false, new Map(), {
+        log,
+        targets: [{ path: database }],
+      }),
+    ).rejects.toThrow(`database ${database} is outside the copy scope`);
+    expect(fs.existsSync(requiredShadow)).toBe(false);
+    expect(hash(database)).toBe(before);
+  });
+
+  it.each([
+    ["", "EACCES"],
+    ["nested", "EIO"],
+  ])("preserves fatal directory errors at %s (%s)", async (name, code) => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const failed = path.join(live, name);
+    fs.mkdirSync(failed, { recursive: true });
+    const error = Object.assign(new Error(code), { code });
+    const readdir = fs.readdirSync;
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory, options) => {
+      if (directory === failed) {
+        throw error;
+      }
+      // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Preserve real directory reads outside the injected filesystem failure.
+      return readdir(directory, options);
+    });
+    const shadow = path.join(root, "shadow");
+    await expect(copyTree(live, shadow, () => false, new Map())).rejects.toBe(error);
+    expect(fs.existsSync(shadow)).toBe(false);
+  });
+
   it("byte-copies closed databases and never replaces uncopied workspace files", async () => {
     const root = tempDir();
     const live = path.join(root, "live");
@@ -400,7 +587,7 @@ describe("SQLite byte-copy boundary", () => {
       });
     const transfer = vi.spyOn(fileTransfer, "copyFileHandle");
     const clone = vi.spyOn(fs, "copyFileSync");
-    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    await copyTree(live, shadow, () => false, new Map());
     expect(policy).toHaveBeenCalledOnce();
     expect(transfer).toHaveBeenCalledOnce();
     expect(clone).not.toHaveBeenCalled();
@@ -422,7 +609,7 @@ describe("SQLite byte-copy boundary", () => {
     vi.spyOn(sqliteFilesystem, "setSqliteDirectoryNoCow").mockImplementation(() => {
       throw new Error("chattr: not found");
     });
-    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    await copyTree(live, shadow, () => false, new Map());
     expect(hash(path.join(shadow, "target.sqlite"))).toBe(hash(source));
   });
 

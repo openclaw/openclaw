@@ -1,16 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { fitCompactionSummary } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
+  assertCompactionRequestCanFitFromTokens,
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
   replayTokenBudget,
+  resolveCompactionRetentionBudgetFromTokens,
   withCompactionQueuedContext,
 } from "./request-budget.js";
+
+it("reads history pressure only at the public budget's original estimation points", () => {
+  let reads = 0;
+  const tokens = () => {
+    reads += 1;
+    return 50;
+  };
+  const budget = { contextWindow: 100, reserveTokens: 10, fixedTokens: 20, pendingTokens: 5 };
+  assertCompactionRequestCanFitFromTokens(tokens, undefined, false);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, true);
+  expect(resolveCompactionRetentionBudgetFromTokens(budget, tokens).maxTokens).toBe(65);
+  expect(reads).toBe(0);
+  expect(
+    resolveCompactionRetentionBudgetFromTokens({ ...budget, reserveTokens: 100 }, tokens).maxTokens,
+  ).toBe(49);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, false);
+  expect(reads).toBe(2);
+  expect(() => assertCompactionRequestCanFitFromTokens(80, budget, false)).toThrow(
+    "retained history: 80",
+  );
+});
 
 describe("createCompactionRequestBudget", () => {
   it.each([
     { pendingPrompt: undefined, pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 4 },
+    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 5 },
     { pendingPrompt: "", pendingImageCount: 1, pendingTokens: 2_400 },
     { pendingPrompt: "a", pendingImageCount: 1, pendingTokens: 2_401 },
   ])(
@@ -30,11 +53,11 @@ describe("createCompactionRequestBudget", () => {
         pendingUserIdempotencyKey: "pending-user",
       });
 
-      // The 48-character tool JSON, including 11 delimiters, adds 24 tokens beside the 12-token boundary.
+      // The 48-character tool JSON, including 11 delimiters, adds 21 tokens beside the 12-token boundary.
       expect(budget).toEqual({
         contextWindow: 4_096,
         reserveTokens: 512,
-        fixedTokens: 44,
+        fixedTokens: 40,
         pendingTokens,
         pendingQueuedContextTokens: 0,
         pendingUserIdempotencyKey: "pending-user",

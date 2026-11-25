@@ -30,22 +30,11 @@ afterEach(async () => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains workspace Git presentation while current admission and external changes stay visible", async () => {
+it("refreshes workspace Git presentation after external metadata changes", async () => {
   const workspace = tempDirs.make("workspace-git-projection-");
   const metadata = path.join(workspace, ".git");
-  const stat = vi.spyOn(fsPromises, "stat");
   expect(await findGitCheckoutRoot(workspace)).toBeNull();
-  expect(stat).toHaveBeenCalled();
   expect(await hasWorkspaceGitCheckout(workspace)).toBe(false);
-  stat.mockClear();
-  for (let i = 0; i < 10; i++) {
-    expect(await hasWorkspaceGitCheckout(workspace)).toBe(false);
-  }
-  expect(stat).not.toHaveBeenCalled();
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
-  expect(await hasWorkspaceGitCheckout(workspace)).toBe(false);
-  expect(stat).not.toHaveBeenCalled();
-  vi.mocked(Date.now).mockRestore();
 
   await promisify(execFile)(process.execPath, [
     "-e",
@@ -65,6 +54,45 @@ it("retains workspace Git presentation while current admission and external chan
 
   await ensureGitRepo(workspace, true);
   expect(await hasWorkspaceGitCheckout(workspace)).toBe(true);
+});
+
+it("caches workspace Git presentation between observation invalidations", async () => {
+  const workspace = tempDirs.make("workspace-git-cache-");
+  const listeners: Parameters<typeof directoryObservation.observeOwnedDirectory>[1][] = [];
+  // Native registration may finish after the first read; control that notification for work counts.
+  vi.spyOn(directoryObservation, "observeOwnedDirectory").mockImplementation(
+    (_directory, listener) => {
+      listeners.push(listener);
+      return { close() {}, isWatching: () => true };
+    },
+  );
+  const stat = vi.spyOn(fsPromises, "stat");
+  expect(await hasWorkspaceGitCheckout(workspace)).toBe(false);
+  expect(stat).toHaveBeenCalled();
+
+  await fsPromises.writeFile(path.join(workspace, ".git"), "gitdir: missing-worktree\n");
+  expect(await findGitCheckoutRoot(workspace)).toBe(workspace);
+  stat.mockClear();
+  expect(await hasWorkspaceGitCheckout(workspace)).toBe(false);
+  expect(stat).not.toHaveBeenCalled();
+
+  for (const listener of listeners) {
+    listener(undefined, "change");
+  }
+  expect(await hasWorkspaceGitCheckout(workspace)).toBe(true);
+  expect(stat).toHaveBeenCalled();
+  stat.mockClear();
+  for (let i = 0; i < 10; i++) {
+    expect(await hasWorkspaceGitCheckout(workspace)).toBe(true);
+  }
+  expect(stat).not.toHaveBeenCalled();
+
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+  for (const listener of listeners) {
+    listener();
+  }
+  expect(await hasWorkspaceGitCheckout(workspace)).toBe(true);
+  expect(stat).not.toHaveBeenCalled();
 });
 
 it("keeps periodic presentation and fresh admission off synchronous filesystem APIs", async () => {

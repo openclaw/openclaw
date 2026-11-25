@@ -51,7 +51,6 @@ function WorkGroupSummaryBody(props: { label: string; options: WorkGroupSummaryO
   );
 }
 
-/** The same elapsed-time label identifies completed work in either disclosure state. */
 export function WorkGroupSummary(props: {
   item: WorkGroupSummaryItem;
   options: WorkGroupSummaryOptions;

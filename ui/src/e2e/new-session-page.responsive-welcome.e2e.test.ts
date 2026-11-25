@@ -121,12 +121,21 @@ suite.define(() => {
         await evaluateControlUiContext(page, (context) => context.theme.setMode("light"));
       }
       if (width <= 768) {
-        const chevrons = await triggerRow
-          .locator(".new-session-page__picker-chevron")
-          .evaluateAll((elements) =>
-            elements.map((element) => element.getBoundingClientRect().right),
-          );
-        expect(Math.max(...chevrons) - Math.min(...chevrons)).toBeLessThan(1);
+        for (const trigger of await triggerRow.locator(".new-session-page__trigger").all()) {
+          const label = trigger.locator(".new-session-page__trigger-label");
+          const textRight = await label.evaluate((element) => {
+            const text = document.createRange();
+            text.selectNodeContents(element);
+            return Math.min(
+              text.getBoundingClientRect().right,
+              element.getBoundingClientRect().right,
+            );
+          });
+          const chevron = trigger.locator(".new-session-page__picker-chevron");
+          const gap = (await chevron.boundingBox())!.x - textRight;
+          expect(gap).toBeGreaterThanOrEqual(0);
+          expect(gap).toBeLessThanOrEqual(8);
+        }
       }
       const layout = await triggerRow.locator(".new-session-page__trigger").evaluateAll((buttons) =>
         buttons.map((button) => {

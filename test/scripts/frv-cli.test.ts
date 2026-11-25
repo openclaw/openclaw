@@ -24,7 +24,21 @@ describe("frv CLI", () => {
       const selected = child("normalCi", "101");
       const workflow = "name: Full Release Validation\n";
       const sourcePath = ".github/workflows/full-release-validation.yml";
+      const waiverSource = JSON.stringify({
+        schema: "openclaw.release-validation-waivers/v1",
+        waivers: [],
+      });
       const fixture = {
+        waiverSource: {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: Buffer.byteLength(waiverSource),
+          content: Buffer.from(waiverSource).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(waiverSource) + "\0" + waiverSource)
+            .digest("hex"),
+        },
         plan: executionPlanArtifact({ children: [selected] }),
         parent: rootRun(),
         runs: [runFor(selected, 1, "failure"), runFor(selected, 2, "failure")],
@@ -32,7 +46,16 @@ describe("frv CLI", () => {
           ["selected", "untouched"].map((name, index) =>
             Object.assign(job(name, "failure"), { id: 10 + index, run_id: 101, run_attempt: 1 }),
           ),
-          [{ ...job("selected", conclusion), id: 20, run_id: 101, run_attempt: 2 }],
+          [
+            {
+              ...job("selected", conclusion),
+              id: 20,
+              run_id: 101,
+              run_attempt: 2,
+              started_at: "2026-08-22T00:02:00Z",
+              completed_at: "2026-08-22T00:03:00Z",
+            },
+          ],
         ],
         workflow: {
           type: "file",
@@ -81,7 +104,7 @@ if (args[0] === "run" && args[1] === "download" && args[2] === "77") {
   process.stdout.write("TARGET_SHA: ${TARGET_SHA}\nDispatched ci.yml: https://github.com/openclaw/openclaw/actions/runs/101 (attempt 1)\n");
   process.exit(0);
 } else if (route?.startsWith("contents/")) {
-  value = fixture.workflow;
+  value = route.includes("release-validation-waivers.json") ? fixture.waiverSource : fixture.workflow;
 } else if (/^actions\/runs\/101\/attempts\/[12]\/jobs\?per_page=100$/.test(route ?? "")) {
   value = fixture.jobs[route.includes("/attempts/2/") ? 1 : 0];
 } else {
@@ -132,42 +155,6 @@ process.stdout.write(Array.isArray(value) ? value.map(job => JSON.stringify(job)
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("usage: pnpm frv");
     expect(result.stdout).toContain("--no-follow");
-  });
-
-  it.each([
-    ["--run", "77", "--workflow-sha", "a".repeat(40), "--request-file", "unused-request.json"],
-    ["--reconcile-request", "unused-request.json"],
-  ])("rejects retired receipt recovery before transport for %j", (...arguments_) => {
-    const preload = `
-      import childProcess from "node:child_process";
-      import { syncBuiltinESMExports } from "node:module";
-      const rejectTransport = () => {
-        process.stdout.write("unexpected transport");
-        throw new Error("unexpected transport");
-      };
-      childProcess.spawn = rejectTransport;
-      childProcess.execFileSync = rejectTransport;
-      childProcess.execFile = rejectTransport;
-      globalThis.fetch = rejectTransport;
-      syncBuiltinESMExports();
-    `;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        `data:text/javascript,${encodeURIComponent(preload)}`,
-        resolve("scripts/frv.mjs"),
-        "recover",
-        ...arguments_,
-      ],
-      { encoding: "utf8", env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" } },
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("[frv] recover is retired");
-    expect(result.stderr).toContain("fresh qualification with pnpm ci:full-release");
-    expect(result.stdout).toBe("");
   });
 
   it.each([

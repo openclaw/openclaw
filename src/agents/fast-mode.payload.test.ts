@@ -100,7 +100,7 @@ async function checkSpeeds(cfg: OpenClawConfig, inherited?: string, key?: string
     }
     const override = key ? { [key]: mode } : undefined;
     const payload = await captureRequest(cfg, key ? true : mode, override);
-    const threshold = tier === "ultrafast" ? 260_000 : 735_000;
+    const threshold = tier === "ultrafast" ? 260_000 : 892_500;
     const compaction = { type: "compaction", compact_threshold: threshold };
     expect(payload).toMatchObject({
       service_tier: tier,

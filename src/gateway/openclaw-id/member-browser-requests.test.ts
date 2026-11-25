@@ -36,7 +36,7 @@ async function setup() {
     email: "member@example.test",
   });
   const sink = {
-    ...createMailboxSink(claw.authority),
+    ...createMailboxSink(claw.authority, claw.clawId),
     submit: vi.fn((statement: unknown) => claw.authority.submit(statement, "mailbox")),
   };
   const mail = (id = "a".repeat(32)): MailboxMessage => ({

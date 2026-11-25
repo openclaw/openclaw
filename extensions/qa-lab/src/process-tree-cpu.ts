@@ -54,13 +54,21 @@ function parsePsRssBytes(raw: string): number | null {
   return Math.round(rssKiB * 1024);
 }
 
-function readLinuxProcessRssBytes(pid: number): number | null {
+function readLinuxProcessRssBytes(
+  pid: number,
+  onUnavailable?: (reason: string) => void,
+): number | null {
   try {
     const status = readFileSync(`/proc/${pid}/status`, "utf8");
     const match = status.match(/^VmRSS:[ \t]+(\d+)[ \t]+kB[ \t]*$/mu);
     const rssKiB = parseStrictNonNegativeInteger(match?.[1]);
-    return rssKiB === undefined ? null : rssKiB * 1024;
+    if (rssKiB === undefined) {
+      onUnavailable?.(`vmrss-unavailable pid=${pid}`);
+      return null;
+    }
+    return rssKiB * 1024;
   } catch {
+    onUnavailable?.(`proc-status-unreadable pid=${pid}`);
     return null;
   }
 }
@@ -118,8 +126,10 @@ function collectProcessTreeMetric(
   childrenByParent: Map<number, number[]>,
   metricByPid: Map<number, number | null>,
   readRequiredMetric?: (pid: number) => number | null,
+  onUnavailable?: (reason: string) => void,
 ): number | null {
   if (!metricByPid.has(rootPid)) {
+    onUnavailable?.(`root-missing pid=${rootPid}`);
     return null;
   }
 
@@ -178,16 +188,26 @@ function readProcessTreeMetric(params: {
   posixColumn: "time=" | "rss=";
   parsePosixMetric: (raw: string) => number | null;
   windowsMetric: "cpuByPid" | "rssByPid";
+  onUnavailable?: (reason: string) => void;
 }): number | null {
-  const { rootPid } = params;
+  const { rootPid, onUnavailable } = params;
   if (typeof rootPid !== "number" || !Number.isInteger(rootPid) || rootPid <= 0) {
+    onUnavailable?.("invalid-root-pid");
     return null;
   }
   if (process.platform === "win32") {
     const snapshot = readWindowsProcessTreeSnapshot();
-    return snapshot
-      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot[params.windowsMetric])
-      : null;
+    if (!snapshot) {
+      onUnavailable?.("windows-snapshot-unavailable");
+      return null;
+    }
+    return collectProcessTreeMetric(
+      rootPid,
+      snapshot.childrenByParent,
+      snapshot[params.windowsMetric],
+      undefined,
+      onUnavailable,
+    );
   }
   const result = spawnSync("ps", ["-eo", `pid=,ppid=,${params.posixColumn}`], {
     encoding: "utf8",
@@ -196,6 +216,7 @@ function readProcessTreeMetric(params: {
     timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
   });
   if (result.status !== 0) {
+    onUnavailable?.(`ps-failed status=${result.status}`);
     return null;
   }
 
@@ -203,7 +224,7 @@ function readProcessTreeMetric(params: {
   // Keep that process in the tree and require an available VmRSS for every member.
   const readRequiredMetric =
     process.platform === "linux" && params.posixColumn === "rss="
-      ? readLinuxProcessRssBytes
+      ? (pid: number) => readLinuxProcessRssBytes(pid, onUnavailable)
       : undefined;
   const childrenByParent = new Map<number, number[]>();
   const metricByPid = new Map<number, number | null>();
@@ -229,7 +250,13 @@ function readProcessTreeMetric(params: {
     childrenByParent.set(ppid, children);
   }
 
-  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid, readRequiredMetric);
+  return collectProcessTreeMetric(
+    rootPid,
+    childrenByParent,
+    metricByPid,
+    readRequiredMetric,
+    onUnavailable,
+  );
 }
 
 export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {
@@ -241,11 +268,15 @@ export function readProcessTreeCpuMs(rootPid: number | null | undefined): number
   });
 }
 
-export function readProcessTreeRssBytes(rootPid: number | null | undefined): number | null {
+export function readProcessTreeRssBytes(
+  rootPid: number | null | undefined,
+  onUnavailable?: (reason: string) => void,
+): number | null {
   return readProcessTreeMetric({
     rootPid,
     posixColumn: "rss=",
     parsePosixMetric: parsePsRssBytes,
     windowsMetric: "rssByPid",
+    onUnavailable,
   });
 }

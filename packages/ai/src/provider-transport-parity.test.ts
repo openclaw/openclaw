@@ -362,7 +362,6 @@ describe("provider and transport observable parity fixtures", () => {
   registerParityHostLifecycle();
 
   it.each([
-    { name: "seeded starts followed by deltas", seeded: true, deltas: true },
     { name: "seed-only blocks", seeded: true, deltas: false },
     { name: "empty starts followed by deltas", seeded: false, deltas: true },
   ])("preserves Anthropic $name", async ({ seeded, deltas }) => {

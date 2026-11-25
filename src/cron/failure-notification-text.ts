@@ -44,19 +44,6 @@ const SCRIPT_FAILURE_COPY = {
   tool_budget_exceeded: "exceeded its tool budget",
 } satisfies Record<Exclude<CronTriggerFailureCode, "plugin_reload_failed">, string>;
 
-/**
- * A streak count spans several runs but the recorded cause is only the last one:
- * say so, or readers attribute every failure in the streak to it.
- */
-export function labelLatestCronFailureCause(
-  detailLines: string[],
-  consecutiveErrors: number,
-): string[] {
-  return consecutiveErrors > 1
-    ? detailLines.map((line) => line.replace(/^Cause: /, "Latest cause: "))
-    : detailLines;
-}
-
 /** Renders only classified reasons or closed producer-authored failure facts. */
 export function cronFailureDetailLines(
   errorReason: FailoverReason | undefined,

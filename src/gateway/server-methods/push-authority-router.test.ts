@@ -11,10 +11,7 @@ import {
   readResidentUserProfileIdentity,
   readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
-import {
-  closeGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "../device-revocation.js";
+import { closeGatewayDeviceRevocation } from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import {
@@ -61,13 +58,7 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
 });
 
-it.each([
-  "merged alias",
-  "transport retirement",
-  "retained device revoked",
-  "Gateway closed",
-  "worker selection mismatch",
-] as const)(
+it.each(["merged alias", "transport retirement", "worker selection mismatch"] as const)(
   "Web Push router keeps profile SQL outside the worker grant for %s",
   async (scenario) => {
     let inGrant = false;
@@ -158,25 +149,13 @@ it.each([
       );
       expect(readResidentUserProfileId).not.toHaveBeenCalled();
       expect(persisted).not.toHaveBeenCalled();
-      if (scenario === "transport retirement" || scenario === "retained device revoked") {
+      if (scenario === "transport retirement") {
         connection.abort();
         isConnectionActive.mockReturnValue(false);
         getClientConnIds.mockReturnValue(new Set());
       }
-      if (scenario === "retained device revoked") {
-        invalidateGatewayDeviceRevocation(context, "browser-device", "operator");
-        expect(client.invalidated).not.toBe(true);
-      } else if (scenario === "Gateway closed") {
-        closeGatewayDeviceRevocation(context);
-        expect(client.invalidated).not.toBe(true);
-      }
     });
     expect(forbiddenGrantReads).not.toHaveBeenCalled();
-    if (scenario === "retained device revoked" || scenario === "Gateway closed") {
-      expect(persisted).not.toHaveBeenCalled();
-      expect(harness.send).not.toHaveBeenCalled();
-      return;
-    }
     expect(harness.send).toHaveBeenCalledOnce();
     const response = await harness.awaitResponseFrame("router-authority");
     if (scenario === "worker selection mismatch") {

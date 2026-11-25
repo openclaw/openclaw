@@ -47,7 +47,11 @@ it.each(["current", "replaced target", "retired Gateway"] as const)(
         agentId: "main",
         sessionKey: "agent:main:caller",
         operationalRunInstance: createOperationalRunInstanceRef("stop-caller"),
-        receiptAuthority: () => callerCurrent,
+        receiptAuthority: () => {
+          if (!callerCurrent) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         gatewayContextResolver: context.resolveGatewayContext,
       };
       const stopTarget: Parameters<typeof stopSessionTool>[0] = {

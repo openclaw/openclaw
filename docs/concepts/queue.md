@@ -38,7 +38,9 @@ When unset, all inbound channel surfaces use:
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-conversation collaborative steering is enabled by default, including [Shared Owner WebUI/channel continuation](/concepts/queue-steering#scope) in the exact same active session. When collaboration is disabled, that continuation requires current administrative authority on the shared WebUI side and current channel-owner authority on the channel side. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+In Discord guild channels and threads, ordinary messages from a different authenticated requester stay queued as separate turns, even when collaborative steering is enabled. Same-requester guidance can still steer; explicit `/steer` and `/tell` keep their existing authorization and collaboration rules. This avoids consuming an independent request into someone else’s active task. Unrelated requests from the same requester are not classified automatically; use `/followup` to keep those separate.
+
+Same-conversation collaborative steering is enabled by default on other inbound surfaces, including [Shared Owner WebUI/channel continuation](/concepts/queue-steering#scope) in the exact same active session. When collaboration is disabled, that continuation requires current administrative authority on the shared WebUI side and current channel-owner authority on the channel side. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 

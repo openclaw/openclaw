@@ -4,6 +4,9 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { forceFullGc } from "../../../../src/test-utils/retention.js";
 import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { writerState } from "../provider-state.test-support.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import type { Context, Model, StreamOptions } from "../types.js";
 
 type WireEvent =
@@ -99,7 +102,6 @@ vi.mock("openai/resources/responses/ws.js", () => ({ ResponsesWS: sockets.Respon
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
-import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { ResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
@@ -199,7 +201,7 @@ function createStream(
     client: client as never,
     request: { model: "gpt-6-astra", instructions: "Be helpful", tools: [], input, ...request },
     mode: "websocket-cached",
-    sessionId: "steering-integration-session",
+    providerState: claimConversationProviderState("steering-integration-session"),
     onActiveResponse,
     steeringInput: (messages) =>
       messages.map((message) => ({ role: "user", content: message.content as string })),
@@ -271,7 +273,7 @@ describe("Responses WebSocket steering handoff", () => {
           client: client as never,
           request: { model: model.id, input: [initialUser] },
           mode: "websocket-cached",
-          sessionId: "steering-retention",
+          providerState: claimConversationProviderState("steering-retention"),
           steeringInput,
           ...(mode === "absent hook"
             ? {}
@@ -327,6 +329,7 @@ describe("Responses WebSocket steering handoff", () => {
     const options = {
       apiKey: "test-key",
       sessionId: "runtime-context-steering",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("runtime-context-steering"),
       transport: "websocket-cached" as const,
     };
     const { first, stream, socket, control } = await startTransport(context, options);
@@ -365,6 +368,7 @@ describe("Responses WebSocket steering handoff", () => {
         { messages: [{ role: "user", content: "original", timestamp: 0 }] },
         {
           sessionId: "payload-projection",
+          ...writerState("payload-projection"),
           onPayload: (payload) => {
             const request = payload as { input: unknown[] };
             return {
@@ -403,6 +407,7 @@ describe("Responses WebSocket steering handoff", () => {
     const options = {
       apiKey: "test-key",
       sessionId: "input-replay-client",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("input-replay-client"),
       transport: "websocket-cached" as const,
       asyncToolExecution: true,
       onPayload: (payload: unknown): unknown => {

@@ -45,11 +45,11 @@ import {
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
-import { ADMIN_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
@@ -314,15 +314,18 @@ async function invokeGatewayToolWithSignal(
     return failure(400, "invalid_request", sessionTarget.error.message);
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
-  const authenticatedUserProfile = isNamedOperatorRoleEnforcementEnabled(params.cfg)
-    ? params.authenticatedUserProfile
-    : undefined;
+  const profile = params.authenticatedUserProfile;
+  const authenticatedUserProfile =
+    isNamedOperatorRoleEnforcementEnabled(params.cfg) ||
+    (profile && resolveOperatorRolePolicyForProfile(profile.profileId, params.cfg))
+      ? profile
+      : undefined;
   // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     operatorRoleActor: params.operatorRoleActor,
     openclawIdPrincipal: params.openclawIdPrincipal ?? sourceClient?.internal?.openclawIdPrincipal,
-    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
+    scopes: [...(params.operatorScopes ?? [])],
   });
   const sessionEntry = params.preparedSession
     ? params.preparedSession.entry
@@ -337,7 +340,7 @@ async function invokeGatewayToolWithSignal(
   const profiles =
     isGatewayAdmin(client) &&
     !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
-    resolveOperatorRolePolicy(client, params.cfg)?.sandbox !== "required"
+    resolveOperatorRolePolicy(client, params.cfg) === undefined
       ? undefined
       : await prepareSessionSharingProfiles(client);
   const prepareAuthorization = async (
@@ -352,7 +355,7 @@ async function invokeGatewayToolWithSignal(
       sessionChecks.push(() => {
         if (
           isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()) ||
-          resolveOperatorRolePolicy(client, getRuntimeConfig())?.sandbox === "required"
+          resolveOperatorRolePolicy(client, getRuntimeConfig()) !== undefined
         ) {
           throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
@@ -493,6 +496,8 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
+  const sessionModel = resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId);
+  const authProfileId = sessionEntry?.authProfileOverride;
   const { resolved, mcpUnavailable } = await resolveToolsWithInvocationMcp({
     toolName,
     knownCoreTool,
@@ -504,10 +509,7 @@ async function invokeGatewayToolWithSignal(
         sessionPermissionPolicy,
         preparedSessionWorkspaceDir: sessionWorkspace,
         agentId: selectedAgentId,
-        webSearchModelSelection: {
-          ...resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId),
-          authProfileId: sessionEntry?.authProfileOverride,
-        },
+        webSearchModelSelection: sessionModel && { ...sessionModel, authProfileId },
         messageProvider: params.messageChannel,
         accountId: params.accountId,
         agentTo: params.agentTo,

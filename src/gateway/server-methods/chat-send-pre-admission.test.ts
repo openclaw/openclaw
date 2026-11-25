@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -42,6 +43,7 @@ import {
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
 
 const submittedInput = vi.hoisted(() =>
   vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
@@ -96,6 +98,45 @@ it("reports durable queued input in flight instead of a cached terminal response
     { cached: true, runId: params.session.clientRunId },
   );
 });
+
+it.each([
+  { timing: "before", state: undefined },
+  { timing: "before", state: "queued" },
+  { timing: "after", state: "cancelled" },
+] as const)(
+  "rejects replay of a canceled steer $timing cleanup writes the receipt (pending state: $state)",
+  async ({ timing, state }) => {
+    const { clientRunId } = params.session;
+    params.context.dedupe.set(`chat:${clientRunId}`, {
+      ts: 200,
+      ok: true,
+      requestIdentity: params.request.requestIdentity,
+      payload: { runId: clientRunId, status: "timeout", summary: "aborted" },
+    });
+    if (timing === "before") {
+      params.context.chatRunState.getOrCreate(clientRunId).abortMarker = {
+        ...createChatAbortMarker(200),
+        pendingInputCancellation: { chat: chatRef(params.session), endCause: "user-stop" },
+      };
+    }
+    if (state) {
+      submittedInput.mockResolvedValue(submittedMessage(params));
+      submittedSource.value = {
+        source: "pending",
+        state,
+        endCause: state === "cancelled" ? "user-stop" : undefined,
+      };
+    }
+
+    expect(await runChatSendPreAdmission(params)).toBe(false);
+    expectFailure(params.respond, {
+      code: "INVALID_REQUEST",
+      message: "Chat input was cancelled: user-stop. Use a new message ID to send again.",
+      details: { reason: "chat-input-cancelled", endCause: "user-stop" },
+    });
+  },
+);
+
 type RetryParams = Parameters<typeof respondChatSendRetry>[0];
 
 function createFixture() {
@@ -142,7 +183,6 @@ function createFixture() {
       requestedSessionId: undefined,
       backingSessionId: "mention-session",
       resolvedSessionModel: { provider: "openai", model: "gpt-4.1" },
-      resolvedSessionAuthProvider: "openai",
       timeoutMs: 1000,
       now: 100,
     },
@@ -256,7 +296,7 @@ it("stops admitted session work while preserving a detached producer", () =>
     }
   }));
 
-it("stops selected-agent work without cancelling the compatibility owner's run", () =>
+it.each([false, true])("scopes Stop by agent and optional session ID (%s)", (strict) =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: {
@@ -272,13 +312,20 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     params.context.getRuntimeConfig = () => cfg;
-    params.request.stopCommand = true;
-    params.request.p = {
-      sessionKey: "global",
-      agentId: "research",
-      idempotencyKey: params.session.clientRunId,
-      message: "/stop",
-    };
+    const normalized = await normalizeChatSendRequest({
+      client: params.client,
+      params: {
+        sessionKey: "global",
+        agentId: "research",
+        idempotencyKey: params.session.clientRunId,
+        message: "/stop",
+        ...(strict ? { expectedSessionId: "selected-session" } : {}),
+      },
+    });
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
+    params.request = normalized.value;
     Object.assign(params.session, {
       cfg,
       sessionKey: "global",
@@ -290,7 +337,7 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
       requestedAgentId: "research",
       selectedAgent: { ok: true, agentId: "research" },
       backingSessionId: undefined,
-      entry: undefined,
+      entry: strict ? { sessionId: "selected-session", updatedAt: 100 } : undefined,
     });
     for (const [runId, agentId] of [
       ["selected", "research"],
@@ -305,6 +352,8 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
     const registrations = [
       ["selected", "research"],
       ["compatibility", "ops"],
+      // The same logical key has new active work after physical-target preparation.
+      ...(strict ? [["replacement", "research"] as const] : []),
     ] as const;
     const sourceRegistrations = registrations.map(([runId, agentId]) => {
       const sessionId = `${runId}-session`;
@@ -332,6 +381,10 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
       });
       expect(sourceRegistrations[0]?.entry?.input.abortSignal.aborted).toBe(true);
       expect(sourceRegistrations[1]?.entry?.input.abortSignal.aborted).toBe(false);
+      if (strict) {
+        expect(sourceRegistrations[2]?.entry?.input.abortSignal.aborted).toBe(false);
+        expect(rpcSourceTesting.has("replacement")).toBe(true);
+      }
       expect(rpcSourceTesting.has("selected")).toBe(false);
       expect(rpcSourceTesting.has("compatibility")).toBe(true);
       expect(params.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
@@ -342,7 +395,8 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
         registration.cleanup();
       }
     }
-  }));
+  }),
+);
 
 it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
   "requires accepted custody and rejects changed mention recipients for a %s retry",

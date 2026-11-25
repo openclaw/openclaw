@@ -16,8 +16,6 @@ import {
   createNodeTestShardBundles as bundleTests,
   createNodeTestShards as planTests,
   createSelectedNodeTestShardBundles as selectTests,
-  createUiRealGatewayTestShards,
-  createUiTestShardGroups,
   createVitestCacheWarmGroups,
   hasCompleteStartupCorpusCoverage,
   packCompactNodeTestJobsToCapacity,
@@ -31,13 +29,17 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
-import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
+import * as testTierPolicy from "../../scripts/lib/ci-test-tier-policy.mts";
 import {
   createNativeSoloTimingKey,
   type CiTimingProfile,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import {
+  createUiRealGatewayTestShards,
+  createUiTestShardGroups,
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import { isExclusiveCiTestConfig } from "../../scripts/lib/local-check-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -346,7 +348,7 @@ describe("Control UI release-only inventories", () => {
     const desktop = "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts";
     const serial = [
       "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
-      "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+      "ui/src/e2e/guest-sidebar-pins.real-gateway.e2e.test.ts",
       "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
     ];
     const parallel = [
@@ -1629,7 +1631,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (runnerBackend !== "github") {
         const fullFiles = groups.flatMap(optionalPatterns);
         const excluded = required(fullFiles[0]);
-        vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+        vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
           (file) => file === excluded,
         );
         vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -1833,23 +1835,30 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("prices serial Gateway server measurements at two workers and preserves parallel samples (github)", () => {
+  it("prices serial Gateway server measurements at two workers and preserves parallel samples (github)", async () => {
     const runnerBackend = "github";
 
     const config = configPath("gateway-server");
     const owner = "agentic-control-plane-agent-chat";
-    useFixtureProjects((candidate) => candidate === config);
-
+    // Keep the file bound stable with both serial and release-only runtime work.
+    const files = [
+      ...Array.from(
+        { length: 89 },
+        (_, index) => `src/gateway/server.chat.timing-${index}.test.ts`,
+      ),
+      gatewayServerSerialTestFiles[0]!,
+      "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
+    ];
     const timings: Record<string, number> = { [owner]: 540 };
-    spyTimings().mockReturnValue(timings);
-    vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    mockProject("agentic", config, "src/gateway", files, timings);
+    const { createNodeTestShardBundles: createPlan } = await loadPlanModule();
     const options = { compactMode: "pull-request" as const, runnerBackend };
     const select = (includeReleaseOnlyRuntimeTests = true) =>
-      bundleTests({ ...options, includeReleaseOnlyRuntimeTests })
+      createPlan({ ...options, includeReleaseOnlyRuntimeTests })
         .flatMap(jobGroups)
         .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner);
     const inherited = select();
-    expect(inherited).toHaveLength(2);
+    expect(inherited).toHaveLength(4);
     expectEvery(inherited, (group) => workers(group) === "2");
     const parallelParent = required(
       parseCompactSplitTimingKey(inherited[0]!.timing_key!)?.parentShardName,
@@ -1863,16 +1872,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       serialEnv,
     );
     timings[serialGeneration.timingKeys[0]!] = 500;
-    expect(select()).toHaveLength(2);
-    timings[serialGeneration.timingKeys[1]!] = 500;
+    expect(select()).toEqual(inherited);
+    for (const key of serialGeneration.timingKeys) {
+      timings[key] = 250;
+    }
     expect(select()).toHaveLength(4);
     timings[`${owner}-parallel-native-serial`] = 440;
     timings[parallelParent] = 440;
     const measured = select();
-    expect(measured).toHaveLength(3);
+    // Full inventory retains the file bound even when timing permits three groups.
+    expect(measured).toHaveLength(4);
     expectSameEntries(measured.flatMap(requiredPatterns), inherited.flatMap(requiredPatterns));
     const reduced = select(false);
-    expect(reduced).toHaveLength(measured.length);
+    expect(reduced).toHaveLength(3);
     expectSameEntries(
       reduced.flatMap(requiredPatterns),
       measured.flatMap(requiredPatterns).filter((file) => !isReleaseOnlyRuntimeTestFile(file)),
@@ -2272,8 +2284,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps reduced Gateway coverage under distinct complete timing parts", () => {
-    const isReleaseOnlyRuntime = proofTestInventory.isReleaseOnlyRuntimeTestFile;
-    vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+    const isReleaseOnlyRuntime = testTierPolicy.isReleaseOnlyRuntimeTestFile;
+    vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
       (file) => file === "src/gateway/server.chat-cli-auth.test.ts" || isReleaseOnlyRuntime(file),
     );
     const options = {

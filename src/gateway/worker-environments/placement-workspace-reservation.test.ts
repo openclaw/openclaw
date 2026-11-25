@@ -9,8 +9,8 @@ import { ensureLocal } from "./placement-row-codec.js";
 import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
 
 const NOW_MS = 1_756_000_000_000;
-const businessSql =
-  /\bworker_(?:session_placements|workspace_pending_results|workspace_reconciliations)\b/i;
+const reservationSql =
+  /\b(?:state_leases|worker_(?:session_placements|workspace_pending_results|workspace_reconciliations))\b/i;
 
 const fixture = usePlacementStoreFixture(undefined, undefined, Date.now);
 
@@ -37,7 +37,7 @@ it.each([
         effect();
       });
       expect(effect).toHaveBeenCalledOnce();
-      expect(reads.queries.filter((sql) => businessSql.test(sql))).toEqual([]);
+      expect(reads.queries.filter((sql) => reservationSql.test(sql))).toEqual([]);
     } finally {
       reads.restore();
     }
@@ -95,7 +95,7 @@ it.each(["retirement", "pending", "reconciling"] as const)(
         assertCurrent();
         effect();
       }),
-    ).rejects.toThrow(kind === "retirement" ? "placement authority changed" : "still reconciling");
+    ).rejects.toThrow(kind === "retirement" ? "placement changed" : "still reconciling");
     expect(effect).not.toHaveBeenCalled();
   },
 );

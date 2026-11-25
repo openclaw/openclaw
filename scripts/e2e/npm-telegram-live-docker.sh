@@ -235,6 +235,16 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.m
 cleanup() {
   local rc=$?
   trap - EXIT
+  # The harness has stopped; return its private output to the host uploader
+  # without widening modes or following links outside this run's directory.
+  if ! docker_e2e_docker_with_timeout 30s run --rm --network none --user 0:0 \
+    -v "$OUTPUT_DIR_HOST:/output" "$IMAGE_NAME" \
+    find -P /output -exec chown -h "$(id -u):$(id -g)" '{}' +; then
+    echo "Could not return Telegram artifacts to the host user." >&2
+    if [ "$rc" -eq 0 ]; then
+      rc=1
+    fi
+  fi
   printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
   rm -rf "$npm_prefix_host"
   rm -rf "$harness_root"
@@ -485,7 +495,7 @@ cleanup_recovery() {
 }
 trap cleanup_recovery EXIT
 
-dump_hotpath_logs() {
+dump_debug_logs() {
   local status="$1"
   echo "installed-package onboarding recovery hot path failed with exit code $status" >&2
   for file in \
@@ -501,7 +511,7 @@ dump_hotpath_logs() {
     fi
   done
 }
-trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 test -x "$sut_command"
 openclaw_e2e_run_command "$sut_command" --version

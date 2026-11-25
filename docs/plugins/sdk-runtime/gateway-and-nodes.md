@@ -107,6 +107,24 @@ only its service scope, leaving the CLI scheduler available to other work.
 
 ## Gateway and node namespaces
 
+### Request authority
+
+A Gateway-authenticated HTTP route or registered operator RPC handler can call
+`getGatewayRequestAuthorityV1()` from `openclaw/plugin-sdk/gateway-request-authority`.
+It returns the scopes admitted for that request, an optional client IP, and the
+plugin ID of any access grant explicitly required by the caller's role.
+`personProfileId` identifies an authenticated individual. Use `attributionProfileId`
+for display. Shared credentials can carry Gateway owner attribution.
+
+The Gateway authenticates the request once. `authority.assertCurrent()` checks
+the admitted handler's lifetime and identity. Credential rotation and ordinary
+policy edits apply to the next HTTP request. A grant-owned operation can require
+its original grant with `authority.assertCurrent(pluginId)`, including at a
+synchronous commit. `await authority.revalidate(pluginId)` also waits for the
+transport's check. A mismatch or ended grant rejects the operation.
+A nested plugin RPC inherits the exact HTTP caller and its lifetime. Outside an
+admitted handler the getter returns `undefined`. Retained guards expire at settlement.
+
 ### Session control
 
 The session controller owns turn admission, queued input, and Stop. Gateway
@@ -122,6 +140,15 @@ authority. Use `chat.send` for input, `chat.abort` with `{ sessionKey, runId? }`
 for chat cancellation, `sessions.abort` with `{ key, runId?, clearQueued? }` for
 session cancellation, and `agent.wait` to await a run. There is no public
 controller mutation API.
+
+After `sessions.catalog.resolve` returns a destination, use
+`sendToResolvedSession({ target, message, idempotencyKey })` from the same SDK
+subpath. Pass the returned `{ sessionKey, sessionId }` as `target`. The Gateway
+checks that the same session still owns the key. The helper returns `accepted`
+when the Gateway acknowledges that request as started or already in flight,
+`forbidden` when the caller lacks permission, and `unconfirmed` when it cannot
+establish admission. Keep the original request key when reconciling an
+unconfirmed send.
 
 For status displays, use `sessions.list` to observe aggregate activity. Bundled
 or trusted official plugins can also use `api.runtime.gateway.request(...)`,
@@ -536,6 +563,12 @@ applicable policy also requires fresh publication admission.
     optional `caps`. Use those facts to require supported command behavior, then
     dispatch through the supplied `invokeNode` callback, which revalidates the
     current connection and pairing before forwarding the command.
+
+    A policy for `mcp.tools.call.v1` can provide
+    `allowLocalMcpTool({ nodeId, server, tool, pluginConfig })`. Returning
+    `true` admits that exact tool to same-node execution without calling the
+    Gateway handler. Other results, errors, and policies without this callback
+    retain Gateway dispatch.
 
     `allow-always` remains one policy decision unless the node-invoke policy explicitly declares `standingApproval: { kind: "placement", scope: "<capability>" }`. That opt-in permits later launches only for a high-risk command on the same current managed placement, node pairing, environment owner, workspace, and semantic capability scope, for at most 30 days and never across Gateway restart. Use a stable, content-free scope for a capability whose approval deliberately covers later argument changes. Do not opt in when the approved target or other request arguments must remain exact.
 

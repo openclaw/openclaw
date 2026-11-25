@@ -9,7 +9,10 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
-import { arePostgresSearchExtensionsAdmitted } from "../infra/database-engine/search-extension.js";
+import {
+  admitStoreSearchExtension,
+  arePostgresSearchExtensionsAdmitted,
+} from "../infra/database-engine/search-extension.js";
 import {
   isPostgresSqlConnection,
   type EngineConnection,
@@ -59,6 +62,11 @@ import {
   AGENT_INDEX_RETIREMENT_SQL,
   withLegacyAgentPostgresIndexes,
 } from "./openclaw-agent-index-retirement-migration.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  withoutAgentPostgresMemberAccess,
+} from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
 import {
   AGENT_MEMORY_REVISION_POSTGRES_SQL,
@@ -98,6 +106,7 @@ export function admitAgentEngineSearchExtensions(
   db: EngineConnection,
   definitions: Readonly<Record<string, SearchSchema>>,
   admit: (stage: "transaction" | "commit") => void,
+  rebuild = false,
 ): void {
   if (!isPostgresSqlConnection(db)) {
     return;
@@ -112,7 +121,7 @@ export function admitAgentEngineSearchExtensions(
     () => {
       admit("transaction");
       for (const [name, definition] of Object.entries(definitions)) {
-        admitStoreSearch(db, definition, { extension: name });
+        admitStoreSearchExtension(db, name, definition, rebuild);
       }
     },
     {
@@ -124,9 +133,10 @@ export function admitAgentEngineSearchExtensions(
   );
 }
 
-const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
 function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresSql);
+  const agentPostgresSql = agentEngineSchema.postgres;
+  const agentPostgresV43Sql = withoutAgentPostgresMemberAccess(agentPostgresSql);
+  const agentPostgresV42Sql = withoutAgentPostgresPendingInputEndings(agentPostgresV43Sql);
   const agentPostgresV41Sql = withoutAgentPostgresToolUsage(agentPostgresV42Sql);
   const agentPostgresV40Sql = withoutAgentPostgresActiveEventFacts(agentPostgresV41Sql);
   const agentPostgresV39Sql = withoutAgentPostgresCreationOperations(agentPostgresV40Sql);
@@ -403,7 +413,7 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
         postgresTextSearchVersion: 2,
       },
       schema: {
-        postgres: agentPostgresSql,
+        postgres: agentPostgresV43Sql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
         postgresTextSearchVersion: 2,
@@ -415,14 +425,44 @@ function createAgentPostgresMigrations(): StoreSchema["postgresMigrations"] {
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,
     },
+    {
+      version: AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+      fromSchema: {
+        postgres: agentPostgresV43Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      schema: {
+        postgres: agentPostgresSql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+        postgresTextSearchVersion: 2,
+      },
+      sql: `${AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL}
+        UPDATE schema_meta SET schema_version = ${AGENT_MEMBER_ACCESS_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
   ];
 }
 
-export const agentEngineSchema: StoreSchema = {
+export const agentEngineSchema: StoreSchema & { postgres: string } = {
   id: "agent",
   version: OPENCLAW_AGENT_SCHEMA_VERSION,
   sqlite: "",
-  postgres: agentPostgresSql,
+  get postgres() {
+    // SQLite readers import this owner but never consume its PostgreSQL DDL or catalog.
+    const value = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
+    Object.defineProperty(this, "postgres", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
   postgresVectorDecoderVersion: 2,
   postgresVectorSearchVersion: 2,
   postgresTextSearchVersion: 2,

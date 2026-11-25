@@ -33,6 +33,7 @@ const handshakeRecoverySnapshotSchema = z.strictObject({
     authMethod: z.enum(["token", "password", "device-token", "tailscale", "trusted-proxy"]),
     authModeOverride: z.enum(["none", "token", "password", "trusted-proxy"]).optional(),
     verifiedIdentity: boundedString.optional(),
+    fallbackCredentialGeneration: boundedString.optional(),
     browserOrigin: z
       .strictObject({
         requestHost: boundedString.optional(),

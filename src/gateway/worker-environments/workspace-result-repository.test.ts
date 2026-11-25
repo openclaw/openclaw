@@ -301,7 +301,7 @@ describe("repository workspace result ownership", () => {
           await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
         for (const call of fastImports()) {
-          expect(call[2]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
+          expect(call[2]).toMatchObject({ stdinFile: expect.any(Object) });
         }
         expect(importRoots).toHaveLength(1);
         expect(await candidates()).toEqual([]);

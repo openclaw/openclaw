@@ -1,16 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-js";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
+import { createMemo, createSignal, Errored, For, onSettled, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
-import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
+import { ChatModelAuthState, activeModelAuthState } from "./chat-model-auth-state.tsx";
 import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
 import { createChatModelFavoriteReorder } from "./chat-model-favorite-reorder.ts";
 import {
@@ -45,7 +44,10 @@ import {
 } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
-import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
+import {
+  ChatModelProviderHeading,
+  prepareChatModelProviderAuth,
+} from "./chat-model-provider-heading.tsx";
 import { ChatModelProviderRail } from "./chat-model-provider-rail.tsx";
 import {
   ChatModelSettings,
@@ -61,6 +63,13 @@ type ChatModelPickerPanelProps = {
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
+  const modelAuthStatus = createMemo(() => panel.params.modelAuthStatusResult);
+  const authProfileId = createMemo(() => panel.params.authProfileId);
+  // Account headings are only needed inside the lazily mounted picker, not at Chat boot.
+  const providerAuth = createMemo(() => {
+    i18nRevision();
+    return prepareChatModelProviderAuth(modelAuthStatus(), authProfileId());
+  });
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const favorites = createChatModelFavorites(owner);
   const search = useContext(ChatModelSearchContext);
@@ -218,14 +227,17 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   });
   const searchView =
     search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
-  const activeAuth = createMemo(() => {
-    const group = state().orderedProviderGroups.find(([provider]) =>
-      searchView?.providerOpen(provider),
-    );
-    return group && group[0] !== FAVORITES_GROUP && !searchView?.filtering()
-      ? modelAuthState([...group[1].lead, ...group[1].more])
+  const prefetchAccounts = () => {
+    const provider = state().activeProvider;
+    return search?.open() &&
+      (modelSelectionLocked() ||
+        (provider && searchView?.providerOpen(provider) && !searchView.filtering()))
+      ? panel.params.accountSection?.prefetch
       : undefined;
-  });
+  };
+  const activeAuth = createMemo(() =>
+    activeModelAuthState(state().orderedProviderGroups, searchView),
+  );
   const layout = createMemo<string[]>(() => {
     if (searchView?.filtering()) {
       return [
@@ -416,14 +428,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         options().length > 0 &&
         options().every((option) => option.disabled && option.unavailableReason === "cooldown"),
     );
-    const auth = createMemo(() => {
-      const authProvider =
-        resolveModelRuntimeRoute(props.provider, providerRuntime(props.provider) ?? undefined) ===
-        "claudeCli"
-          ? "claude-cli"
-          : props.provider;
-      return panel.params.providerAuth?.get(authProvider);
-    });
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -437,7 +441,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             favorites={props.provider === FAVORITES_GROUP}
             options={options()}
             cooldown={providerCooldown()}
-            auth={auth()}
+            providerAuth={providerAuth()}
+            runtime={providerRuntime(props.provider)}
             accounts={props.provider === state().activeProvider ? accounts() : undefined}
             onSettings={panel.params.onProviderSettings}
           />
@@ -510,6 +515,12 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
           : undefined
       }
     >
+      <Show when={prefetchAccounts()} keyed>
+        {(prefetch) => {
+          onSettled(() => prefetch());
+          return null;
+        }}
+      </Show>
       {modelSelectionLocked() ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
           <span class="chat-controls__locked-model-value">{panel.params.triggerModelLabel}</span>
@@ -660,7 +671,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                       runtime={providerRuntime}
                       onRuntimeSelect={(provider, runtime, entry) => {
                         if (entry?.disabled) {
-                          onModelSetup()?.();
+                          onModelSetup()?.(provider);
                           return;
                         }
                         if (

@@ -12,7 +12,11 @@ import type { SkillLibraryFilesystemInput } from "../library/filesystem.contract
 import type { Skill } from "../loading/skill-contract.js";
 import type { SkillsSyncFilesystemOperation } from "../loading/workspace-skill-sync-files.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import type { SkillsDiscoveryInput, SkillsDiscoveryOutput } from "./discovery-worker-contract.js";
+import type {
+  SkillsDiscoveryInput,
+  SkillsDiscoveryOutput,
+  SkillsFilesystemMutation,
+} from "./discovery-worker-contract.js";
 
 export function createSkillsFilesystemOperations(
   getWorker: () => Promise<
@@ -54,37 +58,45 @@ export function createSkillsFilesystemOperations(
     };
   }
 
-  async function runSandboxMountPreparation(
-    kind: "sandbox-mounts" | "sandbox-mount-sources",
-    input: SandboxMountPlanInput,
+  async function runFilesystemMutation(
+    request: SkillsFilesystemMutation,
     assertCurrent?: () => void,
     stateOwnerPath?: SandboxStateOwnerPath,
+    onPhase?: (phase: string) => void,
   ) {
     const nativeMode = getFsSafeNativeConfig().mode;
     const worker = await getWorker();
     const authority = assertCurrent ? createWorkerMutationAuthority(assertCurrent) : undefined;
+    let result: SkillsDiscoveryOutput;
     try {
-      const result = await worker.run(
+      result = await worker.run(
+        { ...request, nativeMode, stateOwnerPath, authority: authority?.buffer },
         {
-          kind,
-          stateOwnerPath,
-          input,
-          nativeMode,
-          authority: authority?.buffer,
+          timeoutMs: 120_000,
+          onNotification: (notification) => {
+            if (notification === "authority") {
+              authority?.onNotification();
+            } else if (typeof notification === "string") {
+              onPhase?.(notification);
+            }
+          },
         },
-        { timeoutMs: 120_000, onNotification: () => authority?.onNotification() },
       );
-      authority?.throwIfRefused();
-      if (result.kind === "sandbox-mounts-error") {
-        throw decodeNativeWorkerFailure(result.error);
-      }
-      return result;
-    } catch (error) {
-      authority?.throwIfRefused();
-      throw error;
     } finally {
       authority?.dispose();
+      // The original host refusal outranks a worker error or lost reply.
+      authority?.throwIfRefused();
     }
+    if (result.kind === "filesystem-mutation-error") {
+      const error = decodeNativeWorkerFailure(result.error);
+      throw result.code && error instanceof Error
+        ? new FsSafeError(result.code, error.message, {
+            cause: error.cause,
+            details: result.details,
+          })
+        : error;
+    }
+    return result;
   }
 
   async function prepareSandboxMounts(
@@ -92,9 +104,8 @@ export function createSkillsFilesystemOperations(
     assertCurrent?: () => void,
     stateOwnerPath?: SandboxStateOwnerPath,
   ) {
-    const result = await runSandboxMountPreparation(
-      "sandbox-mounts",
-      input,
+    const result = await runFilesystemMutation(
+      { kind: "sandbox-mounts", input },
       assertCurrent,
       stateOwnerPath,
     );
@@ -109,9 +120,8 @@ export function createSkillsFilesystemOperations(
     assertCurrent?: () => void,
     stateOwnerPath?: SandboxStateOwnerPath,
   ) {
-    const result = await runSandboxMountPreparation(
-      "sandbox-mount-sources",
-      input,
+    const result = await runFilesystemMutation(
+      { kind: "sandbox-mount-sources", input },
       assertCurrent,
       stateOwnerPath,
     );
@@ -148,49 +158,16 @@ export function createSkillsFilesystemOperations(
     onPhase: (phase: string) => void,
     stateOwnerPath?: SandboxStateOwnerPath,
   ) {
-    const nativeMode = getFsSafeNativeConfig().mode;
-    const worker = await getWorker();
-    const authority = assertCurrent ? createWorkerMutationAuthority(assertCurrent) : undefined;
-    try {
-      const result = await worker.run(
-        {
-          kind: "sync-filesystem",
-          nativeMode,
-          operation,
-          stateOwnerPath,
-          authority: authority?.buffer,
-        },
-        {
-          timeoutMs: 120_000,
-          onNotification: (notification) => {
-            if (notification === "authority") {
-              authority?.onNotification();
-            } else if (typeof notification === "string") {
-              onPhase(notification);
-            }
-          },
-        },
-      );
-      authority?.throwIfRefused();
-      if (result.kind === "sync-filesystem-error") {
-        const error = decodeNativeWorkerFailure(result.error);
-        throw result.code && error instanceof Error
-          ? new FsSafeError(result.code, error.message, {
-              cause: error.cause,
-              details: result.details,
-            })
-          : error;
-      }
-      if (result.kind !== "sync-filesystem") {
-        throw new Error("Unexpected Skills filesystem response");
-      }
-      return result.prepared;
-    } catch (error) {
-      authority?.throwIfRefused();
-      throw error;
-    } finally {
-      authority?.dispose();
+    const result = await runFilesystemMutation(
+      { kind: "sync-filesystem", operation },
+      assertCurrent,
+      stateOwnerPath,
+      onPhase,
+    );
+    if (result.kind !== "sync-filesystem") {
+      throw new Error("Unexpected Skills filesystem response");
     }
+    return result.prepared;
   }
 
   async function prepareSandboxFsPath(input: Parameters<typeof resolveSandboxFsPathWithMounts>[0]) {

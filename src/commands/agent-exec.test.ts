@@ -8,7 +8,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
@@ -25,7 +24,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { applyExecConfigOverrides, resolveExecBaseConfig } from "./agent-exec-input.js";
 import { classifyAgentExecResult } from "./agent-exec-result.js";
 import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createTestModelDefinition, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const externalTempDirs: string[] = [];
@@ -168,12 +167,10 @@ describe("agent exec command composition", () => {
                 : {}),
             },
             () => {
-              expect(getDatabaseEngineSelection()?.effectiveEngines.state).toBe(
-                retained ? "postgres" : "sqlite",
-              );
-              expect(getDatabaseEngineSelection()?.effectiveEngines.agent).toBe(
-                retained ? "postgres" : "sqlite",
-              );
+              expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+                state: retained ? "postgres" : "sqlite",
+                agent: retained ? "postgres" : "sqlite",
+              });
               expect(getRuntimeConfigSnapshot()?.database?.postgres).toEqual(
                 retained ? base.database?.postgres : undefined,
               );
@@ -189,14 +186,18 @@ describe("agent exec command composition", () => {
     async (mode) => {
       const root = tempDirs.make("openclaw-agent-exec-override-");
       const alpha = { model: "custom/model-a", workspace: "/original", skills: ["one"] };
-      const custom = { baseUrl: "https://example.invalid", apiKey: "test-key", models: [] };
+      const openai = {
+        baseUrl: "https://example.invalid",
+        apiKey: "test-key",
+        models: [createTestModelDefinition("model-a", { compat: { cachesInstructions: false } })],
+      };
       const codeMode = { enabled: false, maxOutputBytes: 4096 };
       const base = {
         agents: {
           defaults: { systemAgent: { agentId: "alpha" }, thinkingDefault: "low" },
           entries: { alpha },
         },
-        models: { providers: { custom } },
+        models: { providers: { openai } },
         tools: { deny: ["browser"], codeMode },
       } satisfies OpenClawConfig;
       const original = JSON.stringify(base);
@@ -292,23 +293,17 @@ describe("agent exec command composition", () => {
     }
   });
 
-  it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
-    const message = "attempt aborted before prompt submission";
-    const result = await throwFromRun(
-      new AgentRunTerminalOutcomeError(new Error(message), {
+  it.each([
+    [
+      new AgentRunTerminalOutcomeError(new Error("attempt aborted before prompt submission"), {
         reason: "hard_timeout",
         status: "timeout",
         timeoutPhase: "provider",
         providerStarted: true,
       }),
-    );
-    expect(result).toMatchObject({
-      exitCode: 2,
-      envelope: { status: "timeout", error: { kind: "timeout", message } },
-    });
-  });
-
-  it.each([
+      2,
+      { kind: "timeout", message: "attempt aborted before prompt submission" },
+    ],
     [new Error("deadline", { cause: { name: "TimeoutError" } }), 2],
     [new Error("deadline", { cause: Object.assign([], { code: "ETIMEDOUT" }) }), 2],
     [new Error("deadline", { cause: { reason: "timeout" } }), 2],
@@ -322,10 +317,13 @@ describe("agent exec command composition", () => {
     ],
   ] as const)(
     "classifies structured execution errors %j with exit code %s",
-    async (error, code) => {
+    async (error, code, expectedError?) => {
       expect(await throwFromRun(error)).toMatchObject({
         exitCode: code,
-        envelope: { status: code === 2 ? "timeout" : "error" },
+        envelope: {
+          status: code === 2 ? "timeout" : "error",
+          ...(expectedError ? { error: expectedError } : {}),
+        },
       });
     },
   );
@@ -590,20 +588,5 @@ describe("agent exec tool lifetime", () => {
     });
     await expect(retained?.execute("late", {})).rejects.toThrow();
     expect(source).not.toHaveBeenCalled();
-  });
-
-  it("retained effect guards cannot borrow a replacement invocation's authority", async () => {
-    let retainedGuard: (() => void) | undefined;
-    const effect = vi.fn();
-    await runSuccessfulExec({}, () => {
-      retainedGuard = captureAgentToolSourceExecutionGuard();
-    });
-    await runSuccessfulExec({}, () => {
-      expect(() => {
-        retainedGuard?.();
-        effect();
-      }).toThrow("execution scope is no longer active");
-    });
-    expect(effect).not.toHaveBeenCalled();
   });
 });

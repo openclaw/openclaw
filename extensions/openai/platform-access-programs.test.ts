@@ -2,16 +2,6 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-// mock-isolation: these tests count model-list fetches; the npm Codex version read is
-// covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
-  return {
-    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
-    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
-  };
-});
-
 const fetchMock = vi.fn<typeof fetch>();
 const grants = new Map<string, unknown>();
 let now = 1_000_000;
@@ -64,9 +54,14 @@ beforeEach(() => {
       models: [
         {
           slug: "gpt-6.1-sol",
+          service_tiers: [{ id: "priority", name: "Fast" }],
           ...(cyber === undefined ? {} : { available_access_programs: { cyber } }),
         },
-        { slug: "gpt-unlisted-fixture", available_access_programs: { cyber: ["daybreak_red"] } },
+        {
+          slug: "gpt-unlisted-fixture",
+          service_tiers: [],
+          available_access_programs: { cyber: ["daybreak_red"] },
+        },
       ],
     });
   });
@@ -94,6 +89,16 @@ it("discovers explicit per-key programs independently of identical model availab
         cyber,
       })),
     );
+    // The same response states which speed tiers each listed model accepts with this key.
+    expect(results[index]?.outcomes?.[0]?.modelServiceTiers).toEqual([
+      {
+        modelId: "gpt-6.1-sol",
+        runtimeId: "openclaw",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        serviceTiers: ["priority"],
+      },
+    ]);
   }
   await discover("blue");
   expect(fetchMock).toHaveBeenCalledTimes(6);

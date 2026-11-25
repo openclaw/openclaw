@@ -1,5 +1,10 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import type { NavigationRouteId, SidebarNavigationView } from "../app-navigation.ts";
+import type {
+  NavigationRouteId,
+  ShellNavigationIntent,
+  SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -22,12 +27,18 @@ export interface SidebarRouteView {
   readonly onNavigate?: (
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
+    intent?: ShellNavigationIntent,
   ) => void;
   readonly sessionDataContext: ApplicationContext | undefined;
   getRouteSessionKey(): string;
 }
 
 export interface SidebarMenusOwner extends SidebarRouteView {
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void;
   sessionsGrouping: SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
@@ -84,5 +95,8 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ): void;
 }

@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { SessionGitHubPublicationPublished } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
@@ -53,6 +54,27 @@ export function createOperatorContinuationService(params: {
         sessionKey: `cron:${request.job.id}`,
       }),
   });
+}
+export function prepareContinuationRoleConfig(config: OpenClawConfig, enabled: boolean) {
+  if (enabled) {
+    config.gateway = {
+      ...config.gateway,
+      roles: {
+        default: "writer",
+        definitions: {
+          writer: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+        },
+      },
+    };
+  }
+  if (config.gateway?.roles) {
+    config.gateway.roles.definitions.blocked = {
+      scopes: [],
+      agents: [],
+      sessions: { others: "none" },
+    };
+  }
+  setRuntimeConfigSnapshot(config);
 }
 
 export const publication: SessionGitHubPublicationPublished = {

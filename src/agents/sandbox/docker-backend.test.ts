@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildAgentGitShimInstallCommand } from "../../infra/agent-git-shim-install.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
@@ -458,7 +459,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   );
   expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
   expect(execSpec.stdinMode).toBe("pipe-closed");
-  expect(execSpec.argv.at(-1)).toBe("true");
+  expect(execSpec.argv.at(-1)).toBe('mkdir -p -- "$TMPDIR" || exit; true');
   expect(fs.readFileSync(envFile(execSpec), "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
   await finalize(backend, execSpec.finalizeToken);
 });
@@ -472,19 +473,86 @@ it("admits explicit piped input without enabling a PTY", async () => {
   await finalize(backend, spec.finalizeToken);
 });
 
-it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
-  "prepends the mounted Git shim after shell startup (requested PATH=%s)",
-  async (requestedPath) => {
+it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
+  "%s keeps temporary files writable with read-only workspace access",
+  async (engine) => {
     provision();
+    const cfg = resolveSandboxConfigForAgent(createConfig(engine, false));
+    cfg.workspaceAccess = "ro";
+    cfg.docker.workdir = tempDirs.make("sandbox-readonly-workspace-");
+    fs.chmodSync(cfg.docker.workdir, 0o555);
+    const backend = await (
+      engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend
+    )(backendParams({ cfg }));
+    const spec = await backend.buildExecSpec({
+      command: 'temporary=$(mktemp -d "$TMPDIR/proof.XXXXXXXX") && rmdir "$temporary"',
+      env: {},
+      usePty: false,
+    });
+    try {
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...backend.env },
+        encoding: "utf8",
+      });
+      expect(child.stderr).toBe("");
+      expect(child.status).toBe(0);
+      assertStaged(fs.readFileSync(envFile(spec), "utf8"), {
+        TMPDIR: "/tmp",
+        TMP: "/tmp",
+        TEMP: "/tmp",
+      });
+    } finally {
+      fs.chmodSync(cfg.docker.workdir, 0o755);
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32").each([
+  { workspaceAccess: "rw", requestedPath: undefined },
+  { workspaceAccess: "ro", requestedPath: "/requested/tools" },
+] as const)(
+  "prepares native Git behind the executable mount (workspace=$workspaceAccess)",
+  async ({ workspaceAccess, requestedPath }) => {
+    provision();
+    const cfg = resolveSandboxConfigForAgent();
+    cfg.workspaceAccess = workspaceAccess;
+    cfg.docker.workdir = tempDirs.make("sandbox-shell-workspace-");
+    const hostBin = tempDirs.make("sandbox-host-git-");
+    const preparedBin = tempDirs.make("sandbox-prepared-git-");
+    const temporaryDir = tempDirs.make("sandbox-noexec-tmp-");
+    const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(hostBin)], {
+      encoding: "utf8",
+    });
+    expect(installed.status, installed.stderr).toBe(0);
+    expect(fs.statSync(hostBin).mode & 0o777).toBe(0o755);
+    const translate = (script: string) =>
+      script
+        .replaceAll("/openclaw/git-tools", hostBin)
+        .replaceAll("/tmp/openclaw-agent-git", preparedBin);
+    const launcher = path.join(hostBin, "container/git");
+    fs.writeFileSync(launcher, translate(fs.readFileSync(launcher, "utf8")));
+    mocks.execContainerRaw.mockImplementationOnce(async (_engine, args) => {
+      // Translate the read-only resource mount into this transport fixture's host path.
+      const resolved = spawnSync("/bin/sh", ["-c", translate(args[5])], {
+        encoding: "buffer",
+        env: { ...process.env, PATH: requestedPath ?? process.env.PATH },
+      });
+      // The prepared script need not be executable (Docker's /tmp is noexec).
+      fs.chmodSync(path.join(preparedBin, "git"), 0o644);
+      return { code: resolved.status, stdout: resolved.stdout, stderr: resolved.stderr };
+    });
     const backend = await createDockerSandboxBackend(
       backendParams({
+        cfg,
         readOnlyResourceMounts: [
           { hostPath: "/host/git-tools", containerPath: "/openclaw/git-tools" },
         ],
       }),
     );
     const spec = await backend.buildExecSpec({
-      command: 'printf "%s" "$PATH"',
+      command:
+        'printf "%s\\n" "$PATH"; mktemp -d "$TMPDIR/proof.XXXXXXXX"; command -v git; git --version',
       env: requestedPath ? { PATH: requestedPath } : {},
       usePty: false,
     });
@@ -497,12 +565,27 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
           .map((line) => line.split("=")),
       );
       const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
-        env: { PATH: "/usr/bin:/bin", ...staged },
+        env: {
+          PATH: "/usr/bin:/bin",
+          ...staged,
+          OPENCLAW_PREPEND_PATH: translate(staged.OPENCLAW_PREPEND_PATH!),
+          ...(workspaceAccess === "ro" ? { TMPDIR: temporaryDir } : {}),
+        },
         encoding: "utf8",
       });
       expect(child.status).toBe(0);
-      expect(child.stdout).toBe(
-        `/openclaw/git-tools:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
+      const [toolPath, temporary, gitCommand, gitVersion] = child.stdout.trim().split("\n");
+      const containerTemp =
+        workspaceAccess === "ro" ? "/tmp" : path.join(cfg.docker.workdir, ".openclaw/tmp");
+      expect(path.dirname(temporary!)).toBe(
+        workspaceAccess === "ro" ? temporaryDir : containerTemp,
+      );
+      expect(gitCommand).toBe(launcher);
+      expect(gitVersion).toMatch(/^git version /);
+      expect(staged.TMP).toBe(containerTemp);
+      expect(staged.TEMP).toBe(containerTemp);
+      expect(toolPath).toBe(
+        `${hostBin}/container:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
       );
       expect(child.stderr).toBe("");
     } finally {
@@ -617,7 +700,7 @@ process.stdout.write(JSON.stringify({
       expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
       expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
       expect(delivered.args.at(-1)).toBe(
-        "export PATH=\"${OPENCLAW_PREPEND_PATH}:$PATH\"; unset OPENCLAW_PREPEND_PATH; printf '%s' '$HOME space \"quotes\" ${HOME}'",
+        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; mkdir -p -- "$TMPDIR" || exit; printf \'%s\' \'$HOME space "quotes" ${HOME}\'',
       );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(

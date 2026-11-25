@@ -2,7 +2,7 @@ import Foundation
 
 extension DashboardManager {
     func showRemovalIfNeeded(in controller: DashboardWindowController, present: Bool) -> Bool {
-        guard AppStateStore.shared.connectionMode == .unconfigured,
+        guard MacOpenClawIDFeature.isEnabled, AppStateStore.shared.connectionMode == .unconfigured,
               let removal = MacOpenClawIDDeviceStore.shared.lastRemoval() else { return false }
         controller.showRemoval(removal, present: present)
         return true

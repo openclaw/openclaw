@@ -64,10 +64,16 @@ import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-c
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
+  collectPluginReloadTargets,
+  createPluginRecordPublicationHooks,
+  publishPluginRecordsWithoutConfigWrite,
+} from "./update-command-plugin-records.js";
+import {
   buildInvalidConfigPostCoreUpdateResult,
   createOwedPluginStepWarning,
   createPostCorePluginUpdateResult,
   createPluginUpdateWarning,
+  formatMissingPluginPayloadReason,
   pluginConvergenceFailureBlocksUpdate,
   type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
@@ -81,14 +87,6 @@ class PluginFinalizationConfigConflictError extends ConfigMutationConflictError 
       retryable: false,
     });
   }
-}
-
-function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
-  return entry.reason === "missing-install-path"
-    ? "installPath is missing"
-    : entry.reason === "missing-package-json"
-      ? `package.json is missing under ${entry.installPath}`
-      : `package directory is missing: ${entry.installPath}`;
 }
 
 export async function updatePluginsAfterCoreUpdate(params: {
@@ -108,6 +106,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   runtime?: RuntimeEnv;
   cohort?: { runId: string; env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
+  beforeRecordPublication?: () => Promise<void>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
     params.assertCurrent?.();
@@ -551,73 +550,86 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
-    await transformConfigFileWithRetry({
-      writeOptions: {
-        ...mutationWriteOptions,
-        observe: false,
-        assertCurrent,
-        beforeCommit: async () => {
-          assertCurrent();
-          await params.configWriteOptions.beforeCommit?.();
-          assertCurrent();
-          await assertRecoveryCurrent();
-          assertCurrent();
-        },
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
-      transform: (current, { snapshot }) => {
-        const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
-        const currentConfig = currentReferences
-          ? restoreDoctorConfigEnvRefs(current, currentReferences)
-          : current;
-        const candidate = structuredClone(currentConfig);
-        for (const changedPath of changedPaths) {
-          const before = getConfigValueAtPath(baseline, changedPath);
-          const after = getConfigValueAtPath(nextConfig, changedPath);
-          const value = getConfigValueAtPath(currentConfig, changedPath);
-          const parentChanged = changedPath.slice(0, -1).some((_, index) => {
-            const parent = changedPath.slice(0, index + 1);
-            return (
-              isRecord(getConfigValueAtPath(baseline, parent)) &&
-              !isRecord(getConfigValueAtPath(currentConfig, parent))
-            );
-          });
-          if (
-            !isDeepStrictEqual(value, after) &&
-            (parentChanged || !isDeepStrictEqual(value, before))
-          ) {
-            throw new PluginFinalizationConfigConflictError(changedPath);
-          }
-          if (after === undefined) {
-            unsetConfigValueAtPath(candidate, [...changedPath]);
-          } else {
-            setConfigValueAtPath(candidate, changedPath, structuredClone(after));
-          }
-        }
-        setDeferredPluginMigrationConfigFacts(
-          candidate,
-          getDeferredPluginMigrationConfigFacts(nextConfig),
-        );
-        return { nextConfig: candidate };
-      },
-      commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
-        const { configWrite } = await commitPluginInstallRecordsWithConfig({
-          beforePersistentEffect: assertCurrent,
-          previousInstallRecords: pluginInstallRecords,
-          nextInstallRecords,
-          nextConfig: candidate,
-          baseHash,
-          writeOptions,
-        });
-        return {
-          config: configWrite.nextConfig,
-          persistedHash: configWrite.persistedHash,
-          persistedSourceConfig: configWrite.persistedSourceConfig,
-          afterWrite: configWrite.afterWrite,
-        };
-      },
+    const { beforeRecordWrite, beforeCommit } = createPluginRecordPublicationHooks({
+      beforeRecordPublication: params.beforeRecordPublication,
+      configBeforeCommit: params.configWriteOptions.beforeCommit,
+      assertCurrent,
+      assertRecoveryCurrent,
     });
+    const recordsOnly =
+      changedPaths.length === 0 &&
+      (await publishPluginRecordsWithoutConfigWrite({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig,
+        deferredPluginMigrations: params.configWriteOptions.deferredPluginMigrations,
+        assertConfigPathForWrite: params.configWriteOptions.assertConfigPathForWrite,
+        assertCurrent,
+        beforeCommit,
+      }));
+    if (!recordsOnly) {
+      await transformConfigFileWithRetry({
+        writeOptions: {
+          ...mutationWriteOptions,
+          observe: false,
+          assertCurrent,
+          beforeCommit,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        transform: (current, { snapshot }) => {
+          const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
+          const currentConfig = currentReferences
+            ? restoreDoctorConfigEnvRefs(current, currentReferences)
+            : current;
+          const candidate = structuredClone(currentConfig);
+          for (const changedPath of changedPaths) {
+            const before = getConfigValueAtPath(baseline, changedPath);
+            const after = getConfigValueAtPath(nextConfig, changedPath);
+            const value = getConfigValueAtPath(currentConfig, changedPath);
+            const parentChanged = changedPath.slice(0, -1).some((_, index) => {
+              const parent = changedPath.slice(0, index + 1);
+              return (
+                isRecord(getConfigValueAtPath(baseline, parent)) &&
+                !isRecord(getConfigValueAtPath(currentConfig, parent))
+              );
+            });
+            if (
+              !isDeepStrictEqual(value, after) &&
+              (parentChanged || !isDeepStrictEqual(value, before))
+            ) {
+              throw new PluginFinalizationConfigConflictError(changedPath);
+            }
+            if (after === undefined) {
+              unsetConfigValueAtPath(candidate, [...changedPath]);
+            } else {
+              setConfigValueAtPath(candidate, changedPath, structuredClone(after));
+            }
+          }
+          setDeferredPluginMigrationConfigFacts(
+            candidate,
+            getDeferredPluginMigrationConfigFacts(nextConfig),
+          );
+          return { nextConfig: candidate };
+        },
+        commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
+          const { configWrite } = await commitPluginInstallRecordsWithConfig({
+            beforePersistentEffect: beforeRecordWrite,
+            previousInstallRecords: pluginInstallRecords,
+            nextInstallRecords,
+            nextConfig: candidate,
+            baseHash,
+            writeOptions,
+          });
+          return {
+            config: configWrite.nextConfig,
+            persistedHash: configWrite.persistedHash,
+            persistedSourceConfig: configWrite.persistedSourceConfig,
+            afterWrite: configWrite.afterWrite,
+          };
+        },
+      });
+    }
     if (!params.json) {
       for (const change of convergence.configChanges) {
         runtime.log(theme.muted(change));
@@ -672,6 +684,9 @@ async function updatePluginsAfterCoreUpdateWithLease(
       outcomes: pluginUpdateOutcomes,
     },
     integrityDrifts,
+    reloadTargets: pluginsChanged
+      ? collectPluginReloadTargets(pluginInstallRecords, pluginConfig.plugins?.installs ?? {})
+      : undefined,
   };
 
   if (params.json) {

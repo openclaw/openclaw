@@ -3,8 +3,10 @@
  * ClickClack needs auto-enable to fill its missing enabled flag; one other plugin
  * is explicitly disabled. The same authored config is reused for every turn.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/model-fallback-activation-inputs.ts \
- *   --iterations 1000 [--flow runner|prepared-runner|activation] [--allocation | --counts]
+ *   --iterations 1000 [--flow runner|prepared-runner|registry-runner|activation] [--allocation | --counts]
  *   [--config published|frozen] [--warmup 100] [--profile <output.cpuprofile>]
+ * registry-runner uses 48 entries, one channel, three executable provider plugins,
+ * and six candidates without a borrowed model-runtime snapshot.
  * Run separate processes in A/A controls and five alternating AB/BA pairs. Accept
  * unchanged model selection, one materialization per config/metadata generation,
  * lower CPU/allocation beyond A/A spread, and no 20% worsening. Published mode
@@ -33,7 +35,12 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveBundledCompatActivationInputs } from "../../src/plugins/activation-context.js";
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
+import {
+  cleanupPluginLoaderFixturesForTest,
+  clearPluginLoaderCache,
+} from "../../src/plugins/loader.test-fixtures.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeRegistryScope } from "../../src/plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
 
@@ -54,7 +61,7 @@ assert(Number.isSafeInteger(warmup) && warmup >= 0);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const gc = globalThis.gc;
 assert(gc, "Use --expose-gc");
-assert(["runner", "prepared-runner", "activation"].includes(values.flow));
+assert(["runner", "prepared-runner", "registry-runner", "activation"].includes(values.flow));
 assert(["published", "frozen"].includes(values.config));
 assert(!(values.allocation && values.counts), "Measure allocation and coverage separately");
 const channels = ["clickclack", "discord", "nextcloud-talk", "reef", "slack", "x"];
@@ -65,8 +72,17 @@ const ids = [
   ...Array.from({ length: 32 }, (_, index) => `synthetic-plugin-${index}`),
 ];
 const preparedFixture =
-  values.flow === "prepared-runner" ? createFallbackRateLimitFixture() : undefined;
-const config: OpenClawConfig = preparedFixture?.config ?? {
+  values.flow === "prepared-runner" || values.flow === "registry-runner"
+    ? createFallbackRateLimitFixture(undefined, values.flow === "registry-runner")
+    : undefined;
+if (values.flow === "registry-runner") {
+  assert.equal(preparedFixture?.generation.pluginRegistry?.providers.length, 3);
+}
+const config: OpenClawConfig = (preparedFixture
+  ? values.config === "published" && values.flow === "registry-runner"
+    ? structuredClone(preparedFixture.config)
+    : preparedFixture.config
+  : undefined) ?? {
   agents: {
     defaults: {
       model: {
@@ -111,9 +127,7 @@ const config: OpenClawConfig = preparedFixture?.config ?? {
     ),
   },
 };
-if (preparedFixture) {
-  prepareRuntimePluginsConfig(config);
-} else if (values.config === "published") {
+if (values.config === "published" && values.flow !== "prepared-runner") {
   setRuntimeConfigSnapshot(config);
   assert.equal(getRuntimeConfigSnapshot(), config);
   assert.equal(Object.isFrozen(config), false);
@@ -132,10 +146,12 @@ const snapshot =
       channelCatalogMeta: { id, preferOver: ["unused-synthetic-predecessor"] },
     })),
   });
-snapshot.discovery = { candidates: [], diagnostics: [] };
+if (!preparedFixture) {
+  snapshot.discovery = { candidates: [], diagnostics: [] };
+}
 const preparationCpu = process.cpuUsage();
 const preparationStart = performance.now();
-const preparedSnapshot = preparedFixture?.publish();
+const preparedSnapshot = values.flow === "prepared-runner" ? preparedFixture?.publish() : undefined;
 const preparationWallMs = performance.now() - preparationStart;
 const preparationCpuDelta = process.cpuUsage(preparationCpu);
 const params = {
@@ -170,6 +186,11 @@ async function run(count: number) {
           withPluginRuntimeGenerationScope(preparedSnapshot, () => runWithModelFallback(params)),
         () => preparedSnapshot,
       );
+    } else if (preparedFixture) {
+      result = await withPluginRuntimeRegistryScope(
+        preparedFixture.generation.pluginRegistry!,
+        () => runWithModelFallback(params),
+      );
     } else if (values.flow === "runner") {
       result = await runWithModelFallback(params);
     } else {
@@ -185,9 +206,13 @@ inspector.connect();
 await withPluginMetadataSnapshotScope(
   snapshot,
   async () => {
-    if (!values.counts) {
-      await run(warmup);
+    const coldCpu = process.threadCpuUsage();
+    if (values.flow === "registry-runner") {
+      await run(1);
     }
+    const coldWallMs = ownerWallMs;
+    const coldCpuDelta = process.threadCpuUsage(coldCpu);
+    await run(warmup);
     gc();
     if (values.counts) {
       await inspector.post("Profiler.enable");
@@ -254,6 +279,7 @@ await withPluginMetadataSnapshotScope(
               "normalizePluginsConfig",
               "normalizeConfiguredProviderModel",
               "resolveProviderRuntimePluginLookup",
+              "resolvePluginRegistrationConfigKey",
             ].includes(fn.functionName)
           ) {
             const range = fn.ranges[0];
@@ -286,6 +312,8 @@ await withPluginMetadataSnapshotScope(
             "plugins/activation-context.ts",
             "config/plugin-auto-enable.apply.ts",
             "agents/model-fallback-rate-limit.ts",
+            "agents/model-fallback-rate-limit-model.ts",
+            "plugins/runtime/load-context.ts",
             "agents/embedded-agent-runner/model.registry-resolution.ts",
             "agents/prepared-model-runtime.full-catalog.ts",
             "plugins/provider-model-normalization.ts",
@@ -301,9 +329,11 @@ await withPluginMetadataSnapshotScope(
         entries: Object.keys(config.plugins?.entries ?? {}).length,
         preparationWallMs,
         preparationCpuMs: (preparationCpuDelta.user + preparationCpuDelta.system) / 1000,
-        configuredChannels: preparedFixture ? 0 : channels.length,
-        activationRewrites: preparedFixture ? 0 : 1,
-        candidates: preparedFixture ? 5 : 2,
+        configuredChannels: Object.keys(config.channels ?? {}).length,
+        activationRewrites: values.flow === "registry-runner" ? 3 : preparedFixture ? 0 : 1,
+        candidates: preparedFixture ? 6 : 2,
+        coldWallMs,
+        coldMainThreadCpuMs: (coldCpuDelta.user + coldCpuDelta.system) / 1000,
         iterations,
         warmup,
         ownerMedianUs: ownerSamples.toSorted((a, b) => a - b)[Math.floor(iterations / 2)]! * 1000,
@@ -334,3 +364,6 @@ await withPluginMetadataSnapshotScope(
   { config, trustConfigIdentity: true },
 );
 inspector.disconnect();
+
+clearPluginLoaderCache();
+cleanupPluginLoaderFixturesForTest();

@@ -181,7 +181,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("recovers a successor transcript from its own frozen tool projection", async () => {
+  it("replays a successor's frozen tool projection without rewriting its transcript", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { retainEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
       await import("./session-prompt-state.js");
@@ -299,11 +299,21 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       if (!successor) {
         throw new Error("expected the successor attempt to populate its projection");
       }
-      // Recovery writes through a separate manager; read its committed branch.
+      // Predicted recovery replays the successor projection, but must not commit
+      // its already-bounded bytes over the original result.
       await successor.manager.reloadPersistedTranscriptAsync();
+      const messages = successor.manager.buildSessionContext().messages;
+      expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+        content: toolResult.content,
+      });
+      using restored = retainEmbeddedSessionPromptState(successorId);
+      actualTruncation.restoreCacheTtlToolResultProjections(
+        restored.state.toolResults,
+        successor.manager.getEntries(),
+      );
       expect(
-        successor.manager
-          .buildSessionContext()
+        actualTruncation
+          .projectToolResultMessages({ messages, projectionState: restored.state.toolResults })
           .messages.find((message) => message.role === "toolResult"),
       ).toMatchObject({ content: successor.content });
     } finally {
@@ -401,14 +411,13 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
   );
 
   it.each([
-    ["a tool call without a recorded result", { resultRecorded: false }, true],
+    ["a tool call without a recorded result", { resultRecorded: false }],
     [
       "a direct tool active while Code Mode is merely enabled",
       { activeCount: 1, codeModeEngaged: true },
-      true,
     ],
-    ["asynchronous tool activity", { asyncStarted: true }, false],
-  ])("keeps %s fail-closed", async (_label, attemptParams, expectsWarning) => {
+    ["asynchronous tool activity", { asyncStarted: true }],
+  ])("keeps %s fail-closed", async (_label, attemptParams) => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow(attemptParams));
 
     const result = await runEmbeddedAgent({
@@ -418,13 +427,9 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    if (expectsWarning) {
-      expect(result.payloads?.[0]?.text).toContain(
-        "some tool actions may have already been executed",
-      );
-    } else {
-      expect(result.payloads).toBeUndefined();
-    }
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
   });
 
   it("preserves compaction failure guidance after settled tools", async () => {

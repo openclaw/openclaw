@@ -63,6 +63,10 @@ it.each([{ baseUrl: "https://fixture.invalid/routed" }, { api: "openai-completio
   (route) => {
     const result = overlayCatalogMetadata(base, { ...base, ...route, inference: undefined });
     expect(result.inference).toEqual({ chat: false });
+    // #201513: a dual chat/Decision row stays chat-capable; only its Decision facts are dropped.
+    const dual = { ...base, inference: { ...inference, chat: true } };
+    const routed = overlayCatalogMetadata(dual, { ...dual, ...route, inference: undefined });
+    expect(routed.inference).toBeUndefined();
   },
 );
 

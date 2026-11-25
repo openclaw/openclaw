@@ -6,8 +6,8 @@ import { upsertSessionEntryCore } from "../../../config/sessions/session-accesso
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import type { Context } from "../../../llm/types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -369,7 +369,7 @@ it("rechecks authority after awaiting persistence, before dispatch", async () =>
           await activeSession.agent.streamFn(testModel, { messages: [] }, {});
         },
       }),
-    ).rejects.toThrow("admitted run authority is no longer active");
+    ).rejects.toThrow("This agent run is no longer active. Start a new turn to retry.");
     expect(stream).not.toHaveBeenCalled();
   } finally {
     admission.close();

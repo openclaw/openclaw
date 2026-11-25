@@ -1,6 +1,7 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { hasToolDefinition } from "./mock-openai-directives.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { countCurrentToolOutputs } from "./mock-openai-input.js";
 
 const QA_CRON_SEND_CONTINUE_PROMPT_RE = /Cron send-then-continue QA check/i;
 const QA_CRON_SEND_CONTINUE_TARGET_RE = /Delivery target: (\S+)/;
@@ -23,7 +24,7 @@ export function planCronSendContinueTurn(params: {
     return null;
   }
   const target = QA_CRON_SEND_CONTINUE_TARGET_RE.exec(params.prompt)?.[1];
-  const completed = params.input.filter((item) => item.type === "function_call_output").length;
+  const completed = countCurrentToolOutputs(params.input);
   if (completed === 0 && target) {
     return params.buildToolCall("message", {
       action: "send",

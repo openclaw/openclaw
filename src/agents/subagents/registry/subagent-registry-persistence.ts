@@ -23,6 +23,7 @@ import {
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
 import {
+  bindImmutableSubagentRun,
   compactSubagentRunForMemory,
   immutableSubagentRun,
   restoreSubagentRunPayload,
@@ -43,10 +44,7 @@ import {
   publishSubagentRunsAfterAtomicStore,
   rememberRestoredSubagentRunNotification,
 } from "./subagent-registry-state.js";
-import {
-  bindSubagentRunRecord,
-  parseSubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.codec.js";
+import { parseSubagentRegistryWriteReceipt } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
@@ -356,13 +354,13 @@ async function commitRows<T>(
     if (!row) {
       return [];
     }
-    const value = bindSubagentRunRecord(row);
+    const value = bindImmutableSubagentRun(row);
     const previous = runs.get(row.runId);
     // Runtime-only reservations still publish, but need no identical durable write.
     // Prepared-only and compacted rows cannot prove equality with stored payloads.
     return previous &&
       !isSubagentRunPayloadEvicted(previous) &&
-      isDeepStrictEqual(value, bindSubagentRunRecord(previous))
+      isDeepStrictEqual(value, bindImmutableSubagentRun(previous))
       ? []
       : [value];
   });
@@ -452,7 +450,7 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
     const evictedIds = [...rows.values()]
       .filter(isSubagentRunPayloadEvicted)
       .map((row) => row.runId);
-    if (evictedIds.length) {
+    if (evictedIds.length && !options.deleteOnly) {
       const payloads = await readFullSubagentRuns(
         context,
         { kind: "ids", runIds: evictedIds },
@@ -475,6 +473,11 @@ export async function mutateSubagentRuns<P extends SubagentRunMutation<unknown>>
       throw new Error("Subagent mutation plans must remain synchronous");
     }
     for (const [id, row] of planned.postimages ?? []) {
+      if (options.deleteOnly && row !== null) {
+        throw new SubagentRegistryMutationRejectedError(
+          "Deletion-only subagent mutations cannot write retained payloads",
+        );
+      }
       if (!pending.runIds.has(id) || (row && row.runId !== id)) {
         throw new SubagentRegistryMutationRejectedError(
           "Subagent mutation writes an unadmitted row",

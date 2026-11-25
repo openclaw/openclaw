@@ -9,7 +9,9 @@ import {
 import type {
   ErrorShape,
   SessionsCatalogContinueParams,
+  SessionsCatalogResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -33,7 +35,7 @@ import {
 import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   createGatewaySession,
   SessionCreationNotCommittedError,
@@ -57,7 +59,9 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   assertCurrent: () => void;
-}): Promise<{ ok: true; sessionKey?: string } | { ok: false; error: ErrorShape }> {
+}): Promise<
+  { ok: true; destination: SessionsCatalogResolveResult } | { ok: false; error: ErrorShape }
+> {
   params.assertCurrent();
   using sourceLease = {
     binding: await params.provider.resolveGatewayConversation?.({
@@ -72,7 +76,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
   const binding = sourceLease.binding;
   if (!binding) {
     params.assertCurrent();
-    return { ok: true };
+    return { ok: true, destination: null };
   }
   const admitted = await resolveSessionMutationAuthorizationAsync({
     client: params.client,
@@ -112,7 +116,7 @@ export async function resolveSessionCatalogGatewayConversation(params: {
     const origin = isRecord(extension) ? extension.catalogContinuation : undefined;
     assertCurrent();
     if (
-      !entry ||
+      !entry?.sessionId ||
       entry.initializationPending ||
       !isRecord(origin) ||
       origin.id !== binding.id ||
@@ -128,7 +132,11 @@ export async function resolveSessionCatalogGatewayConversation(params: {
         ),
       };
     }
-    return { ok: true, sessionKey: binding.sessionKey };
+    // Carry the incarnation from the same row whose catalog provenance was verified.
+    return {
+      ok: true,
+      destination: { sessionKey: binding.sessionKey, sessionId: entry.sessionId },
+    };
   } finally {
     prepared.release();
   }
@@ -162,7 +170,7 @@ async function resolveGatewayCopyModel(params: {
       cfg,
       catalog,
       model: sourceModel,
-      defaultProvider: defaultModel.provider,
+      defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
       agentId: params.agentId,
     });
     const resolved = resolveModelRefFromString({
@@ -181,7 +189,7 @@ async function resolveGatewayCopyModel(params: {
       cfg,
       catalog,
       ref: source,
-      defaultProvider: defaultModel.provider,
+      defaultProvider: defaultModel?.provider ?? DEFAULT_PROVIDER,
       defaultModel,
       agentId: params.agentId,
     });
@@ -202,7 +210,7 @@ async function resolveGatewayCopyModel(params: {
 
 function gatewayCopyNotice(params: {
   catalogLabel: string;
-  selectedModel: string;
+  selectedModel?: string;
   sourceModel?: string;
   usedPreferredModel: boolean;
   continuation: boolean;
@@ -217,11 +225,16 @@ function gatewayCopyNotice(params: {
       ).text.replace(/[\r\n]+/g, " ")
     : undefined;
   if (!sourceModel) {
-    return `${boundary}\n\nThe snapshot did not include a source model, so this session is using the Team agent's configured model, ${params.selectedModel}.`;
+    return params.selectedModel
+      ? `${boundary}\n\nThe snapshot did not include a source model, so this session is using the Team agent's configured model, ${params.selectedModel}.`
+      : `${boundary}\n\nThe snapshot did not include a source model, and the Team agent has no configured model.`;
   }
-  return params.usedPreferredModel
-    ? `${boundary}\n\nThis session is using the source model, ${sourceModel}.`
-    : `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, so this session is using its configured model, ${params.selectedModel}.`;
+  if (params.usedPreferredModel) {
+    return `${boundary}\n\nThis session is using the source model, ${sourceModel}.`;
+  }
+  return params.selectedModel
+    ? `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, so this session is using its configured model, ${params.selectedModel}.`
+    : `${boundary}\n\nThe source model, ${sourceModel}, is not available to this Team agent, and it has no configured model.`;
 }
 
 /** Source-authorized plugin routes use the same Gateway adoption and creation owner. */
@@ -300,7 +313,7 @@ export async function copySessionCatalogToGateway(params: {
     throw new Error("catalog cannot copy this session to the Gateway");
   }
   await using operatorCapture = {
-    preparation: captureGatewayOperatorRunAuthority({
+    preparation: prepareGatewayOperatorRunAuthority({
       client: params.client,
       context: params.context,
       hasCurrentClientAuthority: params.hasCurrentClientAuthority,
@@ -313,10 +326,7 @@ export async function copySessionCatalogToGateway(params: {
   };
   const captured = await operatorCapture.preparation;
   let destinationAuthority: SessionMutationAuthorization | undefined;
-  const assertSourceCurrent = () => {
-    params.commitGuard?.();
-    captured?.authority.assertCurrent();
-  };
+  const assertSourceCurrent = () => params.commitGuard?.();
   assertSourceCurrent();
   const gatewayCopy = await copyToGatewaySession({
     ...params.providerContinueParams,
@@ -495,7 +505,7 @@ export async function copySessionCatalogToGateway(params: {
     commitGuard,
     afterCreate: async (entry) => {
       const selected = resolveSessionModelRef(cfg, entry.entry, entry.agentId);
-      const selectedModel = `${selected.provider}/${selected.model}`;
+      const selectedModel = selected && `${selected.provider}/${selected.model}`;
       await importSessionCatalogHistory({
         catalogId: params.request.catalogId,
         threadId: params.request.threadId,

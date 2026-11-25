@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { NATIVE_HISTORICAL_TOOL_CALL } from "@openclaw/ai/provider-types";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderMessage } from "../../../../packages/ai/src/provider-types.js";
@@ -12,16 +13,21 @@ import { cloneTranscriptView } from "../../../config/sessions/transcript-snapsho
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { labelRuntimeContextText } from "../../../llm/types.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import {
   buildPersistedUserTurnMessage,
   createUserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import {
+  PROJECT_MOVE_HANDOFF_NAME,
+  buildSessionToolHandoffNotice,
+  buildSessionsYieldContextMessage,
+} from "../../sessions-yield-context.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -39,10 +45,15 @@ import {
 } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
-import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
 import {
+  beginPromptCacheObservation,
+  clearPromptCacheObservations,
+} from "../prompt-cache-observability.js";
+import {
+  clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
   recordToolResultPromptProjection,
+  retainEmbeddedSessionPromptState,
   type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
@@ -62,31 +73,199 @@ import {
 } from "./runtime-context-prompt.js";
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
-  it("strips persisted carriers when a session switches to transient replay", async () => {
-    const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
-    const previousCarrier: AgentMessage = buildRuntimeContextCustomMessage("persisted context")!;
-    previousCarrier.details = { runtimeContextCarrier: true };
-    const reply = makeAssistantMessageFixture({
-      content: [{ type: "text", text: "first answer" }],
-    });
-    const currentCarrier = buildRuntimeContextCustomMessage("current context")!;
-    const currentUser: AgentMessage = { role: "user", content: "next question", timestamp: 2 };
-    const messages = [previousUser, previousCarrier, reply, currentCarrier, currentUser];
+  it("folds the current move continuation into the provider history before the first resumed request", async () => {
     const { activeSession } = createActiveSession();
+    activeSession.agent.convertToLlm = convertHarnessMessages;
+    const completed = '{"status":"moved","projectId":"garden","branch":"openclaw/garden"}';
+    const request = "Move to the garden and read the note.";
+    const user: AgentMessage = {
+      role: "user",
+      content: request,
+      timestamp: 1,
+    };
+    const assistant = makeAssistantMessageFixture({
+      content: [
+        { type: "toolCall", id: "move", name: "session_project", arguments: { action: "move" } },
+      ],
+      stopReason: "toolUse",
+    });
+    const pending: AgentMessage = {
+      role: "toolResult",
+      toolCallId: "move",
+      toolName: "session_project",
+      content: [{ type: "text", text: '{"status":"started"}' }],
+      timestamp: 2,
+      isError: false,
+    };
+    const notice: AgentMessage = {
+      role: "custom",
+      timestamp: 3,
+      ...buildSessionsYieldContextMessage(buildSessionToolHandoffNotice(PROJECT_MOVE_HANDOFF_NAME)),
+    };
+    const continuation = {
+      role: "user" as const,
+      content: "Conversation move result: continue in the project.",
+      timestamp: 4,
+      provenance: {
+        kind: "internal_system",
+        sourceTool: "tool_handoff",
+        completedToolCall: { id: "move", result: completed },
+      },
+    };
+    const currentCarrier = buildRuntimeContextCustomMessage("current project context")!;
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      appendOnlyRuntimeContext: false,
-      attempt: { sessionId: "session-boundary", prompt: "next question" },
+      attempt: {
+        sessionId: "boundary-move",
+        prompt: continuation.content,
+        model: { api: "openai-completions", baseUrl: "http://127.0.0.1:8080/v1" },
+      },
       getUserTranscriptContexts: () => undefined,
       ...createBoundaryInputDefaults(),
     });
-    const converted = await activeSession.agent.convertToLlm(messages);
-    expect(converted).toHaveLength(4);
-    expect(converted).not.toContain(previousCarrier);
-    expect(converted.at(-1)).toBe(currentCarrier);
-    expect(converted.slice(0, -1)).not.toContain(currentCarrier);
-    expect(await activeSession.agent.convertToLlm(messages)).toEqual(converted);
+    const provider = await activeSession.agent.convertToLlm([
+      user,
+      assistant,
+      pending,
+      notice,
+      currentCarrier,
+      continuation,
+    ]);
+    expect(provider).toMatchObject([
+      { role: "user", content: expect.stringContaining(request) },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "move", [NATIVE_HISTORICAL_TOOL_CALL]: true }],
+      },
+      { ...pending, content: [{ type: "text", text: completed }] },
+      { role: "user", runtimeContextCarrier: true },
+    ]);
+    expect(pending.content).toEqual([{ type: "text", text: '{"status":"started"}' }]);
   });
+
+  it("declares transient context movement after disposing the previous attempt", async () => {
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      const sessionId = "boundary-disposed-lease";
+      const observe = (messages: Parameters<typeof beginPromptCacheObservation>[0]["messages"]) =>
+        beginPromptCacheObservation({
+          sessionId,
+          provider: "test-provider",
+          modelId: "test-model",
+          streamStrategy: "test",
+          systemPrompt: "stable",
+          tools: [],
+          messages,
+        });
+      const prepare = async () => {
+        const { activeSession } = createActiveSession();
+        activeSession.agent.convertToLlm = convertHarnessMessages;
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession,
+          appendOnlyRuntimeContext: false,
+          attempt: { sessionId, prompt: "fixture" },
+          getUserTranscriptContexts: () => undefined,
+          ...createBoundaryInputDefaults(),
+        });
+        return activeSession;
+      };
+      const user = { role: "user" as const, content: "first question", timestamp: 1 };
+      const firstLease = retainEmbeddedSessionPromptState(sessionId);
+      try {
+        const first = await prepare();
+        expect(
+          observe(
+            await first.agent.convertToLlm([
+              expectDefined(buildRuntimeContextCustomMessage("first context"), "first carrier"),
+              user,
+            ]),
+          ).changes,
+        ).toBeNull();
+        firstLease[Symbol.dispose]();
+        using lease = retainEmbeddedSessionPromptState(sessionId);
+        void lease;
+        const next = await prepare();
+        const messages = await next.agent.convertToLlm([
+          user,
+          makeAssistantMessageFixture({ content: [{ type: "text", text: "first answer" }] }),
+          expectDefined(buildRuntimeContextCustomMessage("next context"), "next carrier"),
+          { role: "user", content: "next question", timestamp: 2 },
+        ]);
+        expect(observe(messages).changes).toEqual([
+          expect.objectContaining({ code: "runtimeContextCarrier" }),
+        ]);
+        expect(() => observe([{ ...user, content: "unrelated rewrite" }])).toThrow(
+          "historyRewrite",
+        );
+      } finally {
+        firstLease[Symbol.dispose]();
+        clearEmbeddedSessionPromptStates([sessionId]);
+        clearPromptCacheObservations(sessionId);
+      }
+    });
+  });
+
+  it.each([false, true])(
+    "does not re-declare repeated carrier removal (unrelated edit: %s)",
+    async (edit) =>
+      withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const sessionId = `persisted-carrier-${edit}`;
+        const previousUser: AgentMessage = {
+          role: "user",
+          content: "first question",
+          timestamp: 1,
+        };
+        const previousCarrier: AgentMessage =
+          buildRuntimeContextCustomMessage("persisted context")!;
+        previousCarrier.details = { runtimeContextCarrier: true };
+        const reply = makeAssistantMessageFixture({
+          content: [{ type: "text", text: "first answer" }],
+        });
+        const currentCarrier = buildRuntimeContextCustomMessage("current context")!;
+        const currentUser: AgentMessage = { role: "user", content: "next question", timestamp: 2 };
+        const messages = [previousUser, previousCarrier, reply, currentCarrier, currentUser];
+        const { activeSession } = createActiveSession();
+        activeSession.agent.convertToLlm = convertHarnessMessages;
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession,
+          appendOnlyRuntimeContext: false,
+          attempt: { sessionId, prompt: "next question" },
+          getUserTranscriptContexts: () => undefined,
+          ...createBoundaryInputDefaults(),
+        });
+        try {
+          const observe = (input: Parameters<typeof beginPromptCacheObservation>[0]["messages"]) =>
+            beginPromptCacheObservation({
+              sessionId,
+              provider: "test-provider",
+              modelId: "test-model",
+              streamStrategy: "test",
+              systemPrompt: "stable",
+              tools: [],
+              messages: input,
+            });
+          const converted = await activeSession.agent.convertToLlm(messages);
+          expect(converted).toHaveLength(4);
+          expect(JSON.stringify(converted)).not.toContain("persisted context");
+          expect(converted.at(-1)).toMatchObject({
+            role: "user",
+            content: labelRuntimeContextText(currentCarrier.content),
+          });
+          expect(observe(converted).changes).toBeNull();
+          if (edit) {
+            messages[0] = { ...previousUser, content: "unrelated history edit" };
+          }
+          const repeated = await activeSession.agent.convertToLlm(messages);
+          if (edit) {
+            expect(() => observe(repeated)).toThrow("historyRewrite");
+          } else {
+            expect(repeated).toEqual(converted);
+            expect(observe(repeated).changes).toBeNull();
+          }
+        } finally {
+          clearPromptCacheObservations(sessionId);
+        }
+      }),
+  );
 
   it.each([false, true])(
     "replays turn and tool-loop prefixes with append-only runtime context %s",

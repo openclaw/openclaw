@@ -79,7 +79,7 @@ suite.define(() => {
             }),
           }),
         );
-        await page.goto(`${suite.server.baseUrl}/new`);
+        await page.goto(new URL("new", suite.server.baseUrl).href);
         await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready);
         await page.locator("openclaw-app-sidebar:visible .sidebar-identity-card").click();
         const menu = page.locator('.sidebar-identity-menu[data-phase="open"]');

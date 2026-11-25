@@ -239,16 +239,11 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     };
     const assertCurrent = Object.assign(
       () => {
-        authorize?.();
+        (authorize?.assertWorkerLifetime ?? authorize)?.();
         assertTargetCurrent();
       },
       {
-        // Transport waits keep caller custody; both write grants check the retained generation.
         assertWorkerLifetime: () => (authorize?.assertWorkerLifetime ?? authorize)?.(),
-        assertWorkerGrant: () => {
-          (authorize?.assertWorkerGrant ?? authorize)?.();
-          assertTargetCurrent();
-        },
       },
     );
     const placement = await params.placements.getAsync(sessionId);
@@ -368,10 +363,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           }
           assertBindingCurrent();
           using resolved = await resolveReclaimTarget();
-          // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
-          // immediately before drain so revoked callers cannot commit stale placement authority.
+          // Keep the captured binding through the lifecycle wait and drain.
           assertBindingCurrent();
-          // Eligibility ends at this operation's drain, unlike caller authority during teardown.
           beforeDrain?.();
           resolved.assertCurrent(getRuntimeConfig());
           const assertDrainCurrent = () => {
@@ -437,8 +430,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
             `Session ${sessionKey} changed before failed cloud worker cleanup. Retry.`,
           );
         }
-        // Failed teardown is still a session mutation: reauthorize inside the shared lifecycle
-        // fence before provider cleanup or the failed-to-local transition becomes durable.
+        // Keep the retained session lifetime through cleanup and durable completion.
         authorize?.();
       };
       return await runSessionMutation({
