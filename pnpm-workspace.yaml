@@ -38,6 +38,9 @@ minimumReleaseAgeExclude:
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
+# The build requires dependencies physically inside the checkout, and updates build
+# the target tree under the host's user pnpm config, which may set a global store.
+virtualStoreType: project
 # Private inodes keep sibling installs from changing compiler input ctimes.
 packageImportMethod: clone-or-copy
 # GWTs share node_modules; script commands must not reconcile that shared install.
