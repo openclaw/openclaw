@@ -99,7 +99,10 @@ export function registerEmbeddedSessionReaderTests<Projection extends { dispose:
       await backend.listSessions(opts);
       await createEmbeddedCallGateway()({ method: "sessions.list", params: opts });
       expect(createProjection).toHaveBeenCalledOnce();
-      expect(listSessions.mock.calls).toEqual([[{ projection, opts }], [{ projection, opts }]]);
+      expect(listSessions.mock.calls).toEqual([
+        [{ projection, opts }],
+        [{ projection, opts, personalPins: null }],
+      ]);
       for (const sessionKey of ["agent:work:notes", "global", "unknown"]) {
         await backend.describeSession({ sessionKey, agentId: "work" });
         expect(listSessions).toHaveBeenLastCalledWith({

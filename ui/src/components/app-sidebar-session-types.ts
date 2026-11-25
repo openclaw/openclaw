@@ -617,3 +617,21 @@ export type SidebarPinZone = {
   entries: readonly SidebarZoneEntry[];
   sessionRows: ReadonlyMap<string, SidebarRecentSession>;
 };
+
+/** Rendering and selection share visibility for saved personal references. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+  now = Date.now(),
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row &&
+      row.archived !== true &&
+      !archiveVisibility?.(row.key) &&
+      !isSessionSnoozed(row, now)
+      ? [row]
+      : [];
+  });
+}

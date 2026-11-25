@@ -123,24 +123,13 @@ it.each(["routed", "direct"] as const)(
       // Router admission rejects an initially unauthorized batch before handler dispatch.
       // Direct handlers have no router witness and must qualify each supplied target themselves.
       const keys = direct ? [invited, unseen, own] : [invited, own];
-      await expect(
-        f.patch(
-          "sessions.patchMany",
-          { targets: keys.map((key) => ({ key })), patch: { pinned: true } },
-          direct,
-        ),
-      ).resolves.toEqual({
+      const targets = keys.map((key) => ({ key }));
+      const patch = { pinned: true };
+      const error = { code: "INVALID_REQUEST", message: "Session not found or not visible." };
+      await expect(f.patch("sessions.patchMany", { targets, patch }, direct)).resolves.toEqual({
         outcomes: [
           { key: invited, ok: true },
-          ...(direct
-            ? [
-                {
-                  key: unseen,
-                  ok: false,
-                  error: { code: "INVALID_REQUEST", message: "Session not found or not visible." },
-                },
-              ]
-            : []),
+          ...(direct ? [{ key: unseen, ok: false, error }] : []),
           { key: own, ok: true },
         ],
       });
@@ -165,7 +154,7 @@ it.each(["read", "write"] as const)(
       const archive = () => upsertSessionEntryCore(scope(invited), { archivedAt: Date.now() });
       const read = preferences.getCanonicalUserPreferences;
       const write = preferences.setCanonicalUserPreferences;
-      using intercept =
+      using _intercept =
         stage === "read"
           ? vi
               .spyOn(preferences, "getCanonicalUserPreferences")

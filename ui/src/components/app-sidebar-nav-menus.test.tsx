@@ -271,6 +271,7 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
       sessionResultsByAgent: {},
       childSessionRowsByParent: {},
     },
+    gatewayTimeForSavedPin: () => undefined,
     findSidebarMenuSessionByKey: () => session,
     selectedVisibleSessions: () => [],
     readSessionMutationAccess: () => ({ allowed: false, reason: "Reconnect" }),
