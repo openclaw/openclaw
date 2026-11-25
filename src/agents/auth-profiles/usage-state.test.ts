@@ -8,7 +8,6 @@ import {
   clearExpiredCooldowns,
   resetAuthProfileFailureState,
   getSoonestCooldownExpiry,
-  isAuthCooldownBypassedForProvider,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
@@ -75,10 +74,7 @@ const checks = (blocked: Model[], allowed: Model[] = []): Array<[Model, boolean]
 beforeEach(() =>
   setCurrentPluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
-      plugins: [
-        { id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true },
-        { id: "litellm", providers: ["litellm"], managesOwnAvailability: true },
-      ],
+      plugins: [{ id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true }],
     }),
     { config: {} },
   ),
@@ -137,13 +133,6 @@ it.each([
       "disabledReason" in permanent ? permanent.disabledReason : "rate_limit",
     );
   }
-});
-
-it("bypasses rate_limit and overloaded cooldowns for litellm while enforcing auth and billing", () => {
-  expect(isAuthCooldownBypassedForProvider("litellm", "rate_limit")).toBe(true);
-  expect(isAuthCooldownBypassedForProvider("litellm", "overloaded")).toBe(true);
-  expect(isAuthCooldownBypassedForProvider("litellm", "auth")).toBe(false);
-  expect(isAuthCooldownBypassedForProvider("litellm", "billing")).toBe(false);
 });
 
 it("keeps model-scoped subscription blocks while ignoring managed transient cooldowns", () => {
