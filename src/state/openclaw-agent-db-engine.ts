@@ -483,6 +483,7 @@ function admitAgentPostgres(
       agentId,
       role: "agent",
       schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      minReader: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
   }
   const metadata = readExistingAgentSchemaMeta(db);
@@ -492,7 +493,13 @@ function admitAgentPostgres(
     pathname,
     agentEngineSchema.version,
   );
-  if (getPostgresPhysicalFacts(db)?.version !== agentEngineSchema.version) {
+  const facts = getPostgresPhysicalFacts(db);
+  if (
+    !facts ||
+    facts.version < agentEngineSchema.version ||
+    facts.minReader > agentEngineSchema.version ||
+    metadata?.schemaVersion !== facts.version
+  ) {
     throw new Error("Agent database has no current PostgreSQL schema admission");
   }
   // Nested worker writes must see the identity anchor's completed native admission.

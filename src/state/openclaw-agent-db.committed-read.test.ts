@@ -112,7 +112,10 @@ describe("committed agent database reads", () => {
         fs.renameSync(`${databasePath}.replacement`, databasePath);
         const writer = new DatabaseSync(databasePath);
         try {
-          writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
+          writer.exec(`BEGIN IMMEDIATE;
+            UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
+            PRAGMA user_version = ${version};
+            COMMIT;`);
         } finally {
           writer.close();
         }

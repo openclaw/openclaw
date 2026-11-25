@@ -536,6 +536,7 @@ function* openOpenClawAgentDatabaseSteps(
           agentId,
           path: pathname,
           env: options.env,
+          schemaVersion: readExistingAgentSchemaMeta(selected)?.schemaVersion ?? undefined,
           // Bounded admission retains process proof without minting a FULL receipt or seal.
           // Temporary QUICK repair handles still cannot publish runtime admission.
           admittedDb:
