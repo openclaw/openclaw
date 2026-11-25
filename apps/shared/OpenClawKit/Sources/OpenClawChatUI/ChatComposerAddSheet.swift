@@ -403,6 +403,14 @@ private struct ChatComposerPhotoRow: View {
                 .contentShape(Self.tileShape)
         }
         .buttonStyle(.plain)
+        // Touch and hold previews the photo; the menu offers only what the tap does.
+        .contextMenu {
+            Button { self.onAttach(id) } label: {
+                Label(ChatComposerAddSheet.addPhotosLabel(self.selection.attaching(id).count), systemImage: "plus")
+            }
+        } preview: {
+            Self.preview(asset, manager: self.library.imageManager)
+        }
         .overlay(alignment: .topTrailing) {
             // The mark's own target: the photo's top-trailing 44 pt.
             Button { self.selection.toggle(id) } label: {
@@ -423,6 +431,15 @@ private struct ChatComposerPhotoRow: View {
             self.selection.toggle(id)
         }
         .accessibilityIdentifier("chat-composer-add-photo-\(self.library.assets.firstIndex(of: asset) ?? 0)")
+    }
+
+    /// The whole photo, fitted to a 360 by 480 pt box.
+    private static func preview(_ asset: PHAsset, manager: PHCachingImageManager) -> some View {
+        let width = CGFloat(max(asset.pixelWidth, 1))
+        let height = CGFloat(max(asset.pixelHeight, 1))
+        let scale = min(360 / width, 480 / height)
+        return ChatRecentPhotoThumbnail(asset: asset, manager: manager, side: max(width, height) * scale)
+            .frame(width: width * scale, height: height * scale)
     }
 
     private func card(
