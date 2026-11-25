@@ -275,41 +275,45 @@ export function TalkSplitVoice(props: FieldsProps & { catalog: TalkCatalogState 
     entries().length > 0 && !entries().some((key) => key.toLowerCase() === id.toLowerCase());
   return (
     <SettingsSection title={t("talkPage.revamp.voice")}>
-      <SettingsPickerRow
-        title={t("talkPage.provider.title")}
-        disabled={props.disabled || !speech()}
-        value={selected()}
-        options={[
-          {
-            value: "",
-            label: t("talkPage.revamp.defaultValue"),
-            disabled: entries().length > 1,
-            // Unset means browser Talk speaks through the general text-to-speech route, which the
-            // Talk catalog does not describe: speech.activeProvider follows Talk's own config.
-            description: t("talkPage.revamp.defaultSpeech"),
-          },
-          ...(speech()?.providers.map(({ id, label, configured: ready }) => ({
-            value: id,
-            label,
-            description: talkProviderStatusLabel(
-              talkProviderStatus(speech(), { id, configured: ready }),
-            ),
-            group: t("talkPage.revamp.groupCloud"),
-            disabled: outsideEntries(id),
-          })) ?? []),
-          ...configured().map((id) => ({
-            value: id,
-            label: id,
-            group: t("talkPage.revamp.groupConfigured"),
-          })),
-          { value: CUSTOM_COMMAND_PROVIDER, label: t("talkPage.revamp.customCommand") },
-        ]}
-        onChange={(next) =>
-          next
-            ? runtimeConfig.patchForm(["talk", "provider"], next)
-            : runtimeConfig.removeFormValue(["talk", "provider"])
+      <Show
+        when={speech() || entries().length > 0}
+        fallback={
+          <TalkInput {...props} title={t("talkPage.provider.title")} path={["talk", "provider"]} />
         }
-      />
+      >
+        <SettingsPickerRow
+          title={t("talkPage.provider.title")}
+          disabled={props.disabled}
+          value={selected()}
+          options={[
+            {
+              value: "",
+              label: t("talkPage.revamp.defaultValue"),
+              disabled: entries().length > 1,
+            },
+            ...(speech()?.providers.map(({ id, label, configured: ready }) => ({
+              value: id,
+              label,
+              description: talkProviderStatusLabel(
+                talkProviderStatus(speech(), { id, configured: ready }),
+              ),
+              group: t("talkPage.revamp.groupCloud"),
+              disabled: outsideEntries(id),
+            })) ?? []),
+            ...configured().map((id) => ({
+              value: id,
+              label: id,
+              group: t("talkPage.revamp.groupConfigured"),
+            })),
+            { value: CUSTOM_COMMAND_PROVIDER, label: t("talkPage.revamp.customCommand") },
+          ]}
+          onChange={(next) =>
+            next
+              ? runtimeConfig.patchForm(["talk", "provider"], next)
+              : runtimeConfig.removeFormValue(["talk", "provider"])
+          }
+        />
+      </Show>
       <Show when={selected() === CUSTOM_COMMAND_PROVIDER}>
         <CommandFields {...props} />
       </Show>

@@ -429,7 +429,6 @@ const enSettings = {
       groupConfigured: "Configured",
       program: "Program",
       arguments: "Arguments (one per line)",
-      defaultSpeech: "General text-to-speech",
       hearingVoice: "Hearing and voice",
       agentDefault: "{agent} (default)",
       silenceBeforeSend: "Silence before sending (ms)",

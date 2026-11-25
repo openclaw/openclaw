@@ -1022,7 +1022,7 @@ describe("Talk settings page revamp", () => {
     await waitForSolid(() => expect(interrupt()?.value).toBe("false"));
   });
 
-  it("never names the Talk speech provider as the general text-to-speech route", async () => {
+  it("keeps Default neutral when a sole Talk provider can still be selected", async () => {
     const { page } = await readyTalk({
       catalogRequest: (_index, catalog) => ({
         ...catalog,
@@ -1033,14 +1033,32 @@ describe("Talk settings page revamp", () => {
         },
       }),
     });
-    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    page.configObject = { talk: { realtime: { mode: "stt-tts" }, providers: { elevenlabs: {} } } };
     const voice = () =>
       [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
         candidate.params.options.some((option) => option.value === "tts-local-cli"),
       );
     await waitForSolid(() => expect(voice()).toBeDefined());
     const fallback = voice()!.params.options.find((option) => option.value === "");
-    expect(fallback?.description).toBe(t("talkPage.revamp.defaultSpeech"));
-    expect(fallback?.description).not.toContain("ElevenLabs");
+    expect(fallback?.disabled).toBe(false);
+    expect(fallback?.description).toBeUndefined();
+  });
+  it("can edit and clear the speech provider when the catalog fails", async () => {
+    const { page, runtimeConfig } = createTalkMutationHarness({
+      catalogRequest: () => Promise.reject(new Error("catalog unavailable")),
+    });
+    page.configObject = { talk: { realtime: { mode: "stt-tts" }, provider: "elevenlabs" } };
+    const input = () =>
+      page.querySelector<HTMLInputElement>(
+        `input[aria-label="${t("talkPage.provider.title")}"][placeholder="${t("talkPage.revamp.defaultValue")}"]`,
+      );
+    await waitForSolid(() => expect(page.textContent).toContain("catalog unavailable"));
+    expect(input()).toMatchObject({ disabled: false, value: "elevenlabs" });
+    input()!.value = "openai";
+    input()!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(["talk", "provider"], "openai");
+    input()!.value = "";
+    input()!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(["talk", "provider"]);
   });
 });
