@@ -1,2 +1,2 @@
-# Exact net growth above 400: browser flows for link arrival, reduced motion, every listed place and every schema row ID, plus the arrival owner's unit contract.
-85
+# Exact net growth above 400: the setting ID check's own contract (core list, published IDs, plugin manifests), browser flows that open every drawn Settings row and a plugin row from their links, the arrival owner's unit contract, and plugin manifest validation for declared setting IDs.
+560

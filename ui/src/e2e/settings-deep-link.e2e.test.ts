@@ -221,12 +221,7 @@ suite.define(() => {
                 );
               },
             );
-            // A setting with fields in both groups shows its header in each; a link opens
-            // the first. Within one group an ID names one row.
-            const ids = rows.map(
-              (row) =>
-                `${row.closest(".config-advanced-disclosure") ? "advanced" : "common"} ${row.id}`,
-            );
+            const ids = rows.map((row) => row.id).filter(Boolean);
             return {
               unnamed: rows
                 .filter((row) => !row.id)
