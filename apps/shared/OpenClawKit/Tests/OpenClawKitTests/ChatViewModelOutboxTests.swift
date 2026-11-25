@@ -179,6 +179,7 @@ actor OutboxTransportState {
     var historyRequestAgentIDs: [String?] = []
     var sentThinkingLevels: [String] = []
     var sentQueueModes: [OpenClawChatQueueMode?] = []
+    var sentAttachmentFileNames: [[String]] = []
     var sentSessionSettings: [OpenClawChatSessionSettingsExpectation?] = []
 
     init(healthy: Bool, sendFails: Bool) {
@@ -527,8 +528,9 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
         let transport = self
         return .available(OpenClawChatTransportRouteLease(
             sendTargetedMessage: {
-                sessionKey, target, message, thinking, idempotencyKey, _ in
-                try await transport.sendMessage(
+                sessionKey, target, message, thinking, idempotencyKey, attachments in
+                await transport.state.update { $0.sentAttachmentFileNames.append(attachments.map(\.fileName)) }
+                return try await transport.sendMessage(
                     sessionKey: sessionKey,
                     agentID: target.agentID,
                     message: message,
@@ -1207,7 +1209,7 @@ struct ChatViewModelBusySendTests {
     }
 
     @Test @MainActor
-    func `busy admission still rejects branch switches and attachments`() async throws {
+    func `busy admission still rejects branch switches`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
         let transport = OutboxTestTransport(healthy: true)
@@ -1220,18 +1222,54 @@ struct ChatViewModelBusySendTests {
         #expect(!vm.canSend)
         #expect(vm.send() == nil)
         vm.endSessionBranchSwitchActivity(branchSwitch)
-        vm.attachments = [OpenClawPendingAttachment(
-            url: nil,
-            data: Data([1]),
-            fileName: "note.txt",
-            mimeType: "text/plain",
-            preview: nil)]
-        #expect(!vm.canSend)
-        #expect(vm.send() == nil)
-        #expect(vm.send(queueMode: .steer) == nil)
+        #expect(vm.canSend)
         #expect(vm.input == "next task")
         #expect(await store.loadCommands().isEmpty)
         #expect(await transport.state.sentMessages.isEmpty)
+    }
+
+    /// A photo sent while a reply runs goes out behind it, or steers it, like text: the outbox keeps
+    /// its bytes and its mode, and the Gateway gets both.
+    @Test(arguments: [
+        (OpenClawChatQueueMode?.none, "look at this"),
+        (.followup, ""),
+        (.steer, "use this one instead"),
+    ])
+    @MainActor
+    func `busy attachment drafts go out with their queue mode`(
+        mode: OpenClawChatQueueMode?,
+        text: String) async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        vm.load()
+        await vm.bootstrapTask?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
+        vm.hasActiveSessionRunWithoutChatSnapshot = true
+        vm.defaultFollowUpMode = .followup
+        vm.input = text
+        vm.attachments = [OpenClawPendingAttachment(
+            url: nil,
+            data: Data([1, 2, 3]),
+            fileName: "photo.jpg",
+            mimeType: "image/jpeg",
+            preview: nil)]
+        #expect(vm.canSend)
+        #expect(vm.canChooseSendMode)
+        let send = try #require(vm.send(queueMode: mode))
+        await send.value
+        #expect(vm.input.isEmpty)
+        #expect(vm.attachments.isEmpty)
+        if let flush = vm.outboxFlushTask { await flush.value }
+        var waits = 0
+        while await transport.state.sentAttachmentFileNames.isEmpty, waits < 500 {
+            waits += 1
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await transport.state.sentAttachmentFileNames == [["photo.jpg"]])
+        #expect(await transport.state.sentQueueModes == [mode ?? .followup])
     }
 
     @Test @MainActor

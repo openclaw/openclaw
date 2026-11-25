@@ -70,7 +70,9 @@ extension OpenClawChatComposer {
             // A tile, preparing or failed, keeps the button on a disabled Send instead of Talk:
             // a voice conversation would leave the tile sitting in the composer.
             hasDraftToSend: self.viewModel.hasDraftToSend || !self.viewModel.preparingAttachments.isEmpty,
-            canSendDraft: self.canSendMessage,
+            // A tile still preparing during a reply is a Send that is about to work, not a Stop.
+            canSendDraft: self.canSendMessage ||
+                (!self.viewModel.preparingAttachments.isEmpty && self.viewModel.canSendDuringRun),
             hasOwnReply: self.viewModel.pendingRunCount > 0 ||
                 (self.primaryReplyMark != nil && !self.replyMarkEnded),
             hasReplyRunningElsewhere: self.viewModel.hasAdvertisedLiveRun ||

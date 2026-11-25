@@ -27,9 +27,11 @@ extension OpenClawChatViewModel {
             self.hasDraftToSend
     }
 
-    private var canSendDuringRun: Bool {
+    /// Text and attachments go out during a reply through the outbox, which carries the queue mode
+    /// and the attachment bytes, as the Control UI does. Local session commands wait for the reply.
+    var canSendDuringRun: Bool {
         let command = Self.slashCommandName(from: self.input).map { "/\($0)" } ?? ""
-        return self.outbox != nil && self.attachments.isEmpty && !localSessionCommands.contains(command)
+        return self.outbox != nil && !localSessionCommands.contains(command)
     }
 
     var canChooseSendMode: Bool {
