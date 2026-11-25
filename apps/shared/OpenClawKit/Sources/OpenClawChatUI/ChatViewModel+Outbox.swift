@@ -346,7 +346,7 @@ extension OpenClawChatViewModel {
             case .missing, .confirmed, .superseded:
                 self.clearOutboxState(forCommandID: commandID)
             case .unavailable:
-                self.errorText = "Could not retry the queued message. Try again."
+                self.errorText = String(localized: "Couldn’t send the message. Try again.")
             }
         }
     }
@@ -356,7 +356,7 @@ extension OpenClawChatViewModel {
         self.removeOutboxMessage(messageID, commandID: commandID) { [weak self] in
             let result = await outbox.cancelCommand(id: commandID)
             if result == .unavailable {
-                self?.errorText = "Could not delete the queued message. Try again."
+                self?.errorText = String(localized: "Couldn’t delete the message. Try again.")
             }
             return result
         }
@@ -471,7 +471,7 @@ extension OpenClawChatViewModel {
             guard let commands else {
                 // An Edit abandoned by a session switch says nothing in the new chat.
                 if failure == nil, self.composerDraftKey == key {
-                    self.errorText = String(localized: "Could not edit the queued message. Try again.")
+                    self.errorText = String(localized: "Couldn’t edit the message. Try again.")
                 }
                 return .unavailable
             }
@@ -503,7 +503,7 @@ extension OpenClawChatViewModel {
                 return .unavailable
             case .unavailable:
                 if failure == nil, self.composerDraftKey == key {
-                    self.errorText = String(localized: "Could not edit the queued message. Try again.")
+                    self.errorText = String(localized: "Couldn’t edit the message. Try again.")
                 }
                 return .unavailable
             }
