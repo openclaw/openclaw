@@ -475,7 +475,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
-  // upgrade-survivor-docker.sh runs the release-update scenario by path.
+  // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
+  "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
