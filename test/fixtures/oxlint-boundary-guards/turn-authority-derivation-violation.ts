@@ -17,3 +17,30 @@ export function plantDivergence(
 export function mintOwner(authority: { scopes: string[] }) {
   return { senderIsOwner: authority.scopes.includes("operator.admin") };
 }
+
+// Forms that can only narrow a passed-along bit are not producers; defaults to owner are.
+export function narrowOwner(input: { senderIsOwner?: boolean }, scoped: boolean) {
+  return [
+    { senderIsOwner: input.senderIsOwner === true },
+    { senderIsOwner: scoped ? input.senderIsOwner : false },
+    { senderIsOwner: input.senderIsOwner && scoped },
+    {
+      get senderIsOwner() {
+        return input.senderIsOwner;
+      },
+    },
+    { senderIsOwner: input.senderIsOwner ?? true },
+    { senderIsOwner: input.senderIsOwner !== false },
+    // A function value is truthy whatever it returns; only a getter is read as its value.
+    {
+      senderIsOwner() {
+        return false;
+      },
+    },
+    {
+      senderIsOwner: function () {
+        return false;
+      },
+    },
+  ];
+}

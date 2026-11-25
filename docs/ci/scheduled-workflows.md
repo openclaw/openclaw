@@ -429,6 +429,222 @@ ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
 
+For the prepared Node-cache pair mode, the runner snapshots every regular file's
+bytes and permissions and every internal symlink target before and after the
+schedule. Only the workload root's Git metadata is excluded; ignored generated
+files and installed dependencies remain covered. Dangling or escaping symlinks
+and special files are rejected. Both scans use the aggregate deadline and sit
+outside individual pair measurements.
+
+`prepared-inventory.json` retains the initial inventory; `prepared-integrity.json`
+binds its digest and comparison scope and records complete added, removed, and
+changed metadata. Changed or unverified input prevents successful analysis.
+After uncertain child settlement the runner does not inspect the workload.
+This is a pre/post integrity boundary: it cannot detect a mutation that is fully
+reverted between snapshots and does not replace preparation or cache-acceptance
+qualification.
+
+#### Node compile-cache diagnostic qualification
+
+Before using native cache diagnostics to admit a benchmark, qualify their meaning
+on Linux with Node **24.22.1**:
+
+```bash
+node scripts/vitest-pair-benchmark.mts \
+  --mode node-cache-diagnostics \
+  --output /tmp/node-cache-diagnostics \
+  --run-attempt 1
+```
+
+For a hosted check, select the branch containing the helper and bind `target_ref`
+to that branch's exact commit:
+
+```bash
+gh workflow run openclaw-performance.yml --ref <branch> \
+  -f mode=node-cache-diagnostics \
+  -f target_ref=<exact-40-character-sha> \
+  -f publish_reports=false
+```
+
+This starts one five-minute Ubuntu job with the pinned Node runtime. It does not
+install packages, use provider secrets, or start the other performance jobs.
+The workflow uploads the diagnostic output even when qualification fails.
+
+The output directory must not exist. This runs a tiny ESM fixture with caching
+disabled, an empty cache, a restored seed, and changed source at the same path.
+It requires a successful native cache read and explicit V8 acceptance for the
+seeded case. Incomplete, duplicate, interleaved, or contradictory source records
+fail qualification. The grammar follows Node's pinned
+[cache reader and acceptance result](https://github.com/nodejs/node/blob/v24.22.1/src/compile_cache.cc)
+and [ESM cache consumption](https://github.com/nodejs/node/blob/v24.22.1/src/module_wrap.cc).
+
+The result contains runtime identities, source and log digests, four control
+observations, complete logs, and a terminal manifest. Owned scratch is removed
+after child processes settle; uncertain child ownership retains it. This is
+synthetic diagnostic proof. It does not establish cache acceptance for an
+OpenClaw workload, run paired measurements, or change the scheduled workflow.
+
+#### Prepared workload disabled control
+
+The `node-cache-disabled-control` CLI checks one already prepared workload with
+Node compile caching disabled. Supply a reviewed definition containing the exact
+workload commit/tree, five source identities, twenty distinct expected cases,
+and the pinned Linux x64 Node runtime. The harness must be clean and committed.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-disabled-control \
+  --definition /work/definition.json --workload /work/prepared \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --output /work/disabled-proof --scratch /work/control-scratch \
+  --timeout-ms 1200000 --run-attempt 1
+```
+
+The selected pnpm must be a preprovisioned physical ELF64 x86_64 executable at
+version 12.15.0. Its bytes are bound; downloads and version switching are disabled.
+Output and scratch must be new physical directories outside both checkouts.
+The control uses the paired runner's arguments and compares the full prepared
+inventory before and after the settled child; this is not continuous monitoring.
+Logs, oracle results, disabled-cache diagnostics and complete input deltas remain
+in the output, including explicit unavailable results after failures. Explicit
+Node flush-call announcements are allowed while caching is disabled; cache files,
+cache reads/writes and unknown native diagnostic events still fail the control.
+Uncertain child settlement retains scratch and prevents inspecting the workload.
+
+The receipt is `disabled-only`, with `timingAdmission: false`. It does not install
+or prepare dependencies, run empty/seeded controls, or admit paired measurements.
+
+#### Prepared workload cache controls
+
+Use `--mode node-cache-workload-qualification` with the same arguments to run
+exactly one disabled, empty, then seeded control under one aggregate deadline.
+Each control must pass the same twenty-case oracle and full input inventory.
+The empty control must report a missing launcher cache and uninitialized V8 cache.
+Only then does the runner copy its cache to `seed/`, record every file's bytes and
+hash, and seal files to `0400` and directories to `0500`.
+
+The seeded control restores a fresh writable copy. Its launcher must report a
+cache hit accepted by V8, with that cache file present in the sealed seed. The
+runner checks the original seed's bytes and permissions before and after the
+settled child. The first failure stops the sequence; each attempted control's
+receipt, log and available report remain in the output. `qualification.json`
+summarizes the result, and the sealed seed remains available for inspection.
+Expired deadlines and uncertain child settlement retain explicit unavailable
+checks; uncertain children retain scratch.
+
+These controls qualify launcher cache behavior for the supplied workload only.
+They do not prove descendant-module acceptance or provide timing admission;
+`timingAdmission` remains `false`, and the runner produces no paired analysis.
+
+The OpenClaw Performance workflow exposes this as the manual-only
+`node-cache-workload-qualification` mode. It uses the event SHA as the harness
+and the fixed workload commit `8cfbac51a27a1195176a3564f6d7cfd7d6994c85`.
+Leave `target_ref` empty or set it to the event SHA; dispatch a fresh run instead
+of rerunning an attempt. Other performance, release and publishing jobs stay
+excluded, regardless of their input flags.
+
+The job prepares dependencies online with the workload's pinned pnpm installer,
+frozen lockfile and isolated store. It generates Kysely types before the control
+runner snapshots the prepared tree. Node is pinned to `24.22.1`; the committed
+public definition also binds its executable hash, the five workload sources and
+twenty expected cases. The observed runtime fingerprint is retained before the
+fixed-runtime comparison, including its executable SHA-256. Preparation has a
+40-minute preparation timeout shared by the installer and Kysely generation,
+controls have one 30-minute deadline, and the job has a 75-minute limit. Controls disable
+package downloads and reject persistent changes to prepared inputs.
+
+The `node-cache-workload-<run-id>-<attempt>` artifact retains preparation logs,
+per-control receipts, the sealed seed when available, and terminal evidence on
+failure. It is qualification evidence only; it does not enable timing admission
+or publish a report.
+
+#### Admit prepared workload qualification
+
+The `node-cache-qualification-admission` CLI validates existing disabled, empty
+and seeded receipts against the same committed harness, physical workload,
+runtime and sealed seed. It writes a v2 `manifest.json`, bound provenance in
+`qualification.json` and a terminal manifest to a new physical output directory
+outside both checkouts and the qualification directory.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualification-admission \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/control-proof --output /work/admission \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --timeout-ms 600000 --run-attempt 1
+```
+
+Admission has one explicit deadline of at most ten minutes. Success requires
+final revalidation; rejected receipts retain a failure terminal manifest after
+the output directory is admitted. Earlier-harness receipts, including `ff3d6bec`,
+cannot admit the new harness: produce fresh controls at its exact commit.
+This mode does not run controls or measurements, install dependencies, change
+workflows, or grant timing admission. `timingAdmission` remains `false`.
+It binds the recorded prepared-inventory digest; a measurement consumer must
+compare a fresh whole-workload inventory before starting measured calls.
+
+#### Qualified paired measurements
+
+`node-cache-qualified-measurement` admits a completed three-control output and
+uses the existing paired runner. Keep the physical workload directory, harness
+commit, runtime, native pnpm and sealed seed unchanged after qualification.
+Receipts from a different harness commit or workload path do not qualify.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-qualified-measurement \
+  --definition /work/definition.json --workload /work/prepared \
+  --qualification /work/controls --harness-sha <exact-harness-commit> \
+  --pnpm-bin /tools/pnpm-native --output /work/measurements \
+  --scratch /work/measurement-scratch --timeout-ms 9000000 --run-attempt 1
+```
+
+Output and scratch must be new physical directories, disjoint from the two
+checkouts and qualification output. Admission verifies all control reports,
+logs, source identities and seed files. The runner compares its initial full
+prepared inventory with the control inventory before starting a measured call.
+It rechecks source, receipt and seed identities before success. Failed admission
+produces a failed terminal receipt and starts no measured workload.
+
+The explicit timeout covers admission, all twenty alternating pairs and final
+verification, with a maximum of 150 minutes. GNU `/usr/bin/time` is required.
+Both treatments use the same selected pnpm and Node PATH, fixed offline settings,
+fresh writable cache namespaces and disabled Vitest caches. Native diagnostic
+tracing stays off during measurement. Incomplete pairs admit no comparison.
+The earlier qualification receipt retains `timingAdmission: false`; the new
+measurement output records the verified provenance and resulting analysis.
+This CLI does not add a scheduled workflow, install dependencies or publish data.
+
+The manual `node-cache-qualified-measurement` workflow mode prepares the same
+fixed workload and runs fresh controls followed immediately by measurement at
+the same harness SHA. Use a fresh dispatch with `target_ref` empty or equal to
+that SHA. It does not reuse artifacts from an earlier run. A failed control
+prevents measurement; both modes retain the same shared workload arguments and
+offline cache settings. Release, live-provider and publishing inputs cannot
+select other jobs in this mode.
+
+This mode has a 240-minute job limit. Its first owned validation step records a
+230-minute work deadline to target a ten-minute finalization allowance. This
+anchor is not the runner's job-start time, so the actual finalization allowance
+can be shorter. The preparation admission deadline
+is 40 minutes after that anchor and includes checkout, runtime and pnpm setup
+elapsed time. Checkout and setup actions each have a five-minute timeout;
+runtime verification has two minutes. The admission deadline does not cancel
+an action asynchronously: after these bounded steps, installation is rejected
+if no preparation budget remains. The installer and Kysely generation share
+that remaining budget, with 30 seconds reserved for TERM/KILL settlement.
+Successful preparation is rejected if either absolute deadline has passed before
+controls are admitted. Controls receive at most 30 minutes and measurement
+at most 150 minutes, each capped by the remaining work budget. An exhausted
+budget stops before the next command. These are execution limits, not estimates
+of how long the workload will take.
+
+Measurement uses new physical output and scratch directories outside both
+checkouts and the control output. It finishes before the control artifact is
+finalized. The separate `node-cache-measurement-<run-id>-<attempt>` artifact
+retains admission provenance, paired records, analysis when complete and the
+measurement terminal; the control artifact retains its original qualification
+terminal and the recorded workflow clock. Finalizers create failure terminals
+only when absent, and both uploads run after failure. No report is published.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions

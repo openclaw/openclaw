@@ -34,6 +34,7 @@ import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-a
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeCommandSpans } from "../../shared/exec-approval-command-spans.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { prepareExecApprovalParticipation } from "../exec-approval-participation.js";
 import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
   buildCronExecOperationBinding,
@@ -364,6 +365,10 @@ export function createExecApprovalHandlers(
           }
           throw error;
         }
+        record.participation = await prepareExecApprovalParticipation(
+          trustedAgentRuntime,
+          runtimeConfig,
+        );
         bindApprovalRequesterMetadata({ record, client });
         if (trustedAgentRuntime) {
           record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
@@ -421,8 +426,12 @@ export function createExecApprovalHandlers(
           suppressDelivery: p.suppressDelivery,
           // The gateway-derived cron fact wins even when an older in-process
           // caller omits the flag: cron cards belong on approval surfaces only.
+          // Participation approvals reach only the bound creator's connections;
+          // forwarders, push and channel routes cannot resolve them.
           deliverToApprovalClientsOnly:
-            p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
+            p.deliverToApprovalClientsOnly === true ||
+            cronExecutionSource !== null ||
+            record.participation !== undefined,
           forwardRequest: opts?.forwarder?.handleRequested.bind(opts.forwarder),
           getIosPushDelivery: () => opts?.iosPushDelivery,
         });

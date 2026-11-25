@@ -1,4 +1,8 @@
-import { CONTROL_PLANE_WRITE, OWN_SESSION_WRITE } from "./core-descriptor-options.js";
+import {
+  CONTROL_PLANE_WRITE,
+  OWN_SESSION_WRITE,
+  PROFILE_DEPENDENT,
+} from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 
 // New core method rows go here: core-descriptors.ts reached its line cap. Its table
@@ -28,4 +32,6 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
   ["projects.rename", "projects", "operator.admin", "2026.11"],
   ["sessions.catalog.route", "session-catalog", "operator.sessions.read", "2026.11"],
+  ["session.members.setAccess", "sessions-sharing", "operator.write", "2026.11"],
+  ["chat.pendingInputs.own", "chat", "operator.sessions.read", "2026.11", PROFILE_DEPENDENT],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

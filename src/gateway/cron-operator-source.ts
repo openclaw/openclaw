@@ -96,7 +96,6 @@ export async function restoreCronOperatorSource(params: {
     operator = await restoreScheduledAutomationOperator({
       agentId: target?.agentId ?? source.agentId,
       source: { kind: "gateway", snapshot: source.snapshot },
-      operatorSource: source,
       context,
       assertCurrent,
     });
@@ -163,11 +162,7 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
 }): T & Pick<CronSourceCapture, "assertOperatorSourceCurrent"> {
   const previous = params.job.operatorSource;
   const fresh = params.capture.operatorSource;
-  if (
-    !previous ||
-    !fresh ||
-    (previous.source.kind !== "gateway" && !previous.source.snapshot.openclawIdPrincipal)
-  ) {
+  if (!previous) {
     return params.capture;
   }
   // A stream's schedule is its process definition, not timing; enabling it remains a control.
@@ -179,18 +174,27 @@ export function retainCronControlSource<T extends CronSourceCapture>(params: {
     Object.keys(params.patch).every((key) =>
       ["schedule", "enabled", "description", "displayName"].includes(key),
     );
-  const sameRequester = previous.source.snapshot.profileId === fresh.snapshot.profileId;
+  const participantControl = controlOnly && previous.source.snapshot.participationCeiling;
+  if (
+    !participantControl &&
+    (!fresh ||
+      (previous.source.kind !== "gateway" && !previous.source.snapshot.openclawIdPrincipal))
+  ) {
+    return params.capture;
+  }
+  const sameRequester =
+    !participantControl && previous.source.snapshot.profileId === fresh?.snapshot.profileId;
   // Devices share their account's profile, so only the exact device listing that holds the
   // grant may refresh it; another device or a reapproval of the same one keeps the original.
   const sameDevice = isSameOpenClawIdTunnelPrincipal(
     previous.source.snapshot.openclawIdPrincipal,
-    fresh.snapshot.openclawIdPrincipal,
+    fresh?.snapshot.openclawIdPrincipal,
   );
   if (sameRequester && !controlOnly) {
     // Changing what runs authorizes the new task under the editing device, as recreating it would.
     return params.capture;
   }
-  if (sameRequester && sameDevice) {
+  if (fresh && sameRequester && sameDevice) {
     // A fresh connection may have broader invocation scopes; a timing edit does not grant them.
     const scopes = intersectOperatorScopes(fresh.snapshot.scopes, previous.source.snapshot.scopes);
     return {

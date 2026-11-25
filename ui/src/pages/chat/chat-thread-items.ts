@@ -424,6 +424,7 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "message":
       return rawMessageTimestamp(item.message);
     case "divider":
+    case "compaction":
     case "notice":
       return item.timestamp;
     case "stream":

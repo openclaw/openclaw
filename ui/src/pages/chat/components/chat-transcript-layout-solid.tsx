@@ -158,7 +158,10 @@ function TranscriptRows(props: {
                     ref={[rowRef(String(virtualRow().key))]}
                     class={[
                       "chat-virtual-row",
-                      { "chat-virtual-row--first": virtualRow().index === 0 },
+                      {
+                        "chat-virtual-row--first": virtualRow().index === 0,
+                        "chat-virtual-row--compact-activity": row()?.compactActivity,
+                      },
                     ]}
                     style={{
                       "min-height":

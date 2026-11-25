@@ -107,7 +107,6 @@ beforeEach(() => {
     getActiveMcpLoopbackRuntime: () => ({
       port: 31783,
       ownerToken: "fixture-owner",
-      nonOwnerToken: "fixture-reader",
     }),
     mintMcpLoopbackClientGrant: createTestMcpLoopbackClientGrant,
     bindMcpLoopbackClientGrantAdmission: () => true,

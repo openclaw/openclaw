@@ -296,13 +296,14 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.automationAdmin
+  const operatorAuthority = automation
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.
-        (!automation && (options.source === "cron" || options.source === "cron_failure_repair"))
+        options.source === "cron" ||
+        options.source === "cron_failure_repair"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   const requesterOwner = readSessionEventTargetRequesterOwner(target);
@@ -315,10 +316,8 @@ export function buildSessionEventContext(params: {
         }
       : undefined;
   if (
-    operatorAuthority &&
-    (automation?.automationAdmin ||
-      ((options.source === "restart" || readSessionEventTargetOwnerContinuation(target)) &&
-        operatorAuthority.grant.owner))
+    operatorAuthority?.grant.owner &&
+    (automation || options.source === "restart" || readSessionEventTargetOwnerContinuation(target))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event

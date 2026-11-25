@@ -472,6 +472,7 @@ export function renderChatComposerView(
               )}
               <AttachmentPreview {...props} readRevision={context().attachmentReadRevision} />
               <AttachmentReadStatus
+                videoStatus={context().runControlsProps.videoPreparationStatus?.message}
                 pendingReads={
                   props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
                 }

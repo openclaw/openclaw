@@ -1,0 +1,2 @@
+# One shared real-CLI fixture covers ten distinct receipt, path, oracle, seed and revalidation cases.
+14

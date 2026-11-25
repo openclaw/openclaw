@@ -47,6 +47,7 @@ export function candidatePublicationFixture(
     qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
     publicationArtifactSource?: { runId: string; runAttempt: number };
     reuseEvidence?: boolean;
+    preflightFirst?: boolean;
     rerunGroup?: "all" | "build-only";
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
@@ -94,6 +95,7 @@ export function candidatePublicationFixture(
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = {
+    ...(options.preflightFirst ? { preflight_first: "true" } : {}),
     ...(options.publicationArtifactSource
       ? { publication_artifact_source_json: JSON.stringify(options.publicationArtifactSource) }
       : {}),
@@ -290,6 +292,13 @@ export function candidatePublicationFixture(
     candidate: candidateBinding,
     candidateRequest: candidate.request,
   });
+  if (options.preflightFirst) {
+    plan.gates = plan.gates.map((gate) =>
+      gate.name === "Prepare release npm artifacts"
+        ? { ...gate, name: "Prepare initial release npm artifacts" }
+        : gate,
+    );
+  }
   if (plan.coveragePolicy === undefined) {
     delete plan.coveragePolicy;
   }

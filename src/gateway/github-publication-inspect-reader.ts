@@ -41,7 +41,7 @@ export function captureOwnGitHubPullRequestReader(
   }
   if (!profileId) {
     throw new Error(
-      "This conversation has no Gateway operator identity, so it cannot inspect PRs. Ask from your own Gateway profile, or ask an admin to link this channel account to it.",
+      "This channel cannot confirm who you are, so it cannot inspect PRs; use Control UI, Discord or Telegram for this. If you are not the Gateway owner, ask an admin to link your channel account to your Gateway profile first.",
     );
   }
   const profile = captureResidentUserProfileAccess(profileId);

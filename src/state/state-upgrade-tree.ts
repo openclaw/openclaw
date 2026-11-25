@@ -783,33 +783,6 @@ export function countSqlitePrefix(db: DatabaseSync, needle: string): number {
   return found;
 }
 
-/** Replace a path prefix in a non-SQLite file or a symlink target. */
-export function rewriteFilePrefix(file: string, from: string, to: string): boolean {
-  const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink()) {
-    const target = fs.readlinkSync(file);
-    if (!target.includes(from)) {
-      return false;
-    }
-    fs.rmSync(file);
-    fs.symlinkSync(target.replaceAll(from, to), file);
-    return true;
-  }
-  const bytes = fs.readFileSync(file);
-  if (!bytes.includes(from)) {
-    return false;
-  }
-  const parts: Buffer[] = [];
-  let start = 0;
-  for (let at = bytes.indexOf(from); at >= 0; at = bytes.indexOf(from, start)) {
-    parts.push(bytes.subarray(start, at), Buffer.from(to));
-    start = at + Buffer.byteLength(from);
-  }
-  parts.push(bytes.subarray(start));
-  fs.writeFileSync(file, Buffer.concat(parts), { mode: stat.mode & 0o7777 });
-  return true;
-}
-
 export function listTreeFiles(root: string): string[] {
   return [...listFiles(root, () => false)];
 }

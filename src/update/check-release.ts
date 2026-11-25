@@ -11,6 +11,7 @@ import {
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
+import { isConfiguredPluginPathDiagnosticCode } from "../plugins/discovery-availability.js";
 import { getPersistedInstalledPluginIndexCacheEntry } from "../plugins/installed-plugin-index-record-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { buildPluginRegistrySnapshotReport } from "../plugins/status-snapshot.js";
@@ -18,7 +19,13 @@ import { withArtifactPreservingStateReads } from "../state/artifact-preserving-s
 import { preflightStateUpgrade } from "../state/state-upgrade-databases.js";
 
 type ReleaseSurface = { plugin: string; surface: string; error?: string };
-export type CheckReleaseResult = { ok: boolean; reason?: string; surfaces: ReleaseSurface[] };
+export type CheckReleaseResult = {
+  ok: boolean;
+  reason?: string;
+  surfaces: ReleaseSurface[];
+  // Older releases do not include warnings in their result.
+  warnings?: { code: string; message: string }[];
+};
 
 /** The upgrade inventory owns schema and recovery admission before the old Gateway stops. */
 export async function checkRelease(
@@ -29,7 +36,13 @@ export async function checkRelease(
 ): Promise<CheckReleaseResult> {
   const env = { ...(options.env ?? process.env) };
   const surfaces: ReleaseSurface[] = [];
-  const refuse = (reason: string): CheckReleaseResult => ({ ok: false, reason, surfaces });
+  const warnings: NonNullable<CheckReleaseResult["warnings"]> = [];
+  const refuse = (reason: string): CheckReleaseResult => ({
+    ok: false,
+    reason,
+    surfaces,
+    warnings,
+  });
   try {
     const deps = normalizeConfigIoDeps({ env, configPath: options.configPath, observe: false });
     const configPath = resolveConfigPathForDeps(deps);
@@ -69,6 +82,12 @@ export async function checkRelease(
           });
         }
         for (const diagnostic of [...report.diagnostics, ...report.registryDiagnostics]) {
+          if (
+            diagnostic.level === "warn" &&
+            isConfiguredPluginPathDiagnosticCode(diagnostic.code)
+          ) {
+            warnings.push({ code: diagnostic.code, message: diagnostic.message });
+          }
           if (diagnostic.level === "error") {
             surfaces.push({
               plugin: diagnostic.pluginId ?? "core",
@@ -78,7 +97,7 @@ export async function checkRelease(
           }
         }
         const coreError = surfaces.find((surface) => surface.plugin === "core" && surface.error);
-        return coreError ? refuse(coreError.error!) : { ok: true, surfaces };
+        return coreError ? refuse(coreError.error!) : { ok: true, surfaces, warnings };
       });
     });
   } catch (error) {

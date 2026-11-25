@@ -134,7 +134,13 @@ describe("CI runtime job inventory", () => {
   it.each([
     [nodeOnly, bothHosts],
     [nodeOnly, "test/scripts/vitest-pair-benchmark.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-disabled-control.test.ts"],
+    [nodeOnly, "test/scripts/node-cache-qualification.test.ts"],
+    [nodeOnly, "test/vitest-performance-config.test.ts"],
     [gitRelease, bothHosts],
+    ["test/scripts/upgrade-survivor-sqlite-observer.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-bulk-access.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-migration-chain.test.ts", bothHosts],
   ])(
     "keeps Node-only %s and both-host %s coverage in a mixed bun-all group",
     (nodeContract, bothHost) => {

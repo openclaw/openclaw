@@ -73,7 +73,12 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
       `Matrix ${name} result`,
     );
     remaining();
-    assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    if (name === "send") {
+      assert.equal(result.channel, "matrix", "Matrix send must identify its channel");
+      assert.equal(result.deliveryStatus, "sent", "Matrix send must succeed");
+    } else {
+      assert.equal(result.ok, true, `Matrix ${name} must succeed`);
+    }
     return result;
   };
   const observe = async (predicate: (event: MatrixQaObservedEvent) => boolean) =>
@@ -110,7 +115,9 @@ export async function runPublicMessageActionsScenario(context: MatrixQaScenarioC
     const sendResult = record(sent.result, "Matrix send payload");
     const messageId = acceptedEventId(sendResult.messageId, "Matrix send");
     completed.push(`send accepted=${messageId}`);
-    assert.equal(sendResult.roomId, room.roomId, "send result must identify the requested room");
+    const sendTarget = record(sendResult.target, "Matrix send target");
+    assert.equal(sendTarget.kind, "room");
+    assert.equal(sendTarget.id, room.roomId, "send result must identify the requested room");
     await observe((event) => event.eventId === messageId && event.type === "m.room.message");
     const original = await eventContent(messageId, "m.room.message");
     assert.equal(original.body, marker);

@@ -11,7 +11,9 @@ export function resolveAgentHarnessAutoSelectionHint(params: {
     return undefined;
   }
   const provider = normalizeProviderId(params.provider);
-  if (providerIds.some((id) => normalizeProviderId(id) === provider)) {
+  if (
+    Array.prototype.some.call(providerIds, (id: string) => normalizeProviderId(id) === provider)
+  ) {
     return undefined;
   }
   return {

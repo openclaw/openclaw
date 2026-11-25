@@ -152,9 +152,9 @@ async function prepareLiveProducer(
         const runId = randomUUID();
         let retainedAuthority: AdmittedRunOperatorAuthority | undefined;
         let releaseRetained: (() => void) | undefined;
-        const prepare = operatorRun.prepareGatewayOperatorRunAuthority;
+        const prepare = operatorRun.prepareGatewayHttpOperatorRunAuthority;
         const observer = vi
-          .spyOn(operatorRun, "prepareGatewayOperatorRunAuthority")
+          .spyOn(operatorRun, "prepareGatewayHttpOperatorRunAuthority")
           .mockImplementation(async (input) => {
             const prepared = await prepare(input);
             const principal = input.client?.internal?.openclawIdPrincipal;
@@ -188,7 +188,6 @@ async function prepareLiveProducer(
                   sessionKey: c.sessionKey,
                   runId,
                   messageChannel: "webchat",
-                  senderIsOwner: false,
                   requestAuth,
                   operatorScopes: resolveSharedSecretHttpOperatorScopes(req, requestAuth),
                   hasCurrentClientAuthority: requestAuth.hasCurrentClientAuthority,
@@ -248,26 +247,25 @@ async function prepareLiveProducer(
         }
       }
       // This is the OpenAI-compatible/tools HTTP adapter's production client
-      // factory, preserving the authenticated actor and access grant verbatim.
+      // factory and admission, preserving the authenticated actor and access grant verbatim.
       const client = createSyntheticPluginRuntimeClient({
         authenticatedUserProfile: requestAuth.authenticatedUserProfile,
         operatorRoleActor: requestAuth.operatorRoleActor,
         openclawIdPrincipal: requestAuth.openclawIdPrincipal,
         operatorAccessAuthority: requestAuth.operatorAccessAuthority,
-        scopes: ["operator.admin"],
+        scopes:
+          kind === "http-bearer"
+            ? resolveSharedSecretHttpOperatorScopes(req, requestAuth)
+            : ["operator.admin"],
       });
-      const admitted = await operatorRun.prepareGatewayOperatorRunAuthority({
+      const admitted = await operatorRun.prepareGatewayHttpOperatorRunAuthority({
         client,
         context,
         hasCurrentClientAuthority: requestAuth.hasCurrentClientAuthority,
         sourceAuthority: requestAuth.operatorAccessAuthority,
       });
-      if (kind === "http-bearer") {
-        expect(requestAuth.operatorRoleActor).toEqual({ kind: "system" });
-        expect(admitted).toBeUndefined();
-      } else {
-        assert(admitted, "The host-authenticated HTTP member must yield live operator authority");
-      }
+      // The shared token names the Gateway owner, as on a Control UI socket.
+      assert(admitted, "The host-authenticated HTTP principal must yield live operator authority");
       const authority = admitted?.authority;
       return {
         client: authority

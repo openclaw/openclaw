@@ -1,17 +1,12 @@
+import type { TurnGrant } from "../../agents/admitted-run-operator-authority.types.js";
 import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
-import {
-  CRON_SCOPE,
-  hasGatewayAdminScope,
-  resolveGatewayUiAdminSource,
-} from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -36,6 +31,8 @@ type DirectOperatorAuthorityParams = {
   spawnedBy?: string;
   client?: GatewayClient | null;
   inputProvenance?: InputProvenance;
+  grant?: TurnGrant;
+  child?: true;
   disallowed: boolean;
 };
 
@@ -71,44 +68,26 @@ function resolveDirectOperatorAuthority(
   params: DirectOperatorAuthorityParams,
   callerScopedOnly = false,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
-  const internal = params.client?.internal;
-  const runId = params.runId.trim();
   const isDirectTurn = isDirectGatewayUserTurn(params);
   if (isDirectTurn && params.resolvedSessionKey) {
     // A new user admission replaces pending task authority, including for a non-admin caller.
     revokeRequesterCronAuthority(params.resolvedSessionKey);
   }
-  const adminSource = resolveGatewayUiAdminSource(params.client);
-  const isDirectOperator =
-    !callerScopedOnly &&
-    isDirectTurn &&
-    hasGatewayAdminScope(params.client) &&
-    (internal?.isLocalClient === true || adminSource !== undefined);
-  const isScopedOperator =
-    isDirectTurn && operatorScopeSatisfied(CRON_SCOPE, params.client?.connect.scopes ?? []);
-  return isDirectOperator || isScopedOperator
+  const automations = ((isDirectTurn || params.child) && params.grant?.automations) || "none";
+  const manage = !callerScopedOnly && automations === "manage";
+  // Local-host provenance is recorded on the jobs this turn creates; it grants nothing more.
+  const local = manage && !params.child && params.client?.internal?.isLocalClient === true;
+  return automations !== "none"
     ? Object.freeze({
-        runId,
-        // Remote management admission does not confer the direct-local creator/operator capability.
-        callerOrigin:
-          isDirectOperator && internal?.isLocalClient === true
-            ? { kind: "local" as const }
-            : { kind: "unknown" as const },
-        ...(isDirectOperator && adminSource !== undefined
-          ? {
-              managementEntitlement: {
-                source: adminSource,
-              },
-            }
-          : {}),
-        ...(!isDirectOperator || internal?.isLocalClient !== true
-          ? { callerScopedCreation: true as const }
-          : {}),
+        runId: params.runId.trim(),
+        callerOrigin: local ? { kind: "local" as const } : { kind: "unknown" as const },
+        ...(manage ? { managementEntitlement: { source: "operator" as const } } : {}),
+        ...(!local ? { callerScopedCreation: true as const } : {}),
       })
     : undefined;
 }
 
-/** Admits scoped scheduling separately from local-owner and authenticated UI admin management. */
+/** The turn's admitted grant decides its automations; this only checks the turn's shape. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;
@@ -117,6 +96,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   client?: GatewayClient | null;
   request: AgentRunRequest;
   inputProvenance?: InputProvenance;
+  grant?: TurnGrant;
   isOneShotModelRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
@@ -131,6 +111,9 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
       return continuation;
     }
   }
+  if (request.lane === "subagent" && !params.isOneShotModelRun) {
+    return resolveDirectOperatorAuthority({ ...params, disallowed: true, child: true });
+  }
   return resolveDirectOperatorAuthority({
     ...params,
     disallowed:
@@ -142,8 +125,7 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
       request.internalEvents !== undefined ||
       request.sessionEffects === "internal" ||
       request.suppressPromptPersistence === true ||
-      request.swarmCollector === true ||
-      request.lane === "subagent",
+      request.swarmCollector === true,
   });
 }
 
@@ -206,6 +188,7 @@ type GatewayChatUserTurn = {
   spawnedBy?: string;
   client?: GatewayClient | null;
   inputProvenance?: InputProvenance;
+  grant?: TurnGrant;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognito: boolean;
@@ -261,8 +244,7 @@ export function resolveGatewayTemplateSetupCronAuthorityAdmission(
   if (
     params.inputProvenance?.kind !== "internal_system" ||
     params.inputProvenance.sourceTool !== "template_add_setup" ||
-    params.client?.internal?.controlUiAdmin !== true ||
-    !hasGatewayAdminScope(params.client)
+    params.grant?.automations !== "manage"
   ) {
     return undefined;
   }
