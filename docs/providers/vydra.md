@@ -135,12 +135,13 @@ Use `https://www.vydra.ai/api/v1` as the base URL. Vydra's apex host (`https://v
     The Vydra live file covers:
 
     - `vydra/veo3` text-to-video
-    - `vydra/kling` image-to-video using a remote image URL
+    - `vydra/kling` motion control with a character image and a distinct motion video
 
-    Override the remote image fixture when needed:
+    The Kling test uses public sample media by default. To use your own fixtures, supply distinct HTTPS URLs that Vydra can fetch. The motion video must be 30 seconds or shorter. [Default sample inputs](https://fal.ai/models/fal-ai/kling-video/v3/standard/motion-control/api)
 
     ```bash
-    export OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL="https://example.com/reference.png"
+    export OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL="https://example.com/character.png"
+    export OPENCLAW_LIVE_VYDRA_KLING_VIDEO_URL="https://example.com/motion.mp4"
     ```
 
   </Accordion>
