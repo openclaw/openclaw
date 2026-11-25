@@ -920,9 +920,7 @@ it.each([
         expect(offered).toBeUndefined();
       } else {
         expect(admittedOperator).toBe(scenario === "cron-scoped operator");
-        expect(rejected).toContain(
-          scopedOperator ? "missing scope: operator.write" : "needs operator write permission",
-        );
+        expect(rejected).toContain("needs operator write permission");
       }
       if (scenario === "role revoked during merge") {
         clock.setTime(expectDefined(state.nextRunAtMs, "next occurrence after admitted merge"));

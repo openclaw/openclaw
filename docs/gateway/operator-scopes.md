@@ -253,6 +253,13 @@ RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.
 
+When an agent tool call needs a scope that the turn's role lacks, the tool
+result names the refused tool and tells the model to ask a Gateway admin
+instead of retrying; the Gateway log keeps the missing scope. `github_publish`
+actions reach the Gateway with `operator.sessions.write`, and the action handler
+refuses `inspect`, `merge`, `close` and `ready` for another session without
+`operator.write`, naming the action.
+
 `question.*` also accepts `operator.sessions.write` for ordinary questions
 bound to the caller's own admitted run and owned session. The Gateway records
 that binding from trusted run authority, never from caller-supplied session or

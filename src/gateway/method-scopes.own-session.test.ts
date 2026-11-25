@@ -105,26 +105,6 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
-  it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
-    for (const action of [
-      "inspect_pr",
-      "prepare_pr",
-      "refresh_base",
-      "edit",
-      "request_review",
-      "ready",
-      "upload_evidence",
-    ]) {
-      allow("sessions.github.action", [OWN_WRITE], { action });
-    }
-    deny(WRITE, "sessions.github.action", [OWN_WRITE], {
-      action: "ready",
-      publishingSessionKey: "agent:main:child",
-    });
-    for (const action of ["inspect", "merge", "close", "unknown"]) {
-      deny(WRITE, "sessions.github.action", [OWN_WRITE], { action });
-    }
-  });
   const incognitoKey = "agent:main:dashboard:incognito-parent";
   const guarded = {
     key: "agent:main:ios-1",

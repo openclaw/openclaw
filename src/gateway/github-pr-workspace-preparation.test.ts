@@ -63,7 +63,7 @@ describe("existing PR preparation through the registered agent action", () => {
           expectedHeadCommit: f.headCommit,
           mergeMethod: "squash",
         }),
-      ).rejects.toThrow("missing scope: operator.write");
+      ).rejects.toThrow("The merge action needs operator write permission.");
       f.pr.user.id = 999;
       await expect(f.invoke()).rejects.toThrow(
         privateRepository
