@@ -19,13 +19,10 @@ their own conversation in a public project without a worktree, a PR, or GitHub
 credentials in the sandbox. Success returns the issue URL. If the result is
 unconfirmed, check the project’s issues before trying again.
 
-## Comment on an issue or PR from a project conversation
-
-From a registered project conversation, call `github_publish` with
-`action: "create_comment"`, `issueNumber`, and a Markdown `body` of up to 8192
-characters. The Gateway holds the posting credential and asks the operator to
-approve the target, account, and text. Denial sends nothing. Success returns the
-comment URL. If the result is unconfirmed, check the thread before retrying.
+To leave a top-level comment in that project's repository, call `github_publish`
+with `action: "create_comment"`, `issueNumber`, and a Markdown `body`. The Gateway
+requires approval and returns the comment URL. Check the thread before retrying
+an unconfirmed result.
 
 ## Session GitHub App reader
 

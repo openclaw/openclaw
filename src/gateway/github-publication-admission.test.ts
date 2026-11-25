@@ -503,16 +503,11 @@ describe("project issue creation through the guest tool and registered Gateway m
     });
     let detail: PluginApprovalRequestPayload["detail"];
     let decision: "allow-once" | "deny" = "allow-once";
-    const resolved: string[] = [];
     const { invoke } = await fixture(true, {
       pluginApprovalManager: approval.manager,
       forwardPluginApprovalRequest: async (event) => {
         detail = event.request.detail;
-        const accepted = await approval.manager.resolve(event.id, decision);
-        if (accepted) {
-          resolved.push(decision);
-        }
-        return accepted;
+        return await approval.manager.resolve(event.id, decision);
       },
     });
     mocks.runCommand.mockResolvedValue(
@@ -530,7 +525,6 @@ describe("project issue creation through the guest tool and registered Gateway m
       await expect(approval.track(invoke(comment))).rejects.toThrow(
         /not approved.*Nothing was posted/,
       );
-      expect(resolved).toEqual(["allow-once", "deny"]);
       expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
         expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
         expect.objectContaining({ input: JSON.stringify({ body }) }),

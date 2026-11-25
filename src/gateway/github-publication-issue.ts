@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { Type, type Static } from "typebox";
+import {
+  GitHubPublicationBodySchema,
+  SessionGitHubPullRequestInspectResultSchema,
+  type SessionGitHubActionParams,
+} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -37,18 +42,25 @@ import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type HandlerOptions = Omit<GatewayRequestHandlerOptions, "params">;
-type ProjectTarget = {
-  host: string;
-  repository: string;
-  agentId: string;
-  sessionKey: string;
-  account: PreparedGitHubPublicationIdentity["account"];
-};
+
+export const GitHubToolCommentParamsSchema = Type.Object(
+  {
+    action: Type.Literal("create_comment"),
+    sessionKey: Type.String({ minLength: 1 }),
+    agentId: Type.String({ minLength: 1 }),
+    issueNumber: SessionGitHubPullRequestInspectResultSchema.properties.number,
+    body: GitHubPublicationBodySchema,
+  },
+  { additionalProperties: false },
+);
+export type GitHubToolCommentParams = Static<typeof GitHubToolCommentParamsSchema>;
 
 /** Project posts use the registered repository, never a checkout remote or a tool-supplied URL. */
 export async function postSessionGitHubProjectItem(
   options: HandlerOptions & {
-    params: Extract<SessionGitHubActionParams, { action: "create_issue" | "create_comment" }>;
+    params:
+      | Extract<SessionGitHubActionParams, { action: "create_issue" }>
+      | GitHubToolCommentParams;
   },
 ) {
   const { params } = options;
@@ -130,8 +142,14 @@ export async function postSessionGitHubProjectItem(
   const recordComment = isComment
     ? await requestGitHubCommentApproval(
         options,
-        { host, repository, agentId, sessionKey: canonicalKey, account: identity.account },
-        params,
+        {
+          ...params,
+          host,
+          repository,
+          account: identity.account,
+          agentId,
+          sessionKey: canonicalKey,
+        },
         assertPublisherCurrent,
       )
     : undefined;
@@ -257,13 +275,14 @@ export async function postSessionGitHubProjectItem(
   return { status: "created" as const, url: posted.url };
 }
 
-const COMMENT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
-
 /** The approver sees the exact repository, number, account and text that the Gateway posts. */
 async function requestGitHubCommentApproval(
   options: HandlerOptions,
-  target: ProjectTarget,
-  params: { issueNumber: number; body: string },
+  target: Omit<GitHubToolCommentParams, "action"> & {
+    host: string;
+    repository: string;
+    account: PreparedGitHubPublicationIdentity["account"];
+  },
   assertCurrent: () => void,
 ) {
   const manager = options.context.pluginApprovalManager;
@@ -271,10 +290,10 @@ async function requestGitHubCommentApproval(
     throw new Error("GitHub comment approval is unavailable. Nothing was posted.");
   }
   const repositoryLabel = `${target.host}/${target.repository}`;
-  const shown = sanitizeExecApprovalWarningTextWithStatus(params.body);
+  const shown = sanitizeExecApprovalWarningTextWithStatus(target.body);
   const detail = [
     `Repository: ${repositoryLabel}`,
-    `Issue or PR: #${params.issueNumber}`,
+    `Issue or PR: #${target.issueNumber}`,
     `Account: @${target.account.login}`,
     "",
     "Comment body:",
@@ -285,40 +304,31 @@ async function requestGitHubCommentApproval(
       "The comment cannot be shown in full for approval. Shorten it; nothing was posted.",
     );
   }
+  const timeoutMs = 5 * 60 * 1000;
   const toolCallId = randomUUID();
   const payload: PluginApprovalRequestPayload = {
     pluginId: "github",
     title: "Post GitHub comment?",
     description: sanitizeExecApprovalDisplayText(
-      `Post this comment on ${repositoryLabel}#${params.issueNumber} as @${target.account.login}?`,
+      `Post this comment on ${repositoryLabel}#${target.issueNumber} as @${target.account.login}?`,
     ).slice(0, 512),
     detail,
     severity: "warning",
-    scope: null,
     toolName: "github_publish",
     toolCallId,
     agentId: target.agentId,
     sessionKey: target.sessionKey,
-    runId: null,
     allowedDecisions: ["allow-once", "deny"],
-    actions: [
-      { kind: "decision", decision: "allow-once", label: "Post once", command: "allow-once" },
-      { kind: "decision", decision: "deny", label: "Deny", command: "deny" },
-    ],
-    turnSourceChannel: null,
-    turnSourceTo: null,
-    turnSourceAccountId: null,
-    turnSourceThreadId: null,
   };
   assertCurrent();
-  const record = manager.create(payload, COMMENT_APPROVAL_TIMEOUT_MS, "plugin:" + randomUUID());
+  const record = manager.create(payload, timeoutMs, `plugin:${toolCallId}`);
   record.approvalAuthority = () => {
     assertCurrent();
     return true;
   };
   record.approvalSignals = options.signal ? [options.signal] : [];
   bindApprovalRequesterMetadata({ record, client: options.client });
-  const { decision } = await manager.register(record, COMMENT_APPROVAL_TIMEOUT_MS);
+  const { decision } = await manager.register(record, timeoutMs);
   await handlePendingApprovalRequestWithDelivery({
     approvalKind: "plugin",
     manager,
@@ -344,7 +354,7 @@ async function requestGitHubCommentApproval(
         agentId: target.agentId,
         sessionKey: target.sessionKey,
         repository: target.repository,
-        issueNumber: params.issueNumber,
+        issueNumber: target.issueNumber,
         ...(url ? { url } : {}),
       });
     } catch {

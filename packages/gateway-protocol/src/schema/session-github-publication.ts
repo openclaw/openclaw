@@ -175,13 +175,6 @@ export const SessionGitHubActionParamsSchema = Type.Union([
     title: GitHubPublicationTitleSchema,
     body: Type.Optional(GitHubPublicationBodySchema),
   }),
-  closedObject({
-    action: Type.Literal("create_comment"),
-    sessionKey: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
-    issueNumber: SessionGitHubPullRequestInspectResultSchema.properties.number,
-    body: GitHubPublicationBodySchema,
-  }),
 ]);
 export const SessionGitHubBaseRefreshResultSchema = closedObject({
   status: stringLiteralUnion(["current", "refreshed", "conflicts"]),
