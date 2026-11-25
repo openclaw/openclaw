@@ -140,7 +140,7 @@ describe("configured channel owner's saved work after a restart", () => {
         ...(operatorSource ? { originFacts: { operatorSource } } : {}),
       });
     const replay = async () => {
-      using wake = vi.spyOn(execNotify, "wakeOwedExec").mockImplementation(() => {});
+      using wake = vi.spyOn(execNotify, "wakeOwedExec").mockResolvedValue();
       await continueSessionQueuedInputs(exec.context, exec.target, {
         signal: new AbortController().signal,
         assertCurrent: () => {},

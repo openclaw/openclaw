@@ -264,7 +264,7 @@ export function captureExecRequesterSource(target: SessionEventTarget | undefine
 
 /**
  * Admits a saved requester again and captures their chat as them, so the wake runs as them. The
- * caller releases the admission after the wake is enqueued, once the queue holds the authority.
+ * caller releases the admission once the wake and its retry settle (`wakeOwedExec` resolves).
  */
 export async function captureOwedRequesterTarget(
   to: ChatRef,
@@ -297,14 +297,15 @@ export async function captureOwedRequesterTarget(
  * The one exec wake: it delivers a stored exec result through session-event admission. A live
  * wake passes the producer's captured target; restart recovery passes none, so admission
  * captures the chat's current target. Its settlement reads the stored row; `retries` stored
- * wakes follow a failed one.
+ * wakes follow a failed one. Resolves once the last attempt settles, so a caller holding the
+ * target's admission keeps it for the retry too.
  */
 export function wakeOwedExec(
   owed: Owed,
   options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
   onWake?: (cancel: () => boolean) => void,
   retries = 0,
-): void {
+): Promise<void> {
   const wakeAgain =
     retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
   let receipt: ReturnType<typeof enqueueSessionEvent>;
@@ -320,11 +321,10 @@ export function wakeOwedExec(
   } catch (error) {
     // A refused enqueue (for example a full wake pool) settles like a wake that never started.
     const failed = { status: "failed", executionStarted: false, delivered: false } as const;
-    void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
-    return;
+    return settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
   }
   onWake?.(receipt.cancel);
-  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
+  return receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
 }
 
 /**
@@ -338,7 +338,7 @@ export function wakeOwedExec(
 async function settleOwedExecWake(
   owed: Owed,
   outcome: SessionEventOutcome,
-  wakeAgain?: (stored: Owed) => void,
+  wakeAgain?: (stored: Owed) => Promise<void>,
 ) {
   if (outcome.status === "failed") {
     logWarn(
@@ -353,7 +353,7 @@ async function settleOwedExecWake(
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
     } else if (outcome.status === "failed" && wakeAgain) {
-      wakeAgain(stored);
+      await wakeAgain(stored);
     } else {
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }
@@ -443,20 +443,17 @@ async function notifyOnExit(
           }
           // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
           // target and request owners carry the requester's authority into the one retry too.
-          try {
-            wakeOwedExec(
-              owed,
-              {
-                ...eventOptions,
-                sourceRunId: session.startedByRunId,
-                expectedTarget: admitted?.target ?? target,
-              },
-              (cancel) => recordNotifyOnExitRemoval(session, cancel),
-              stored ? 1 : 0,
-            );
-          } finally {
-            admitted?.release();
-          }
+          // The admission is held until the last attempt settles, so the retry keeps it too.
+          void wakeOwedExec(
+            owed,
+            {
+              ...eventOptions,
+              sourceRunId: session.startedByRunId,
+              expectedTarget: admitted?.target ?? target,
+            },
+            (cancel) => recordNotifyOnExitRemoval(session, cancel),
+            stored ? 1 : 0,
+          ).finally(() => admitted?.release());
         }),
       );
     } catch (error) {

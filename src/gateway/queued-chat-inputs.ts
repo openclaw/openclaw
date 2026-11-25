@@ -101,15 +101,17 @@ export async function continueSessionQueuedInputs(
           text: owedText,
         };
         await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
-          const admitted =
+          const requester =
             source === undefined
               ? undefined
               : await captureOwedRequesterTarget(owed.to, source, context, assertCurrent);
-          try {
-            wakeOwedExec(owed, admitted ? { expectedTarget: admitted.target } : {}, undefined, 1);
-          } finally {
-            admitted?.release();
-          }
+          // The admission is held until the last attempt settles, so the retry keeps it too.
+          void wakeOwedExec(
+            owed,
+            requester ? { expectedTarget: requester.target } : {},
+            undefined,
+            1,
+          ).finally(() => requester?.release());
         });
         return undefined;
       }
