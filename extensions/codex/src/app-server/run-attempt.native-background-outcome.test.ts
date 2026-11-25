@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -382,6 +383,53 @@ it.each([
   } finally {
     source.abort(new Error("fixture cleanup"));
     abort.abort(new Error("fixture cleanup"));
+    harness.close();
+    await Promise.allSettled([run]);
+  }
+});
+
+it("records two late command failures before settling a silent turn", async () => {
+  const commands = ["first", "second"].map((id) => runningCommand(id, "synthetic-command", null));
+  let lateCompletions: Promise<void> | undefined;
+  const harness = createStartedThreadHarness(async (method) => {
+    if (method !== "thread/backgroundTerminals/list") {
+      return undefined;
+    }
+    lateCompletions ??= delay(40).then(async () => {
+      for (const command of commands) {
+        await harness.notify(
+          itemNotification("item/completed", {
+            ...command,
+            status: "failed",
+            exitCode: -1,
+            aggregatedOutput: "Synthetic late command failure",
+          }),
+        );
+      }
+    });
+    return { data: [], nextCursor: null };
+  });
+  const run = runCodexAppServerAttempt(createTestParams());
+  try {
+    await run.waitForTurnAccepted();
+    for (const command of commands) {
+      await harness.notify(itemNotification("item/started", command));
+    }
+    await harness.notify(answerCompleted("NO_REPLY"));
+    const result = await run;
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    for (const command of commands) {
+      expect(result.messagesSnapshot).toContainEqual(
+        expect.objectContaining({
+          role: "toolResult",
+          toolCallId: command.id,
+          isError: true,
+          content: [{ type: "text", text: "Synthetic late command failure" }],
+        }),
+      );
+    }
+  } finally {
+    await lateCompletions;
     harness.close();
     await Promise.allSettled([run]);
   }
