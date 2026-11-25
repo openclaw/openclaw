@@ -107,13 +107,13 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           },
           delivery: { status: "pending" },
           cleanupCompletedAt: Date.now(),
+          retireAfterSettle: binding === "restored" && runId === "run-unbound" ? true : undefined,
           requesterSettleWake: {
             status: "pending",
             attemptCount: 0,
             requesterYieldBatch: true,
             batchRunIds,
             rearmGeneration: 1,
-            retireAfterSettle: binding === "restored" && runId === "run-unbound",
           },
         });
         const entry = subagentRuns.get(runId)!;

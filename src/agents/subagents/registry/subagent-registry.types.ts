@@ -130,8 +130,6 @@ export type RequesterSettleWakeState = {
   /** Reference to the conversation receipt for this presentation, not completion credit. */
   progressOperationId?: string;
   lastError?: string | null;
-  /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
-  retireAfterSettle?: boolean;
 };
 
 type SubagentKillReconciliationState = {
@@ -179,8 +177,11 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   requesterTurnYielded?: true;
   /** This yield waits for its requester, rather than owned child completions. */
   waitForMessage?: true;
-  /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
-  retireAfterRequesterTurn?: boolean;
+  /**
+   * Cleanup wanted to retire this row. It retires once no requester obligation is
+   * outstanding: no settle wake and no open requester turn awaiting its completion.
+   */
+  retireAfterSettle?: true;
   requesterOrigin?: DeliveryContext;
   /** Requester's source at spawn; restart re-admits it under current policy. Older rows lack it. */
   requesterOperatorSource?: QueuedOperatorRecoverySource;

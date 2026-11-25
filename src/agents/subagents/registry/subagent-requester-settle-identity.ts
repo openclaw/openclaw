@@ -206,7 +206,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
   requester: captureRequesterSettleRunIdentity(current),
   expectsCompletionMessage: current.expectsCompletionMessage === true,
   suppressCompletionDelivery: current.suppressCompletionDelivery === true,
-  retireAfterRequesterTurn: current.retireAfterRequesterTurn === true,
+  retireAfterSettle: current.retireAfterSettle === true,
   hasRequesterSettleWake: current.requesterSettleWake !== undefined,
   killIntent: current.killIntent && {
     requestedAt: current.killIntent.requestedAt,

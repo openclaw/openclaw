@@ -611,7 +611,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       assert(member, "Quiet delete wake did not retain its member");
       const { entry, wake } = member;
       expect(entry.runId).toBe(runId);
-      expect(wake?.retireAfterSettle).toBe(true);
+      expect(entry.retireAfterSettle).toBe(true);
       expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
       expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);

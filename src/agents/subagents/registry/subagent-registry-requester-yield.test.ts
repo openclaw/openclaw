@@ -709,7 +709,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
     } else if (kind === "valid delete receipt") {
       entry.cleanup = "delete";
-      entry.retireAfterRequesterTurn = true;
+      entry.retireAfterSettle = true;
     } else if (kind === "a replayed running child") {
       entry.execution.status = "running";
     }
@@ -792,7 +792,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       } else if (kind === "delete") {
         first.cleanup = "delete";
         first.cleanupCompletedAt = 2_100;
-        first.retireAfterRequesterTurn = true;
+        first.retireAfterSettle = true;
       } else if (kind === "in_progress") {
         second.delivery = { status: "in_progress" };
       }
@@ -816,10 +816,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           yieldedFinalDeliverable: true,
           rearmGeneration: 1,
           ...(kind === "running" ? {} : { afterRequesterYield: true }),
-          ...(kind === "delete" ? { retireAfterSettle: true } : {}),
         });
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
-        expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();
+        expect(runs.get(entry.runId)!.retireAfterSettle).toBe(kind === "delete" ? true : undefined);
       }
       expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
         requesterTurnRunId: undefined,
@@ -844,7 +843,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     "retires normal-answer children only after a committed plan (reject: %s)",
     async (reject) => {
       const entry = makeRun("run-delete", false);
-      entry.retireAfterRequesterTurn = true;
+      entry.retireAfterSettle = true;
       const runs = runMap(entry);
       const original = structuredClone(entry);
       const failure = new Error("sqlite unavailable");
