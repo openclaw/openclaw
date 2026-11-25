@@ -11,6 +11,7 @@ import {
   type LifecycleTestDrivers,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
@@ -22,12 +23,9 @@ export function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): s
 
 export function registerDeliveryMirrorCases({
   createLifecycleController,
-  waitForLifecycleState,
   callGateway,
 }: Omit<LifecycleTestDrivers, "createRunEntry"> & {
   callGateway: Mock<(opts: CallGatewayOptions) => Promise<unknown>>;
-  blockSubagentCompletionDelivery: Mock;
-  logAnnounceGiveUp: Mock;
 }) {
   const failure = "completion agent did not produce a visible reply";
   it.each(["current", "message tool", "child run", "stale", "sibling"])(
@@ -65,13 +63,14 @@ export function registerDeliveryMirrorCases({
         };
       });
 
+      const join = observeRootWork();
       await createLifecycleController({
         entry,
         captureSubagentCompletionReply: vi.fn(async () => text),
         runSubagentAnnounceFlow: vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
           async ({ onDeliveryResult }) => {
             await onDeliveryResult?.({ delivered: false, path: "direct", error: failure });
-            return "retryable";
+            return "undelivered";
           },
         ),
       }).completeSubagentRun(
@@ -81,22 +80,17 @@ export function registerDeliveryMirrorCases({
         }),
       );
       const delivered = source !== "stale" && source !== "sibling";
-      await waitForLifecycleState(() =>
-        expect(
-          delivered
-            ? readLifecycleRun(entry).cleanupCompletedAt
-            : readLifecycleRun(entry).delivery?.suspendedAt,
-        ).toBeTypeOf("number"),
-      );
+      await join();
+      expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
       expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
         method: "chat.history",
         params: { sessionKey: "global", agentId: "ops", maxChars: 128 * 1024 },
       });
       expect(readLifecycleRun(entry).delivery).toMatchObject({
-        status: delivered ? "delivered" : "suspended",
-        deliveredAt: delivered ? 12_345 : undefined,
-        announcedAt: delivered ? 12_345 : undefined,
-        lastError: delivered ? undefined : failure,
+        status: "delivered",
+        deliveredAt: delivered ? 12_345 : expect.any(Number),
+        announcedAt: delivered ? 12_345 : expect.any(Number),
+        lastError: undefined,
       });
     },
   );

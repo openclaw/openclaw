@@ -48,7 +48,7 @@ import {
 } from "../../src/config/sessions/session-actor-receipt.js";
 import { captureSqliteWorkerCommitReceipt } from "../../src/infra/sqlite-worker-operation-settlement.js";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -250,12 +250,7 @@ async function measure() {
     await receive(1000);
     await setImmediate();
     if (values.mode === "allocation") {
-      inspector.connect();
-      await inspector.post("HeapProfiler.startSampling", {
-        samplingInterval: 1024,
-        includeObjectsCollectedByMajorGC: true,
-        includeObjectsCollectedByMinorGC: true,
-      });
+      await startCollectedHeapSampling(inspector, 1024);
     }
     observer.observe({ entryTypes: ["gc"] });
     const hostLoadBefore = loadavg();

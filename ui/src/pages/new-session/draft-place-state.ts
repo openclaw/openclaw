@@ -103,23 +103,12 @@ export class DraftPlaceState {
     return canUseDeviceFolder(this.deviceId, this.devices());
   }
 
-  selectDeviceFolder() {
+  selectDeviceFolder(path: string) {
     selectDraftDeviceFolder(this.targetActions(), () => {
-      this.deviceFolderValue = "";
+      this.deviceFolderValue = path;
     });
   }
 
-  setDeviceFolderPath(path: string) {
-    if (
-      this.deviceFolderValue === null ||
-      this.read().submitting ||
-      this.read().pendingPlacementSessionKey
-    ) {
-      return;
-    }
-    this.deviceFolderValue = path;
-    this.callbacks.changed();
-  }
   readonly cloudMachines = new DraftCloudMachineState();
   agentsHydrated = false;
   private agentSelectedByUser = false;

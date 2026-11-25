@@ -7,11 +7,8 @@ import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnInput,
-  UserTurnMessagePersistenceParams,
-} from "./user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage, UserTurnInput } from "./user-turn-input.types.js";
+import type { UserTurnMessagePersistenceParams } from "./user-turn-transcript.types.js";
 
 const REPLY_PREVIEW_TEXT_MAX_CHARS = 2000;
 const REPLY_PREVIEW_SENDER_MAX_CHARS = 200;
@@ -45,6 +42,7 @@ export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["send
           },
         }
       : {}),
+    ...(normalizeOptionalString(ctx.ForwardedFrom) ? { forwarded: true } : {}),
   };
 }
 
@@ -55,10 +53,11 @@ export function buildPersistedUserTurnMetadata(
   const senderId = normalizeOptionalString(input.sender?.id);
   const senderName = normalizeOptionalString(input.sender?.name);
   const senderUsername = normalizeOptionalString(input.sender?.username);
-  const senderIdentity =
-    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
-      ? readTranscriptSenderIdentity(input.sender?.identity)
-      : undefined;
+  const externalChannelTurn =
+    input.display !== false && (!input.provenance || input.provenance.kind === "external_user");
+  const senderIdentity = externalChannelTurn
+    ? readTranscriptSenderIdentity(input.sender?.identity)
+    : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
@@ -81,6 +80,7 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(externalChannelTurn && input.sender?.forwarded === true ? { forwarded: true } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
     ...(input.appContext ? { appContext: structuredClone(input.appContext) } : {}),
     ...(input.mentions?.length

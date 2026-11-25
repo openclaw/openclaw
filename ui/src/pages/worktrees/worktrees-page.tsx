@@ -149,7 +149,21 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
             </InlineAlert>
           </Show>
           <Show when={view().error}>
-            <InlineAlert tone="danger" role="alert">
+            <InlineAlert
+              tone="danger"
+              role="alert"
+              action={
+                <Show when={view().listLoaded && view().listFailed}>
+                  <button
+                    class="btn btn--sm"
+                    disabled={!model.gateway.connected || busy()}
+                    onClick={() => void model.load()}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </Show>
+              }
+            >
               {view().error}
             </InlineAlert>
           </Show>

@@ -101,13 +101,17 @@ export function inspectRemountedPackagePublication(
   bind(d.previous.identity, () =>
     packageActivationIdentity(selected === "previous" ? live : path.join(anchor, "previous"), true),
   );
-  bind(d.launcherRootIdentity, () =>
-    packageActivationIdentity(path.join(anchor, "launchers"), true),
-  );
-  if (d.previousLauncherRootIdentity) {
-    bind(d.previousLauncherRootIdentity, () =>
-      packageActivationIdentity(path.join(anchor, "previous-launchers"), true),
-    );
+  // `brew cleanup` prunes dangling symlinks and then empty directories under
+  // its prefix, which removes these retained relative launcher copies. Settlement
+  // never republishes them, so only a present root must keep its identity.
+  for (const [identity, name] of [
+    [d.launcherRootIdentity, "launchers"],
+    [d.previousLauncherRootIdentity, "previous-launchers"],
+  ] as const) {
+    const launcherRoot = path.join(anchor, name);
+    if (identity && entryIdentity(launcherRoot, true) !== null) {
+      bind(identity, () => packageActivationIdentity(launcherRoot, true));
+    }
   }
   if (selected === "candidate") {
     bind(d.candidate.identity, () => packageActivationIdentity(live, true));

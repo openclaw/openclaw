@@ -94,6 +94,8 @@ export async function createBlockedCronRun(
     }),
   );
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
+  // No spare memory, so exactly the default run slots fill.
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   const held = createHeldCronRunner(blockers.length);
   const runTarget = overrides.runIsolatedAgentJob ?? (async () => ({ status: "ok" as const }));
   const runIsolatedAgentJob = vi.fn<Runner>((input) =>

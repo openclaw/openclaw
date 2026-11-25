@@ -21,6 +21,7 @@ import {
   pressAndExpectFocus,
 } from "./sidebar-assertions.test-support.ts";
 import {
+  captureSidebarUiProof,
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
   openSidebarPinMenu,
@@ -351,6 +352,73 @@ suite.define(() => {
         "aria-current",
         "true",
       );
+    });
+  });
+
+  it("shares an agent from its menu row by asking in its main session", async () => {
+    await suite.withPage(desktop, async ({ page }) => {
+      const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "templates.drafts.create"],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: "agent-share",
+            valid: true,
+            issues: [],
+          },
+          // The default chat fixture keeps the sent message in the opened transcript.
+          "agents.list": {
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "research", name: "Research" },
+            ],
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
+      const menu = sidebar.locator(".sidebar-agent-menu");
+      const research = menu.getByRole("menuitem", { name: "Research", exact: true });
+      const share = research.getByRole("button", { name: "Share Research" });
+      const settings = research.getByRole("button", { name: "Research settings" });
+      await research.hover();
+      const resting = await share.evaluate((button) => getComputedStyle(button).color);
+      for (const action of [share, settings]) {
+        await action.hover();
+        // Hover brightens the icon without drawing a box behind it.
+        await expect
+          .poll(() =>
+            action.evaluate((button, restingColor) => {
+              const style = getComputedStyle(button);
+              return [style.backgroundColor, style.color !== restingColor];
+            }, resting),
+          )
+          .toEqual(["rgba(0, 0, 0, 0)", true]);
+      }
+      await share.hover();
+      await captureSidebarUiProof(suite, page, "agent-row-actions.png", menu, [share, settings]);
+      await pressAndExpectFocus(page, "r", research);
+      await pressAndExpectFocus(page, "Tab", share);
+      await pressAndExpectFocus(page, "Tab", settings);
+
+      await share.click();
+      const sent = await gateway.waitForRequest("chat.send");
+      expect(sent.params).toMatchObject({
+        sessionKey: "agent:research:main",
+        message: "Create a shareable template of yourself",
+      });
+      await expectPath(page, controlUiSessionPath("agent:research:main"));
+      await page.getByText("Create a shareable template of yourself", { exact: true }).waitFor();
+      await expectCount(menu, 0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await gateway.getRequests("templates.drafts.create")).toHaveLength(0);
     });
   });
 

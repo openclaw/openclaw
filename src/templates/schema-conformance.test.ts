@@ -33,8 +33,8 @@ describe("portable Template schema conformance", () => {
   );
 
   it("preserves optional portable categories", () => {
-    const result = parseTemplateManifest({ ...baseManifest, categories: ["travel", "personal"] });
-    expect(result).toMatchObject({ ok: true, manifest: { categories: ["travel", "personal"] } });
+    const result = parseTemplateManifest({ ...baseManifest, categories: ["travel", "household"] });
+    expect(result).toMatchObject({ ok: true, manifest: { categories: ["travel", "household"] } });
     expect(parseTemplateManifest(baseManifest).ok).toBe(true);
     expect(parseTemplateManifest({ ...baseManifest, categories: ["custom"] }).ok).toBe(true);
   });
@@ -43,7 +43,7 @@ describe("portable Template schema conformance", () => {
     { categories: [] },
     { categories: ["travel", "travel"] },
     { categories: ["Travel"] },
-    { categories: ["travel", "personal", "health", "research"] },
+    { categories: ["travel", "household", "health", "research"] },
   ])("rejects invalid category declarations %j", ({ categories }) => {
     const result = parseTemplateManifest({ ...baseManifest, categories });
     expect(result.ok).toBe(false);

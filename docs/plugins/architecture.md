@@ -245,7 +245,7 @@ Retained work and in-flight calls share a 60-second pre-stop budget. Retained ru
 
 Automatic config reloads defer before closing admission when the affected plugin has retained work or calls and cannot overlap generations. The previous configuration keeps serving; deferred edits do not mark readiness unhealthy or hold new runs behind the drain budget. The config watcher retries after the recorded work and cleanup settle. Repeated observations of the same saved revision reuse that pending outcome instead of starting another replacement attempt. A newer edit replaces the pending candidate.
 
-`config.set`, `config.patch`, and `config.apply` report a saved-but-deferred edit as an unsuccessful application, including the saved revision, reason, and when it can apply. The Control UI retains the saved values and displays **Saved; waiting to apply**. This is not a rollback of the saved file: the previous plugin configuration remains active until automatic retry succeeds or the Gateway restarts. Explicit plugin reload requests retain their bounded drain and handover behavior; cleanup failures and failures after publication remain errors.
+`config.set`, `config.patch`, and `config.apply` report a saved-but-deferred edit as an unsuccessful application, including the saved revision, reason, and when it can apply. Agent saves through `agents.create`, `agents.update`, and `agents.delete` report the same outcome, because a waiting plugin reload also holds saved changes that need no reload, such as an agent's name or avatar. The Control UI retains the saved values and displays **Saved; waiting to apply**. This is not a rollback of the saved file: the previous plugin configuration remains active until automatic retry succeeds or the Gateway restarts. Explicit plugin reload requests retain their bounded drain and handover behavior; cleanup failures and failures after publication remain errors.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
@@ -307,6 +307,11 @@ updated bundled, host, or SDK code, and
 rebuild first when the installation loads compiled output. Embedded executable code
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
+
+Bundled public surfaces that would load TypeScript below `node_modules` use the
+matching `dist/extensions/<plugin>/` or `dist-runtime/extensions/<plugin>/`
+JavaScript artifact when available. Resolution follows release symlinks, so Git
+releases built by older updaters do not need a manual relocation to start.
 
 For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
 capture a bundled plugin's own code: its package tree and the build chunks that

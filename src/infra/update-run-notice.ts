@@ -1,10 +1,27 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { resolveUpdateRunVerifiedServingVersion } from "./update-run-report.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
   Partial<Pick<UpdateRunRecord, "before" | "verification" | "steps" | "origin">>;
+
+/** Serving observation is independent of permission to restart or roll back. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch &&
+        (verification.coreReady ?? verification.readyz) &&
+        verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
 
 const UPDATE_RUN_HEADLINES = new Map<UpdateRunRecord["status"], string>([
   ["succeeded", "✅ OpenClaw updated."],

@@ -4,8 +4,9 @@ import { assert, expect, it, vi, type Mock } from "vitest";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import * as portsInspect from "../../infra/ports-inspect.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { getUpdateRun, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as processExec from "../../process/exec.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
@@ -14,6 +15,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { releaseLaunchedState } from "./update-command-verification.js";
 
 export function registerUnverifiedDefinitionRecoveryTests({
   fixture,
@@ -188,6 +190,202 @@ export function registerUnverifiedDefinitionRecoveryTests({
       expect(report).toContain(reportedDetail);
     },
   );
+  const answered = { serviceRunning: true, pid: 4321, port: 18789, runningVersion: "2026.9.3" };
+  const stopped = { serviceRunning: false };
+  const migrated = "state-migrated-no-rollback";
+  // The native runtime and port listeners as read after readiness failed; the recorded
+  // answer predates them.
+  function useLiveRuntime(
+    live: { status: "running" | "stopped"; pid?: number },
+    listeners: readonly { pid?: number }[] = live.pid ? [{ pid: live.pid }] : [],
+  ) {
+    const resolve = vi.mocked(resolveGatewayService).getMockImplementation();
+    assert(resolve);
+    vi.mocked(resolveGatewayService).mockImplementation((...args) => ({
+      ...resolve(...args),
+      readRuntime: async () => live,
+    }));
+    vi.spyOn(portsInspect, "inspectPortUsage").mockImplementation(async (port) => ({
+      port,
+      status: "busy",
+      listeners: [...listeners],
+      hints: listeners.length ? [] : ["process details are unavailable"],
+    }));
+  }
+  it.each([
+    // The candidate answered as the expected version: it owns the migrated state.
+    { launch: "candidate answered", outcome: "restart-health-failed", seen: [answered] },
+    {
+      launch: "candidate answered with its build",
+      outcome: "restart-health-failed",
+      seen: [{ ...answered, runningBuildId: "candidate-build" }],
+      afterBuild: "candidate-build",
+    },
+    // The update knows the candidate's build, but the answer named none.
+    {
+      launch: "build not answered",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      afterBuild: "candidate-build",
+      risk: true,
+    },
+    // The service manager accepted the restart, but no candidate process ever ran.
+    { launch: "start only queued", outcome: "restart-health-failed", seen: [stopped], risk: true },
+    { launch: "restart command failed", outcome: "failed", seen: [stopped], risk: true },
+    // A match flag left by an earlier observation, without the candidate's own version.
+    {
+      launch: "stale match flag",
+      outcome: "restart-health-failed",
+      seen: [{ ...answered, runningVersion: "2026.9.2", versionMatch: true }],
+      risk: true,
+    },
+    // The candidate answered, then exited while readiness was polled: the recorded answer is
+    // no evidence once the service stopped.
+    {
+      launch: "candidate exited",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      live: { status: "stopped" },
+      risk: true,
+    },
+    // A different process owns the port that answered; the managed PID never did.
+    {
+      launch: "listener not owned",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      listeners: [{ pid: 7777 }],
+      risk: true,
+    },
+    // The managed process owns one bind address, another process owns a second one.
+    {
+      launch: "listener shared",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      listeners: [{ pid: 4321 }, { pid: 7777 }],
+      risk: true,
+    },
+    // The port is busy, but its owner cannot be attributed.
+    {
+      launch: "listener unattributed",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      listeners: [],
+      risk: true,
+    },
+    // Another process replaced the one that answered.
+    {
+      launch: "process replaced",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      live: { status: "running", pid: 9999 },
+      risk: true,
+    },
+    // The port answered as the candidate, but no service process was identified, including
+    // after the update's own Gateway recorded its PID (Gateway-triggered updates do).
+    {
+      launch: "no service PID",
+      outcome: "restart-health-failed",
+      seen: [
+        { serviceRunning: true, pid: 1234, runningVersion: "2026.9.1" },
+        { serviceRunning: true, pid: undefined, runningVersion: "2026.9.3" },
+      ],
+      risk: true,
+    },
+    // Same version, different build: not the candidate that migrated the state.
+    {
+      launch: "build mismatch",
+      outcome: "restart-health-failed",
+      seen: [{ ...answered, versionMatch: false }],
+      risk: true,
+    },
+    // An unchanged or unknown version cannot tell the candidate from the build it replaced.
+    {
+      launch: "version unchanged",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      before: "2026.9.3",
+      risk: true,
+    },
+    {
+      launch: "previous version unknown",
+      outcome: "restart-health-failed",
+      seen: [answered],
+      before: null,
+      risk: true,
+    },
+  ] as const)(
+    "marks a migrated restart failure at risk only without launch evidence ($launch)",
+    async (row) => {
+      // A retained package transaction makes rollback available, as in a package update.
+      const { params } = await swappedFixture();
+      params.rollbackBlockedReason = migrated;
+      params.result.before = { version: "before" in row ? row.before : "2026.9.1" };
+      params.result.after = {
+        version: "2026.9.3",
+        ...("afterBuild" in row ? { buildId: row.afterBuild } : {}),
+      };
+      const run = params.opts.run!;
+      useLiveRuntime(
+        ("live" in row ? row.live : undefined) ?? { status: "running", pid: 4321 },
+        "listeners" in row ? row.listeners : undefined,
+      );
+      mocks.restart.mockImplementationOnce(async (restart) => {
+        restart.onGatewayStartAttempted?.();
+        for (const seen of row.seen) {
+          recordUpdateRunVerification(run.runId, seen, { env: run.env });
+        }
+        restart.onVerificationFailure?.("readyz-unhealthy");
+        return row.outcome;
+      });
+      const failed = await finish(params);
+      assert(failed instanceof UpdateCommandFailure);
+      const recorded = getUpdateRun(run.runId, { env: run.env });
+      if ("risk" in row) {
+        expect(mocks.rollback).toHaveBeenCalledOnce();
+        expect(failed.result.reason).toBe(migrated);
+        expectRisk(recorded?.verification.recovery, migrated);
+        expect(recorded?.origin.nextAction).toContain("data at risk");
+        return;
+      }
+      // The run still ends unsafe to restart on its own, for the true reason, with no risk.
+      expect(mocks.rollback).not.toHaveBeenCalled();
+      expect(failed.result.reason).toBe("readyz-unhealthy");
+      expect(recorded?.verification.recovery).toEqual(unsafeRecovery());
+      expect(recorded?.verification.rollbackOutcome).toEqual({
+        status: "not-attempted",
+        reason: migrated,
+      });
+      expect(recorded?.origin.nextAction).toContain("openclaw update repair");
+      expect(recorded?.origin.nextAction).not.toContain("data at risk");
+    },
+  );
+  it("keeps the migrated block for a split-root update even when the candidate answered", async () => {
+    const params = fixture();
+    const run = params.opts.run!;
+    recordUpdateRunVerification(run.runId, answered, { env: run.env });
+    useLiveRuntime({ status: "running", pid: 4321 });
+    const released: FinishUpdateParams = { ...params, rollbackBlockedReason: migrated };
+    await expect(
+      releaseLaunchedState(released, "restart-health-failed", params.result),
+    ).resolves.toBe(true);
+    expect(released.rollbackBlockedReason).toBeUndefined();
+    expect(getUpdateRun(run.runId, { env: run.env })?.verification.rollbackOutcome).toEqual({
+      status: "not-attempted",
+      reason: migrated,
+    });
+    const splitRoot: FinishUpdateParams = {
+      ...params,
+      rollbackBlockedReason: migrated,
+      // Only its presence selects A's original-service compensation.
+      originalManagedServiceRuntime: {} as NonNullable<
+        FinishUpdateParams["originalManagedServiceRuntime"]
+      >,
+    };
+    await expect(
+      releaseLaunchedState(splitRoot, "restart-health-failed", params.result),
+    ).resolves.toBe(false);
+    expect(splitRoot.rollbackBlockedReason).toBe(migrated);
+  });
   it("preserves a named Doctor risk when rollback adds a generic migration refusal", async () => {
     const { params } = await swappedFixture();
     params.rollbackBlockedReason = "state-migrated-no-rollback";

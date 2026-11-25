@@ -289,7 +289,7 @@ pr_read_current_workflow_request "$@" || {
 pr_batch_wrapper_git() {
   node --input-type=module - "$GIT_EXEC" "$@" <<'EOF_WRAPPER_GIT'
 import { spawnSync } from "node:child_process";
-import { fstatSync, lstatSync, readFileSync, readSync, realpathSync } from "node:fs";
+import { fstatSync, lstatSync, readFileSync, readSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const [binary, operation, repository, revision, ...paths] = process.argv.slice(2);
@@ -692,7 +692,7 @@ try {
       const [head, anchor] = rows.slice(index * 2, index * 2 + 2);
       return !oid.test(head) || !oid.test(anchor) || head !== anchor;
     }).join("\n"));
-  } else if (operation === "verify") {
+  } else if (operation === "verify" || operation === "bootstrap-verify") {
     const [directory, ...components] = paths;
     const listing = git(repository, ["ls-tree", "-r", "-z", "--full-tree", revision, "--", ...components]);
     const text = listing.toString("utf8");
@@ -724,6 +724,18 @@ try {
       expected.push(hash);
     }
     if (components.some(path => !names.has(path) && !directories.has(path))) throw new Error("Incomplete anchor components");
+    if (operation === "bootstrap-verify") {
+      const visit = (parent, prefix = "") => {
+        for (const entry of readdirSync(parent, { withFileTypes: true })) {
+          const name = prefix + entry.name;
+          if (entry.isDirectory() && directories.has(name)) visit(join(parent, entry.name), name + "/");
+          else if (!entry.isFile() || !names.has(name) && name !== "source.json") {
+            throw new Error("Unexpected bootstrap entry");
+          }
+        }
+      };
+      visit(directory);
+    }
     // Git's stdin path quoting uses C/octal escapes, not JSON's Unicode escapes.
     const input = [...names].map(path => '"' + join(directory, path).replace(/[\x00-\x1f\x7f\\"]/g, char =>
       char === "\\" || char === '"' ? "\\" + char : "\\" + char.charCodeAt(0).toString(8).padStart(3, "0"),
@@ -937,6 +949,22 @@ pr_prepare_bootstrap() {
     printf '%s' "$record" > "$pr_bootstrap_root/source.json" || return 1
     chmod 400 "$pr_bootstrap_root/source.json" || return 1
     pr_bootstrap_revision="$revision"
+  elif [ ! -e "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" ] &&
+    [ ! -L "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" ]; then
+    # Older parents supplied the complete bootstrap except its new exporter.
+    # Preserve every existing byte; only this authenticated trust-root expansion
+    # may be added before the current child verifies the complete closure.
+    selection=$(pr_batch_wrapper_git bootstrap-source "$canonical_repo_root" \
+      "$pr_bootstrap_root/source.json" "${2:-${PR_WORKFLOW_SOURCE_REVISION:-}}") || return 1
+    IFS=$'\t' read -r revision record <<< "$selection"
+    [ -z "$pr_bootstrap_revision" ] || [ "$revision" = "$pr_bootstrap_revision" ] || return 1
+    pr_batch_wrapper_git bootstrap-owner "$canonical_repo_root" "$anchor" "$$" || return 1
+    pr_batch_wrapper_git bootstrap-verify "$canonical_repo_root" "$revision" \
+      "$pr_bootstrap_root" "${pr_bootstrap_components[@]}" || return 1
+    pr_batch_wrapper_git verify "$canonical_repo_root" "$revision" "$script_parent_dir/.." \
+      scripts/pr-lib/export-tree.py || return 1
+    python3 -I -B "$script_parent_dir/pr-lib/export-tree.py" "$GIT_EXEC" "$canonical_repo_root" \
+      "$revision" "$pr_bootstrap_root" scripts/pr-lib/export-tree.py || return 1
   fi
   pr_verify_bootstrap || {
     echo "Bootstrap helper qualification failed; retaining $anchor." >&2
@@ -1602,8 +1630,9 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin [--current-workflow]]
+  scripts/pr merge-run <PR> [--retain-resources] [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin [--current-workflow]]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
+    --retain-resources requires ordinary immediate squash and verified head-branch retention protection.
     --auto-merge selects pinned immediate squash for CLEAN, auto for BEHIND/BLOCKED (MERGEABLE only).
     OPENCLAW_PR_GATES_REMOTE=github prepare-run defers required CI to this auto-merge handoff.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
@@ -1615,8 +1644,9 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--retain-resources] [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
+    Version-2 resource-retention outcomes reconcile only; recovery never dispatches a successor.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
     a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
@@ -1783,6 +1813,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
+      local retain_resources=false
       local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" observed_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
@@ -1794,6 +1825,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --retain-resources)
+            [ "$retain_resources" = false ] || { usage; exit 2; }
+            retain_resources=true
+            shift
+            ;;
           --current-workflow)
             { [ "$cmd" = merge-recover ] && [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; } ||
               { [ "$cmd" = merge-run ] && [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ]; } || { usage; exit 2; }
@@ -2077,7 +2113,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head" "$retain_resources"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

@@ -1399,12 +1399,10 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
   };
   const changes: string[] = [];
   const backupId = randomUUID();
+  const sharedAuth = resolveSharedAuthStoreOwnership(env).location === "state-db";
   for (const target of changed) {
     assertTargetCurrent(target);
-    const kind =
-      target.agentDir === undefined && resolveSharedAuthStoreOwnership(env).location === "state-db"
-        ? "shared-state"
-        : "agent";
+    const kind = target.agentDir === undefined && sharedAuth ? "shared-state" : "agent";
     const backup = await createVerifiedDatabaseMigrationBackup({
       sourcePath: target.databasePath,
       targetPath: `${target.databasePath}.auth-profile-migration-${backupId}.bak`,
@@ -1433,7 +1431,9 @@ export async function maybeRepairLegacyAuthProfileStores(params: {
       },
     });
     assertTargetCurrent(target);
-    changes.push(`Saved auth profile migration backup: ${shortenHomePath(backup.path)}.`);
+    if (backup) {
+      changes.push(`Saved auth profile migration backup: ${shortenHomePath(backup.path)}.`);
+    }
   }
   const assertSourceCurrent = (
     target: (typeof migrated)[number],

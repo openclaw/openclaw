@@ -251,8 +251,6 @@ const UpdateRunGitActivationSchema = z.object({
   previousBuildId: z.string().min(1).max(96).nullable(),
 });
 
-export type UpdateRunGitActivation = z.infer<typeof UpdateRunGitActivationSchema>;
-
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -270,6 +268,15 @@ export const UpdateRunRecordSchema = z.object({
       .optional(),
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
+    releaseAdmission: z
+      .object({
+        owner: z.literal("candidate"),
+        candidateVersion: text,
+        verdict: z.enum(["admit", "refuse"]),
+        reason: text.optional(),
+        warnings: z.array(z.object({ code: text, message: text })).max(UPDATE_RUN_DIAGNOSTIC_LIMIT),
+      })
+      .optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
     driver: recordedDriver.optional(),
     managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
@@ -297,6 +304,7 @@ export const UpdateRunRecordSchema = z.object({
       })
       .optional(),
     sessionKey: text.optional(),
+    noticeSurface: z.literal("app").optional(),
     deliveryContext: z
       .object({
         channel: text.optional(),

@@ -206,7 +206,7 @@ suite.define(() => {
       // Leaving Activity and returning recreates the dropdown with the persisted non-first value.
       const newAutomation = page.locator(".sidebar-automations__new");
       await newAutomation.click();
-      await page.locator("#cron-name").waitFor({ state: "visible" });
+      await page.locator("#cron-payload-text").waitFor({ state: "visible" });
       await openAutomationActivity(page);
       await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
       expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(

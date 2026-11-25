@@ -53,7 +53,7 @@ export function SidebarAutomations(props: {
   const [revision, setRevision] = createSignal(0);
   onSettled(() =>
     app.gateway.subscribeEvents((event) => {
-      if (event.event === "cron" || isCronInventoryInvalidation(event, app.gateway.snapshot)) {
+      if (event.event === "cron" || isCronInventoryInvalidation(event)) {
         setRevision((value) => value + 1);
       }
     }),
@@ -238,7 +238,9 @@ export function SidebarAutomations(props: {
           open={activeOpen()}
           onToggle={() => setActiveOpen(!activeOpen())}
         >
-          <For each={activeJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={activeJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
       <Show when={pausedJobs().length > 0}>
@@ -248,7 +250,9 @@ export function SidebarAutomations(props: {
           open={pausedOpen() || automationsFilter().status === "paused"}
           onToggle={() => setPausedOpen(!pausedOpen())}
         >
-          <For each={pausedJobs()}>{(job) => <Row job={job} />}</For>
+          <For each={pausedJobs()} keyed={(job) => job.id}>
+            {(job) => <Row job={job()} />}
+          </For>
         </SidebarListGroup>
       </Show>
     </nav>

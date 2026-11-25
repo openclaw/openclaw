@@ -63,6 +63,7 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
  */
 export function SessionRailComposer(props: {
   sessionKey: string;
+  agentId?: string | null;
   companion: ChatSessionCompanionThread;
   modelControls?: ChatModelControlsProps;
   client: GatewayBrowserClient | null;
@@ -108,6 +109,24 @@ export function SessionRailComposer(props: {
       }
     };
   });
+  const pendingAskId = () => props.companion.turns.find((turn) => turn.status === "pending")?.askId;
+  const stop = async () => {
+    const askId = pendingAskId();
+    if (!props.client || !askId) {
+      return;
+    }
+    try {
+      await props.client.request("sessions.companion.reset", {
+        sessionKey: props.sessionKey,
+        ...(props.agentId ? { agentId: props.agentId } : {}),
+        cancelAskId: askId,
+      });
+    } catch {
+      if (pendingAskId() === askId) {
+        showToast({ severity: "error", message: t("chat.rail.askStopFailed") });
+      }
+    }
+  };
   const dictationActive = createMemo(() => dictation.read().active);
   // Dictation admission reads these inputs synchronously; a changed input re-prepares it.
   const dictationRevision = createMemo(() => ({
@@ -300,19 +319,35 @@ export function SessionRailComposer(props: {
                 renderRevision={dictationRevision()}
               />
             </Show>
-            <Show when={!dictationActive()}>
+            <Show
+              when={pendingAskId() && props.client}
+              fallback={
+                <Show when={!dictationActive()}>
+                  <button
+                    class="chat-send-btn"
+                    type="submit"
+                    aria-label={t("chat.rail.askSubmit")}
+                    disabled={
+                      !props.connected ||
+                      props.pending ||
+                      Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
+                      !sessionRailQuestion(props.companion)
+                    }
+                  >
+                    <Icon name="arrowUp" />
+                  </button>
+                </Show>
+              }
+            >
               <button
-                class="chat-send-btn"
-                type="submit"
-                aria-label={t("chat.rail.askSubmit")}
-                disabled={
-                  !props.connected ||
-                  props.pending ||
-                  Boolean(props.attachmentProps.attachmentReads?.pendingReads) ||
-                  !sessionRailQuestion(props.companion)
-                }
+                class="chat-send-btn chat-send-btn--stop"
+                type="button"
+                aria-label={t("chat.rail.askStop")}
+                title={t("chat.rail.askStop")}
+                disabled={!props.connected}
+                onClick={() => void stop()}
               >
-                <Icon name="arrowUp" />
+                <Icon name="stop" />
               </button>
             </Show>
           </div>

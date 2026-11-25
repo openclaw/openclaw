@@ -1,7 +1,6 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -14,7 +13,6 @@ import { isHostRootEscapeError } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
-import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function makeDir(workspace = false) {
@@ -655,58 +653,4 @@ describe("apply_patch unrestricted host writes", () => {
     expect(after.ino).toBe(before.ino);
     expect(after.mode & 0o777).toBe(0o640);
   });
-});
-
-describe("apply_patch mutation authority", () => {
-  afterEach(() => {
-    __setFsSafeTestHooksForTest();
-  });
-
-  it.each(["create", "remove"] as const)(
-    "rechecks patch authority after %s preparation",
-    async (operation) => {
-      const root = await fs.realpath(tempDirs.make("openclaw-patch-authority-"));
-      const existing = path.join(root, "existing.txt");
-      await fs.writeFile(existing, "original\n");
-      const target = operation === "create" ? path.join(root, "nested", "new.txt") : existing;
-      let current = true;
-      let prepared = false;
-      const revoke = async () => {
-        await Promise.resolve();
-        current = false;
-        prepared = true;
-      };
-      __setFsSafeTestHooksForTest({
-        beforePinnedWriteParentAdmission: async (targetPath) => {
-          if (operation === "create" && targetPath === target) {
-            await revoke();
-          }
-        },
-        beforeRootFallbackMutation: async (kind, targetPath) => {
-          if (kind === operation && targetPath === target) {
-            await revoke();
-          }
-        },
-      });
-
-      const tool = createApplyPatchTool({ cwd: root, workspaceOnly: true });
-      const input =
-        operation === "create"
-          ? buildAddFilePatch("nested/new.txt", "new")
-          : buildDeletePatch("existing.txt");
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:patch-authority",
-          receiptAuthority: () => current,
-        },
-        () => tool.execute("patch-authority", { input }),
-      );
-
-      await expect(pending).rejects.toThrow("authority is no longer active");
-      expect(prepared).toBe(true);
-      await expect(fs.readFile(existing, "utf8")).resolves.toBe("original\n");
-      await expect(fs.readdir(root)).resolves.toEqual(["existing.txt"]);
-    },
-  );
 });

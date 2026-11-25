@@ -881,7 +881,7 @@ describe("sessions view at phone width", () => {
     expectTexts(".session-list-cell__title", ["Alpha", "Beta"]);
     expectTexts(".session-list-cell__key", ["agent:main:alpha", "agent:main:beta"]);
     const search = getInput(".sessions-search input");
-    expect(search?.placeholder).toBe("Search sessions");
+    expect(search?.placeholder).toBe("Search sessions…");
     search!.value = "alp";
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("alp");

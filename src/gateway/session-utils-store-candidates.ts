@@ -132,7 +132,7 @@ export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStor
   const cfg = sessionStoreRoutingConfig(params.routing);
   return withAgentRosterFactsBatch(cfg, () => {
     const registered = params.registeredDatabases.filter(
-      (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+      (entry) => entry.schemaVersion >= OPENCLAW_AGENT_SCHEMA_VERSION,
     );
     const agentIds = new Set([
       ...listConfiguredSessionStoreAgentIds(cfg),

@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   captureDiagnosticToolExecutionAwaiting,
   recordDiagnosticToolExecutionDeadline,
@@ -41,10 +40,6 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
 import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
@@ -225,6 +220,7 @@ export async function runExecProcess({
   githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
+  workerMemoryBoundary?: "sandbox";
   containerWorkdir?: string | null;
   usePty: boolean;
   warnings: string[];
@@ -267,9 +263,8 @@ export async function runExecProcess({
     requestSignal && initialStartupSignal
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
-  let assertSourceActive: SessionSourceAssertion | undefined =
-    captureAgentToolSourceExecutionGuard(startupSignal);
-  let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  startupSignal?.throwIfAborted();
+  const operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
@@ -445,7 +440,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome, opts.warnings);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -564,73 +559,68 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const spawn = (input: SpawnInput) =>
-    runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
-      const assertSourceCurrent = assertSourceActive;
-      const assertOperatorCurrent = operatorAuthority?.assertCurrent;
-      const assertRuntimeCurrent = assertSandboxCurrent;
-      const assertHostPolicyCurrent = assertPolicyCurrent;
-      const assertCurrent = () => {
-        assertSourceCurrent?.();
-        assertOperatorCurrent?.();
-        assertRuntimeCurrent?.();
-      };
-      // Source authority covers construction; approval policy ends at native launch.
-      assertCurrent();
-      assertHostPolicyCurrent?.();
-      if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
-        throw new Error(
-          "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+  const spawn = async (input: SpawnInput) => {
+    const assertRuntimeCurrent = assertSandboxCurrent;
+    const assertHostPolicyCurrent = assertPolicyCurrent;
+    const assertCurrent = () => {
+      startupSignal?.throwIfAborted();
+      operatorSignal?.throwIfAborted();
+      assertRuntimeCurrent?.();
+    };
+    // Source authority covers construction; approval policy ends at native launch.
+    assertCurrent();
+    assertHostPolicyCurrent?.();
+    if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
+      throw new Error(
+        "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+      );
+    }
+    const grant = opts.secretEgressBindings
+      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
+      : undefined;
+    secretEgressGrant = grant;
+    try {
+      if (opts.durable) {
+        const { startDurableExecProcess } = await import("./bash-process-durable.js");
+        return await startDurableExecProcess(
+          session,
+          {
+            ...input,
+            env: resolveExecLaunchEnv(input.env, false),
+            assertCurrent,
+            beforeSpawn: assertHostPolicyCurrent,
+            initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+          },
+          opts.durable,
         );
       }
-      const grant = opts.secretEgressBindings
-        ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
-        : undefined;
-      secretEgressGrant = grant;
-      try {
-        if (opts.durable) {
-          const { startDurableExecProcess } = await import("./bash-process-durable.js");
-          return await startDurableExecProcess(
-            session,
-            {
-              ...input,
-              env: resolveExecLaunchEnv(input.env, false),
-              assertCurrent,
-              beforeSpawn: assertHostPolicyCurrent,
-              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+      return await withChildProcessOperation("agent.exec", () =>
+        withoutGatewayToolCallerIdentity(() =>
+          supervisor.spawn({
+            ...input,
+            env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
+            onCancel: () => {
+              beginSandboxTermination();
+              grant?.revoke();
             },
-            opts.durable,
-          );
-        }
-        return await withChildProcessOperation("agent.exec", () =>
-          withoutGatewayToolCallerIdentity(() =>
-            supervisor.spawn({
-              ...input,
-              env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
-              onCancel: () => {
-                beginSandboxTermination();
-                grant?.revoke();
-              },
-              assertCurrent,
-              ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
-              beforeSpawn: assertHostPolicyCurrent,
-              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
-            }),
-          ),
-        );
-      } catch (error) {
-        grant?.revoke();
-        throw error;
-      }
-    });
+            assertCurrent,
+            ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
+            beforeSpawn: assertHostPolicyCurrent,
+            initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+          }),
+        ),
+      );
+    } catch (error) {
+      grant?.revoke();
+      throw error;
+    }
+  };
 
   // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
   if (!opts.sandbox && !opts.durable) {
     session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
   }
   try {
-    assertSourceActive?.();
-    operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
@@ -643,11 +633,13 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
+      workerMemoryBoundary: opts.workerMemoryBoundary,
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
-    await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+    startupSignal?.throwIfAborted();
+    await launchLifecycle.prepare(beforeSpawn);
     if (spawnSpec.mode === "pty") {
       try {
         managedRun = await spawn({
@@ -661,14 +653,14 @@ export async function runExecProcess({
           throw err;
         }
         launchLifecycle.release("retry");
-        assertSourceActive?.();
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
         );
         opts.warnings.push(warning);
         usingPty = false;
-        await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+        await launchLifecycle.prepare(beforeSpawn);
       }
     }
     if (!managedRun) {
@@ -700,8 +692,6 @@ export async function runExecProcess({
   } finally {
     launchLifecycle.dispose();
     assertPolicyCurrent = undefined;
-    assertSourceActive = undefined;
-    operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
     prepareSandboxCurrent = undefined;
   }

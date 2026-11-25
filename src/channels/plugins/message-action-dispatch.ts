@@ -3,6 +3,7 @@ import type { MessageActionAuthorization } from "../../gateway/message-action-tu
 import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { enforceMessageActionAllowlist } from "../../infra/outbound/outbound-policy.js";
+import { stampAgentControls } from "../../interactive/agent-control.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-normalize.js";
@@ -337,7 +338,9 @@ function prepareMessageActionReadContext(
           assertDashboardReadCurrent?.();
           scheduledAccess?.assertCurrent();
           if (!authority?.()) {
-            throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
+            throw new Error(
+              `Plugin ${ctx.channel} was reloaded during the read. Retry the action.`,
+            );
           }
         }
       : undefined;
@@ -360,7 +363,9 @@ function prepareMessageActionReadContext(
           ? undefined
           : resolveChannelPluginRegistration(ctx.channel, { loadedOnly: true });
       if (current?.plugin !== registration.plugin || current.origin !== registration.origin) {
-        throw new Error(`Plugin ${ctx.channel} alias authority is no longer active.`);
+        throw new Error(
+          `Plugin ${ctx.channel} was reloaded during alias resolution. Retry the action.`,
+        );
       }
     },
   };
@@ -587,8 +592,10 @@ export function shouldDeferExternalMessageActionTargetResolution(
  * Runs a channel message action if the target plugin supports it.
  */
 export async function dispatchChannelMessageAction(
-  ctx: ChannelMessageActionDispatchContext,
+  dispatchCtx: ChannelMessageActionDispatchContext,
 ): Promise<AgentToolResult<unknown> | null> {
+  // Message-action controls leave core for a plugin here (runner or direct Gateway call).
+  const ctx = { ...dispatchCtx, params: stampAgentControls(dispatchCtx.params) };
   const prepared = prepareMessageActionReadContext(ctx);
   if (!prepared) {
     return null;
@@ -671,7 +678,7 @@ export async function dispatchChannelMessageAction(
   const assertCurrent = () => {
     if (!open) {
       throw new Error(
-        `Scheduled ${context.channel}:${context.action} invocation is no longer active.`,
+        `Scheduled ${context.channel}:${context.action} invocation ended. Retry the action.`,
       );
     }
     context.assertDirectAdapterHandoff?.();

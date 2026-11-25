@@ -48,8 +48,8 @@ function resolveMessageToolAvailability(params: {
   ].map((byProvider) =>
     resolveProviderToolPolicy({
       byProvider,
-      modelProvider: modelRef.provider,
-      modelId: modelRef.model,
+      modelProvider: modelRef?.provider,
+      modelId: modelRef?.model,
     }),
   );
   const profilePolicy = (global?: ToolPolicyConfig, agent?: ToolPolicyConfig) => {
@@ -438,8 +438,8 @@ export async function collectDoctorPreviewNotes(params: {
         configuredEntries: agentConfiguredEntries,
       }),
     );
-    const modelProvider = modelRef.provider;
-    const modelId = modelRef.model;
+    const modelProvider = modelRef?.provider;
+    const modelId = modelRef?.model;
     const inheritedByProvider = asOptionalRecord(globalTools?.byProvider);
     if (inheritedByProvider && ownAgentConfiguredEntries.length > 0) {
       const overridingByProvider = asOptionalRecord(agentTools?.byProvider);

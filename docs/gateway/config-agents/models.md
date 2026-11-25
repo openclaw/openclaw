@@ -17,11 +17,11 @@ title: "Configuration — agent models"
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.7": { alias: "minimax" },
+        "minimax/MiniMax-M3": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.7"],
+        fallbacks: ["minimax/MiniMax-M3"],
       },
       utilityModel: {
         primary: "openai/gpt-5.4-mini",
@@ -34,7 +34,7 @@ title: "Configuration — agent models"
       mediaModels: {
         image: {
           primary: "openai/gpt-image-2",
-          fallbacks: ["google/gemini-3.1-flash-image"],
+          fallbacks: ["google/gemini-nano-banana-2.1"],
         },
         video: {
           primary: "qwen/wan2.6-t2v",
@@ -118,7 +118,7 @@ Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-h
 - `toolProgressDetail`: detail mode for `/verbose` tool summaries and progress-draft tool lines. Values: `"explain"` (default, compact human labels) or `"raw"` (append raw command/detail when available). Per-agent `agents.entries.*.toolProgressDetail` overrides this default.
 - `reasoningDefault`: default reasoning visibility for agents. Values: `"off"`, `"on"`, `"stream"`. Per-agent `agents.entries.*.reasoningDefault` overrides this default. Configured reasoning defaults are only applied for owners, authorized senders, or operator-admin gateway contexts when no per-message or session reasoning override is set.
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
-- `model.primary`: format `provider/model` (e.g. `openai/gpt-6-astra` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
+- `model.primary`: format `provider/model` (e.g. `openai/gpt-6-astra` for Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the `openai` provider (deprecated compatibility behavior, so prefer explicit `provider/model`). With no primary, OpenClaw uses the first configured provider/model; if no provider lists a model, the agent has no model and turns ask you to choose one (see [No model configured](/concepts/models#no-model-configured)).
 - To cap active input for one model, set `models.providers.<provider>.models[].contextTokens`; use `contextWindow` on the same entry for its native window. See [OpenAI context window defaults](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
 - `models`: configured aliases and per-model settings. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `promptCacheTtl`, `context1m`, `anthropicServerCompaction`, `anthropicCompactThreshold`, `responsesServerCompaction`, `responsesCompactThreshold`, OpenRouter `provider` routing, `chat_template_kwargs`, `extra_body`/`extraBody`). Adding entries does not restrict model overrides.
   - Use `provider/*` entries such as `"openai/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
@@ -127,8 +127,8 @@ Leaving `agents.defaults.timeoutSeconds` unset gives each model attempt the 48-h
   - Safe metadata edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing entries unless you pass `--replace`.
 - `modelPolicy.allow`: explicit override allowlist. Accepts aliases, exact `provider/model` refs, and trailing prefix wildcards such as `openai/*` or `clawrouter/anthropic/*`. Omit it or use `[]` to allow any model. `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent; an explicit empty list opts that agent into allow-any.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
-  - For direct Anthropic models using API-key auth, server-side compaction is enabled automatically on the models Anthropic documents for threshold compaction. Its default trigger sits below local preflight compaction, so Anthropic compacts first; an explicit `params.anthropicServerCompaction: true` also delays the outer pre-run compaction check to its trigger, though checkpoint safety guards can still compact locally first. Set `params.anthropicServerCompaction: false` to disable it, or `true` to opt in another direct Claude model. Use `params.anthropicCompactThreshold` to override the input-token trigger; the default is `max(50000, floor(budget * 0.7))`, where the budget is `contextTokens` when set and `contextWindow` otherwise, and lower configured values clamp to `50000`. OAuth/subscription and non-direct endpoints are excluded. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
-  - For store-capable direct OpenAI Responses models, server-side compaction is enabled automatically and the same effective threshold delays local preflight compaction. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the default of 70% of the resolved context window (80,000 when unavailable). ChatGPT OAuth, custom proxies, and routes with `compat.supportsStore: false` do not enable this path. See [OpenAI server-side compaction](/providers/openai/advanced#advanced-configuration).
+  - For direct Anthropic models using API-key auth, server-side compaction is enabled automatically on the models Anthropic documents for threshold compaction. Its default trigger equals the client compaction trigger; an explicit `params.anthropicServerCompaction: true` also delays the outer pre-run compaction check to its trigger, though checkpoint safety guards can still compact locally first. Set `params.anthropicServerCompaction: false` to disable it, or `true` to opt in another direct Claude model. Use `params.anthropicCompactThreshold` to override the input-token trigger; the default is `max(50000, floor(budget * 0.85))`, where the budget is `contextTokens` when set and `contextWindow` otherwise, and lower configured values clamp to `50000`. OAuth/subscription and non-direct endpoints are excluded. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
+  - For store-capable direct OpenAI Responses models, server-side compaction is enabled automatically and the same effective threshold delays local preflight compaction. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the default of 85% of the resolved context window (80,000 when unavailable). ChatGPT OAuth, custom proxies, and routes with `compat.supportsStore: false` do not enable this path. See [OpenAI server-side compaction](/providers/openai/advanced#advanced-configuration).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base), then `agents.defaults.models["provider/model"].params` (shared per-model), then `agents.entries.*.models["provider/model"].params` (agent-specific per-model), then `agents.entries.*.params` (agent-wide). Later layers override by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - Nucleus sampling accepts `params.topP` or `params.top_p`. If both are present after config merging, `topP` wins; a per-request `topP` overrides either spelling. Google forwards the value on Interactions, GenerateContent, and Vertex routes. Provider-specific sampling restrictions still apply.

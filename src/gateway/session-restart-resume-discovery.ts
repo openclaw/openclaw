@@ -90,8 +90,7 @@ async function prepareRestartStore(
         if (
           child.requesterSettleWake ||
           child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress" ||
-          child.delivery?.disposition === "retryable"
+          child.delivery?.status === "in_progress"
         ) {
           return true;
         }

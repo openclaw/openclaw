@@ -174,29 +174,26 @@ describe("OpenAI subscription models list and run without a release", () => {
   afterEach(() => {
     clearLiveCatalogCacheForTests();
     fetchWithSsrFGuard.mockReset();
+    vi.unstubAllEnvs();
   });
 
-  it("lists a model gated at the newest published Codex, and OpenClaw turns pass that gate", async () => {
+  it("lists with the Responses version, and OpenClaw turns pass the model gate", async () => {
     clearLiveCatalogCacheForTests();
-    const newestCodex = "0.999.0";
+    vi.stubEnv("OPENCLAW_VERSION", "2026.11.5");
+    const minimumCodex = "0.999.0";
     const listedAs: string[] = [];
     fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
       const target = new URL(url);
-      const body =
-        target.hostname === "registry.npmjs.org"
-          ? { version: newestCodex }
-          : (() => {
-              const clientVersion = target.searchParams.get("client_version") ?? "0.0.0";
-              listedAs.push(clientVersion);
-              const gated = {
-                slug: PROBE_MODEL_ID,
-                visibility: "list",
-                minimal_client_version: newestCodex,
-              };
-              return {
-                models: compareReleaseVersions(clientVersion, newestCodex) >= 0 ? [gated] : [],
-              };
-            })();
+      const clientVersion = target.searchParams.get("client_version") ?? "0.0.0";
+      listedAs.push(clientVersion);
+      const gated = {
+        slug: PROBE_MODEL_ID,
+        visibility: "list",
+        minimal_client_version: minimumCodex,
+      };
+      const body = {
+        models: compareReleaseVersions(clientVersion, minimumCodex) >= 0 ? [gated] : [],
+      };
       return { response: Response.json(body), finalUrl: url, release: async () => {} };
     });
     const { default: plugin } = (await import(
@@ -223,14 +220,12 @@ describe("OpenAI subscription models list and run without a release", () => {
     ].flatMap((entry) => entry?.models ?? []);
 
     expect(published.map((model) => model.id)).toContain(PROBE_MODEL_ID);
-    expect(listedAs).toEqual([newestCodex]);
+    expect(listedAs).toEqual(["2026.11.5"]);
     const turnVersion = resolveProviderRequestPolicy({
       provider: "openai",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     }).attributionHeaders?.version;
-    expect(turnVersion, "OpenClaw-harness turns must send a version header").toEqual(
-      expect.any(String),
-    );
-    expect(compareReleaseVersions(turnVersion!, listedAs[0]!)).toBeGreaterThanOrEqual(0);
+    expect(turnVersion).toBe(listedAs[0]);
+    expect(compareReleaseVersions(turnVersion!, minimumCodex)).toBeGreaterThanOrEqual(0);
   });
 });

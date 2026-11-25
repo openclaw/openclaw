@@ -33,7 +33,7 @@ operator steering. Do not preserve superseded scope.
 - Code SHA: `<regular release full sha | not applicable>`
 - integrated prepush: `<passing Code SHA + pinned comparison base | pending>`
 - Candidate C: `<exact qualification target sha>`
-- Qualification Q: `<C by default | explicit reviewed main-ancestor Q | original historical Q>`
+- Qualification Q: `<C by default | assessed executable Q | authorized Q-ledger-only descendant | original historical Q>`
 - Admission/verifier/publisher P: `<independent trusted full sha and ref>`
 - Qualification admission: `<P run/attempt and immutable descriptor | historical route>`
 - Retained request: `<private request path; original semantics preserved>`
@@ -56,7 +56,7 @@ operator steering. Do not preserve superseded scope.
 ## Active evidence
 
 - Full Release Validation parent: `<run id / attempt / URL or none>`
-- applied release-tooling waivers: `<none | pinned P, exact version/role/job and reason; raw failure retained>`
+- applied release-tooling waivers: `<none | pinned Q ledger and evaluator P, exact version/role/job and reason; original receipt/run/attempt and raw failure retained>`
 - npm preflight: `<run id / URL or none>`
 - qualified npm/OCI descriptors: `<exact producer run/attempt and artifact identities>`
 - candidate acceptance: `<green untagged-SHA evidence | pending>`
@@ -130,8 +130,9 @@ reference for commands rather than redispatching the release parent.
   its evidence. An untouched test or passing replay alone does not prove a
   flake or a fix. A flake gets at most two recorded reruns on the same Release
   SHA and a fix-in-parallel issue or PR on `main`; never re-cut for it. A deliberate
-  [tooling-code waiver](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
-  requires successful FRV validation under its pinned P, with C/Q unchanged
+  [Q-owned grant](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+  requires a new pinned Q request/admission and successful FRV validation, with C
+  unchanged and eligible raw receipts reevaluated under Q’s grants
 - regular changelog-only failure before tagging: change the selected release entry and only
   its permitted record/index paths, freeze a new Release SHA, and reuse green
   Code SHA evidence after `split-changelog-release-v1` delta proof
@@ -143,7 +144,7 @@ reference for commands rather than redispatching the release parent.
   urgent release-first forward-ports owned in the handoff. Record the
   source/invariant and replace all exact-head evidence
 - qualification harness/contract failure: preserve C for a tooling-only repair,
-  select an exact reviewed main-ancestor Q through a new admitted request and
+  select an exact reviewed exact Q through a new admitted request and
   successful parent, and replace affected evidence; never retarget the old
   request, relabel the failed FRV, or silently substitute moving-main checks
 - P-only admission/verifier/publisher failure: keep C/Q and original artifacts,

@@ -21,6 +21,7 @@ it.for([
   "nested-message",
   "nested-retired-message",
   "nested-lost",
+  "lost",
   "stale-requester",
   "current-completed",
   "retired-completed",
@@ -83,6 +84,7 @@ it.for([
       "retired-message",
       "nested-retired-message",
       "stopped",
+      "lost",
       "interrupted",
     ].includes(source);
     const completed = source === "current-completed" || source === "retired-completed";
@@ -157,6 +159,9 @@ it.for([
     try {
       await persistRunningSessionsForRestart({ cfg });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+      if (source === "lost") {
+        subagentRuns.delete(childRunId);
+      }
       for (let boot = 0; boot < 2; boot++) {
         const warn = vi.fn();
         await resumeMarkedSessions({
@@ -166,27 +171,36 @@ it.for([
         });
         const parked = warn.mock.calls.filter(([message]) => message.includes("(yield-waiting)"));
         expect(parked).toEqual(
-          ["message", "nested-message", "current-completed"].includes(source)
+          [
+            "message",
+            "nested-message",
+            "nested-lost",
+            "stale-requester",
+            "current-completed",
+          ].includes(source)
             ? [[expect.stringContaining(target.sessionKey)]]
             : [],
         );
         const restored = (await readSessionEntryReadOnlyInWorker(target))!;
         expect(restored.resumeAfterRestart).toBeUndefined();
         expect(restored.activeWriterRunId).toBe(runId);
-        if (source === "message" || source === "nested-message" || source === "current-completed") {
-          expect(restored.lifecycleRunId).toBe(runId);
-          expect(restored.status).toBeUndefined();
-          expect(restored.endedAt).toBe(120);
-        } else if (recovery) {
+        if (recovery) {
           expect(restored.lifecycleRunId).toBeUndefined();
           expect(restored.status).toBe("killed");
         } else {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("failed");
-          expect(restored.lastRunError).toMatch(/wait|child|restart/i);
+          expect(restored.lifecycleRunId).toBe(runId);
+          expect(restored.status).toBeUndefined();
+          expect(restored.endedAt).toBe(120);
         }
+        expect(restored.lastRunError).toBeUndefined();
       }
       expect(resume).toHaveBeenCalledTimes(recovery ? 1 : 0);
+      if (recovery) {
+        expect(resume.mock.calls[0]?.[1]).toMatchObject({
+          sessionKey: target.sessionKey,
+          source: "restart",
+        });
+      }
     } finally {
       resume.mockRestore();
       subagentRuns.delete(childRunId);

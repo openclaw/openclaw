@@ -91,6 +91,7 @@ export async function prepareExecApprovalRegistration<TPayload>(params: {
     kind: params.kind,
     presentation: params.presentation,
     requester: {
+      profileId: record.requestedByProfileId,
       deviceId: record.requestedByDeviceId,
       clientId: record.requestedByClientId,
       deviceTokenAuth: record.requestedByDeviceTokenAuth === true,

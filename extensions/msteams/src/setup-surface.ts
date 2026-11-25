@@ -319,7 +319,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
                 void params.prompter.note(msg);
               },
               note: (msg, title) => params.prompter.note(msg, title),
-              prompt: (msg) => params.prompter.text({ message: msg }),
+              prompt: (request) => params.prompter.text(request),
               progress,
             },
             {

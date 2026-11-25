@@ -222,7 +222,7 @@ describe("gateway chat metadata runtime", () => {
     const harness = createChatMetadataHarness();
 
     await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
-      "prepared chat metadata snapshot is unavailable",
+      "Chat metadata is starting; retry shortly.",
     );
     await harness.runtime.refresh();
     expect(harness.buildProjection).not.toHaveBeenCalled();
@@ -501,17 +501,54 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("reuses the prepared generation for an equivalent config replacement", async () => {
-    const harness = await preparedHarness();
+  test.each([
+    { browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } } },
+    { browser: { headless: true } },
+    { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+    { logging: { level: "debug" as const } },
+  ])("retains prepared metadata through presentation writes: %j", async (change) => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    await harness.refresh();
+    onChanged.mockClear();
     const first = await harness.read();
 
-    harness.setConfig({ agents: { entries: { main: {} } } });
+    harness.setConfig({
+      agents: { entries: { main: {} } },
+      ...change,
+    });
     await harness.refresh();
     const second = await harness.read();
 
     expect(second).toEqual(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  test("refreshes command eligibility through skills publication without announcing changed models", async () => {
+    const onChanged = vi.fn();
+    const harness = createChatMetadataHarness(undefined, { onChanged });
+    await harness.refresh();
+    const first = await harness.read();
+    onChanged.mockClear();
+    harness.setConfig({
+      agents: { entries: { main: {} } },
+      commands: { text: false },
+      skills: { allowBundled: ["fixture"] },
+      browser: { enabled: false },
+    });
+    // The config reload owner always publishes completed skill eligibility.
+    harness.setSkillsVersion(2);
+    await harness.refresh();
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+      agentId: "main",
+      modelCatalogChanged: false,
+      authChanged: false,
+    });
+    const next = await harness.read();
+    expect(next.commands).not.toEqual(first.commands);
+    expect(next.models).toEqual(first.models);
   });
 
   test("rebuilds after an auth store publishes a newer revision", async () => {

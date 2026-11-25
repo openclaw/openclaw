@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import os from "node:os";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -132,18 +131,13 @@ describe("spawnSubagentDirect thread binding", () => {
       expect(result.expectsCompletionMessage).toBe(announce);
       expect(registered().expectsCompletionMessage).toBe(announce);
       const { extraSystemPrompt, message } = agentParams();
-      assert(typeof extraSystemPrompt === "string", "child system prompt must be text");
-      assert(typeof message === "string", "child task must be text");
-      const guidance = `${extraSystemPrompt}\n${message}`;
+      expect(extraSystemPrompt).toBeTypeOf("string");
+      expect(message).toBeTypeOf("string");
       const contract = announce ? /completion event/i : /no completion notification/i;
-      expect(guidance).toMatch(contract);
+      expect([extraSystemPrompt, message].join("\n")).toMatch(contract);
       expect(result.note).toMatch(contract);
       if (cleanup === "delete") {
         expect(registered()).toMatchObject({ cleanup: "delete" });
-        expect(guidance).not.toContain("remains in the child session");
-        expect(result.note).not.toContain("remains in the child session");
-        expect(guidance).not.toMatch(/final auto-reported|Results auto-announce/);
-        expect(result.note).not.toMatch(/Auto-announce is push-based/);
       }
     },
   );

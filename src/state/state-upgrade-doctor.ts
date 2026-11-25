@@ -51,7 +51,15 @@ export const createDoctorChain =
       const code = await new Promise<number | null>((resolve, reject) => {
         const child = spawn(
           process.execPath,
-          [...execArgv, entry, "doctor", "--fix", "--non-interactive"],
+          [
+            ...execArgv,
+            entry,
+            "doctor",
+            "--fix",
+            "--non-interactive",
+            "--state-upgrade-live-state-dir",
+            liveStateDir,
+          ],
           { env: childEnv, stdio: ["ignore", log, log] },
         );
         const timer = setTimeout(() => child.kill("SIGKILL"), CHAIN_TIMEOUT_MS);

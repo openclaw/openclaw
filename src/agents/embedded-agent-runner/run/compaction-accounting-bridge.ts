@@ -1,5 +1,6 @@
 import type { ConversationRecord } from "../../../config/sessions/conversation-registry.types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { PreparedCompactionSource } from "../../../config/sessions/session-compaction-prepared.types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineRuntimeContext } from "../../../context-engine/types.js";
 import type { CompactionRequestConstraints } from "../../sessions/compaction/preparation.types.js";
@@ -40,11 +41,20 @@ export type CompactionAccountingReceipt = {
 export type PreparedCompactionSession = {
   sessionTarget: SessionTranscriptRuntimeTarget;
   entry: InternalSessionEntry;
-  sessionManager: SessionManager;
+  source?: PreparedCompactionSource;
+  memoryTranscript?: CompactionMemoryTranscript;
   primaryConversation?: ConversationRecord;
 };
 
+type CompactionMemoryTranscript = {
+  sessionManager: SessionManager;
+  sessionTarget: SessionTranscriptRuntimeTarget;
+  assertActive: () => void;
+};
+
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
+  /** Host-issued operator authority follows native delegation, never public runtime metadata. */
+  operatorAuthority?: import("../../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** The queued host owns plugin hooks and refresh; native internal events still run. */
   hostOwnsCompactionLifecycle?: boolean;
   /** A precheck can require budget recovery while its user request is still pending. */
@@ -52,11 +62,7 @@ type CompactionAccountingRecorder = CompactionRequestConstraints & {
   preparedSession?: PreparedCompactionSession;
   withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   /** The caller's buffer owns recovery; its portable identity grants no durable access. */
-  memoryTranscript?: {
-    sessionManager: SessionManager;
-    sessionTarget: SessionTranscriptRuntimeTarget;
-    assertActive: () => void;
-  };
+  memoryTranscript?: CompactionMemoryTranscript;
   recordUsage?: (usage: NormalizedUsage) => void;
   recordCompaction?: (receipt: CompactionAccountingReceipt) => void;
   /** Provider facts for a failed compaction; the public engine result carries only its reason. */
@@ -71,6 +77,7 @@ export function attachCompactionAccountingRecorder(
   runtimeContext: ContextEngineRuntimeContext,
   recorder: CompactionAccountingRecorder,
 ): void {
+  recorder.memoryTranscript ??= recorder.preparedSession?.memoryTranscript;
   recorderByRuntimeContext.set(runtimeContext, recorder);
 }
 

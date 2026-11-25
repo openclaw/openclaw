@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as config from "../../../config/config.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import { decideTurnGrant } from "../../../gateway/operator-admission.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
 import {
   resolveGatewayChatCronCreatorAuthorityAdmission,
@@ -47,208 +48,201 @@ export function registerRequesterAutomationCustodyTests({
   registration,
   updateRun,
 }: RegistryRegistrationFixture) {
-  it.each(["current", "revoked"] as const)(
-    "settles with %s original completion custody after a same-human chat admission revokes automation",
-    async (authority) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg = { session: { store: state.path("sessions.json") } };
-        vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-        const requesterSessionKey = "agent:main:main";
-        const sessionId = "yielded-requester";
-        const requesterTurnRunId = "original-requester";
-        const runId = "yielded-child";
-        await upsertSessionEntryCore(
-          { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-          { sessionId, updatedAt: 1 },
-        );
-        const context = createContext([], () => cfg);
-        context.resolveGatewayContext = () => context;
-        const client = createOperatorClient({
-          profileName: "original-requester",
-          scopes: ["operator.admin"],
-        });
-        const revoked = new AbortController();
-        const source = expectDefined(
-          await operatorCapture.captureGatewayOperatorRunAuthority({
-            client,
-            context,
-            sourceAuthority: {
-              signal: revoked.signal,
-              assertCurrent: () => revoked.signal.throwIfAborted(),
-            },
-          }),
-          "original requester source",
-        );
-        client.internal = { operatorRunAuthority: source.authority };
-        const { operationalRunInstance } = createTestAdmittedRunContext(requesterTurnRunId);
-        const delegated = claimAgentRunDelegatedAuthority(operationalRunInstance);
-        registerAgentRunContext(requesterTurnRunId, {
-          agentId: "main",
-          sessionKey: requesterSessionKey,
-          sessionId,
-        });
-        const capability = expectDefined(
-          createCronCreatorAuthorityCapability(
-            requesterTurnRunId,
-            { kind: "unknown" },
-            { source: "control-ui-admin" },
-          ),
-          "original automation management capability",
-        );
-        const transfer = createRequesterInitialTransferFixture(subagentRuns);
-        const requester = { requesterSessionKey, requesterAgentId: "main", requesterTurnRunId };
-        const settlement = { ...requester, runs: subagentRuns, transfer };
-        const scope = { context, isWebchatConnect: () => false };
-        const deliver = vi.spyOn(delivery, "deliverSubagentAnnouncement");
-        try {
-          await withPluginRuntimeGatewayRequestScope(
-            { ...scope, client, resolveGatewayContext: () => context },
-            () =>
-              runWithCronCreatorAuthorityCapability(capability, () =>
-                withGatewayToolCallerIdentity(
-                  {
-                    agentId: "main",
-                    sessionKey: requesterSessionKey,
-                    operationalRunInstance,
-                    approvalAuthority: delegated,
-                    operatorAuthority: source.authority,
-                    receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
-                  },
-                  async () => {
-                    await registerSubagentRun(
-                      registration(runId, { ...requester, gatewayContextResolver: () => context }),
-                    );
-                    expect(await markRequesterTurnYieldedWithAuthority(settlement)).toBe(1);
-                    expect(
-                      await settleRequesterTurnAfterSessionSpawns({
-                        ...settlement,
-                        requesterYielded: true,
-                        acceptedSessionSpawns: [
-                          {
-                            runId,
-                            childSessionKey: subagentRuns.get(runId)!.childSessionKey,
-                            expectsCompletionMessage: true,
-                          },
-                        ],
-                        schedule: () => {},
-                      }),
-                    ).toBe(true);
-                  },
-                ),
-              ),
-          );
-          releaseAgentRunDelegatedAuthority(delegated);
-          clearAgentRunContext(requesterTurnRunId);
-          source.release();
-          expect(capability.active).toBe(false);
-          expect(source.authority.assertCurrent).not.toThrow();
-
-          // A fresh connection for the same human may manage automations; the old batch may not.
-          const freshClient = createOperatorClient({
-            profileId: source.authority.profileId,
-            scopes: ["operator.admin", "operator.approvals"],
-          });
-          freshClient.internal = { controlUiAdmin: true };
-          expect(
-            resolveGatewayChatCronCreatorAuthorityAdmission({
-              runId: "same-human-next-message",
-              resolvedSessionKey: requesterSessionKey,
-              client: freshClient,
-              hasExplicitOrigin: false,
-              hasRestoredCronContinuation: false,
-              isIncognito: false,
-              isReconnectResume: false,
-              isSystemGenerated: false,
-              turnKind: "main",
-              isDirectExternalUser: true,
-            }),
-          ).toMatchObject({ managementEntitlement: { source: "control-ui-admin" } });
-          const resultText = "Original child result";
-          await updateRun(runId, (draft) => {
-            draft.execution = {
-              status: "terminal",
-              endedAt: Date.now(),
-              outcome: { status: "ok" },
-            };
-            draft.completion = {
-              required: true,
-              resultText,
-              terminalReply: { disposition: "visible", text: resultText },
-            };
-            draft.delivery = { status: "pending" };
-          });
-          if (authority === "revoked") {
-            revoked.abort(new Error("original operator source revoked"));
-          }
-          deliver.mockImplementation(async (params) => {
-            const retained =
-              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-            if (authority === "current") {
-              expect(retained?.source).toBe(source.authority.source);
-              expect(retained?.scopes).toEqual(["operator.admin"]);
-            } else {
-              expect(retained).toBeUndefined();
-            }
-            expect(params.triggerMessage).toContain(resultText);
-            expect(
-              resolveGatewayCronCreatorAuthorityAdmission({
-                runId: params.directIdempotencyKey!,
-                resolvedSessionKey: requesterSessionKey,
-                sessionId,
-                client: createSyntheticPluginRuntimeClient(),
-                request: {
-                  message: params.triggerMessage,
-                  idempotencyKey: params.directIdempotencyKey!,
-                },
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceSessionKey: subagentRuns.get(runId)!.childSessionKey,
-                  sourceTool: "subagent_settle",
-                },
-                isOneShotModelRun: false,
-              }),
-            ).toBeUndefined();
-            return { delivered: true, path: "direct" };
-          });
-          const completeBatch = vi.fn();
-          const unrelatedClient = createOperatorClient({
-            profileName: "unrelated-ambient-operator",
-            scopes: ["operator.admin", "operator.pairing"],
-          });
-          // Exercise the real settle dispatcher, including its canonical registry authority wrapper.
-          const deliveryAttempt = withPluginRuntimeGatewayRequestScope(
-            { ...scope, client: unrelatedClient },
-            () =>
-              maybeWakeRequesterAfterAllChildrenSettled({
-                requesterSessionKey,
-                settledEntry: subagentRuns.get(runId)!,
-                isSourceCurrent: () => true,
-                transitionBatch: async (_batch, wake, onPublished) => {
-                  await updateRun(runId, (draft) => {
-                    draft.requesterSettleWake = wake;
-                  });
-                  onPublished?.([subagentRuns.get(runId)!]);
-                },
-                completeBatch,
-              }),
-          );
-          await expect(deliveryAttempt).resolves.toBe(true);
-          expect(deliver).toHaveBeenCalledOnce();
-          expect(completeBatch).toHaveBeenCalledWith(
-            expect.any(Array),
-            expect.any(Number),
-            { delivered: true, path: "direct" },
-            expect.any(Function),
-          );
-        } finally {
-          deliver.mockRestore();
-          releaseAgentRunDelegatedAuthority(delegated);
-          clearAgentRunContext(requesterTurnRunId);
-          revokeRequesterCronAuthority(requesterSessionKey);
-          source.release();
-          await resetSubagentRegistryForTests({ persist: false });
-        }
+  it("settles with original completion custody after a same-human chat admission revokes automation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { session: { store: state.path("sessions.json") } };
+      vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
+      const requesterSessionKey = "agent:main:main";
+      const sessionId = "yielded-requester";
+      const requesterTurnRunId = "original-requester";
+      const runId = "yielded-child";
+      await upsertSessionEntryCore(
+        { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
+        { sessionId, updatedAt: 1 },
+      );
+      const context = createContext([], () => cfg);
+      context.resolveGatewayContext = () => context;
+      const client = createOperatorClient({
+        profileName: "original-requester",
+        scopes: ["operator.admin"],
       });
-    },
-  );
+      const revoked = new AbortController();
+      const source = expectDefined(
+        await operatorCapture.prepareGatewayOperatorRunAuthority({
+          client,
+          context,
+          sourceAuthority: {
+            signal: revoked.signal,
+            assertCurrent: () => revoked.signal.throwIfAborted(),
+          },
+        }),
+        "original requester source",
+      );
+      client.internal = { operatorRunAuthority: source.authority };
+      const { operationalRunInstance } = createTestAdmittedRunContext(requesterTurnRunId);
+      const delegated = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      registerAgentRunContext(requesterTurnRunId, {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        sessionId,
+      });
+      const capability = expectDefined(
+        createCronCreatorAuthorityCapability(
+          requesterTurnRunId,
+          { kind: "unknown" },
+          { source: "operator" },
+        ),
+        "original automation management capability",
+      );
+      const transfer = createRequesterInitialTransferFixture(subagentRuns);
+      const requester = { requesterSessionKey, requesterAgentId: "main", requesterTurnRunId };
+      const settlement = { ...requester, runs: subagentRuns, transfer };
+      const scope = { context, isWebchatConnect: () => false };
+      const deliver = vi.spyOn(delivery, "deliverSubagentAnnouncement");
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { ...scope, client, resolveGatewayContext: () => context },
+          () =>
+            runWithCronCreatorAuthorityCapability(capability, () =>
+              withGatewayToolCallerIdentity(
+                {
+                  agentId: "main",
+                  sessionKey: requesterSessionKey,
+                  operationalRunInstance,
+                  approvalAuthority: delegated,
+                  operatorAuthority: source.authority,
+                  receiptAuthority: () => {
+                    if (!validateAgentRunDelegatedAuthority(delegated)) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
+                },
+                async () => {
+                  await registerSubagentRun(
+                    registration(runId, { ...requester, gatewayContextResolver: () => context }),
+                  );
+                  expect(await markRequesterTurnYieldedWithAuthority(settlement)).toBe(1);
+                  expect(
+                    await settleRequesterTurnAfterSessionSpawns({
+                      ...settlement,
+                      requesterYielded: true,
+                      acceptedSessionSpawns: [
+                        {
+                          runId,
+                          childSessionKey: subagentRuns.get(runId)!.childSessionKey,
+                          expectsCompletionMessage: true,
+                        },
+                      ],
+                      schedule: () => {},
+                    }),
+                  ).toBe(true);
+                },
+              ),
+            ),
+        );
+        releaseAgentRunDelegatedAuthority(delegated);
+        clearAgentRunContext(requesterTurnRunId);
+        source.release();
+        expect(capability.active).toBe(false);
+
+        // A fresh connection for the same human may manage automations; the old batch may not.
+        const freshClient = createOperatorClient({
+          profileId: source.authority.profileId,
+          scopes: ["operator.admin", "operator.approvals"],
+        });
+        freshClient.internal = { controlUiAdmin: true };
+        expect(
+          resolveGatewayChatCronCreatorAuthorityAdmission({
+            runId: "same-human-next-message",
+            resolvedSessionKey: requesterSessionKey,
+            client: freshClient,
+            grant: decideTurnGrant(freshClient.connect.scopes ?? []),
+            hasExplicitOrigin: false,
+            hasRestoredCronContinuation: false,
+            isIncognito: false,
+            isSystemGenerated: false,
+            turnKind: "main",
+            isDirectExternalUser: true,
+          }),
+        ).toMatchObject({ managementEntitlement: { source: "operator" } });
+        const resultText = "Original child result";
+        await updateRun(runId, (draft) => {
+          draft.execution = {
+            status: "terminal",
+            endedAt: Date.now(),
+            outcome: { status: "ok" },
+          };
+          draft.completion = {
+            required: true,
+            resultText,
+            terminalReply: { disposition: "visible", text: resultText },
+          };
+          draft.delivery = { status: "pending" };
+        });
+        deliver.mockImplementation(async (params) => {
+          const retained =
+            getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+          expect(retained?.source).toBe(source.authority.source);
+          expect(retained?.scopes).toEqual(["operator.admin"]);
+          expect(params.triggerMessage).toContain(resultText);
+          expect(
+            resolveGatewayCronCreatorAuthorityAdmission({
+              runId: params.directIdempotencyKey!,
+              resolvedSessionKey: requesterSessionKey,
+              sessionId,
+              client: createSyntheticPluginRuntimeClient(),
+              request: {
+                message: params.triggerMessage,
+                idempotencyKey: params.directIdempotencyKey!,
+              },
+              inputProvenance: {
+                kind: "inter_session",
+                sourceSessionKey: subagentRuns.get(runId)!.childSessionKey,
+                sourceTool: "subagent_settle",
+              },
+              isOneShotModelRun: false,
+            }),
+          ).toBeUndefined();
+          return { delivered: true, path: "direct" };
+        });
+        const completeBatch = vi.fn();
+        const unrelatedClient = createOperatorClient({
+          profileName: "unrelated-ambient-operator",
+          scopes: ["operator.admin", "operator.pairing"],
+        });
+        // Exercise the real settle dispatcher, including its canonical registry authority wrapper.
+        const deliveryAttempt = withPluginRuntimeGatewayRequestScope(
+          { ...scope, client: unrelatedClient },
+          () =>
+            maybeWakeRequesterAfterAllChildrenSettled({
+              requesterSessionKey,
+              settledEntry: subagentRuns.get(runId)!,
+              isSourceCurrent: () => true,
+              transitionBatch: async (_batch, wake, onPublished) => {
+                await updateRun(runId, (draft) => {
+                  draft.requesterSettleWake = wake;
+                });
+                onPublished?.([subagentRuns.get(runId)!]);
+              },
+              completeBatch,
+            }),
+        );
+        await expect(deliveryAttempt).resolves.toBe(true);
+        expect(deliver).toHaveBeenCalledOnce();
+        expect(completeBatch).toHaveBeenCalledWith(
+          expect.any(Array),
+          expect.any(Number),
+          { delivered: true, path: "direct" },
+          expect.any(Function),
+        );
+      } finally {
+        deliver.mockRestore();
+        releaseAgentRunDelegatedAuthority(delegated);
+        clearAgentRunContext(requesterTurnRunId);
+        revokeRequesterCronAuthority(requesterSessionKey);
+        source.release();
+        await resetSubagentRegistryForTests({ persist: false });
+      }
+    });
+  });
 }

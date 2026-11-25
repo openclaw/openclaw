@@ -32,7 +32,9 @@ const ToolMessageSummary = lazy(() => import("./chat-tool-card-row.solid.tsx"), 
   export: "ToolMessageSummary",
 });
 
-type ToolMessageProps = ContentProps & { renderContents: () => JSX.Element };
+type ToolMessageProps = ContentProps & {
+  renderContents: () => JSX.Element;
+};
 
 export function InlineToolCards(props: {
   cards: ToolCard[];

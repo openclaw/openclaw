@@ -50,9 +50,11 @@ Enabling browser control gives the model a real browser. If that profile already
 
 ### Browser SSRF policy (strict by default)
 
-Private/internal destinations stay blocked unless you explicitly opt in.
+Direct navigation to private/internal destinations stays blocked unless you explicitly opt in or configure a destination exception.
 
-- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
+- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so direct navigation to private/internal/special-use destinations stays blocked. Legacy alias `allowPrivateNetwork` still accepted.
+- **Default-mode redirect limitation:** Chrome MCP (`existing-session`) and raw CDP fallback check the requested and final URLs, without inspecting intermediate redirects. A permitted public URL can redirect to a private destination before the final-URL check rejects the result. That rejection cannot undo a request already sent.
+- Explicit strict mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` to require redirect-hop inspection. Chrome MCP refuses `http(s)` navigation and tab opens before dispatch because it cannot provide that inspection; raw CDP fallback likewise refuses network tab creation. Use the managed browser with driver `openclaw` for strict navigation. See [Browser configuration](/tools/browser/configuration#configuration) for the additional strict-mode URL requirements.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
 - `browser.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and any allow rule, including private-network exceptions. `*.example.com` does not block the apex `example.com`; add both to block the entire domain. An empty or absent list adds no denials. `tools.web.fetch.ssrfPolicy.blockedHostnames` provides the same policy for guarded fetches, including redirects.
 - In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.

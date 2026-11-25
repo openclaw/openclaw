@@ -25,6 +25,7 @@ import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js
 import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
+import { readVisibleSessionActivityAt } from "./session-row-transcript-backfill.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 type GatewaySessionLifecycleEventParams = {
@@ -144,6 +145,17 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     matchesProviderReviewWriter(sessionEntry.entry, terminalReview)
       ? terminalReview
       : undefined;
+  // Incognito transcripts stay in the Gateway process; the agent database has no row to read.
+  const visibleActivityAt =
+    phase === "start" || isIncognitoSessionKey(sessionEntry.canonicalKey)
+      ? undefined
+      : await readVisibleSessionActivityAt({
+          agentId: sessionEntry.agentId,
+          storePath: sessionEntry.storePath,
+          sessionKey: sessionEntry.canonicalKey,
+          sessionId: sessionEntry.entry.sessionId,
+          sessionEntry: sessionEntry.entry,
+        });
   let effects: SessionLifecyclePatchEffects | undefined;
   const persisted = await applySessionEntryTargetOperation(
     {
@@ -165,7 +177,6 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           runId: params.event.runId,
           clientRunId: params.clientRunId ?? params.event.clientRunId,
           lifecycleGeneration: params.event.lifecycleGeneration,
-          controlUiVisible: params.event.controlUiVisible,
           contextClaimId: params.event.contextClaimId,
           data: params.event.data,
         },
@@ -175,6 +186,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         lifecycleRevision,
         exactCronRun: parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined,
         gatewayShutdown,
+        visibleActivityAt,
         expectedWriter: params.expectedWriter,
         providerReview: providerReview
           ? {

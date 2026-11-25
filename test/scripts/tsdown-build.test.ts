@@ -392,6 +392,8 @@ describe("resolveTsdownBuildInvocation", () => {
       expect(invocation.args).toEqual(expect.arrayContaining(["--concurrency", "1"]));
       expect(invocation.args.slice(-args.length)).toEqual(args);
       expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+      // Native children (the declaration emitter) read the same frozen, capped budget.
+      expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
     }
   });
 
@@ -598,6 +600,7 @@ describe("resolveTsdownBuildInvocation", () => {
         windowsVerbatimArguments: undefined,
         env: {
           NODE_OPTIONS: "--max-old-space-size=8192",
+          OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "8192",
           npm_execpath: "/unrelated/pnpm.cjs",
           GOGC: "30",
           GOMAXPROCS: "2",
@@ -630,12 +633,13 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("raises a split inherited heap to the build default", () => {
-    expect(
-      resolveTestNodeOptions({
-        ...NO_MEMORY_LIMIT,
-        env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
-      }),
-    ).toBe("--trace-warnings --max-old-space-size=12288");
+    const { env } = resolveTsdownBuildInvocation({
+      ...NO_MEMORY_LIMIT,
+      nodeExecPath: "/usr/bin/node",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+    }).options;
+    expect(env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=12288");
+    expect(env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("12288");
   });
 
   it("deducts competing cgroup usage while crediting inactive files and wrapper RSS", () => {

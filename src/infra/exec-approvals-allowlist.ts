@@ -803,10 +803,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
   segment: ExecCommandSegment;
   cwd?: string;
 }): string | undefined {
-  if (!isShellWrapperSegment(params.segment)) {
-    return undefined;
-  }
-  if (isOpaquePosixShellWrapperSegment(params.segment)) {
+  if (!isShellWrapperSegment(params.segment) || isOpaquePosixShellWrapperSegment(params.segment)) {
     return undefined;
   }
 
@@ -842,11 +839,14 @@ function resolveShellWrapperScriptCandidatePath(params: {
     if (hasDisqualifyingShellWrapperScriptOption(token)) {
       return undefined;
     }
-    if (SHELL_WRAPPER_OPTIONS_WITH_VALUE.has(token)) {
-      idx += 2;
-      continue;
+    // fish runs `+x` as the script and `-f`/`-o` take attached values; do not model its options.
+    if (wrapperName === "fish" && (token.startsWith("-") || token.startsWith("+"))) {
+      return undefined;
     }
-    if (isPowerShell && POWERSHELL_OPTIONS_WITH_VALUE_RE.test(token)) {
+    if (
+      isPowerShell &&
+      (SHELL_WRAPPER_OPTIONS_WITH_VALUE.has(token) || POWERSHELL_OPTIONS_WITH_VALUE_RE.test(token))
+    ) {
       idx += 2;
       continue;
     }
@@ -854,7 +854,7 @@ function resolveShellWrapperScriptCandidatePath(params: {
       !isPowerShell &&
       (token.startsWith("-") || (supportsPosixPlusOptions && token.startsWith("+")))
     ) {
-      idx += advancePosixInlineOptionScan(token);
+      idx += advancePosixInlineOptionScan(token, wrapperName);
       continue;
     }
     if (token.startsWith("-") || token.startsWith("+")) {

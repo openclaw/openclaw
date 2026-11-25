@@ -5,7 +5,7 @@ import { runStartupTasks, type StartupTask } from "../../../gateway/startup-task
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import type { HookHandler } from "../../hooks.js";
-import { isGatewayStartupEvent } from "../../internal-hooks.js";
+import { isGatewayStartupEvent } from "../../internal-hook-types.js";
 
 const log = createSubsystemLogger("hooks/boot-md");
 

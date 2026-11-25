@@ -313,6 +313,9 @@ export const FIELD_LABELS: Record<string, string> = {
     "OpenAI Chat Completions Image Max Redirects",
   "gateway.http.endpoints.chatCompletions.images.timeoutMs":
     "OpenAI Chat Completions Image Timeout (ms)",
+  "gateway.resources": "Gateway Resources",
+  "gateway.resources.profile": "Resource Profile",
+  "gateway.resources.memoryBudgetMiB": "Worker Memory Budget (MiB)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
@@ -667,6 +670,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.allowMetrics": "Allow Plugin Metrics",
+  "plugins.entries.*.memoryBackend": "Memory Backend",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
   "plugins.entries.*.hooks.allowPromptModification": "Modify prompts",

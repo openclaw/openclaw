@@ -288,6 +288,16 @@ export type OpenClawPluginNodeInvokePolicyResult =
 export type OpenClawPluginNodeInvokePolicy = {
   commands: string[];
   /**
+   * Admit an exact MCP tool to same-node execution without running handle.
+   * Only an explicit true permits local execution; otherwise the Gateway handles it.
+   */
+  allowLocalMcpTool?: (ctx: {
+    nodeId: string;
+    server: string;
+    tool: string;
+    pluginConfig?: Record<string, unknown>;
+  }) => boolean;
+  /**
    * Platforms where these node-handled commands should be allowlisted by default.
    * Omit for commands that require explicit `gateway.nodes.commands.allow`.
    */
@@ -365,6 +375,8 @@ export type OpenClawPluginServiceContext = {
   stateDir: string;
   logger: PluginLogger;
   serviceHealth?: OpenClawPluginServiceHealth;
+  /** Available only to a service declaring its own configured catalog allowlist. */
+  catalogExports?: import("./service-catalog-exports.js").PluginServiceCatalogExports;
   /** Gateway-owned timed work; required by the version 2 service contract. */
   scheduler?: PluginServiceSchedulerV1;
   /** Remote device-only Control UI ingress, available only to admitted trusted services. */
@@ -476,6 +488,8 @@ export type OpenClawPluginServiceContext = {
 export type OpenClawPluginService = {
   apiVersion?: 1;
   id: string;
+  /** Path within this plugin's config to its operator-selected catalog IDs. */
+  catalogExports?: { allowlistPath: readonly string[] };
   /** Restart this service with committed config when one of these paths changes. */
   reload?: { configPrefixes: readonly string[] };
   start: (ctx: OpenClawPluginServiceContext) => void | Promise<void>;
@@ -516,6 +530,8 @@ export type OpenClawPluginChannelRegistration<
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
+ * - `memory-backend`: passive memory backend for the slot owner; only
+ *   `registerMemoryCapability({ providerRuntime })` is honored.
  */
 export type PluginRegistrationMode =
   | "full"
@@ -523,7 +539,8 @@ export type PluginRegistrationMode =
   | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
-  | "cli-metadata";
+  | "cli-metadata"
+  | "memory-backend";
 
 export type {
   PluginServiceSessionWorkV1,

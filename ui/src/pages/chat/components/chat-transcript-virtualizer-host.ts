@@ -83,16 +83,14 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.#scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.#recordEndLayoutCorrection);
-  readonly #followEnd = () =>
-    this.scrollToEnd({
-      source: "auto",
-      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
-    });
-  readonly #reconcilePosition = () => {
+  readonly #followEnd = (behavior = this.offsetState.scrollCommand?.behavior ?? "auto") =>
+    this.scrollToEnd({ source: "auto", behavior });
+  readonly #reconcileCommittedPosition = () => this.#reconcilePosition(true);
+  readonly #reconcilePosition = (committed = false) => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       if (
         !this.offsetState.touchActive &&
-        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured)
+        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured, committed)
       ) {
         this.offsetState.syncNativeOffset?.();
         this.#presentation.commitChange(this.invalidate, true);
@@ -145,7 +143,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
   };
   readonly #rowRefs: TranscriptRowRefs;
-  readonly #readerAnchor = new TranscriptReaderAnchor(this, this.#reconcilePosition);
+  readonly #readerAnchor = new TranscriptReaderAnchor(this, this.#reconcileCommittedPosition);
   readonly #captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event, this.#readerAnchor.readerElement);
     if (!anchor) {
@@ -228,7 +226,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
         // Native resize delivery can read a fast scroll before its scroll event.
         // Keep its position, but replace observed rows outside the delivery cycle.
-        // A row landing before the flow already moved scrollTop; its flow must move this frame.
+        // A measured predecessor needs a geometry projection without another deferred turn.
         const defer =
           redraw && !(moved || flowMoved || this.canFollowEnd || offsetState.hasPendingAnchor);
         this.#presentation.commitChange(
@@ -399,7 +397,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
     if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
-      this.renderer.queueAfterCommit(this.#reconcilePosition);
+      this.renderer.queueAfterCommit(this.#reconcileCommittedPosition);
     }
     if (!this.initialRange.pending || (this.layout.ready && this.#rowKeys.length === 0)) {
       applyPendingScrollOffset(this.#scrollRestoreHost);
@@ -475,7 +473,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     renderRow: (row: TranscriptRow<T>) => TranscriptContent,
     announcement: TranscriptAnnouncement | null,
     announce: boolean,
-    overlay: TranscriptRenderSnapshot<T>["overlay"] = null,
     header: TranscriptHeader | null = null,
     presented: PresentationValue = true,
     applicationContext?: ApplicationContext,
@@ -497,7 +494,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         renderRow,
         announcement,
         announce,
-        overlay,
         header,
         messageRows: this.#candidateMessageRowKeysById,
         renderKeyRows: this.#candidateMessageRowsByKey,
@@ -580,7 +576,6 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           getContent: this.renderer.contentFor(rows, renderRow),
           ...this.initialRange.presentation(rows),
           virtualizer: this.virtualizer,
-          overlay: snapshot.overlay,
           header: header?.content ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.#captureInteractionResize,
@@ -776,8 +771,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.canFollowEnd &&
       !(this.offsetState.pendingInteractionAnchor || this.offsetState.touchActive)
     ) {
-      const behavior = this.offsetState.scrollCommand?.behavior ?? "instant";
-      this.scrollToEnd({ source: "auto", behavior });
+      this.#followEnd(this.offsetState.scrollCommand?.behavior ?? "instant");
       this.offsetState.syncNativeOffset?.();
     }
     if (isTranscriptRangeCommitted(this.#threadInnerElement, this.virtualizer)) {

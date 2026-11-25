@@ -646,6 +646,11 @@ export function createSidebarMenus(deps: {
       });
       // Menus retain this anchor as their return-focus target across sidebar updates.
       const active = () => isSidebarRouteActive(view.activeRouteId, routeId);
+      const opensSection =
+        routeId === "cron" ||
+        routeId === "plugins" ||
+        routeId === "systems" ||
+        routeId === "workboard";
       const link = (
         <SidebarNavLink
           ref={triggerRef}
@@ -653,7 +658,11 @@ export function createSidebarMenus(deps: {
           label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={active()}
-          onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
+          onNavigate={() =>
+            opensSection
+              ? view.onNavigate?.(routeId, undefined, "sidebar-section")
+              : view.onNavigate?.(routeId, sessionTarget()?.options)
+          }
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;

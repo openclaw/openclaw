@@ -11,6 +11,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI inline command trail" });
@@ -332,6 +333,7 @@ suite.define(() => {
             ].flatMap(({ id, shellCommand, text, isError }, index) => [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [
                   { type: "toolCall", id, name: "exec", arguments: { command: shellCommand } },
                 ],
@@ -362,6 +364,7 @@ suite.define(() => {
             ]),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: textContent("The evidence commands finished."),
               timestamp: now + 50,
               __openclaw: { id: "saved-answer", runId },

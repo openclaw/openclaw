@@ -17,10 +17,8 @@ import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -299,7 +297,7 @@ export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
   AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride"
 > & {
-  /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
+  /** @deprecated Ignored; the host decides owner from `runContext.senderId`. */
   senderIsOwner?: boolean;
   /** Ingress callsites must always pass explicit model-override authorization state. */
   allowModelOverride: boolean;

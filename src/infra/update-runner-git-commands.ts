@@ -5,6 +5,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { ignoreMissingPath } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
 import { isFullGitObjectId } from "./update-dev-target.js";
+import { describeUnavailableMacosSystemGit } from "./update-macos-git.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -37,12 +38,15 @@ export function createGitStepFactory(root: string, step: StepFactory) {
 // echoes the flag back as a revision instead of failing, so the update breaks later.
 const MINIMUM_GIT_VERSION = [2, 31] as const;
 
-/** One operator-facing line when the updater's Git is too old for a Git-checkout update. */
+/** Explain a Git prerequisite the operator can fix before checkout staging. */
 export async function describeUnsupportedGit(
   runCommand: CommandRunner,
   options: Parameters<CommandRunner>[1],
 ): Promise<string | null> {
-  // Only a known old version refuses. A missing or unreadable Git keeps its existing failure.
+  const missingDeveloperTools = await describeUnavailableMacosSystemGit(runCommand, options);
+  if (missingDeveloperTools) {
+    return missingDeveloperTools;
+  }
   const probe = await runCommand(["git", "--version"], options).catch(() => null);
   const match = probe?.code === 0 ? /^git version (\d+)\.(\d+)\S*/u.exec(probe.stdout) : null;
   const [major, minor] = [Number(match?.[1]), Number(match?.[2])];

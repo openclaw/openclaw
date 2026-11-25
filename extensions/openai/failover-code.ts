@@ -8,6 +8,8 @@ export function classifyOpenAiFailoverCode(code: string | undefined) {
     case "ORGANIZATION_SPEND_LIMIT_EXCEEDED":
     case "ORGANIZATION_USAGE_LIMIT_EXCEEDED":
     case "PROJECT_SPEND_LIMIT_EXCEEDED":
+    case "WORKSPACE_OWNER_CREDITS_DEPLETED":
+    case "WORKSPACE_MEMBER_CREDITS_DEPLETED":
       return "billing" as const;
     case "USAGE_LIMIT_REACHED":
       return "rate_limit" as const;

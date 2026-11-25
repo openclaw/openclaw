@@ -3160,21 +3160,15 @@ workboard-inline-text {
 }
 
 .workboard-detail__execution-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px 16px;
 }
 
-.workboard-detail__execution-main > .workboard-detail__session-row {
-  grid-column: 1;
-  grid-row: 1;
-}
-
 .workboard-detail__execution-main > .workboard-detail__actions {
-  grid-column: 2;
-  grid-row: 1;
   align-self: start;
+  margin-inline-start: auto;
 }
 
 .workboard-detail .workboard-board-draft__automation > span {

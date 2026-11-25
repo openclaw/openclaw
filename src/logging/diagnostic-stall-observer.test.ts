@@ -100,6 +100,8 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     observer.heartbeat.set([1_000n, 0n, 3n]);
     observer.message.mockReset();
+    const stackMessages = () =>
+      observer.message.mock.calls.filter(([sample]) => "frames" in sample);
     observer.connect.mockClear();
     observer.post.mockReset();
     let dispatchDelay = 101;
@@ -119,15 +121,15 @@ it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".
     await vi.advanceTimersByTimeAsync(1);
     expect(observer.connect).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(observer.message).not.toHaveBeenCalled();
+    expect(stackMessages()).toHaveLength(0);
     expect(observer.heartbeat[2]).toBe(3n);
     dispatchDelay = 0;
     observer.heartbeat[0] = BigInt(Date.now());
     await vi.advanceTimersByTimeAsync(1_250);
-    expect(observer.message).toHaveBeenCalledTimes(3);
+    expect(stackMessages()).toHaveLength(3);
     expect(observer.heartbeat[2]).toBe(0n);
     observer.heartbeat[0] = BigInt(Date.now());
     await vi.advanceTimersByTimeAsync(1_250);
-    expect(observer.message).toHaveBeenCalledTimes(3);
+    expect(stackMessages()).toHaveLength(3);
   },
 );

@@ -30,6 +30,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { admitScheduledOccurrence } from "./execution-context-admission.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -89,6 +90,8 @@ async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: ()
     cronEnabled: true,
     defaultAgentId: "main",
     log: createNoopLogger(),
+    admitScheduledOccurrence: ({ job }) =>
+      admitScheduledOccurrence({ cfg: config, job, agentId: "main", trigger: "cron" }),
     resolveSessionEventTarget: () => scope,
     runSessionEvent: (params) =>
       runCronSessionTurn({

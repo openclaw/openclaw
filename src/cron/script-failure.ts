@@ -4,7 +4,13 @@ import type {
   CronTriggerFailureCode,
 } from "./types.js";
 
-function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
+/**
+ * A script failure is an ordinary run failure: the job stays scheduled and its next run
+ * tries again. Only timeouts and an unavailable runtime are transient retry causes.
+ */
+function classifyCronScriptFailure(
+  code: CronTriggerFailureCode,
+): CronRunErrorClassification | undefined {
   if (code === "timeout") {
     return { kind: "reason", reason: "timeout" };
   }
@@ -15,7 +21,7 @@ function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorCl
   if (code === "aborted") {
     return { kind: "aborted" };
   }
-  return { kind: "permanent" };
+  return undefined;
 }
 
 /** Authors matched retry policy and safe notification detail from one closed code. */
@@ -23,8 +29,9 @@ export function cronScriptFailureMetadata(
   source: Extract<CronFailureNotificationDetail, { kind: "script-failure" }>["source"],
   code: CronTriggerFailureCode,
 ) {
+  const errorClassification = classifyCronScriptFailure(code);
   return {
-    errorClassification: classifyCronScriptFailure(code),
+    ...(errorClassification ? { errorClassification } : {}),
     failureNotificationDetail: { kind: "script-failure" as const, source, code },
   };
 }

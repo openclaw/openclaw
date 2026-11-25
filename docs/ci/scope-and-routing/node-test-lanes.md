@@ -9,6 +9,12 @@ sidebarTitle: "Node test lanes"
 
 How the slowest Node test families are split, balanced, packed, and cached. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
+`scripts/lib/ci-test-runtime.mts` owns runtime selection. The `bun-all` policy
+keeps Node-required contracts on Node. This includes the Git release launcher
+suite, whose Windows/Bun guard remains valid; Linux CI must execute it on Node
+instead of reporting a successful skipped Bun run. Runtime-policy changes select
+that suite through the existing policy watch inventory.
+
 Node-worker process E2Es have an explicit owner map in
 `scripts/lib/ci-node-worker-e2e-inventory.mts`. Changes to worker environments,
 node hosts, worker processes, node RPCs, and their launch/transport inputs select
@@ -53,7 +59,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - Agentic gateway/server (control-plane) configs split across chat, auth, model, HTTP/plugin, runtime, and startup lanes instead of waiting on built artifacts.
 - Hosted full-release plans retain complete measured generations for CLI process, agent/chat, Gateway methods, and runtime-config owners across inventory changes until the current selection is measured. Matching singleton measurements keep known files from being repriced by a coarse weight. The planner splits these owners into groups of at most 64 files, then packs only measured groups with matching runner, build, and environment requirements into serial jobs with at most 720 seconds of measured or projected work. Each group keeps its own process, timing identity, and two-worker ceiling; a failure still fails the job while remaining groups run. PR, hourly main, and Blacksmith planning keep their existing policies. The whole-job timing importer skips packed jobs. `scripts/ci-refit-test-timings.mts` samples their successful jobs from CI dispatches, including failed workflows, and requires a completion receipt covering every Node and Bun invocation before recording each complete group wall. Two independent runs are required, and these partial inventories cannot prune other measurements. The full-release matrix omits redundant names and default fields to stay within the existing output budget.
 - Normal CI packs only isolated infra include-pattern shards into repeatable bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites. Heavy fixed suites stay on 8 vCPU while most bundled and lower-weight lanes use 4 vCPU. Previously promoted compact workloads retain 8-vCPU capacity through their semantic owners and selected files before packing. Timing or build-ownership changes cannot transfer that capacity to an unrelated row. Hosted stripes inherit their parent owner's capacity; whole named manual and release plans retain their existing routing. Full named bundles include their runtime-build mode when present, so `checks-node-bundle-infra-small-runtime-1` and `checks-node-bundle-infra-small-1` identify different prerequisite groups. Their test inventories and runner limits are unchanged; unique names let release collectors retain both jobs without ambiguous attempt evidence.
-- Hourly main on GitHub-hosted runners bounds agent-chat groups to 30 files, Gateway-methods groups to 96, and agent-support, runtime/configuration, status/tools, and Doctor groups to 64, including the main validation tier that selects the complete inventory through PR-mode planning. The measured updater test has its own group; storage retains its 64-file bound. Main validation keeps ordinary row packing within its 77-row budget. Legacy push-mode plans additionally dedicate rows to chat groups, Gateway-methods groups above 32 files, and the updater. These splits retain every selected test, config, worker limit, build prerequisite, and timing generation. The 96-file Gateway-methods ceiling and dedicated rows above 32 files also apply to hosted compact PR-mode layouts, including full dual-runtime dispatches; hourly main validation retains its 77-row packing. Smaller tails, other main-only bounds, and paid-runner policies remain unchanged. Packed rows still need current timing qualification: a file ceiling alone does not bound their complete wall time.
+- GitHub-hosted main and full-inventory compact dispatches bound agent-chat groups to 30 files, Gateway-methods groups to 96, and agent-support, runtime/configuration, status/tools, and Doctor groups to 64. Storage retains its 64-file bound. Only main isolates the measured updater test; full dispatch retains its existing runtime prerequisite group. The 96-file Gateway-methods ceiling and dedicated rows above 32 files also apply to hosted compact PR-mode layouts, including full dual-runtime dispatches; hourly main validation retains its 77-row packing. Legacy push-mode plans additionally dedicate rows to chat groups and the updater. File bounds retain every selected test, config, worker limit, and build prerequisite, with fresh timing generations for changed partitions. Other ordinary PR and paid-runner policies remain unchanged. Full dispatch retains capped compact packing and independent Node/Bun jobs. The existing timing refit samples successful compact jobs from dispatches as well as legacy packed-release jobs; runtime identities, the two-independent-run minimum, and partial-inventory pruning protection remain unchanged. Packed rows still need current timing qualification: a file ceiling alone does not bound their complete wall time.
 - Upstream pull requests resolve their runtime tests from bounded changed owners, transitive import consumers, workspace/public SDK aliases, protected regressions, and explicit policy watches. The Node constructor consumes that selected set. Windows and UI jobs retain complete ordinary inventories when their platform/area owners change; unrelated UI families can still admit precise protected or affected files. Global inputs never request the full compact runtime repository. Missing selector capability fails preflight. Main retains its complete automatic tier, and ordinary manual/release validation adds the existing release-only inventories.
 - Static correctness is independent of runtime targeting. Production and test types, semantic lint, formatting, SDK boundaries, schema drift, and Knip retain their required checks; ambiguous static ownership keeps full compiler/lint coverage. Runtime targeting does not need a full-suite fallback to preserve these guards. See the [scope rules](/ci/scope-and-routing/selection).
 - A changed tooling test or owner selects its exact owner tests, affected transitive test importers, protected regressions, and explicit watches, subject to the named process-proof exclusions below. Tooling configs retain their file parallelism, worker limits, runtime prerequisites, backend routing, and capacity promotion. They never request a full-family PR fallback.
@@ -127,7 +133,7 @@ six-file smoke inventory, including Gateway serving, config compatibility and
 migration, and message-tool delivery. All six still run on hourly main.
 
 The `PR_EXEMPT_RUNTIME_TEST_FILES` inventory in
-`scripts/lib/ci-proof-test-inventory.mts` keeps measured slow integration tests
+`scripts/lib/ci-test-tier-policy.mts` keeps measured slow integration tests
 out of unrelated upstream PRs and exact-head PR fallback dispatches. Hourly
 `main` and Full Release Validation select these complete files through their
 registered suite owners: normal CI owns core, UI, and tooling tests; Plugin Prerelease
@@ -172,6 +178,16 @@ in no PR job.
 Aggressive PR selection keeps changed tests and direct runtime import consumers,
 including package and SDK aliases. A changed module with fewer than 20 direct
 importers also selects tests at depth two; hubs stop at direct consumers.
+Changes under `src/agents/`, `src/auto-reply/reply/agent-runner*`,
+`packages/agent-core/src/harness/compaction/` and `packages/ai/src/transports/`
+also select every transitive importer test in the changed file's own directory (not
+for a file directly in a package root such as `src/agents/`) and a declared behavior
+set: `*prompt-cache*` and `*compaction*` tests under `src/` and `packages/`, plus the
+required-maintenance and session-context-accounting tests. Those behavior tests sit
+3 to 10 imports away (#204252); the full importer closure is nearly the whole suite.
+A change to `src/sessions/owed.ts` selects only its own declared set: the background
+exec completion tests in `src/agents/` that deliver owed rows (#204265 changed it with
+green PR CI while they failed on `main`).
 Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
 resolved exports affected by the changed source, including re-export chains.
 Unrelated resolved subpaths stay unselected. Unresolved package bindings, package
