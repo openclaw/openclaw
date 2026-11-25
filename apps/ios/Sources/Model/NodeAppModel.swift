@@ -3937,6 +3937,10 @@ extension NodeAppModel {
         self.clearGatewayConnectionProblem()
     }
 
+    func gatewayPreconnectProblemKind(for stableID: String) -> GatewayConnectionProblem.Kind? {
+        self.hasGatewayPreconnectProblem(for: stableID) ? self.gatewayPreconnectProblem?.problem.kind : nil
+    }
+
     func hasGatewayPreconnectProblem(for stableID: String) -> Bool {
         guard let preconnectProblem = self.gatewayPreconnectProblem else { return false }
         return GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID) &&

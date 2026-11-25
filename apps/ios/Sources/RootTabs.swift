@@ -578,8 +578,7 @@ struct RootTabs: View {
                 self.appModel.toasts.post(OpenClawToast(
                     String(format: String(localized: "“%@”"), trimmed),
                     systemImage: "mic.fill",
-                    announcement: String(localized: "Voice Wake triggered") + ". "
-                        + String(format: String(localized: "Command: %@"), trimmed)))
+                    announcement: String(format: String(localized: "Voice Wake heard “%@”."), trimmed)))
             }
     }
 

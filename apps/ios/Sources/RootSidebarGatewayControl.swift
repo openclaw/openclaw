@@ -1,7 +1,52 @@
 import Combine
 import OpenClawChatUI
 import OpenClawKit
+import OSLog
 import SwiftUI
+
+/// A failed host switch, in words someone can read in two seconds. The controller's message names
+/// transport details (endpoint, TLS URL, instance ID) and goes to the log instead.
+struct GatewaySwitchFailureToast: Equatable {
+    let text: String
+    let offersRetry: Bool
+
+    init(message: String, problemKind: GatewayConnectionProblem.Kind?, hostName: String) {
+        let unreachable = String(format: String(localized: "Couldn’t reach %@."), hostName)
+        let needsSecure = String(format: String(localized: "%@ needs a secure connection."), hostName)
+        let secureTransportGuidance = GatewayConnectionController.DiscoveredGatewayConnectionAvailability
+            .secureTransportRequired.guidanceText ?? ""
+        switch problemKind {
+        case .reachabilityFailed?, .connectionRefused?, .timeout?:
+            (self.text, self.offersRetry) = (unreachable, true)
+            return
+        case .tlsCertificateUnavailable?:
+            (self.text, self.offersRetry) = (needsSecure, false)
+            return
+        case .tlsPinMismatch?:
+            (self.text, self.offersRetry) = (
+                String(format: String(localized: "%@ isn’t the host you paired with."), hostName), false)
+            return
+        default:
+            break
+        }
+        switch message {
+        case GatewayFailureText.hostUnavailable, GatewayFailureText.checkAddress:
+            (self.text, self.offersRetry) = (message, false)
+        case GatewayFailureText.couldntSwitch, GatewayFailureText.notFound(hostName):
+            (self.text, self.offersRetry) = (message, true)
+        case "Failed to build TLS URL for trust verification.", "Failed to build discovered gateway URL.",
+             String(localized: "Failed to build the gateway URL."):
+            (self.text, self.offersRetry) = (GatewayFailureText.checkAddress, false)
+        case secureTransportGuidance, String(localized: "A TLS certificate fingerprint requires a secure gateway URL."):
+            (self.text, self.offersRetry) = (needsSecure, false)
+        case "Failed to resolve the discovered gateway endpoint.":
+            (self.text, self.offersRetry) = (unreachable, true)
+        default:
+            (self.text, self.offersRetry) = (
+                String(format: String(localized: "Couldn’t connect to %@."), hostName), true)
+        }
+    }
+}
 
 /// A projection of saved entries, not a second registry or connection owner.
 struct SidebarGatewayPresentation {
@@ -184,6 +229,7 @@ struct SidebarGatewayPicker: View {
 struct RootSidebarGatewayControl: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(GatewayConnectionController.self) private var gatewayController
+    private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "GatewayPicker")
     @State private var registry = GatewaySettingsStore.GatewayRegistry.empty
     let fallbackName: String
     let openSettings: () -> Void
@@ -212,6 +258,20 @@ struct RootSidebarGatewayControl: View {
     /// The picker shows the host it's still on, so the toast only says what to do first.
     private func refuseSwitch(_ text: String) {
         self.appModel.toasts.post(OpenClawToast(text, systemImage: "exclamationmark.circle", kind: .warning))
+    }
+
+    private func postSwitchFailure(_ message: String, stableID: String) {
+        Self.logger.error("Host switch failed: \(message, privacy: .public)")
+        let entry = self.registry.entries.first { GatewayStableIdentifier.matches($0.stableID, stableID) }
+        let toast = GatewaySwitchFailureToast(
+            message: message,
+            problemKind: self.appModel.gatewayPreconnectProblemKind(for: stableID),
+            hostName: entry?.name ?? String(localized: "this host"))
+        guard toast.offersRetry else {
+            self.appModel.toasts.post(.failure(toast.text))
+            return
+        }
+        self.appModel.toasts.post(.failure(toast.text, retry: { self.switchGateway(stableID) }))
     }
 
     private func refreshRegistry() {
@@ -248,7 +308,7 @@ struct RootSidebarGatewayControl: View {
                 // trust review, reset, and route commitment.
                 break
             case let .failed(message):
-                self.appModel.toasts.post(.failure(message, retry: { self.switchGateway(stableID) }))
+                self.postSwitchFailure(message, stableID: stableID)
             case .superseded:
                 // The newer attempt is the one the picker shows; nothing to say about this one.
                 break

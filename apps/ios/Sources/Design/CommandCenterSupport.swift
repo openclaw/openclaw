@@ -165,7 +165,7 @@ struct CommandSessionActionsModifier: ViewModifier {
         case (_, true?, _): self.failureText(String(localized: "Couldn’t pin “%@”."))
         case (_, false?, _): self.failureText(String(localized: "Couldn’t unpin “%@”."))
         case (_, _, .some): self.failureText(String(localized: "Couldn’t rename “%@”."))
-        default: self.failureText(String(localized: "Couldn’t change “%@”."))
+        default: self.failureText(String(localized: "Couldn’t update “%@”."))
         }
         // The row leaves the list, so archiving says so and offers Undo. Unarchive in Sessions › Archived
         // is the other way back.

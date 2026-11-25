@@ -156,4 +156,26 @@ struct SidebarGatewayPickerTests {
             }
         }
     }
+
+    @Test func `a failed switch names the cause in plain words and keeps transport terms out`() {
+        func toast(_ message: String, _ kind: GatewayConnectionProblem.Kind? = nil) -> (String, Bool) {
+            let toast = GatewaySwitchFailureToast(message: message, problemKind: kind, hostName: "Studio")
+            return (toast.text, toast.offersRetry)
+        }
+
+        #expect(toast("anything", .reachabilityFailed) == ("Couldn’t reach Studio.", true))
+        #expect(toast("anything", .connectionRefused) == ("Couldn’t reach Studio.", true))
+        #expect(toast("Failed to resolve the discovered gateway endpoint.") == ("Couldn’t reach Studio.", true))
+        #expect(toast("Failed to build discovered gateway URL.")
+            == ("Couldn’t connect. Check this host’s address.", false))
+        #expect(toast("A TLS certificate fingerprint requires a secure gateway URL.")
+            == ("Studio needs a secure connection.", false))
+        #expect(toast("anything", .tlsCertificateUnavailable) == ("Studio needs a secure connection.", false))
+        #expect(toast("anything", .tlsPinMismatch) == ("Studio isn’t the host you paired with.", false))
+        #expect(toast("This host isn’t available anymore.") == ("This host isn’t available anymore.", false))
+        #expect(toast("Couldn’t switch hosts.") == ("Couldn’t switch hosts.", true))
+        #expect(toast("Couldn’t find Studio on this network.") == ("Couldn’t find Studio on this network.", true))
+        #expect(toast("Missing instanceId (node.instanceId). Try restarting the app.")
+            == ("Couldn’t connect to Studio.", true))
+    }
 }
