@@ -2327,6 +2327,9 @@ if (hybridHostedEligible) {
       manifest.run_docker_seed_e2e &&
         workflowEventName === "pull_request" &&
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
+      // The fixture rows inherit this job's runner placement; count the optional reader row
+      // even when its selection step skips the build.
+      dockerSeedLanes.includes("release-update-survivor") ? 4 : 1,
     ),
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =

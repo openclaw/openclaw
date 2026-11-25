@@ -3,32 +3,66 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { packFixture, readPackedJson } from "./schema-downgrade-source.mjs";
 
-const [repo, sourceTarball, directory] = process.argv.slice(2);
-const readPacked = (file) =>
-  JSON.parse(execFileSync("tar", ["-xOf", sourceTarball, `package/${file}`], { encoding: "utf8" }));
-const manifest = readPacked("package.json");
-const build = readPacked("dist/build-info.json");
-const previous = {
-  version: manifest.version,
-  buildId: build.buildId,
-  commit: build.commit,
-  schema: manifest.openclaw.schemaVersions.state,
-};
-assert(previous.buildId && previous.commit, "T must carry its source/build identity");
-assert.equal(
-  execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
-  previous.commit,
-  "T must be built from the selected source",
-);
-const tree = path.join(directory, "source");
-fs.mkdirSync(tree, { recursive: true });
-execFileSync("git", ["archive", "--output", path.join(directory, "source.tar"), "HEAD"], {
-  cwd: repo,
-});
-execFileSync("tar", ["-xf", path.join(directory, "source.tar"), "-C", tree]);
-fs.unlinkSync(path.join(directory, "source.tar"));
-const sourceManifest = JSON.parse(fs.readFileSync(path.join(tree, "package.json"), "utf8"));
+const args = process.argv.slice(2);
+const buildOnly = args[0] === "--prepare";
+const [repo, sourceTarball, directory, prebuilt] = buildOnly ? [args[1], undefined, args[2]] : args;
+const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+const manifest = buildOnly
+  ? JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8"))
+  : readPackedJson(sourceTarball, "package.json");
+const previousSchema = manifest.openclaw.schemaVersions.state;
+const schema = previousSchema + 1;
+const build = buildOnly ? undefined : readPackedJson(sourceTarball, "dist/build-info.json");
+const tarball = path.join(directory, "next.tgz");
+function writeReceipt() {
+  const next = readPackedJson(tarball, "dist/build-info.json");
+  const nextManifest = readPackedJson(tarball, "package.json");
+  assert.equal(next.commit, commit, "T+1 must be built from the selected source");
+  assert(next.buildId && next.buildId !== build.buildId, "T and T+1 need distinct build IDs");
+  assert.equal(
+    nextManifest.openclaw.schemaVersions.state,
+    schema,
+    "T+1 must advance the schema by one",
+  );
+  fs.writeFileSync(
+    path.join(directory, "fixture.json"),
+    JSON.stringify({
+      previous: {
+        version: manifest.version,
+        buildId: build.buildId,
+        commit,
+        schema: previousSchema,
+      },
+      next: { version: nextManifest.version, buildId: next.buildId, schema },
+    }),
+  );
+}
+if (!buildOnly) {
+  assert(
+    build.buildId && build.commit === commit,
+    "T must carry the selected source/build identity",
+  );
+}
+if (prebuilt) {
+  fs.copyFileSync(path.join(prebuilt, "next.tgz"), tarball);
+  writeReceipt();
+  process.exit(0);
+}
+// Hosted preparation owns its checkout; inline callers keep their checkout untouched.
+const tree = buildOnly ? repo : path.join(directory, "source");
+fs.mkdirSync(directory, { recursive: true });
+if (!buildOnly) {
+  fs.mkdirSync(tree);
+  const archive = path.join(directory, "source.tar");
+  execFileSync("git", ["archive", "--output", archive, "HEAD"], { cwd: repo });
+  execFileSync("tar", ["-xf", archive, "-C", tree]);
+  fs.unlinkSync(archive);
+}
+const sourceManifest = buildOnly
+  ? manifest
+  : JSON.parse(fs.readFileSync(path.join(tree, "package.json"), "utf8"));
 assert.equal(sourceManifest.version, manifest.version);
 const patch = (file, before, after) => {
   const filename = path.join(tree, file);
@@ -36,18 +70,16 @@ const patch = (file, before, after) => {
   assert.equal(source.split(before).length, 2, `fixture setup: moved anchor in ${file}`);
   fs.writeFileSync(filename, source.replace(before, after));
 };
-const schema = previous.schema + 1;
 const version = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.-]+)?$/u.exec(manifest.version);
 assert(version, "T must have a release version");
-manifest.version = `${version[1]}.${version[2]}.${Number(version[3]) + 1}-beta.1`;
-sourceManifest.version = manifest.version;
+sourceManifest.version = `${version[1]}.${version[2]}.${Number(version[3]) + 1}-beta.1`;
 sourceManifest.openclaw.schemaVersions.state = schema;
 fs.writeFileSync(path.join(tree, "package.json"), `${JSON.stringify(sourceManifest, null, 2)}\n`);
 const ddl =
   "CREATE TABLE IF NOT EXISTS fixture_update_migration (\n  fixture_id TEXT NOT NULL PRIMARY KEY,\n  migrated_to INTEGER NOT NULL\n) STRICT;\n";
 patch(
   "src/state/openclaw-schema-versions.ts",
-  `export const OPENCLAW_STATE_SCHEMA_VERSION = ${previous.schema};`,
+  `export const OPENCLAW_STATE_SCHEMA_VERSION = ${previousSchema};`,
   `export const OPENCLAW_STATE_SCHEMA_VERSION = ${schema};`,
 );
 fs.appendFileSync(path.join(tree, "src/state/openclaw-state-schema.sql"), `\n${ddl}`);
@@ -90,23 +122,23 @@ patch(
 );
 patch(
   "scripts/lib/sqlite-schema-inputs.mts",
-  `for (const version of [${previous.schema},`,
-  `for (const version of [${schema}, ${previous.schema},`,
+  `for (const version of [${previousSchema},`,
+  `for (const version of [${schema}, ${previousSchema},`,
 );
 patch(
   "scripts/lib/sqlite-schema-inputs.mts",
   "      for (const [era, schema] of [",
-  `      for (const [era, schema] of [\n        ["before-v${schema}", getOpenClawStatePredecessorSchema(${previous.schema})],`,
+  `      for (const [era, schema] of [\n        ["before-v${schema}", getOpenClawStatePredecessorSchema(${previousSchema})],`,
 );
 patch(
   "src/infra/database-engine/state-port-descriptor.ts",
-  `OPENCLAW_STATE_SCHEMA_VERSION !== ${previous.schema}`,
+  `OPENCLAW_STATE_SCHEMA_VERSION !== ${previousSchema}`,
   `OPENCLAW_STATE_SCHEMA_VERSION !== ${schema}`,
 );
 patch(
   "src/infra/database-engine/state-port-descriptor.ts",
   "38, 39, 40].includes(sourceVersion)",
-  `38, 39, 40, ${previous.schema}].includes(sourceVersion)`,
+  `38, 39, 40, ${previousSchema}].includes(sourceVersion)`,
 );
 // This boot point is after the private migration has been swapped into live state.
 patch(
@@ -133,35 +165,17 @@ patch(
 );
 const env = {
   ...process.env,
-  GIT_COMMIT: previous.commit,
-  OPENCLAW_CONTROL_UI_BUILD_ID: `${previous.buildId}-schema-${schema}`,
+  GIT_COMMIT: commit,
+  OPENCLAW_CONTROL_UI_BUILD_ID: `fixture-next-${commit}-schema-${schema}`,
+  OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
 };
-const run = (program, args) => execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
-run("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
+const run = (program, argv) => execFileSync(program, argv, { cwd: tree, env, stdio: "inherit" });
+if (!buildOnly) {
+  run("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
+}
 run("pnpm", ["db:postgres:gen"]);
-run("pnpm", ["build:ci-artifacts"]);
-run("node", ["--import", "./scripts/tsx.mjs", "scripts/write-unified-entry-dts.ts"]);
-run("node", [
-  "scripts/package-openclaw-for-docker.mjs",
-  "--skip-build",
-  "--allow-unreleased-changelog",
-  "--output-dir",
-  directory,
-  "--output-name",
-  "next.tgz",
-]);
-const nextBuild = JSON.parse(fs.readFileSync(path.join(tree, "dist/build-info.json"), "utf8"));
-assert.equal(nextBuild.commit, previous.commit);
-assert.notEqual(nextBuild.buildId, previous.buildId);
-fs.writeFileSync(
-  path.join(directory, "fixture.json"),
-  JSON.stringify(
-    {
-      previous,
-      next: { version: manifest.version, buildId: nextBuild.buildId, schema },
-    },
-    null,
-    2,
-  ),
-);
-fs.rmSync(tree, { recursive: true, force: true });
+packFixture(run, directory, "next.tgz");
+if (!buildOnly) {
+  fs.rmSync(tree, { recursive: true, force: true });
+  writeReceipt();
+}

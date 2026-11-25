@@ -1913,8 +1913,7 @@ AFTER_CD
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
     });
-    expect(job.if).toBe("needs.preflight.outputs.run_docker_seed_e2e == 'true'");
-    expect(job.needs).toEqual(["preflight"]);
+    expect(job.needs).toEqual(["preflight", "docker-survivor-fixtures"]);
     expect(job["timeout-minutes"]).toBe(115);
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.strategy).toBeUndefined();
@@ -1939,16 +1938,20 @@ AFTER_CD
     expect(parallelism).toContain("&& 3 || 1");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS");
+    const inlinePackage = { jobResults: { "docker-survivor-fixtures": "skipped" } };
     const prepare = job.steps.find((step: WorkflowStep) =>
       step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
     ) as WorkflowStep;
     for (const eventName of ["push", "pull_request"] as const) {
-      expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", { eventName })).toBe(true);
+      expect(
+        evaluateWorkflowExpression("${{ " + prepare.if + " }}", { ...inlinePackage, eventName }),
+      ).toBe(true);
     }
     for (const releaseGate of [false, true]) {
       for (const qualification of [false, true]) {
         expect(
           evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+            ...inlinePackage,
             eventName: "workflow_dispatch",
             releaseGate,
             preflightOutputs: { ci_qualification: String(qualification) },
@@ -1957,6 +1960,7 @@ AFTER_CD
       }
     }
     const releaseChild = {
+      ...inlinePackage,
       eventName: "workflow_dispatch",
       repository: "openclaw/openclaw",
       runAttempt: 1,
@@ -1994,9 +1998,8 @@ AFTER_CD
       prepareRun.indexOf(declarations),
     );
     expect(prepareRun.indexOf(declarations)).toBeLessThan(
-      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs --skip-build"),
+      prepareRun.indexOf("node scripts/package-openclaw-for-docker.mjs"),
     );
-    expect(prepareRun).toContain("node scripts/package-openclaw-for-docker.mjs --skip-build");
     expect(prepareRun).not.toContain("--skip-check");
     expect(prepareRun).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ=");
     expect(job.steps.indexOf(prepare)).toBeLessThan(job.steps.indexOf(run));

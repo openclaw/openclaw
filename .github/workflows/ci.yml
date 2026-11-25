@@ -6841,11 +6841,11 @@ jobs:
     permissions:
       contents: read
     name: docker-seed-e2e
-    needs: [preflight]
-    if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
+    needs: [preflight, docker-survivor-fixtures]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.run_docker_seed_e2e == 'true' && (needs.docker-survivor-fixtures.result == 'success' || (needs.docker-survivor-fixtures.result == 'skipped' && !(github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')))) }}
     # Release validation children use the hourly-main Blacksmith row with the smoke package and
     # serial lanes; the hosted full-build path took ~91m (FRV 37607411898).
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) != 'github') && vars.OPENCLAW_RELEASE_RUNNER_GROUP == '' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || ((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04'))) }}
+    runs-on: &docker_seed_runner ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw' && github.run_attempt == 1 && (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.qualification_runner_backend || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) != 'github') && vars.OPENCLAW_RELEASE_RUNNER_GROUP == '' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || ((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat-large' || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04'))) }}
     # Hosted six-lane budget: 6810s (run 36506671071); 60m cancelled run 36486786689.
     timeout-minutes: 115
     steps:
@@ -6904,11 +6904,11 @@ jobs:
 
       - name: Pin previous schema reader source
         if: github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')
-        env:
+        env: &docker_survivor_pin_env
           GH_TOKEN: ${{ github.token }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
+        run: &docker_survivor_pin_run |
           set -euo pipefail
           fork="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${PR_BASE}...${PR_HEAD}" --jq .merge_base_commit.sha)"
           [[ "$fork" =~ ^[0-9a-f]{40}$ ]]
@@ -6917,7 +6917,7 @@ jobs:
 
       # Smoke packages include declarations for every public entrypoint.
       - name: Prepare Docker smoke package
-        if: github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw')
+        if: needs.docker-survivor-fixtures.result == 'skipped' && (github.event_name == 'pull_request' || (inputs.release_gate && needs.preflight.outputs.ci_qualification != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (needs.preflight.outputs.ci_qualification == 'true' && needs.preflight.outputs.ci_shape == 'main') || needs.preflight.outputs.validation_tier == 'main' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && github.repository == 'openclaw/openclaw'))
         run: |
           set -euo pipefail
           pnpm clean:dist
@@ -6928,6 +6928,22 @@ jobs:
             --allow-unreleased-changelog --output-dir "$package_dir" \
             --output-name openclaw-current.tgz
           printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\n' "$package_dir" >> "$GITHUB_ENV"
+
+      - name: Download release survivor fixtures
+        if: needs.docker-survivor-fixtures.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: docker-survivor-fixture-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/docker-survivor-fixtures
+
+      - name: Use prebuilt release survivor fixtures
+        if: needs.docker-survivor-fixtures.result == 'success'
+        run: |
+          set -euo pipefail
+          directory="$RUNNER_TEMP/docker-survivor-fixtures"
+          printf 'OPENCLAW_CURRENT_PACKAGE_TGZ=%s/openclaw-current.tgz\nOPENCLAW_UPGRADE_SURVIVOR_PREBUILT_DIR=%s\n' \
+            "$directory" "$directory" >> "$GITHUB_ENV"
 
       - name: Run Docker seed tier
         env:
@@ -6981,6 +6997,86 @@ jobs:
 
       - *runner_memory_peak_step
 
+  docker-survivor-fixtures:
+    permissions:
+      contents: read
+    name: docker-survivor-fixture (${{ matrix.fixture }})
+    needs: [preflight]
+    if: github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')
+    runs-on: *docker_seed_runner
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture: [current, successor, previous]
+    steps:
+      # Reuse the checkout command without another nested checkout-step alias.
+      - name: Checkout
+        shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: *owned_checkout_run
+      - name: Pin previous schema reader source
+        if: matrix.fixture == 'previous'
+        env: *docker_survivor_pin_env
+        run: *docker_survivor_pin_run
+
+      - name: Select previous schema reader
+        if: matrix.fixture == 'previous'
+        id: previous
+        run: |
+          set -euo pipefail
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node 24.22.1
+          script=scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs
+          selected="$(node "$script" --select "$PWD" "$OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA")"
+          echo "selected=$selected" >> "$GITHUB_OUTPUT"
+          if [[ "$selected" == true ]]; then
+            cp "$script" "$RUNNER_TEMP/survivor-pack.mjs"
+            git -c credential.helper= checkout --detach "$OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA"
+          fi
+
+      - name: Setup Node environment
+        if: matrix.fixture != 'previous' || steps.previous.outputs.selected == 'true'
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          build-all-cache-scope: full
+          cache-mode: *cache_mode
+          node-version: "24.22.1"
+          install-bun: "false"
+          dependency-cache: *trusted_first_attempt_dependency_cache
+
+      - name: Build current or previous package
+        if: matrix.fixture == 'current' || steps.previous.outputs.selected == 'true'
+        env:
+          PACKAGE_NAME: ${{ matrix.fixture == 'previous' && 'previous.tgz' || 'openclaw-current.tgz' }}
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0"
+        run: |
+          set -euo pipefail
+          script=scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs
+          if [[ "$PACKAGE_NAME" == previous.tgz ]]; then
+            script="$RUNNER_TEMP/survivor-pack.mjs"
+          fi
+          node "$script" --pack "$RUNNER_TEMP/docker-survivor-fixture" "$PACKAGE_NAME"
+
+      - name: Build successor package
+        if: matrix.fixture == 'successor'
+        run: node scripts/e2e/lib/upgrade-survivor/release-fixture.mjs --prepare "$PWD" "$RUNNER_TEMP/docker-survivor-fixture"
+
+      - name: Upload survivor fixture
+        if: matrix.fixture != 'previous' || steps.previous.outputs.selected == 'true'
+        uses: *upload_artifact_v7
+        with:
+          name: docker-survivor-fixture-${{ matrix.fixture }}
+          path: ${{ runner.temp }}/docker-survivor-fixture/*.tgz
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 3
+
   pr-failure-report:
     permissions:
       contents: read
@@ -7022,6 +7118,7 @@ jobs:
       - android
       - android-screenshots
       - android-access-native
+      - docker-survivor-fixtures
       - docker-seed-e2e
       - published-driver-update
       - postgres-conformance
@@ -7106,6 +7203,7 @@ jobs:
       - android
       - android-screenshots
       - android-access-native
+      - docker-survivor-fixtures
       - docker-seed-e2e
       - published-driver-update
       - postgres-conformance
@@ -7179,6 +7277,7 @@ jobs:
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
             android-screenshots=${{ needs.android-screenshots.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && (github.event_name != 'workflow_dispatch' || inputs.release_gate) && needs.preflight.outputs.run_android_screenshots == 'true' }}
             android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
+            docker-survivor-fixtures=${{ needs.docker-survivor-fixtures.result }}|${{ github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ') }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
             published-driver-update=${{ needs.published-driver-update.result }}|${{ needs.preflight.outputs.run_published_driver_update == 'true' && needs.preflight.outputs.checkout_revision == github.sha }}
             postgres-conformance=${{ needs.postgres-conformance.result }}|${{ needs.preflight.outputs.run_postgres_conformance }}

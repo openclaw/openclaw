@@ -4430,6 +4430,31 @@ describe("ci workflow guards", () => {
       );
     });
 
+    it("counts every fixture row when a fork selects the Docker survivor", () => {
+      const headRepository = "contributor/openclaw";
+      const manifest = manifestWithHostedNodeRows(0, {
+        eventName: "pull_request",
+        runnerProfile: "hybrid",
+        changedPaths: ["scripts/e2e/upgrade-survivor-docker.sh"],
+        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: headRepository },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = emittedHostedRows(
+        { ...manifest.outputs, hybrid_hosted_offload: "false" },
+        { eventName: "pull_request", headRepository },
+      );
+      expect(rows.filter((job) => job === "docker-survivor-fixtures")).toHaveLength(3);
+      expect(rows.filter((job) => job === "docker-seed-e2e")).toHaveLength(1);
+      const mcpOnly = emittedHostedRows(
+        { ...manifest.outputs, hybrid_hosted_offload: "false", docker_seed_lanes: "mcp-channels" },
+        { eventName: "pull_request", headRepository },
+      );
+      expect(mcpOnly).not.toContain("docker-survivor-fixtures");
+      // Fork preflight runs before hybrid admission and is outside this downstream budget.
+      const admittedRows = rows.filter((job) => job !== "preflight");
+      expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(admittedRows.length);
+    });
+
     it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
       { label: "retry", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } },
       { label: "missing attempt", scopeEnv: { GITHUB_RUN_ATTEMPT: "" } },
@@ -14980,6 +15005,7 @@ describe("ci workflow guards", () => {
       "android",
       "android-screenshots",
       "android-access-native",
+      "docker-survivor-fixtures",
       "docker-seed-e2e",
       "published-driver-update",
       "postgres-conformance",
@@ -15041,6 +15067,14 @@ describe("ci workflow guards", () => {
         // Report unsuccessful PR checks; gate eligibility preserves the original allowance.
         expect(selection).toBe(
           "github.event_name == 'pull_request' && github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))",
+        );
+        continue;
+      }
+      if (job === "docker-seed-e2e") {
+        // A broken builder must not turn a selected Docker lane into an optional skip.
+        expect(selection).toBe("needs.preflight.outputs.run_docker_seed_e2e");
+        expect(workflow.jobs[job].if).toContain(
+          "needs.preflight.outputs.run_docker_seed_e2e == 'true'",
         );
         continue;
       }
@@ -15673,6 +15707,7 @@ describe("ci workflow guards", () => {
       for (const job of jobs) {
         const jobSelected = [
           "pr-failure-report",
+          "docker-survivor-fixtures",
           "ios-screenshot-capture",
           "ios-screenshot-evidence",
           "android-screenshots",

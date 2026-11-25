@@ -576,6 +576,10 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   exit 0
 fi
 
+PREBUILT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_PREBUILT_DIR:-}"
+if [ "$SCENARIO" = "release-update" ] && [ -n "$PREBUILT_DIR" ]; then
+  : "${OPENCLAW_CURRENT_PACKAGE_TGZ:?prebuilt survivor requires a current package tarball}"
+fi
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 if [ "$SCENARIO" = "release-update" ]; then
   docker_e2e_package_mount_args "$PACKAGE_TGZ"
@@ -584,10 +588,10 @@ if [ "$SCENARIO" = "release-update" ]; then
   UPGRADE_SCENARIO_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-fixtures.XXXXXX")"
   if [ "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" != downgrade ]; then
     node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
-      "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
+      "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "$PREBUILT_DIR"
   fi
   node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/schema-downgrade-source.mjs" \
-    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}"
+    "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE" "${OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA:-}" "$PREBUILT_DIR"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
     "") release_cases=(healthy crash) ;;

@@ -279,6 +279,16 @@ export function evaluateWorkflowExpression(
         result: context.jobResults?.["build-artifacts"] ?? "success",
         outputs: {},
       },
+      "docker-survivor-fixtures": {
+        result:
+          context.jobResults?.["docker-survivor-fixtures"] ??
+          (context.eventName === "pull_request" &&
+          context.preflightOutputs?.docker_seed_lanes
+            ?.split(" ")
+            .includes("release-update-survivor")
+            ? "success"
+            : "skipped"),
+      },
       ...Object.fromEntries(
         Object.entries(context.additionalNeeds ?? {}).map(([name, need]) => [
           name,
