@@ -1307,7 +1307,14 @@ check passed), cleanup deletes at once:
   that rebuilt a Git checkout in place kept their snapshots in the checkout's
   `.artifacts` directory, and cleanup finds those the same way. Update history
   records no usable location for a checkout outside the home directory, so
-  cleanup does not find that checkout's snapshots.
+  cleanup does not find that checkout's snapshots. In remaining legacy
+  in-place package routes (unconverted `--tag main`, Git-to-package channel
+  conversion, and node-only package installs before launcher conversion),
+  failed activation-time removal keeps a snapshot at that recorded location so
+  later cleanup can retry. The same pre-candidate cleanup fix needs a backport
+  to the shipped v2026.11.7 stable line; a new candidate cannot change code
+  already running in an older updater. Snapshots older updaters already renamed
+  into the disposable package namespace still need manual inspection.
 - superseded original-state captures, by the rules above.
 
 Doctor backups whose manifest predates `updateRunId` keep their previous rules: they

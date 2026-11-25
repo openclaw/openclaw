@@ -9,7 +9,9 @@ import type * as PluginLifecycleClient from "../cli/plugins-lifecycle-client.js"
 import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
 import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
 import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
+import { isVerifiedSuccessfulUpdate } from "../commands/update-capture-cleanup.js";
 import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
+import { createReadinessChecker } from "../gateway/server/readiness.js";
 import type * as UpdateNotices from "../gateway/update-run-notice.runtime.js";
 import * as watcherModule from "../gateway/update-run-watcher.js";
 import * as rootModule from "../infra/openclaw-root.js";
@@ -19,6 +21,8 @@ import { getUpdateRunAsync } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import * as pluginRuntime from "../plugins/runtime.js";
 import type * as ProcessExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -104,8 +108,29 @@ vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
 }));
 
 const directories: string[] = [];
+async function prepareReadiness(starting = false) {
+  const getReadiness = createReadinessChecker({
+    startedAt: Date.now(),
+    getStartupPending: () => starting,
+    channelManager: {
+      getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+      getAutostartSuppression: () => null,
+      isAmbientAutostartSuppressed: () => false,
+    },
+  });
+  (await getReadiness.prepare()).publish();
+  return getReadiness;
+}
+function activatePlugins(error?: string) {
+  const registry = createEmptyPluginRegistry();
+  if (error) {
+    registry.diagnostics.push({ level: "error", message: error });
+  }
+  pluginRuntime.setActivePluginRegistry(registry);
+}
 afterEach(async () => {
   await Promise.all(backgroundWork.splice(0));
+  await pluginRuntime.clearActivePluginRegistry();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -161,9 +186,23 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
   }
 }, 15_000);
 
-it.each(["succeeded", "rolled-back"] as const)(
-  "settles a %s trial at ready without letting its expired preparation lock win",
-  async (status) => {
+it.each([
+  { status: "succeeded", plugins: "healthy", readiness: "ready" },
+  { status: "succeeded", plugins: "failed", readiness: "ready" },
+  { status: "succeeded", plugins: "unknown", readiness: "ready" },
+  { status: "succeeded", plugins: "healthy", readiness: "pending" },
+  { status: "succeeded", plugins: "healthy", readiness: "unknown" },
+  { status: "rolled-back", plugins: "healthy", readiness: "ready" },
+] as const)(
+  "settles a $status trial before its expired lock with $plugins plugins and $readiness readiness",
+  async ({ status, plugins, readiness }) => {
+    const getReadiness =
+      readiness === "unknown" ? undefined : await prepareReadiness(readiness === "pending");
+    if (plugins === "unknown") {
+      vi.spyOn(pluginRuntime, "getActivePluginRegistry").mockReturnValue(null);
+    } else {
+      activatePlugins(plugins === "failed" ? "synthetic plugin activation failure" : undefined);
+    }
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
     directories.push(state);
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -202,7 +241,8 @@ it.each(["succeeded", "rolled-back"] as const)(
     await writeTrial(trial);
     await acquireUpdateLock({ runId: run.runId, pid: process.pid, deadlineMs: 0 });
     const work = new AsyncWorkScope();
-    await work.run(() => announceReady(null));
+    await work.run(() => announceReady(null, getReadiness));
+    await Promise.all(backgroundWork);
     await work.drain();
     const finished = await getUpdateRunAsync(run.runId, options);
     expect(finished).toMatchObject({
@@ -210,6 +250,9 @@ it.each(["succeeded", "rolled-back"] as const)(
       phase: "finished",
       origin: { releaseAdmission },
     });
+    expect(finished && isVerifiedSuccessfulUpdate(finished)).toBe(
+      status === "succeeded" && plugins === "healthy" && readiness === "ready",
+    );
     if (status === "succeeded") {
       expect(finished).toMatchObject({
         after: { version: VERSION },
@@ -217,7 +260,7 @@ it.each(["succeeded", "rolled-back"] as const)(
           runningVersion: VERSION,
           booted: true,
           serviceRunning: true,
-          coreReady: true,
+          coreReady: readiness !== "pending",
           versionMatch: true,
         },
       });
@@ -382,6 +425,8 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
 it.each(["warning", "error"] as const)(
   "keeps a committed update successful while background inspections report %s",
   async (finding) => {
+    activatePlugins();
+    const getReadiness = await prepareReadiness();
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-advice-"));
     directories.push(state);
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -431,10 +476,11 @@ it.each(["warning", "error"] as const)(
     };
     const work = new AsyncWorkScope();
     try {
-      await work.run(() => settleRunFromTrial(trial));
+      await work.run(() => settleRunFromTrial(trial, resolvePrefix(), getReadiness));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed?.status).toBe("succeeded");
+      expect(committed && isVerifiedSuccessfulUpdate(committed)).toBe(true);
       expect(committed?.steps).not.toContainEqual(
         expect.objectContaining({ step: "post-activation doctor inspections" }),
       );
@@ -446,6 +492,7 @@ it.each(["warning", "error"] as const)(
     }
     const inspected = await getUpdateRunAsync(run.runId, options);
     expect(inspected?.status).toBe("succeeded");
+    expect(inspected && isVerifiedSuccessfulUpdate(inspected)).toBe(true);
     expect(inspected?.steps).toContainEqual(
       expect.objectContaining({
         step: "post-activation doctor inspections",
@@ -524,6 +571,8 @@ it.each([undefined, true, false])(
       ...(acceptCapabilities === undefined ? {} : { acceptCapabilities }),
       outcome: { status: "succeeded", at: Date.now() },
     };
+    activatePlugins();
+    const getReadiness = await prepareReadiness();
     const failed = acceptCapabilities === undefined;
     const result = {
       status: failed ? "warning" : "ok",
@@ -558,10 +607,11 @@ it.each([undefined, true, false])(
     const work = new AsyncWorkScope();
     let finishedAtMs: number | null | undefined;
     try {
-      await work.run(() => settleRunFromTrial(trial));
+      await work.run(() => settleRunFromTrial(trial, resolvePrefix(), getReadiness));
       await entered.promise;
       const committed = await getUpdateRunAsync(run.runId, options);
       expect(committed).toMatchObject({ status: "succeeded", phase: "finished" });
+      expect(committed && isVerifiedSuccessfulUpdate(committed)).toBe(false);
       finishedAtMs = committed?.finishedAtMs;
       expect(finishedAtMs).toEqual(expect.any(Number));
       expect(committed?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
@@ -590,6 +640,7 @@ it.each([undefined, true, false])(
       phase: "finished",
       finishedAtMs,
     });
+    expect(maintained && isVerifiedSuccessfulUpdate(maintained)).toBe(acceptCapabilities === true);
     expect(maintained?.steps).toContainEqual(
       expect.objectContaining({
         step: "plugins",
@@ -618,6 +669,8 @@ it.each([undefined, true, false])(
 );
 
 it("stops plugin command work when the Gateway watcher closes", async ({ signal }) => {
+  activatePlugins();
+  const getReadiness = await prepareReadiness();
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-stop-"));
   directories.push(state);
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -670,23 +723,28 @@ process.stdout.write("maintenance-ready\\n");`,
   openOpenClawStateDatabase({ env: process.env });
   const run = await createUpdateRunAsync({ trigger: "control-ui" });
   try {
-    await settleRunFromTrial({
-      v: 2,
-      runId: run.runId,
-      phase: "committed",
-      target: "releases/new/openclaw",
-      previous: "releases/old/openclaw",
-      version: VERSION,
-      attempts: 1,
-      createdAt: Date.now(),
-      outcome: { status: "succeeded", at: Date.now() },
-    });
+    await settleRunFromTrial(
+      {
+        v: 2,
+        runId: run.runId,
+        phase: "committed",
+        target: "releases/new/openclaw",
+        previous: "releases/old/openclaw",
+        version: VERSION,
+        attempts: 1,
+        createdAt: Date.now(),
+        outcome: { status: "succeeded", at: Date.now() },
+      },
+      resolvePrefix(),
+      getReadiness,
+    );
     await withinTest(entered.promise, signal);
     await withinTest(watcher.stop(), signal);
     expect((await stopped.promise).termination).toBe("signal");
     expect(runPostActivationInspections).not.toHaveBeenCalled();
     const finished = await getUpdateRunAsync(run.runId);
     expect(finished?.status).toBe("succeeded");
+    expect(finished && isVerifiedSuccessfulUpdate(finished)).toBe(false);
     expect(finished?.steps).not.toContainEqual(expect.objectContaining({ step: "plugins" }));
   } finally {
     if (childPid && !commandFinished) {

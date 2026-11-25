@@ -1,3 +1,4 @@
+import type { ReadinessChecker } from "../gateway/health/types.js";
 import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
@@ -10,6 +11,7 @@ import {
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -25,7 +27,10 @@ import {
 const log = createSubsystemLogger("gateway/update-run");
 
 /** The committed core keeps serving while its own code updates and reloads installed plugins. */
-async function maintainTrialPlugins(trial: Trial): Promise<void> {
+async function maintainTrialPlugins(
+  trial: Trial,
+  getReadiness: ReadinessChecker | undefined,
+): Promise<void> {
   let pluginIds: string[] = [];
   let step: UpdateRunStep | undefined;
   try {
@@ -83,6 +88,21 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
     getAsyncWorkSignal()?.throwIfAborted();
     step.endedAtMs = Date.now();
     await recordUpdateRunStepAsync(trial.runId, step);
+    getAsyncWorkSignal()?.throwIfAborted();
+    const readiness = getReadiness?.();
+    const registry = getActivePluginRegistry();
+    if (step.status === "completed" && readiness && registry) {
+      // Core completion stays immediate; cleanup consumes observations only after plugin work settles.
+      const coreReady = readiness.coreReady ?? readiness.ready;
+      await recordUpdateRunVerificationAsync(trial.runId, {
+        coreReady,
+        settled: coreReady,
+        readyz: readiness.ready,
+        pluginErrors: registry.diagnostics
+          .filter((entry) => entry.level === "error")
+          .map((entry) => entry.message),
+      });
+    }
   } catch (error) {
     if (getAsyncWorkSignal()?.aborted) {
       return;
@@ -128,6 +148,7 @@ if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
 export async function settleRunFromTrial(
   trial: Trial | null,
   prefix = resolvePrefix(),
+  getReadiness?: ReadinessChecker,
 ): Promise<void> {
   if (trial?.outcome && !trial.reported && trial.runId) {
     const outcome = trial.outcome;
@@ -175,7 +196,7 @@ export async function settleRunFromTrial(
       const accepted = wakeUpdateRunWatcher(trial.runId, () =>
         withCommandProcessScope(async () => {
           try {
-            await maintainTrialPlugins(trial);
+            await maintainTrialPlugins(trial, getReadiness);
           } catch (error) {
             log.warn(
               `update run ${trial.runId} plugin result could not be recorded: ${String(error)}`,
@@ -263,9 +284,12 @@ export async function settleRunFromTrial(
 }
 
 /** Called after the listener is serving, including the old release after a rollback. */
-export async function announceReady(buildId: string | null): Promise<void> {
+export async function announceReady(
+  buildId: string | null,
+  getReadiness?: ReadinessChecker,
+): Promise<void> {
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
-    return await settleRunFromTrial(await readTrial());
+    return await settleRunFromTrial(await readTrial(), resolvePrefix(), getReadiness);
   }
   const { promise, resolve, reject } = Promise.withResolvers<Trial | null>();
   const onMessage = (message: unknown) => {
@@ -289,7 +313,7 @@ export async function announceReady(buildId: string | null): Promise<void> {
       }
     });
     const confirmed = await promise;
-    await settleRunFromTrial(confirmed ?? (await readTrial()));
+    await settleRunFromTrial(confirmed ?? (await readTrial()), resolvePrefix(), getReadiness);
     if (confirmed?.phase === "committed") {
       try {
         const { takeStateUpgradeRestoreCleanup } =

@@ -393,6 +393,20 @@ database objects, catalog snapshots, or queried row values.
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+After successful post-ready plugin maintenance, the serving release records the
+existing readiness owner's current core result and the active plugin registry's
+error diagnostics. Historical update cleanup can then recognize a qualified
+release update as the later verified success that supersedes preserved snapshots.
+Core update success still completes before this background work; advisory Doctor
+inspections do not hold up cleanup qualification or change that outcome. Failed
+plugin maintenance, cancellation, missing observations, or a core that is still
+starting leave snapshots protected until a later qualified update. This is a
+one-time observation, not a new readiness poller or a change to deletion rules.
+The serving release must contain this producer fix. Legacy in-place snapshot
+path preservation separately serves unconverted `--tag main`, Git-to-package
+conversion, and node-only package installs before launcher conversion on main.
+It needs a v2026.11.7 backport for that shipped updater's first hop.
+
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older
 releases do not have the post-ready job and do not migrate the schema forward.

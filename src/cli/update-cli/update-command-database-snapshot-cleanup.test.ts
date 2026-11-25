@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cleanupCompletedUpdateRecovery } from "../../commands/update-automatic-cleanup.js";
+import { discardPackageUpdateBackup } from "../../infra/package-update-filesystem.js";
 import { formatUpdateDatabaseSnapshotReceipt } from "../../infra/update-database-snapshot-receipt.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
@@ -219,6 +221,37 @@ it("removes only database snapshots a later verified update superseded", async (
     }
     expect(fs.existsSync(snapshots.unrelated!)).toBe(true);
     expect(fs.existsSync(snapshots.supersededRedactedRoot!)).toBe(true);
+  });
+});
+
+it("retries a package snapshot's failed activation cleanup through its recorded location", async () => {
+  await withSnapshotHistory(async (snapshots) => {
+    const snapshot = snapshots.supersededPackage!;
+    const parent = path.dirname(snapshot);
+    const prototype = Object.getPrototypeOf(await fsSafeRoot(parent)) as Root;
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted Root receiver.
+    const remove = prototype.remove;
+    const denied = vi.spyOn(prototype, "remove").mockImplementation(async function (
+      this: Root,
+      relativePath,
+      options,
+    ) {
+      const target = path.resolve(this.rootReal, relativePath);
+      if (target === snapshot || target.startsWith(snapshot + path.sep)) {
+        throw Object.assign(new Error("snapshot cleanup denied"), { code: "EACCES" });
+      }
+      return remove.call(this, relativePath, options);
+    });
+    await discardPackageUpdateBackup(snapshot, "pre-migration database snapshots", parent);
+    denied.mockRestore();
+
+    const result = await runCleanup({ yes: true });
+
+    expect(result.snapshots[snapshot]).toMatchObject({ outcome: "removed" });
+    expect(fs.existsSync(snapshot)).toBe(false);
+    expect(
+      fs.existsSync(path.join(parent, ".openclaw-package-backup-4242-1795000000000.databases")),
+    ).toBe(false);
   });
 });
 
