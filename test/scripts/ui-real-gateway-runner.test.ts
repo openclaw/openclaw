@@ -188,8 +188,9 @@ it.for([
   { rejectConfig: true, rejectOutput: true, sameError: true },
 ])(
   "joins config diagnostics before admission (%j)",
-  ({ rejectConfig, rejectOutput, sameError }, { signal }) =>
-    diagnosticFixture.run(async () => {
+  ({ rejectConfig, rejectOutput, sameError }, { signal }) => {
+    signal.throwIfAborted();
+    return diagnosticFixture.run(async () => {
       signal.throwIfAborted();
       const outputError = new Error("output rejected");
       const configError = sameError ? outputError : new Error("config rejected");
@@ -343,13 +344,15 @@ it.for([
         destination.off("error", sentinel);
       }
       expect(destination.rawListeners("error")).toEqual(originalListeners);
-    }),
+    });
+  },
 );
 
 it.for([false, true])(
   "rejects an unwritable diagnostic destination (errored: %s)",
-  (errored, { signal }) =>
-    diagnosticFixture.run(async () => {
+  (errored, { signal }) => {
+    signal.throwIfAborted();
+    return diagnosticFixture.run(async () => {
       signal.throwIfAborted();
       const failure = new Error("stdout already failed");
       const destination = process.stdout;
@@ -415,7 +418,8 @@ it.for([false, true])(
       for (const [key, descriptor] of originals) {
         expect(Object.getOwnPropertyDescriptor(destination, key)).toEqual(descriptor);
       }
-    }),
+    });
+  },
 );
 
 it.each(
