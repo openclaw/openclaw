@@ -87,6 +87,15 @@ struct ClientCredentialStartupTests {
         #expect(!recovery.message.contains("extended-stable"))
     }
 
+    @Test func `maintenance recovery keeps the lock path with its conditional guidance`() {
+        let path = "/tmp/synthetic-openclaw/legacy.lock"
+        let condition = "Remove that file only after its owner has stopped."
+        let detail = "Legacy Gateway lock " + path + String(repeating: " diagnostic", count: 60) + condition
+        let recovery = ClientCredentialStartup.maintenanceBlockedRecovery(detail: detail)
+        #expect(recovery.message.contains(path))
+        #expect(recovery.message.contains(condition))
+    }
+
     @Test func `a mismatched bundled build never dispatches preparation through another CLI`() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

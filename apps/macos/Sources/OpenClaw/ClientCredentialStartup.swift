@@ -3,6 +3,8 @@ import OpenClawNativeState
 
 @MainActor
 enum ClientCredentialStartup {
+    typealias CommandRunner = @Sendable ([String], String, [String: String]) async -> ShellExecutor.ShellResult
+
     /// The matching CLI reports a maintenance refusal without guessing the process owner.
     struct MaintenanceBlockedError: LocalizedError {
         let detail: String
@@ -17,7 +19,7 @@ enum ClientCredentialStartup {
             "Local client credential maintenance could not acquire the shared state. Another OpenClaw process may hold it, or its owner could not be verified. The app did not stop or replace that process.",
             "Resolve the reported maintenance conflict through the matching CLI, service manager, or original terminal, then choose Retry.",
             "Change the Gateway or app version only if recovery identifies a version incompatibility.",
-            "Details: " + detail.suffix(300),
+            "Details: " + detail,
         ].joined(separator: "\n\n")
         return ("Local credential maintenance is blocked", message)
     }
