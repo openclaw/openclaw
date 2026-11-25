@@ -607,6 +607,7 @@ struct ChatToolActivityRow: View, Equatable {
 
 private struct ChatToolActivityRowContent: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -968,7 +969,8 @@ private struct ChatToolActivityRowContent: View {
         Text(self.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
             .foregroundStyle(self.item.isError ? self.failureTitleTint : self.textColor)
-            .lineLimit(1)
+            // At accessibility sizes the name wraps instead of losing its end beside the status.
+            .lineLimit(self.dynamicTypeSize.isAccessibilitySize ? 3 : 1)
     }
 
     @ViewBuilder
