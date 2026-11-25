@@ -32,7 +32,6 @@ import {
   copyUpgradeConfigInputs,
   readUpgradeConfig,
   rewriteFilePrefix,
-  configPublicationRefusal,
   stageUpgradeConfigs,
 } from "./state-upgrade-config.js";
 import {
@@ -63,7 +62,6 @@ import {
   diffTree,
   fsyncPath,
   isSqliteFile,
-  isUpgradeRestorePath,
   listTreeFiles,
   normalizeSqliteText,
   pruneGenerations,
@@ -609,61 +607,11 @@ export async function upgradeStateDirectory(params: {
     ) {
       ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
     }
-    // Include changes participate in the same durable plan as the root config.
-    const publishedConfigTargets = new Set<string>();
-    const configRefusal = configPublicationRefusal(
-      configInputs,
-      ops,
-      mode === "chain" && configInside,
-    );
-    if (configRefusal) {
-      return { status: "refused", reason: configRefusal };
-    }
-    if (mode === "fallback" || !configInside) {
-      for (const [file, target] of configInputs) {
-        if (!fs.existsSync(target)) {
-          continue;
-        }
-        const original = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
-        if (original?.equals(fs.readFileSync(target))) {
-          continue;
-        }
-        const destination =
-          file === configPath ? file : (configFiles.get(file)?.canonicalPath ?? file);
-        if (publishedConfigTargets.has(destination)) {
-          continue;
-        }
-        publishedConfigTargets.add(destination);
-        ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
-      }
-    }
     for (let index = ops.length - 1; index >= 0; index--) {
       const op = ops[index]!;
-      if (publishedConfigTargets.has(op.live)) {
-        continue;
-      }
       if (fs.lstatSync(op.live, { throwIfNoEntry: false }) && !baseline.has(toShadow(op.live))) {
         warn(`Left uncopied live file unchanged: ${path.relative(stateDir, op.live)}`);
         ops.splice(index, 1);
-      }
-    }
-    if (protectedTrial) {
-      const includedTargets = new Set(
-        [...configFiles].flatMap(([file, { canonicalPath }]) =>
-          file === configPath ? [] : [file, canonicalPath],
-        ),
-      );
-      const uncovered = ops.find(
-        (op) =>
-          op.kind !== "add" &&
-          includedTargets.has(op.live) &&
-          !isUpgradeRestorePath(stateDir, op.live),
-      );
-      if (uncovered) {
-        return {
-          status: "refused",
-          reason: `The release trial cannot restore changed included config ${uncovered.live}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`,
-        };
       }
     }
     const retired = copyScope.retiredBackups;
@@ -689,7 +637,17 @@ export async function upgradeStateDirectory(params: {
     );
     checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
-    stageUpgradeConfigs(configInputs, configFiles, ops, workDir, stagedConfigs);
+    const configRefusal = stageUpgradeConfigs(
+      configInputs,
+      configFiles,
+      ops,
+      workDir,
+      stagedConfigs,
+      protectedTrial ? { stateDir, configPath } : undefined,
+    );
+    if (configRefusal) {
+      return { status: "refused", reason: configRefusal };
+    }
     await params.beforeSwap?.();
     const recovery = publishStateUpgradeRestore(restore, { ops });
     if (restore) {

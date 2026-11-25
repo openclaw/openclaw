@@ -433,6 +433,8 @@ describe("upgradeStateDirectory external config", () => {
     "mounted-fallback",
     "linked-refused",
     "linked-root-refused",
+    "linked-root-chain",
+    "linked-leaf-chain",
     "linked-chain",
     "external-state-include",
     "readonly-chain",
@@ -446,7 +448,8 @@ describe("upgradeStateDirectory external config", () => {
     const mountedWorkspace = mode === "mounted-chain" || mode === "mounted-fallback";
     const fallback = mode === "fallback" || mode === "mounted-fallback";
     const linkedInclude = mode === "linked-refused" || mode === "linked-chain";
-    const linkedRoot = mode === "linked-root-refused";
+    const linkedRoot = mode === "linked-root-refused" || mode === "linked-root-chain";
+    const leafRoot = mode === "linked-leaf-chain";
     const readonly = mode === "readonly-chain";
     const externalState = mode === "external-state-include";
     const fileMounted = mode === "file-mounted";
@@ -454,7 +457,7 @@ describe("upgradeStateDirectory external config", () => {
       ? root
       : linkedRoot
         ? path.join(stateDir, "node_modules", "config", "nested")
-        : workspaceTrial || mountedWorkspace || linkedInclude || readonly || fileMounted
+        : workspaceTrial || mountedWorkspace || linkedInclude || leafRoot || readonly || fileMounted
           ? stateDir
           : path.join(root, "config");
     const configPath = path.join(configDir, "openclaw.json");
@@ -484,6 +487,15 @@ describe("upgradeStateDirectory external config", () => {
     const original = JSON.stringify({ defaults: { workspace, maxConcurrent: 2 } });
     const migrated = JSON.stringify({ defaults: { workspace, maxConcurrent: 3 } });
     fs.writeFileSync(configPath, authored);
+    if (leafRoot) {
+      const target = path.join(stateDir, "root.json");
+      fs.renameSync(configPath, target);
+      fs.symlinkSync(target, configPath);
+    }
+    const migratedRoot = JSON.stringify({
+      ...JSON.parse(authored),
+      gateway: { mode: "local", port: 12345 },
+    });
     fs.writeFileSync(includePath, original);
     if (readonly) {
       fs.chmodSync(includePath, 0o400);
@@ -548,6 +560,11 @@ describe("upgradeStateDirectory external config", () => {
           fs.rmSync(shadowInclude);
         }
         fs.writeFileSync(shadowInclude, migrated);
+        if (linkedRoot || leafRoot) {
+          const rootConfig = JSON.parse(fs.readFileSync(shadow.configPath, "utf8"));
+          rootConfig.gateway.port = 12345;
+          fs.writeFileSync(shadow.configPath, JSON.stringify(rootConfig));
+        }
         if (mountedWorkspace) {
           fs.writeFileSync(`${shadowInclude}.bak`, original);
         }
@@ -562,18 +579,28 @@ describe("upgradeStateDirectory external config", () => {
         expect(fs.readFileSync(configPath, "utf8")).toBe(authored);
         expect(fs.readFileSync(includePath, "utf8")).toBe(original);
         expect(readUpgradeConfig(shadow.configPath).config.agents?.defaults?.maxConcurrent).toBe(3);
-        return mode === "refused" || mode === "linked-refused" || linkedRoot
+        return mode === "refused" || mode === "linked-refused" || mode === "linked-root-refused"
           ? "injected invalid migrated config"
           : undefined;
       },
     });
-    expect(fs.readFileSync(configPath, "utf8")).toBe(authored);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(
+      mode === "linked-root-chain" || leafRoot ? migratedRoot : authored,
+    );
+    if (leafRoot) {
+      expect(fs.lstatSync(configPath).isSymbolicLink()).toBe(true);
+    }
+    if (linkedInclude || linkedRoot) {
+      expect(fs.lstatSync(path.join(stateDir, "node_modules", "config")).isSymbolicLink()).toBe(
+        true,
+      );
+    }
     if (
       mode === "refused" ||
       mode === "trial" ||
       mode === "deep-trial" ||
-      linkedInclude ||
-      linkedRoot ||
+      mode === "linked-refused" ||
+      mode === "linked-root-refused" ||
       (fileMounted && process.platform === "linux")
     ) {
       expect(result.status).toBe("refused");

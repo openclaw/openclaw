@@ -118,7 +118,7 @@ const cases = [
   { release: "2026.7.35", failStep: undefined },
   { release: "2026.8.35", failStep: undefined },
   { release: "2026.9.37", failStep: undefined },
-  { release: "2026.10.10", failStep: undefined },
+  { release: "2026.10.10", failStep: undefined, linkedConfig: true },
   // The generic fallback cannot import 7.x session JSON files (a Doctor file import),
   // so forced-fallback cases use releases whose sessions already live in SQLite.
   { release: "2026.8.35", failStep: "injected-step" },
@@ -179,13 +179,28 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
 
   it.each(cases)(
     "$release (forced chain failure: $failStep)",
-    async ({ release, failStep }) => {
+    async ({ release, failStep, linkedConfig }) => {
       const instance = await createOpenClawTestInstance({
         name: `upgrade-${release}`,
         startTimeoutMs: 300_000,
       });
       try {
         installCorpus(instance, release);
+        const configDirectory = path.join(instance.stateDir, "config-inputs");
+        const configLink = path.join(instance.stateDir, "node_modules", "config");
+        if (linkedConfig) {
+          // Exercise real Doctor publication below a directory the tree diff skips.
+          fs.mkdirSync(configDirectory);
+          fs.mkdirSync(path.dirname(configLink), { recursive: true });
+          const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8"));
+          config.meta = { ...config.meta, lastTouchedAt: "2026-01-01T00:00:00.000Z" };
+          fs.writeFileSync(instance.configPath, JSON.stringify(config));
+          fs.renameSync(instance.configPath, path.join(configDirectory, "openclaw.json"));
+          fs.symlinkSync(configDirectory, configLink, "junction");
+          instance.configPath = path.join(configLink, "openclaw.json");
+          instance.env.OPENCLAW_CONFIG_PATH = instance.configPath;
+        }
+        const originalConfig = fs.readFileSync(instance.configPath, "utf8");
         const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
 
         if (failStep) {
@@ -244,6 +259,18 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           ? resolveRuntimeServiceBuildId()
           : JSON.parse(fs.readFileSync(new URL("../dist/build-info.json", import.meta.url), "utf8"))
               .buildId;
+        if (linkedConfig) {
+          expect(fs.lstatSync(configLink).isSymbolicLink()).toBe(true);
+          expect(JSON.parse(fs.readFileSync(instance.configPath, "utf8")).meta).not.toHaveProperty(
+            "lastTouchedAt",
+          );
+          expect(
+            fs.readFileSync(
+              path.join(configDirectory, `openclaw.json.pre-${builtBy ?? VERSION}`),
+              "utf8",
+            ),
+          ).toBe(originalConfig);
+        }
         for (const [file, digest] of before) {
           expect(sha256(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
         }

@@ -5,7 +5,13 @@ import JSON5 from "json5";
 import { readConfigIncludeFileWithGuards, resolveConfigIncludes } from "../config/includes.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fileStamp, fsyncPath, isSqliteFile, type UpgradeOp } from "./state-upgrade-tree.js";
+import {
+  fileStamp,
+  fsyncPath,
+  isSqliteFile,
+  isUpgradeRestorePath,
+  type UpgradeOp,
+} from "./state-upgrade-tree.js";
 
 export function readUpgradeConfig(configPath: string): {
   config: OpenClawConfig;
@@ -128,12 +134,55 @@ export function rewriteFilePrefix(file: string, source: string, destination: str
   return true;
 }
 
-/** Refuse an unpublishable config before any database swap becomes durable. */
-export function configPublicationRefusal(
-  inputs: ReadonlyMap<string, string>,
-  ops: readonly UpgradeOp[],
-  requirePlanned: boolean,
+export function stageUpgradeConfigs(
+  configInputs: ReadonlyMap<string, string>,
+  configFiles: ReadonlyMap<string, { canonicalPath: string }>,
+  ops: UpgradeOp[],
+  workDir: string,
+  stagedConfigs: Set<string>,
+  trial?: { stateDir: string; configPath: string },
 ): string | undefined {
+  // Captured inputs have one publication owner in chain and fallback upgrades.
+  // The tree diff skips directory links; replace its config writes with canonical
+  // destinations so both directory and leaf links remain intact.
+  const configTargets = new Set([
+    ...configInputs.keys(),
+    ...[...configFiles.values()].map((file) => file.canonicalPath),
+  ]);
+  for (let index = ops.length - 1; index >= 0; index--) {
+    if (ops[index]!.next && configTargets.has(ops[index]!.live)) {
+      ops.splice(index, 1);
+    }
+  }
+  for (const [file, target] of configInputs) {
+    if (!fs.existsSync(target)) {
+      continue;
+    }
+    const original = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+    const destination = configFiles.get(file)?.canonicalPath ?? file;
+    if (original?.equals(fs.readFileSync(target)) || ops.some((op) => op.live === destination)) {
+      continue;
+    }
+    ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
+  }
+  if (trial) {
+    const restoreRoot = fs.realpathSync(trial.stateDir);
+    // Frozen launchers also restore the root entry through parent links, but
+    // cannot discover an external leaf-link target from that entry's backup.
+    const rootEntry = fs.lstatSync(trial.configPath, { throwIfNoEntry: false })?.isSymbolicLink()
+      ? trial.configPath
+      : (configFiles.get(trial.configPath)?.canonicalPath ?? trial.configPath);
+    const uncovered = ops.find(
+      (op) =>
+        op.kind !== "add" &&
+        configTargets.has(op.live) &&
+        op.live !== rootEntry &&
+        !isUpgradeRestorePath(restoreRoot, configFiles.get(op.live)?.canonicalPath ?? op.live),
+    );
+    if (uncovered) {
+      return `The release trial cannot restore changed included config ${uncovered.live}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`;
+    }
+  }
   const mounts = new Set(
     process.platform === "linux"
       ? fs
@@ -142,35 +191,6 @@ export function configPublicationRefusal(
           .map((line) => decodeMountInfoPath(line.split(" ")[4] ?? ""))
       : [],
   );
-  for (const [file, target] of inputs) {
-    if (
-      !fs.existsSync(target) ||
-      !fs.existsSync(file) ||
-      fs.readFileSync(file).equals(fs.readFileSync(target))
-    ) {
-      continue;
-    }
-    if (
-      mounts.has(fs.realpathSync(file)) ||
-      (requirePlanned && !ops.some((op) => op.live === file))
-    ) {
-      return (
-        "Changed config " +
-        file +
-        " cannot be safely published. Run openclaw doctor --fix before retrying. Nothing live was changed."
-      );
-    }
-  }
-  return undefined;
-}
-
-export function stageUpgradeConfigs(
-  configInputs: ReadonlyMap<string, string>,
-  configFiles: ReadonlyMap<string, { canonicalPath: string }>,
-  ops: UpgradeOp[],
-  workDir: string,
-  stagedConfigs: Set<string>,
-): void {
   // A workspace include can be on another filesystem even when the root is not.
   // Stage its planned writes (including Doctor backups) beside their destinations.
   const configDirectories = new Set(
@@ -181,6 +201,11 @@ export function stageUpgradeConfigs(
   );
   for (const op of ops) {
     if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
+      // A file mount cannot be renamed, even when its contents are writable.
+      // Refuse before the database swap plan or recovery images become durable.
+      if (mounts.has(op.live)) {
+        return `Changed config ${op.live} cannot be safely published. Run openclaw doctor --fix before retrying. Nothing live was changed.`;
+      }
       const staged = path.join(
         path.dirname(op.live),
         `.${path.basename(op.live)}${path.basename(workDir)}`,
@@ -194,4 +219,5 @@ export function stageUpgradeConfigs(
       fsyncPath(path.dirname(op.next), true);
     }
   }
+  return undefined;
 }
