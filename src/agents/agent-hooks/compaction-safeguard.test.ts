@@ -231,6 +231,12 @@ it("sends distinct history and split-turn summary formats", async () => {
   expect(providerPrompts[0]).not.toContain("## Goal");
   expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
   expect(providerPrompts[0]).toContain("## Pending user asks");
+  expect(providerPrompts[0]).toContain(
+    "include only unfinished work the user requested or an actual unresolved tool/execution failure",
+  );
+  expect(providerPrompts[0]).toContain(
+    "Missing details about earlier verification do not revoke an approval or add a new gate to an already-approved request.",
+  );
   expect(providerPrompts[0]).not.toContain("## Original Request");
   expect(providerPrompts[1]).toContain("## Original Request");
   expect(providerPrompts[1]).not.toContain("## Pending user asks");

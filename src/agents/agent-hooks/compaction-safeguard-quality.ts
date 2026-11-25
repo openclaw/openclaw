@@ -138,6 +138,8 @@ export function buildCompactionStructureInstructions(
     identifierSectionInstruction,
     "Do not omit unresolved asks from the user.",
     "Record completed requests outside ## Pending user asks; list only unresolved user requests there.",
+    "Treat ## Open TODOs as unresolved actions: include only unfinished work the user requested or an actual unresolved tool/execution failure. Do not invent an audit, fact-check, verification gate, or stop/hold instruction.",
+    "Record settled user approvals and approved execution plans under ## Decisions. Missing details about earlier verification do not revoke an approval or add a new gate to an already-approved request.",
     "Use tool results to update task status: a check that ran and returned a failing result is completed, not an open TODO. Record its result under ## Decisions and keep only the remaining remediation in ## Open TODOs (e.g. failing tests -> fix the failures, not run the same tests again).",
     "Treat prior summaries as drafts to update: reconcile them with all supplied messages, including preserved turns and split-turn progress, and remove stale duplicate detail.",
     "Apply explicit corrections and observed results in the main sections. Preserve unaffected facts; retain superseded values only as clearly labeled history, never as competing current decisions.",
