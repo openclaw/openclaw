@@ -14,7 +14,7 @@ enum IOSOpenClawIDFeature {
     static let stagingClientID = "GowfnkQNWyllNYcatbyHsFEQayOmAyyg"
 
     static func configuration(info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> OpenClawIDConfiguration? {
-        .current(stagingClientID: stagingClientID, callbackScheme: "ai.openclaw.ios", info: info)
+        .current(stagingClientID: self.stagingClientID, callbackScheme: "ai.openclaw.ios", info: info)
     }
 
     /// Device, pending member request and Discovery session of this iPhone or iPad.
