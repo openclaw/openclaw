@@ -9,6 +9,7 @@ function resolveCiRunner({
   runnerBackend = "",
   dispatchId = "",
   releaseRunnerGroup = "",
+  crabboxRunnerLabel = "",
   preflightOutputs: p = {},
   ref = "",
   releaseGate = false,
@@ -317,16 +318,32 @@ function resolveCiRunner({
     default:
       throw new Error(`Unknown CI runner policy: ${jobId}`);
   }
-  // Docker release dispatches select a larger runner class even when ordinary dispatches use hosted Ubuntu.
+  // Docker release dispatches reserve a larger lease even when ordinary dispatches use hosted Ubuntu.
   if (
     jobId === "docker-seed-e2e" &&
     releaseDispatch &&
     upstream &&
     runAttempt === 1 &&
     firstAttemptBackend !== "github" &&
-    !releaseRunnerGroup
+    (crabboxRunnerLabel || !releaseRunnerGroup)
   ) {
     label = "blacksmith-16vcpu-ubuntu-2404";
+  }
+  const linux =
+    typeof label === "string" &&
+    (label.startsWith("ubuntu-") ||
+      (label.startsWith("blacksmith-") && label.includes("-ubuntu-")));
+  const rawMatrixLinux =
+    typeof matrix.runner === "string" &&
+    (matrix.runner.startsWith("ubuntu-") || matrix.runner.includes("-ubuntu-"));
+  const matrixGuarded = [
+    "checks-fast-core",
+    "checks-node-core-test-nondist-shard",
+    "check-shard",
+    "check-additional-shard",
+  ].includes(jobId);
+  if (crabboxRunnerLabel && linux && (!matrixGuarded || rawMatrixLinux)) {
+    return `${crabboxRunnerLabel}-${label}`;
   }
   return jobId !== "check-extension-package-boundary" && releaseDispatch && releaseRunnerGroup
     ? { group: releaseRunnerGroup, labels: label }

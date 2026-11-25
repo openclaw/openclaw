@@ -806,8 +806,13 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     extension_test_exclude_patterns_json,
     qualification_baselines_json,
     known_flaky_jobs_json,
+    crabbox_runner_label,
     ...wireOverrides
   } = overrides;
+  requireDispatch(
+    crabbox_runner_label === undefined || workflow.env.FULL_RELEASE_CRABBOX_RUNNER_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support Crabbox runner routing; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
   const laneInputs =
     extension_test_exclude_patterns_json === undefined && qualification_baselines_json === undefined
       ? undefined
@@ -835,6 +840,8 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     JSON.parse(overrides.trusted_workflow_json || "null"),
     intent,
     laneInputs,
+    undefined,
+    crabbox_runner_label,
   );
   requireDispatch(
     Object.keys(wireOverrides).every((key) => Object.hasOwn(definitions, key)),
@@ -1182,6 +1189,9 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
     retainedInputs = {
       ...retainedInputs,
       ...envelope.laneInputs,
+      ...(envelope.crabboxRunnerLabel === undefined
+        ? {}
+        : { crabbox_runner_label: envelope.crabboxRunnerLabel }),
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };

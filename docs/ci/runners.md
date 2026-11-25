@@ -117,6 +117,10 @@ admission, SKU restrictions, and a hard spending stop require provider controls.
 The CI preflight manifest resolves runner placement once and exposes named JSON
 selectors for downstream jobs and matrix rows. Runner policy lives in
 `scripts/lib/ci-runner-routing.mjs`; YAML anchors only reuse identical selectors.
+Full Release Validation can replace eligible Linux selectors with a unique
+campaign-and-capacity label. The controller registers that exact label and
+provisions only queued demand for its own campaign. Native and credentialed
+publishing jobs retain their existing placement.
 
 Current extension package boundary checks use the 16-class. Frozen targets keep
 their historical 32-class runner and compiler policy.

@@ -3,6 +3,10 @@ name: Full Release Candidate
 on:
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       ref:
         description: Exact target commit SHA
         required: true
@@ -61,12 +65,14 @@ env:
 jobs:
   discover:
     name: Find trusted release candidate
-    runs-on: &linux_runner_hybrid_small >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+    runs-on: &linux_4cpu_runner >-
+      ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, (github.repository == 'openclaw/openclaw' &&
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) ||
+      (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' &&
-      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))
-      || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
-      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04'))) ||
+      (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
+      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 10
     outputs:
       state: ${{ steps.discover.outputs.state }}
@@ -130,6 +136,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ inputs.ref }}
       prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
@@ -155,7 +162,7 @@ jobs:
     name: Resolve release candidate
     needs: [discover, prepare]
     if: always()
-    runs-on: *linux_runner_hybrid_small
+    runs-on: *linux_4cpu_runner
     timeout-minutes: 5
     outputs:
       state: ${{ steps.result.outputs.state }}

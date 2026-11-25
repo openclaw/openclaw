@@ -1942,6 +1942,7 @@ const runnerContext = {
   runnerBackend:
     process.env.OPENCLAW_CI_RAW_RUNNER_BACKEND ?? process.env.OPENCLAW_CI_RUNNER_BACKEND,
   dispatchId: process.env.OPENCLAW_CI_RUNNER_DISPATCH_ID || "",
+  crabboxRunnerLabel: process.env.OPENCLAW_CI_CRABBOX_RUNNER_LABEL || "",
   releaseRunnerGroup: process.env.OPENCLAW_CI_RELEASE_RUNNER_GROUP || "",
   ref: process.env.GITHUB_REF,
   releaseGate: process.env.OPENCLAW_CI_RELEASE_GATE === "true",

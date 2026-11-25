@@ -26,6 +26,7 @@ const shared = [
   "package-acceptance",
   "maturity-scorecard",
   "qa-profile-evidence",
+
   "qa-live-transports-convex",
   "npm-telegram-beta-e2e",
   "docker-release",
@@ -59,10 +60,9 @@ type Workflow = {
   jobs: Record<string, Job>;
 };
 const workflows = new Map(
-  [...dedicated, ...shared, ...mixed].map((name) => [
-    name,
-    parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow,
-  ]),
+  [...dedicated, ...shared, ...mixed, "android-release-e2e", "ci-published-driver-update"].map(
+    (name) => [name, parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")) as Workflow],
+  ),
 );
 const group = 'Release "reserved"';
 const context = {
@@ -115,6 +115,9 @@ describe("release runner reservation", () => {
       expect(evaluateWorkflowRunner(selector, context)).toBe(label);
     }
     for (const [name, workflow] of workflows) {
+      if (["android-release-e2e", "ci-published-driver-update"].includes(name)) {
+        continue;
+      }
       const pinnedJob = credentialedJobs[name];
       if (pinnedJob) {
         expect(credentialed(name, workflow.jobs[pinnedJob]!)).toBe(true);
@@ -169,6 +172,90 @@ describe("release runner reservation", () => {
             !release || credentialed(name, job) ? baseline : { group, labels: baseline },
           );
         }
+      }
+    }
+  });
+
+  it("routes full validation Linux workers to an isolated Crabbox pool and retains native runners", () => {
+    const label = "crabbox-frv-012345abcdef";
+    const native = /(?:windows|macos|xcode)/u;
+    const graph = new Set([
+      "full-release-validation",
+      "full-release-artifacts",
+      "full-release-candidate",
+      "full-release-child-evidence",
+      "plugin-prerelease",
+      "openclaw-release-checks",
+      "openclaw-npm-preflight",
+      "docker-release-prepare",
+      "openclaw-cross-os-release-checks-reusable",
+      "ci",
+      "openclaw-performance",
+      "plugin-npm-release",
+      "android-release-e2e",
+      "ci-published-driver-update",
+      ...shared.filter(
+        (name) => !["docker-release", "vercel-container-registry-publish"].includes(name),
+      ),
+    ]);
+    for (const name of graph) {
+      const workflow = workflows.get(name)!;
+      const runners =
+        name === "openclaw-cross-os-release-checks-reusable"
+          ? ["ubuntu-24.04", "windows-2025", "macos-26"]
+          : name === "docker-release-prepare"
+            ? ["ubuntu-24.04", "ubuntu-24.04-arm"]
+            : ["ubuntu-24.04"];
+      for (const runnerBackend of ["github", "hybrid", "blacksmith"] as const) {
+        for (const runAttempt of [1, 2]) {
+          for (const runner of runners) {
+            const ordinary = {
+              ...context,
+              dispatchId: "full-release-validation-123-1",
+              runnerBackend,
+              runAttempt,
+              matrix: { ...context.matrix, runner },
+            };
+            const selected = {
+              ...ordinary,
+              crabboxRunnerLabel: label,
+              trustedWorkflowJson: JSON.stringify({ crabboxRunnerLabel: label }),
+            };
+            for (const [jobName, job] of Object.entries(workflow.jobs)) {
+              // The failure reporter is PR-only; it cannot receive release dispatch inputs.
+              if (!job["runs-on"] || (name === "ci" && jobName === "pr-failure-report")) {
+                continue;
+              }
+              const baseline = evaluateWorkflowRunner(job["runs-on"], ordinary);
+              expect(
+                evaluateWorkflowRunner(job["runs-on"], selected),
+                `${name}/${jobName}/${runner}`,
+              ).toEqual(
+                name === "full-release-validation" ||
+                  (name === "openclaw-release-checks" &&
+                    jobName === "qa_live_telegram_release_checks")
+                  ? "ubuntu-24.04"
+                  : native.test(String(baseline)) || credentialed(name, job)
+                    ? baseline
+                    : `${label}-${baseline}`,
+              );
+            }
+          }
+        }
+      }
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
+        const child = /^\.\/\.github\/workflows\/(.+)\.yml$/u.exec(job.uses ?? "")?.[1];
+        if (!child || !graph.has(child)) {
+          continue;
+        }
+        expect(
+          evaluateWorkflowRunner(job.with?.crabbox_runner_label, {
+            ...context,
+            crabboxRunnerLabel: label,
+            trustedWorkflowJson: JSON.stringify({ crabboxRunnerLabel: label }),
+          }),
+          `${name}/${jobName} -> ${child}`,
+        ).toBe(label);
       }
     }
   });

@@ -3,10 +3,19 @@ name: Android Release E2E
 on:
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       target_sha:
         type: string
         required: true
   workflow_dispatch:
+    inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -17,7 +26,7 @@ env:
 
 jobs:
   qualify:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, 'ubuntu-24.04') || ('ubuntu-24.04') }}
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}

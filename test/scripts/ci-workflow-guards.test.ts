@@ -2419,10 +2419,16 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
         };
         for (const reservation of [
           {
+            crabboxRunnerLabel: "crabbox-frv-fixture",
+            releaseRunnerGroup: "Release reserved",
+            expected: "crabbox-frv-fixture-ubuntu-24.04",
+          },
+          {
+            crabboxRunnerLabel: "",
             releaseRunnerGroup: "Release reserved",
             expected: { group: "Release reserved", labels: "ubuntu-24.04" },
           },
-          { releaseRunnerGroup: "", expected: "ubuntu-24.04" },
+          { crabboxRunnerLabel: "", releaseRunnerGroup: "", expected: "ubuntu-24.04" },
         ]) {
           expect(
             evaluateWorkflowExpression(workflow.jobs[jobName]["runs-on"], {

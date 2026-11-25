@@ -150,6 +150,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       runner_group:
         description: Optional dedicated release runner group; empty retains the current labels
         required: false
@@ -437,9 +441,10 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: &linux_runner_ubuntu >-
-      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_ubuntu_runner >-
+      ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, ('ubuntu-24.04')) || (inputs.runner_group != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) ||
+      ('ubuntu-24.04')) }}
     timeout-minutes: 60
     outputs:
       tooling_sha: ${{ steps.tooling.outputs.sha }}
@@ -1182,7 +1187,7 @@ jobs:
   package_integrity:
     name: Package integrity
     needs: resolve_package
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
@@ -1227,7 +1232,7 @@ jobs:
     name: npm 12 install.sh acceptance
     needs: [resolve_package, package_integrity]
     if: inputs.suite_profile != 'telegram'
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 15
     permissions:
       actions: read
@@ -1333,6 +1338,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with: &docker_acceptance_inputs
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ inputs.runner_group }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha }}
       include_repo_e2e: false
@@ -1438,6 +1444,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ inputs.runner_group }}
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions || false }}
       package_spec: ${{ inputs.package_spec }}
@@ -1477,7 +1484,7 @@ jobs:
         package_telegram,
       ]
     if: always()
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

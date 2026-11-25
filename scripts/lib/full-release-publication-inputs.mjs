@@ -201,6 +201,7 @@ export function decodePublicationDispatchEnvelope(raw) {
       "publicationSelection",
       "laneInputs",
       "qualificationAdmission",
+      "crabboxRunnerLabel",
     ],
     "source-admission envelope",
   );
@@ -227,6 +228,13 @@ export function decodePublicationDispatchEnvelope(raw) {
       throw new Error("invalid source-admission tooling identity");
     }
   }
+  if (
+    value.crabboxRunnerLabel !== undefined &&
+    (typeof value.crabboxRunnerLabel !== "string" ||
+      !/^crabbox-frv-[a-f0-9]{12}$/u.test(value.crabboxRunnerLabel))
+  ) {
+    throw new Error("invalid Crabbox release runner label");
+  }
   const laneInputs =
     value.laneInputs === undefined ? undefined : normalizePublicationLaneInputs(value.laneInputs);
   if (
@@ -239,6 +247,9 @@ export function decodePublicationDispatchEnvelope(raw) {
   }
   return {
     trustedWorkflow,
+    ...(value.crabboxRunnerLabel === undefined
+      ? {}
+      : { crabboxRunnerLabel: value.crabboxRunnerLabel }),
     ...(value.qualificationAdmission === undefined
       ? {}
       : { qualificationAdmission: value.qualificationAdmission }),
@@ -255,6 +266,7 @@ export function publicationDispatchEnvelope(
   intent,
   laneInputs,
   qualificationAdmission,
+  crabboxRunnerLabel,
 ) {
   return publicationSourceJson(
     decodePublicationDispatchEnvelope(
@@ -262,6 +274,7 @@ export function publicationDispatchEnvelope(
         trustedWorkflow,
         ...intent,
         ...(laneInputs ? { laneInputs } : {}),
+        ...(crabboxRunnerLabel === undefined ? {} : { crabboxRunnerLabel }),
         ...(qualificationAdmission === undefined ? {} : { qualificationAdmission }),
       }),
     ),

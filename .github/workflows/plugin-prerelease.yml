@@ -7,6 +7,10 @@ on:
     - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       target_ref:
         description: Branch, tag, or full commit SHA to validate
         required: false
@@ -81,9 +85,10 @@ jobs:
   resolve_target:
     name: Resolve target ref
     if: github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_ubuntu_runner >-
+      ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, ('ubuntu-24.04')) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP !=
+      '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      toJSON('ubuntu-24.04'))) || ('ubuntu-24.04')) }}
     timeout-minutes: 5
     outputs:
       checkout_revision: ${{ steps.resolve.outputs.sha }}
@@ -115,7 +120,7 @@ jobs:
   preflight:
     name: Build plugin prerelease plan
     needs: [resolve_target]
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 15
     outputs:
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
@@ -551,7 +556,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    runs-on: ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404')) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404')) }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -588,7 +593,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')) }}
+    runs-on: ${{ inputs.crabbox_runner_label && (startsWith(matrix.runner, 'ubuntu-') || contains(matrix.runner, '-ubuntu-')) && format('{0}-{1}', inputs.crabbox_runner_label, (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04'))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04')))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04'))) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -674,7 +679,7 @@ jobs:
     name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner) }}
+    runs-on: ${{ inputs.crabbox_runner_label && (startsWith(matrix.runner, 'ubuntu-') || contains(matrix.runner, '-ubuntu-')) && format('{0}-{1}', inputs.crabbox_runner_label, (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner)) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner)) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -757,7 +762,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -941,6 +946,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       runner_group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
       ref: ${{ needs.resolve_target.outputs.checkout_revision }}
       include_repo_e2e: false
@@ -991,7 +997,7 @@ jobs:
       - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     timeout-minutes: 5
     steps:
       - name: Verify plugin prerelease suite
@@ -1046,5 +1052,6 @@ jobs:
       actions: read
     uses: ./.github/workflows/full-release-child-evidence.yml
     with:
+      crabbox_runner_label: ${{ inputs.crabbox_runner_label }}
       role: ${{ inputs.phase == 'candidate' && 'pluginPrereleaseCandidate' || 'pluginPrereleaseIndependent' }}
       target_sha: ${{ needs.resolve_target.outputs.checkout_revision }}

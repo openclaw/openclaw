@@ -571,6 +571,12 @@ describe("full-release-validation-at-sha", () => {
       error: "does not support packed lane inputs",
     },
     {
+      name: "Crabbox runner",
+      marker: "FULL_RELEASE_CRABBOX_RUNNER_CONTRACT",
+      input: "crabbox_runner_label=crabbox-frv-012345abcdef",
+      error: "does not support Crabbox runner routing",
+    },
+    {
       name: "declared flake",
       marker: undefined,
       input: 'known_flaky_jobs_json=["normalCi:checks-node"]',
@@ -1121,7 +1127,12 @@ describe("full-release-validation-at-sha", () => {
     runGit(fixture.checkout, ["tag", "-a", "v2026.8.1", fixture.targetSha, "-m", "base release"]);
     runGit(fixture.checkout, ["push", "origin", `refs/heads/${releaseRef}`, "refs/tags/v2026.8.1"]);
     expect(runGit(fixture.origin, ["tag", "--list", "v2026.8.1-2"])).toBe("");
-    const result = fixture.run(["--target-ref", releaseRef]);
+    const result = fixture.run([
+      "--target-ref",
+      releaseRef,
+      "-f",
+      "crabbox_runner_label=crabbox-frv-012345abcdef",
+    ]);
     expect(result.status, result.stderr).toBe(0);
     const creates = fixture
       .calls("POST")
@@ -1134,6 +1145,11 @@ describe("full-release-validation-at-sha", () => {
     expect(ghField(creates[0]!, "sha")).toBe(fixture.workflowSha);
     const payload = fixture.readPayload();
     expect(payload.body.ref).toBe(branch.slice("refs/heads/".length));
+    expect(payload.body.inputs).not.toHaveProperty("crabbox_runner_label");
+    expect(JSON.parse(payload.body.inputs.trusted_workflow_json ?? "{}")).toHaveProperty(
+      "crabboxRunnerLabel",
+      "crabbox-frv-012345abcdef",
+    );
     expect(payload.body.inputs).toMatchObject({
       ref: fixture.targetSha,
       expected_sha: fixture.targetSha,

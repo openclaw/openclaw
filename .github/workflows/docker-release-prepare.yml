@@ -3,6 +3,10 @@ name: Prepare Docker Release
 on:
   workflow_dispatch:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       tag:
         description: Intended immutable stable, extended-stable, or beta release tag
         required: true
@@ -18,6 +22,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      crabbox_runner_label:
+        description: Ephemeral Crabbox runner pool label; empty uses existing runners
+        type: string
+        default: ""
       tag:
         description: Intended immutable stable, extended-stable, or beta release tag
         required: true
@@ -55,9 +63,10 @@ env:
 
 jobs:
   resolve:
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_ubuntu_runner >-
+      ${{ inputs.crabbox_runner_label && format('{0}-{1}', inputs.crabbox_runner_label, ('ubuntu-24.04')) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP !=
+      '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      toJSON('ubuntu-24.04'))) || ('ubuntu-24.04')) }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -118,7 +127,7 @@ jobs:
   build:
     name: Prepare Docker images (${{ matrix.architecture }})
     needs: resolve
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner) }}
+    runs-on: ${{ inputs.crabbox_runner_label && (startsWith(matrix.runner, 'ubuntu-') || contains(matrix.runner, '-ubuntu-')) && format('{0}-{1}', inputs.crabbox_runner_label, (matrix.runner)) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(matrix.runner))) || (matrix.runner)) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -290,7 +299,7 @@ jobs:
   seal:
     name: Seal prepared Docker images
     needs: [resolve, build]
-    runs-on: *linux_runner_ubuntu
+    runs-on: *linux_ubuntu_runner
     permissions:
       actions: read
       contents: read

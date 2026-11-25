@@ -22,6 +22,7 @@ export interface PublicationIntent {
   publicationSelection: PublicationSelection | null;
 }
 export interface PublicationDispatchEnvelope extends PublicationIntent {
+  crabboxRunnerLabel?: string;
   qualificationAdmission?: Record<string, unknown>;
   trustedWorkflow: { ref: string; fullRef: string; sha: string } | null;
   laneInputs?: {
@@ -72,6 +73,7 @@ export function publicationDispatchEnvelope(
   intent: PublicationIntent,
   laneInputs?: PublicationDispatchEnvelope["laneInputs"],
   qualificationAdmission?: Record<string, unknown>,
+  crabboxRunnerLabel?: string,
 ): string;
 export function publicationSourceRequest(
   env: Record<string, string | undefined>,
