@@ -38,7 +38,8 @@ export function matchesInstalledProgramArguments(
   const actual = normalizeProgramArguments(actualArguments);
   const installed = normalizeProgramArguments(installedArguments);
   return (
-    actual.length === installed.length && actual.every((arg, index) => arg === installed[index])
+    actual.length === installed.length &&
+    actual.slice(0, -1).every((arg, index) => arg === installed[index])
   );
 }
 
