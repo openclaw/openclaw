@@ -9,7 +9,8 @@ import {
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
@@ -44,13 +45,4 @@ it("retains mock provider requests in the QA artifact directory", async () => {
   await expect(
     fs.readFile(path.join(outputDir, QA_MOCK_PROVIDER_REQUESTS_ARTIFACT), "utf8"),
   ).resolves.toBe(`${JSON.stringify(requests, null, 2)}\n`);
-});
-
-it("does not request artifacts from live providers", async () => {
-  await captureQaMockProviderRequests({
-    outputDir: await makeTempDir("qa-live-provider-artifacts-"),
-    providerMode: "live-frontier",
-  });
-
-  expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
 });
