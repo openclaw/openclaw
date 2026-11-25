@@ -1,18 +1,9 @@
-// Codex provider module implements model/runtime integration.
 import type {
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { applyCodexMigrationPlan, prepareTargetCodexAppServer } from "./apply.js";
-import { buildCodexMigrationPlan } from "./plan.js";
-import { discoverCodexSource, hasCodexSource } from "./source.js";
-
-function isMemoryOnlyMigration(ctx: MigrationProviderContext): boolean {
-  return Boolean(
-    ctx.itemKinds && ctx.itemKinds.length > 0 && ctx.itemKinds.every((kind) => kind === "memory"),
-  );
-}
+import { isOnlyMigrationKind } from "./scope.js";
 
 export function buildCodexMigrationProvider(
   params: {
@@ -22,16 +13,26 @@ export function buildCodexMigrationProvider(
   return {
     id: "codex",
     label: "Codex",
-    description:
-      "Import Codex memory and skills while keeping Codex native plugins and hooks explicit.",
-    supportedItemKinds: ["memory"],
+    description: [
+      "Import consolidated memories, selected Codex and personal AgentSkills, and selected eligible openai-curated plugins.",
+      "Auth credentials require separate consent. Sessions and chat history are not imported.",
+      "Codex config and hooks are saved for manual review, not activated. Source files are not moved or deleted.",
+    ].join(" "),
+    supportedItemKinds: ["memory", "auth"],
     async detect(ctx) {
+      const { discoverCodexSource, hasCodexSource } = await import("./source.js");
+      const memoryOnly = isOnlyMigrationKind(ctx, "memory");
+      const authOnly = isOnlyMigrationKind(ctx, "auth");
       const source = await discoverCodexSource({
         input: ctx.source,
-        memoryOnly: isMemoryOnlyMigration(ctx),
+        memoryOnly,
+        authOnly,
       });
-      const memoryOnly = isMemoryOnlyMigration(ctx);
-      const found = memoryOnly ? source.memoryFiles.length > 0 : hasCodexSource(source);
+      const found = memoryOnly
+        ? source.memoryFiles.length > 0
+        : authOnly
+          ? Boolean(source.authPath)
+          : hasCodexSource(source);
       return {
         found,
         source: source.root,
@@ -40,15 +41,21 @@ export function buildCodexMigrationProvider(
         message: found ? "Codex state found." : "Codex state not found.",
       };
     },
-    plan: buildCodexMigrationPlan,
+    async plan(ctx) {
+      const { buildCodexMigrationPlan } = await import("./plan.js");
+      return buildCodexMigrationPlan(ctx);
+    },
     deferredApply: { retrySafe: true },
     prepareApply(ctx) {
-      if (isMemoryOnlyMigration(ctx)) {
+      if (isOnlyMigrationKind(ctx, "memory") || isOnlyMigrationKind(ctx, "auth")) {
         return undefined;
       }
-      return prepareTargetCodexAppServer(ctx);
+      return import("./apply.js").then(({ prepareTargetCodexAppServer }) =>
+        prepareTargetCodexAppServer(ctx),
+      );
     },
     async apply(ctx, plan?: MigrationPlan) {
+      const { applyCodexMigrationPlan } = await import("./apply.js");
       return await applyCodexMigrationPlan({ ctx, plan, runtime: params.runtime });
     },
   };

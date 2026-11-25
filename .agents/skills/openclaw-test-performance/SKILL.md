@@ -24,7 +24,7 @@ guesswork.
    - Prefer `pnpm test:perf:groups --full-suite --allow-failures --output <file>`
      for full-suite ranking.
    - For bundled plugin breadth, run the smallest relevant `pnpm
-test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
+     test:extensions:batch <plugin[,plugin...]>` or plugin-inspector command
      before jumping to the full extension sweep.
    - For a scoped hotspot use:
      `/usr/bin/time -l pnpm test <file-or-files> --maxWorkers=1 --reporter=verbose`
@@ -93,12 +93,10 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use the current dedicated Linux
-   worker when available. On a maintainer workstation, use Crabbox-backed
-   Blacksmith Testbox:
-   - `pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>`
-   - add `--keep`/`--id <id-or-slug>` only when several commands must share one
-     warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.
+4. Follow `$openclaw-testing` for host selection. Trusted source benchmarks
+   can run locally with comparable machine/load conditions. Use `$crabbox` when
+   clean packaging, Linux/platform behavior, isolation, or an explicit remote
+   request is part of the proof; reuse and clean up only the owned lease.
 5. If plugin performance is package-artifact sensitive, switch to
    `release-openclaw-plugin-testing` and Package Acceptance rather than
    trusting source-only timing.
@@ -228,11 +226,9 @@ pnpm test:perf:groups --report <vitest-json> \
 ## Verification
 
 - Always run the targeted test surface that proves the change.
-- For source changes, run `pnpm check:changed` before push; in maintainer
-  Testbox mode run it in the warmed Testbox.
-- For test-only changes, run `pnpm test:changed` or the exact edited tests.
-- Run `pnpm build` when touching lazy-loading, bundled artifacts, package
-  boundaries, dynamic imports, build output, or public surfaces.
+- Follow [OpenClaw testing](../openclaw-testing/SKILL.md) for focused tests,
+  required builds, proof routing, and publication timing.
+- For test-only changes, run the exact edited tests through that owner's supported command.
 - For plugin SDK/barrel/runtime changes, compare exact commits with
   `pnpm plugin-sdk:api:diff -- --base <base-sha> --head <head-sha>` when the
   public API surface may drift. For PR-local proof, use the branch merge base
@@ -240,8 +236,8 @@ pnpm test:perf:groups --report <vitest-json> \
 - For plugin-suite perf fixes, verify at least one representative plugin batch
   plus the changed gate; use Package Acceptance if the bug only exists in a
   packed artifact.
-- If deps are missing/stale, run `pnpm install` and retry the exact failed
-  command once.
+- For missing or stale dependencies, follow [Source dependencies](../../../CONTRIBUTING.md#source-dependencies)
+  and the current worktree's owner instructions. Use a qualified proof route.
 - Use the report format:
 
 ```markdown

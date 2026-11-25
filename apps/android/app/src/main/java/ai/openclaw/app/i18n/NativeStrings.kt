@@ -91,7 +91,7 @@ internal fun notifyNativeLocaleChanged() {
 }
 
 @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
-private class LocaleResolvingStateFlow<T, R>(
+internal class LocaleResolvingStateFlow<T, R>(
   private val source: StateFlow<T>,
   private val transform: (T) -> R,
 ) : StateFlow<R> {
@@ -206,12 +206,7 @@ internal object NativeStringResources {
           localizedContext
             ?: context
               .localizedContext(
-                applicationLocaleMode
-                  ?.locales
-                  ?: LocaleManagerCompat
-                    .getApplicationLocales(context)
-                    .takeUnless { it.isEmpty }
-                  ?: context.readStoredAppLocales(),
+                checkNotNull(applicationLocaleMode).locales,
               ).also { localizedContext = it }
         }
     return localized.nativeString(source, *formatArgs)

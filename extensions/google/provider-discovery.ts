@@ -1,14 +1,13 @@
-// Google provider module implements model/runtime integration.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildGoogleStaticCatalogProvider,
   buildGoogleVertexStaticCatalogProvider,
 } from "./provider-catalog.js";
-import { resolveGoogleVertexConfigApiKey } from "./vertex-adc.js";
+import { resolveGoogleVertexConfigApiKey } from "./vertex-adc-config.js";
 
 const googleProviderDiscovery: ProviderPlugin = {
   id: "google",
-  label: "Google AI Studio",
+  label: "Gemini API key",
   docsPath: "/providers/models",
   auth: [],
   resolveConfigApiKey: ({ provider, env }) =>

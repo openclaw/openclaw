@@ -1,14 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { useMockHttp } from "../test-utils/mock-http.js";
-import {
-  fetchClawHubPromotion,
-  fetchClawHubPromotions,
-  fetchClawHubPromotionsFeed,
-  parseClawHubPromotionsFeed,
-} from "./clawhub-promotions.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchClawHubPromotion, fetchClawHubPromotions } from "./clawhub-promotions.js";
+import { captureClawHubJson } from "./clawhub.test-support.js";
 
 const CLAWHUB_URL = "https://clawhub.ai";
-const mockHttp = useMockHttp();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const validPromotion = {
   slug: "spring-models",
@@ -29,11 +27,9 @@ describe("promotion payload validation", () => {
     overrides: Record<string, unknown>,
     expected: RegExp,
   ): Promise<void> {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
-      reply: { json: { ...validPromotion, ...overrides } },
-    });
+    const request = captureClawHubJson({ ...validPromotion, ...overrides });
     await expect(fetchClawHubPromotion({ slug: "spring-models" })).rejects.toThrow(expected);
+    expect(request.url().toString()).toBe(`${CLAWHUB_URL}/api/v1/promotions/spring-models`);
   }
 
   it("rejects payloads without models", async () => {
@@ -73,144 +69,14 @@ describe("promotion payload validation", () => {
 
 describe("promotion fetches", () => {
   it("fetches and validates the active promotions list", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions`,
-      reply: { json: { promotions: [validPromotion] } },
-    });
+    const request = captureClawHubJson({ promotions: [validPromotion] });
     const promotions = await fetchClawHubPromotions();
     expect(promotions).toHaveLength(1);
+    expect(request.url().toString()).toBe(`${CLAWHUB_URL}/api/v1/promotions`);
   });
 
   it("rejects a list response without a promotions array", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions`,
-      reply: { json: { nope: true } },
-    });
+    captureClawHubJson({ nope: true });
     await expect(fetchClawHubPromotions()).rejects.toThrow(/promotions array/);
-  });
-
-  it("fetches a single promotion by slug", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/promotions/spring-models`,
-      reply: { json: validPromotion },
-    });
-    const promotion = await fetchClawHubPromotion({ slug: "spring-models" });
-    expect(promotion.title).toBe("Free Example models");
-  });
-});
-
-const { status: _status, active: _active, ...feedEntryFields } = validPromotion;
-const validFeed = {
-  schemaVersion: 1,
-  id: "clawhub-promotions",
-  generatedAt: "2026-07-05T00:00:00.000Z",
-  sequence: 3,
-  expiresAt: "2026-07-06T00:00:00.000Z",
-  entries: [{ type: "promotion", ...feedEntryFields }],
-};
-
-describe("parseClawHubPromotionsFeed", () => {
-  it("parses a valid feed snapshot", () => {
-    const feed = parseClawHubPromotionsFeed(validFeed);
-    expect(feed.sequence).toBe(3);
-    expect(feed.entries[0]?.slug).toBe("spring-models");
-    expect(feed.entries[0]?.models[0]?.modelRef).toBe("openrouter/example/model-alpha");
-  });
-
-  it("rejects wrong feed ids and schema versions", () => {
-    expect(() => parseClawHubPromotionsFeed({ ...validFeed, id: "other-feed" })).toThrow(/feed id/);
-    expect(() => parseClawHubPromotionsFeed({ ...validFeed, schemaVersion: 2 })).toThrow(
-      /schema version/,
-    );
-  });
-
-  it("rejects malformed sequences, timestamps, and entry types", () => {
-    expect(() => parseClawHubPromotionsFeed({ ...validFeed, sequence: -1 })).toThrow(/sequence/);
-    expect(() => parseClawHubPromotionsFeed({ ...validFeed, generatedAt: "not-a-date" })).toThrow(
-      /ISO dates/,
-    );
-    expect(() =>
-      parseClawHubPromotionsFeed({ ...validFeed, generatedAt: "1700000000000" }),
-    ).toThrow(/ISO dates/);
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        entries: [{ type: "advert", ...feedEntryFields }],
-      }),
-    ).toThrow(/entry type/);
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        expiresAt: "2026-07-04T00:00:00.000Z",
-      }),
-    ).toThrow(/expiresAt/);
-  });
-
-  it.each([
-    { field: "generatedAt", value: "2026-02-30T00:00:00.000Z" },
-    { field: "expiresAt", value: "2026-11-31T00:00:00.000Z" },
-  ])("rejects a calendar-invalid $field", ({ field, value }) => {
-    expect(() => parseClawHubPromotionsFeed({ ...validFeed, [field]: value })).toThrow(/ISO dates/);
-  });
-
-  it("accepts canonical ISO calendar dates including leap day", () => {
-    // Canonical leap day must still parse.
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        generatedAt: "2028-02-29T12:00:00.000Z",
-        expiresAt: "2028-03-01T12:00:00.000Z",
-      }),
-    ).not.toThrow();
-  });
-
-  it("holds feed entries to the promotion payload contracts", () => {
-    expect(() =>
-      parseClawHubPromotionsFeed({
-        ...validFeed,
-        entries: [{ type: "promotion", ...feedEntryFields, models: [{ modelRef: "bad ref; rm" }] }],
-      }),
-    ).toThrow(/modelRef/);
-  });
-});
-
-describe("fetchClawHubPromotionsFeed", () => {
-  it("fetches without auth, returns the parsed feed and etag", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
-      requestHeaders: (headers) =>
-        !Object.keys(headers).some((name) => name.toLowerCase() === "authorization"),
-      reply: { json: validFeed, headers: { etag: '"seq-3"' } },
-    });
-    const result = await fetchClawHubPromotionsFeed();
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.feed.sequence).toBe(3);
-      expect(result.etag).toBe('"seq-3"');
-    }
-  });
-
-  it("sends If-None-Match and maps 304 to not-modified", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
-      requestHeaders: { "if-none-match": '"seq-3"' },
-      reply: { status: 304 },
-    });
-    const result = await fetchClawHubPromotionsFeed({ etag: '"seq-3"' });
-    expect(result.status).toBe("not-modified");
-  });
-
-  it("does not extend the interactive feed timeout with transient retries", async () => {
-    mockHttp.intercept({
-      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
-      reply: new Error("offline"),
-    });
-
-    await expect(fetchClawHubPromotionsFeed()).rejects.toMatchObject({
-      message: "fetch failed",
-      cause: expect.objectContaining({ message: "offline" }),
-    });
-
-    expect(mockHttp.requests()).toHaveLength(1);
   });
 });

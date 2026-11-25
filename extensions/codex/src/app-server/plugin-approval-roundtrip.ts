@@ -2,10 +2,13 @@
  * Routes Codex app-server plugin approval prompts through OpenClaw's gateway
  * approval tool and maps gateway decisions back to Codex outcomes.
  */
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  ExecApprovalDecision,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isApprovalNotFoundError, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
 type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
@@ -31,8 +34,6 @@ const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
   String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
 );
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
-
 export type CodexApprovalKind = "command" | "file-change" | "permissions" | "other";
 const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
   command: "Command approval",
@@ -45,7 +46,6 @@ export function codexApprovalTimeoutText(kind: CodexApprovalKind): string {
   return `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
 }
 
-/** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
   | "approved-once"
   | "approved-session"
@@ -53,10 +53,7 @@ export type AppServerApprovalOutcome =
   | "unavailable"
   | "cancelled";
 
-type ApprovalRequestResult = {
-  id?: string;
-  decision?: ExecApprovalDecision | null;
-};
+export type PluginApprovalOutcome = AppServerApprovalOutcome | "timed-out";
 
 /** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
@@ -68,7 +65,9 @@ export async function requestPluginApproval(params: {
   toolName: string;
   toolCallId?: string;
   allowedDecisions?: ExecApprovalDecision[];
-}): Promise<ApprovalRequestResult | undefined> {
+  mcpTool?: { server: string; tool: string };
+  isMcpToolApprovalActive?: () => boolean;
+}): ReturnType<AgentHarnessHostCapabilities["requestApproval"]> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
     signal: params.signal,
@@ -80,24 +79,13 @@ export async function requestPluginApproval(params: {
     severity: params.severity,
     toolName: params.toolName,
     toolCallId: params.toolCallId,
+    ...(params.mcpTool
+      ? { mcpTool: params.mcpTool, isMcpToolApprovalActive: params.isMcpToolApprovalActive }
+      : {}),
     timeoutMs,
-    transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
+    transportTimeoutMs: timeoutMs + 10_000,
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
-  }) as Promise<ApprovalRequestResult | undefined>;
-}
-
-/** Detects the gateway's explicit null-decision marker for unavailable approvals. */
-export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
-  if (result === null || result === undefined || typeof result !== "object") {
-    return false;
-  }
-  let descriptor: PropertyDescriptor | undefined;
-  try {
-    descriptor = Object.getOwnPropertyDescriptor(result, "decision");
-  } catch {
-    return false;
-  }
-  return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
+  });
 }
 
 /** Waits for the gateway's final approval decision, respecting turn aborts. */
@@ -111,7 +99,7 @@ export async function waitForPluginApprovalDecision(params: {
     .waitForApproval({
       approvalId: params.approvalId,
       timeoutMs,
-      transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
+      transportTimeoutMs: timeoutMs + 10_000,
       signal: params.signal,
     })
     .catch((error: unknown) => {
@@ -120,31 +108,14 @@ export async function waitForPluginApprovalDecision(params: {
       }
       throw error;
     });
-  if (!params.signal) {
-    return await waitPromise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-      return;
-    }
-    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-    params.signal!.addEventListener("abort", onAbort, { once: true });
-  });
-  try {
-    return await Promise.race([waitPromise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
-    }
-  }
+  return await racePromiseWithAbortSignal(waitPromise, params.signal, ({ reason }) =>
+    toErrorObject(reason, "Non-Error rejection"),
+  );
 }
 
-/** Converts a gateway exec approval decision into the app-server approval outcome enum. */
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
-): AppServerApprovalOutcome {
+): Exclude<AppServerApprovalOutcome, "cancelled"> {
   switch (decision) {
     case "allow-once":
       return "approved-once";
@@ -157,8 +128,42 @@ export function mapExecDecisionToOutcome(
   }
 }
 
+/** Runs one complete host approval request and maps transport failures to a closed outcome. */
+export async function requestPluginApprovalOutcome(
+  params: Omit<Parameters<typeof requestPluginApproval>[0], "severity">,
+): Promise<PluginApprovalOutcome> {
+  try {
+    const requestResult = await requestPluginApproval({
+      ...params,
+      severity: "warning",
+    });
+    const approvalId = requestResult?.id;
+    if (!approvalId) {
+      return "unavailable";
+    }
+    const approvalResult =
+      requestResult?.decision === null
+        ? undefined
+        : await waitForPluginApprovalDecision({ ...params, approvalId });
+    if (params.signal?.aborted) {
+      return "cancelled";
+    }
+    if (approvalResult?.terminalReason === "timeout") {
+      return "timed-out";
+    }
+    const decision = approvalResult?.decision;
+    return mapExecDecisionToOutcome(
+      decision === "allow-always" && params.allowedDecisions?.includes("allow-always") === false
+        ? "allow-once"
+        : decision,
+    );
+  } catch {
+    return params.signal?.aborted ? "cancelled" : "denied";
+  }
+}
+
 export function truncateCodexApprovalDisplayText(value: string, maxLength: number): string {
-  return value.length <= maxLength ? value : `${truncateUtf16Safe(value, maxLength - 3)}...`;
+  return truncateWithMarker(value, maxLength, { marker: "...", reserve: 3, trimEnd: false });
 }
 
 export function stripDanglingCodexApprovalTerminalSequence(value: string): string {

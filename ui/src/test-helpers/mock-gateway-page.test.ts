@@ -1,5 +1,9 @@
 import { expect } from "vitest";
-import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
+import {
+  createControlUiMockGatewayInitScript,
+  createControlUiMockSameOriginGatewayScript,
+} from "./control-ui-e2e.ts";
 import { mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
 it("keeps serialized Gateway globals and storage out of the host realm", ({ gatewayPage }) => {
@@ -23,18 +27,20 @@ it("keeps serialized Gateway globals and storage out of the host realm", ({ gate
   expect(Object.entries(sessionStorage)).toEqual(hostStorage);
 });
 
+it("binds standalone mock pages to their serving Gateway", ({ gatewayPage }) => {
+  gatewayPage.execute(createControlUiMockSameOriginGatewayScript());
+
+  expect(gatewayPage.window["__OPENCLAW_NATIVE_CONTROL_AUTH__"]).toEqual({
+    gatewayUrl: "ws://mock-control-ui",
+  });
+});
+
 it("retires queued Gateway work and listeners when its page closes", async ({ gatewayPage }) => {
   const { window, execute } = gatewayPage;
   execute(
     createControlUiMockGatewayInitScript({
       methodResponses: {
-        "config.get": {
-          raw: '{"count":1}',
-          config: { count: 1 },
-          hash: "original",
-          valid: true,
-          issues: [],
-        },
+        "config.get": configSnapshot({ count: 1 }, "original", '{"count":1}'),
       },
     }),
   );

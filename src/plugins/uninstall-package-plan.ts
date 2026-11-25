@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setPluginEnabledInConfig } from "./toggle-config.js";
 
 const PLUGIN_PACKAGE_UNINSTALL_PLAN = Symbol.for("openclaw.pluginPackageUninstallPlan");
 
@@ -27,22 +28,27 @@ export function resolvePluginPackageUninstallPlan(
   ];
 }
 
-export function prepareConfigForPendingPluginDirectoryRemovalSet(
+export function prepareConfigForDisabledPluginSet(
   config: OpenClawConfig,
   pluginIds: readonly string[],
+  plannedUninstall?: OpenClawConfig,
 ): OpenClawConfig {
-  const entries = { ...config.plugins?.entries };
+  let disabled = config;
   for (const entryId of new Set(pluginIds)) {
-    entries[entryId] = {
-      ...entries[entryId],
-      enabled: false,
-    };
+    disabled = setPluginEnabledInConfig(disabled, entryId, false, { updateChannelConfig: false });
+  }
+  const plugins = { ...disabled.plugins };
+  if (plannedUninstall) {
+    // Remove proven load-path aliases in the guarded disable write. Once the
+    // package is deleted, a dangling alias can no longer recover its realpath.
+    if (plannedUninstall.plugins?.load) {
+      plugins.load = plannedUninstall.plugins.load;
+    } else {
+      delete plugins.load;
+    }
   }
   return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries,
-    },
+    ...disabled,
+    plugins,
   };
 }

@@ -12,11 +12,8 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import {
-  getGatewayTestPort,
-  installGatewayTestHooks,
-  startTestGatewayServer,
-} from "./test-helpers.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -60,9 +57,9 @@ describe("Gateway startup copied auth SecretRef isolation", () => {
     });
     await writeConfigFile(config);
 
-    const port = await getGatewayTestPort();
-    server = await startTestGatewayServer(port, { auth: { mode: "none" } });
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
+    const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
 
     expect(ready.status).toBe(200);
     const ownerId = resolveAuthProfileSecretOwnerId({ agentDir, profileId });

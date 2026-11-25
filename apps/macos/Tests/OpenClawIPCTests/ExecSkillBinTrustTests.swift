@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -7,7 +8,7 @@ struct ExecSkillBinTrustTests {
         let fixture = try Self.makeExecutable(named: "jq")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
             searchPaths: [fixture.root.path])
 
@@ -19,7 +20,7 @@ struct ExecSkillBinTrustTests {
         let fixture = try Self.makeExecutable(named: "jq")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
             searchPaths: [fixture.root.path])
         let resolution = ExecCommandResolution(
@@ -28,7 +29,7 @@ struct ExecSkillBinTrustTests {
             executableName: "jq",
             cwd: nil)
 
-        #expect(ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+        #expect(ExecApprovalEvaluator.isSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
     @Test func `skill auto allow rejects same basename at different path`() throws {
@@ -39,7 +40,7 @@ struct ExecSkillBinTrustTests {
             try? FileManager.default.removeItem(at: untrusted.root)
         }
 
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
             searchPaths: [trusted.root.path])
         let resolution = ExecCommandResolution(
@@ -48,13 +49,13 @@ struct ExecSkillBinTrustTests {
             executableName: "jq",
             cwd: nil)
 
-        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+        #expect(!ExecApprovalEvaluator.isSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
     @Test func `skill auto allow rejects path scoped invocation`() throws {
         let fixture = try Self.makeExecutable(named: "jq")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
             searchPaths: [fixture.root.path])
         let resolution = ExecCommandResolution(
@@ -64,7 +65,7 @@ struct ExecSkillBinTrustTests {
             executableName: "jq",
             cwd: nil)
 
-        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+        #expect(!ExecApprovalEvaluator.isSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
     @Test func `skill auto allow rejects retargeted PATH symlink`() throws {
@@ -82,7 +83,7 @@ struct ExecSkillBinTrustTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: second.path)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: first)
 
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["jq"]),
             searchPaths: [root.path])
         try FileManager.default.removeItem(at: alias)
@@ -92,7 +93,7 @@ struct ExecSkillBinTrustTests {
             cwd: nil,
             env: ["PATH": root.path]))
 
-        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+        #expect(!ExecApprovalEvaluator.isSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
     @Test func `skill auto allow rejects an alias to a shell carrier`() throws {
@@ -106,7 +107,7 @@ struct ExecSkillBinTrustTests {
             at: alias,
             withDestinationURL: URL(fileURLWithPath: "/bin/sh"))
 
-        let trust = SkillBinsCache._testBuildTrustIndex(
+        let trust = SkillBinsCache.buildTrustIndex(
             report: Self.makeReport(bins: ["skill-shell"]),
             searchPaths: [root.path])
         let resolution = try #require(ExecCommandResolution.resolve(
@@ -114,7 +115,7 @@ struct ExecSkillBinTrustTests {
             cwd: nil,
             env: ["PATH": root.path]))
 
-        #expect(!ExecApprovalEvaluator._testIsSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
+        #expect(!ExecApprovalEvaluator.isSkillAutoAllowed([resolution], trustedBinsByName: trust.pathsByName))
     }
 
     private static func makeExecutable(named name: String) throws -> (root: URL, path: String) {

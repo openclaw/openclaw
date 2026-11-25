@@ -1,11 +1,32 @@
 {
   "id": "mxc",
+  "categories": ["security"],
   "name": "MXC Sandbox Execution",
   "description": "OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.",
   "activation": {
     "onStartup": false,
     "onConfigPaths": ["plugins.entries.mxc"]
   },
+  "configGroups": [
+    {
+      "id": "sandbox-execution",
+      "title": "Sandbox execution",
+      "order": 10,
+      "properties": ["mxcBinaryPath", "containment", "timeoutSeconds"]
+    },
+    {
+      "id": "sandbox-policy",
+      "title": "Sandbox policy",
+      "order": 20,
+      "properties": ["network", "mxcPolicyPaths"]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "order": 30,
+      "properties": ["debug"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

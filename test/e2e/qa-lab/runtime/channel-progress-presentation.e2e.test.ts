@@ -1,35 +1,240 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer, type RequestListener } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type RequestListener,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { connect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { text as readBody } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
 } from "../../../../extensions/qa-lab/api.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  normalizeResponsesInput,
+  resolveMockSubagentTurn,
+} from "../../../../extensions/qa-lab/test-api.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  deliveryQueueEntriesQuery,
+  inflateDeliveryQueueRow,
+} from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { resolveDeliveryQueueAttemptCount } from "../../../../src/infra/delivery-queue-sqlite.types.js";
+import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
+import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
+import {
+  createRequestSummary,
+  deliveryErrorCode,
+  deliveryQueueDiagnostics,
+  rethrowWithDeliveryDiagnostics,
+} from "./delivery-diagnostics.test-support.js";
+import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const MODEL = "mock-openai/progress-fixture";
-const FINAL_MARKER = "QUIET-PROGRESS-FINAL";
+const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
 const HEADLINE = "Checking the requested work";
-const synthesizedDecoration =
-  /\p{Extended_Pictographic}|\b(?:Exec|Bash)\b|\btool calls?\b|elapsed/iu;
+// Draft progress uses compact tool rows; the Slack Block Kit card uses plain
+// "Exec — detail" rows; native Slack uses task_update chunks.
+const toolRow = /\b(?:Exec|Bash)\b/u;
+const slackCardToolRow = /\b(?:Exec|Bash) — /u;
+const nativeToolTitle = /^(?:Exec|Bash)\b/u;
+const failedToolRow = /\b(?:Exec|Bash): failed\b/u;
 type WireWrite = {
-  at: number;
   method: string;
   route: string;
   body: Record<string, unknown>;
-  accepted?: { id: string; action: string; text: string };
+  accepted?: { id: string; text: string };
+  identityOmitted?: true;
 };
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
+type Cleanup = () => Promise<void>;
+type Gateway = Awaited<ReturnType<ReturnType<typeof createQaGatewayChild>["start"]>>;
+
+function closeServer(server: Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function startProviderProxy(
+  cleanups: Cleanup[],
+  handle: (request: IncomingMessage, response: ServerResponse, raw: string) => Promise<void>,
+) {
+  const proxy = createServer((request, response) => {
+    void readBody(request)
+      .then((raw) => handle(request, response, raw))
+      .catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
+  });
+  const baseUrl = await listenLoopback(proxy, "provider proxy did not bind");
+  cleanups.push(async () => {
+    proxy.closeAllConnections();
+    await closeServer(proxy);
+  });
+  return `${baseUrl}/v1`;
+}
+
+function forwardProvider(request: IncomingMessage, raw: string, baseUrl: string) {
+  return fetch(new URL(request.url ?? "/", baseUrl), {
+    method: request.method,
+    headers: {
+      "content-type": "application/json",
+      ...Object.fromEntries(
+        ["session_id", "x-session-affinity"].flatMap((name) =>
+          typeof request.headers[name] === "string" ? [[name, request.headers[name]]] : [],
+        ),
+      ),
+    },
+    ...(request.method === "POST" ? { body: raw } : {}),
+  });
+}
+
+async function createPresentationTransport(
+  channel: "slack" | "discord",
+  cleanups: Cleanup[],
+  directory: string,
+  options?: Parameters<typeof startPresentationApi>[3],
+) {
+  const writes: WireWrite[] = [];
+  const adapter = await startOpenClawCrablineAdapter({
+    channel,
+    recorderPath: path.join(directory, "provider.jsonl"),
+  });
+  cleanups.push(() => adapter.close());
+  const api = await startPresentationApi(adapter, writes, directory, options);
+  cleanups.push(() => api.stop());
+  return { writes, adapter, api };
+}
+
+async function createDirectory(prefix: string, cleanups: Cleanup[]) {
+  const directory = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), prefix));
+  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+async function waitForChannel(gateway: Gateway, channel: string, fields: string[]) {
+  await waitForFact(async () => {
+    const status = asRecord(await gateway.call("channels.status", { probe: false }));
+    const accounts = asRecord(status.channelAccounts)[channel];
+    return (
+      Array.isArray(accounts) &&
+      accounts.some((account) => fields.every((field) => asRecord(account)[field] === true))
+    );
+  }, `${channel} ready`);
+}
+
+async function listSessions(gateway: Gateway, limit = 20) {
+  const { sessions } = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit }));
+  return Array.isArray(sessions) ? sessions.map(asRecord) : [];
+}
+
+function presentationGatewayOptions(
+  adapter: CrablineAdapter,
+  api: Awaited<ReturnType<typeof startPresentationApi>>,
+  providerBaseUrl: string,
+): Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0] {
+  return {
+    repoRoot: process.cwd(),
+    providerBaseUrl,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    controlUiEnabled: false,
+    transportBaseUrl: api.baseUrl,
+    transport: {
+      requiredPluginIds: adapter.requiredPluginIds,
+      createGatewayConfig: () => createGroupOnlyGatewayConfig(adapter),
+    },
+    runtimeEnvPatch: {
+      ...adapter.createProviderReadinessEnv({}),
+      ...(adapter.manifest.provider === "slack"
+        ? { SLACK_API_URL: `${api.baseUrl}/api/` }
+        : { NODE_EXTRA_CA_CERTS: api.caPath }),
+    },
+  };
+}
+
+async function deliverSlackEvent(adapter: CrablineAdapter, gateway: Gateway, event: unknown) {
+  if (adapter.manifest.provider !== "slack") {
+    throw new Error("expected Slack fixture");
+  }
+  const body = JSON.stringify(event);
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const signature = createHmac("sha256", adapter.manifest.signingSecret)
+    .update(`v0:${timestamp}:${body}`)
+    .digest("hex");
+  const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": `v0=${signature}`,
+    },
+    body,
+  });
+  expect(
+    delivered.ok,
+    `HTTP ${delivered.status}: ${(await delivered.text()).slice(0, 2000)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+  ).toBe(true);
+}
+
+async function injectProviderMessage(
+  adapter: CrablineAdapter,
+  text: string,
+  conversationId = adapter.manifest.provider === "slack" ? "C12345678" : "123456789012345678",
+  threadId?: string,
+) {
+  const inbound = adapter.createInbound({
+    input: {
+      conversation: { id: conversationId, kind: "group" },
+      senderId: adapter.manifest.provider === "slack" ? "U12345678" : "123456789012345679",
+      text,
+      ...(threadId ? { threadId } : {}),
+    },
+  });
+  const response = await fetch(inbound.providerUrl, {
+    method: "POST",
+    headers: inbound.providerHeaders,
+    body: JSON.stringify(inbound.providerBody),
+  });
+  expect(response.ok, await response.clone().text()).toBe(true);
+  return response;
+}
+
+function createGroupOnlyGatewayConfig(adapter: CrablineAdapter): OpenClawConfig {
+  const config = adapter.createGatewayConfig() as OpenClawConfig;
+  if (config.channels?.discord) {
+    const discord = config.channels.discord;
+    discord.dm = { ...discord.dm, enabled: false };
+    discord.dmPolicy = "disabled";
+  }
+  if (config.channels?.slack) {
+    config.channels.slack.allowFrom = [];
+    config.channels.slack.dmPolicy = "disabled";
+  }
+  return config;
+}
 
 function parseBody(text: string): Record<string, unknown> {
   try {
@@ -51,30 +256,34 @@ async function startPresentationApi(
   adapter: CrablineAdapter,
   writes: WireWrite[],
   directory: string,
+  {
+    rejectStop = false,
+    clearOrigin,
+    unidentifiedFinalMarker,
+  }: {
+    rejectStop?: boolean;
+    clearOrigin?: () => Promise<void>;
+    unidentifiedFinalMarker?: string;
+  } = {},
 ) {
   const manifest = adapter.manifest;
   const messages = new Map<string, Record<string, unknown>>();
   let nextMessage = 0;
   const listener: RequestListener = (request, response) => {
     void (async () => {
-      const buffers: Buffer[] = [];
-      for await (const chunk of request) {
-        buffers.push(Buffer.from(chunk));
-      }
-      const raw = Buffer.concat(buffers).toString("utf8");
+      const raw = await readBody(request);
       const body = parseBody(raw);
       const route = request.url ?? "/";
       const method = request.method ?? "GET";
       // Tokens are synthetic, but evidence never needs authentication fields.
       const { token: _token, ...visibleBody } = body;
-      const wire: WireWrite = { at: Date.now(), method, route, body: visibleBody };
+      const wire: WireWrite = { method, route, body: visibleBody };
       writes.push(wire);
-      const recordAccepted = (id: string, action: string) => {
+      const recordAccepted = (id: string) => {
         const message = messages.get(id);
         wire.accepted = {
           id,
-          action,
-          text: String(message?.text ?? message?.content ?? "").slice(0, 250),
+          text: (readStringValue(message?.text ?? message?.content) ?? "").slice(0, 250),
         };
       };
       const reply = (result: unknown, status = 200) => {
@@ -88,17 +297,30 @@ async function startPresentationApi(
             ? body.ts
             : `1800000000.${String(++nextMessage).padStart(6, "0")}`;
         if (["chat.startStream", "chat.appendStream", "chat.stopStream"].includes(operation)) {
+          // The admitted final waits for this progress stream to start, so route
+          // loss here is deterministic without changing the agent's tool call.
+          if (rejectStop && operation === "chat.startStream") {
+            await clearOrigin?.();
+          }
+          if (rejectStop && operation === "chat.stopStream") {
+            reply({ ok: false, error: "internal_error" });
+            return;
+          }
           if (operation !== "chat.startStream" && !messages.has(ts)) {
             reply({ ok: false, error: "message_not_found" });
             return;
           }
-          const previous = messages.get(ts) ?? { text: "" };
+          const previous = messages.get(ts) ?? {
+            text: "",
+            channel: body.channel,
+            thread_ts: body.thread_ts,
+          };
           const text = readChunks(body.chunks)
             .filter((chunk) => chunk.type === "markdown_text")
-            .map((chunk) => String(chunk.text ?? ""))
+            .map((chunk) => readStringValue(chunk.text) ?? "")
             .join("");
-          messages.set(ts, { ...previous, text: String(previous.text ?? "") + text });
-          recordAccepted(ts, operation);
+          messages.set(ts, { ...previous, text: (readStringValue(previous.text) ?? "") + text });
+          recordAccepted(ts);
           reply({ ok: true, channel: body.channel, ts });
           return;
         }
@@ -108,12 +330,12 @@ async function startPresentationApi(
             return;
           }
           messages.set(ts, body);
-          recordAccepted(ts, operation);
+          recordAccepted(ts);
           reply({ ok: true, channel: body.channel, ts, message: body });
           return;
         }
         if (operation === "chat.delete") {
-          recordAccepted(ts, operation);
+          recordAccepted(ts);
           messages.delete(ts);
           reply({ ok: true, channel: body.channel, ts });
           return;
@@ -137,12 +359,12 @@ async function startPresentationApi(
         if (method === "PATCH") {
           const updated = { ...messages.get(messageId), ...body };
           messages.set(messageId, updated);
-          recordAccepted(messageId, "updated");
+          recordAccepted(messageId);
           reply(updated);
           return;
         }
         if (method === "DELETE") {
-          recordAccepted(messageId, "deleted");
+          recordAccepted(messageId);
           messages.delete(messageId);
           response.writeHead(204).end();
           return;
@@ -160,7 +382,7 @@ async function startPresentationApi(
         },
         ...(method !== "GET" && method !== "HEAD" ? { body: raw } : {}),
       });
-      const responseText = await upstream.text();
+      let responseText = await upstream.text();
       if (upstream.ok && method === "POST") {
         const result = parseBody(responseText);
         if (
@@ -169,19 +391,34 @@ async function startPresentationApi(
           typeof result.id === "string"
         ) {
           messages.set(result.id, result);
-          recordAccepted(result.id, "sent");
+          recordAccepted(result.id);
+          if (
+            unidentifiedFinalMarker &&
+            (readStringValue(body.content) ?? "").includes(unidentifiedFinalMarker)
+          ) {
+            // Preserve the accepted platform message, but lose its response identity.
+            // Discord's real adapter must report ambiguity, never policy cancellation.
+            const { id: _id, ...unidentified } = result;
+            responseText = JSON.stringify(unidentified);
+            wire.identityOmitted = true;
+          }
         } else if (
           manifest.provider === "slack" &&
           route.endsWith("chat.postMessage") &&
           typeof result.ts === "string"
         ) {
           messages.set(result.ts, asRecord(result.message));
-          recordAccepted(result.ts, "sent");
+          recordAccepted(result.ts);
         }
       }
       response.writeHead(upstream.status, { "content-type": "application/json" });
       response.end(responseText);
-    })().catch(() => {
+    })().catch((error: unknown) => {
+      process.stderr.write(
+        `presentation fixture request failed: ${redactSensitiveText(
+          error instanceof Error ? (error.stack ?? error.message) : String(error),
+        )}\n`,
+      );
       if (!response.headersSent) {
         response.writeHead(500);
       }
@@ -220,11 +457,8 @@ async function startPresentationApi(
           listener,
         )
       : createServer(listener);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("presentation API did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(server, "presentation API did not bind a loopback port");
+  const port = Number(new URL(baseUrl).port);
   const tunnelSockets = new Set<Socket>();
   const proxy = createServer((_request, response) => response.writeHead(405).end());
   proxy.on("connect", (request, socket, head) => {
@@ -232,7 +466,7 @@ async function startPresentationApi(
       manifest.provider === "discord" ? new URL(manifest.endpoints.gatewayUrl) : undefined;
     const targetPort =
       request.url === "discord.com:443"
-        ? address.port
+        ? port
         : localGateway && request.url === localGateway.host
           ? Number(localGateway.port)
           : undefined;
@@ -256,82 +490,145 @@ async function startPresentationApi(
     socket.on("error", () => upstream.destroy());
     socket.on("close", () => upstream.destroy());
   });
-  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
-  const proxyAddress = proxy.address();
-  if (!proxyAddress || typeof proxyAddress === "string") {
-    throw new Error("proxy failed to bind");
-  }
+  const proxyUrl = await listenLoopback(proxy, "proxy failed to bind");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    proxyUrl: `http://127.0.0.1:${proxyAddress.port}`,
+    baseUrl,
+    proxyUrl,
     caPath,
     messages,
     stop: async () => {
       for (const socket of tunnelSockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        proxy.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeServer(proxy);
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await closeServer(server);
     },
   };
+}
+
+function sendCompletionResponse(response: ServerResponse, marker: string, sequence: number) {
+  const item = {
+    type: "message",
+    id: `announce-${sequence}`,
+    role: "assistant",
+    phase: "final_answer",
+    status: "completed",
+    content: [{ type: "output_text", text: marker, annotations: [] }],
+  };
+  const preamble = {
+    ...item,
+    id: `announce-preamble-${sequence}`,
+    phase: "commentary",
+    content: [{ type: "output_text", text: "Checking the delegated result", annotations: [] }],
+  };
+  const events = [
+    ...[preamble, item].flatMap((output, output_index) => [
+      {
+        type: "response.output_item.added",
+        output_index,
+        item: { ...output, status: "in_progress", content: [] },
+      },
+      { type: "response.output_item.done", output_index, item: output },
+    ]),
+    {
+      type: "response.completed",
+      response: {
+        id: `announce-response-${sequence}`,
+        status: "completed",
+        output: [preamble, item],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      },
+    },
+  ];
+  response.writeHead(200, { "content-type": "text/event-stream" });
+  response.end(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+  );
 }
 
 function progressConfig(
   config: OpenClawConfig,
   channel: "discord" | "slack",
   native: boolean,
+  toolProgress: boolean,
+  compact = false,
 ): OpenClawConfig {
   const streaming = {
     mode: "progress" as const,
-    progress: { label: HEADLINE },
+    progress: {
+      label: HEADLINE,
+      toolProgress,
+      ...(channel === "slack" ? { style: compact ? ("compact" as const) : ("card" as const) } : {}),
+    },
   };
+  // mutateConfig receives this fixture's own config; preserve unrelated fields.
+  const agents = (config.agents ??= {});
+  const model = { primary: MODEL, fallbacks: [] };
+  agents.defaults = { ...agents.defaults, model };
+  const entries = (agents.entries ??= {});
+  entries.qa = { ...entries.qa, identity: { name: "Progress QA" }, model };
+  config.messages = {
+    ackReaction: "eyes",
+    ackReactionScope: "all",
+    statusReactions: { enabled: true },
+  };
+  const channels = (config.channels ??= {});
+  if (channel === "slack") {
+    channels.slack = {
+      ...channels.slack,
+      replyToMode: "all",
+      streaming: { ...streaming, nativeTransport: native },
+    };
+  } else {
+    // The first Crabline guild join must not create a separate welcome turn.
+    channels.discord = {
+      ...channels.discord,
+      joinIntro: false,
+      ackReaction: "👀",
+      streaming,
+      commands: { native: false, nativeSkills: false },
+    };
+  }
+  return config;
+}
+
+function progressCase(
+  channel: "discord" | "slack",
+  tools: boolean,
+  overrides: Partial<{
+    native: boolean;
+    thread: string;
+    rejectStop: boolean;
+    compact: boolean;
+    failTool: boolean;
+  }> = {},
+) {
+  return { channel, tools, native: false, thread: "root", rejectStop: false, ...overrides };
+}
+
+async function writePluginManifest(directory: string, id: string) {
+  await fs.mkdir(directory);
+  await fs.writeFile(
+    path.join(directory, "openclaw.plugin.json"),
+    JSON.stringify({
+      id,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+  );
+}
+
+function pluginConfig(
+  config: OpenClawConfig,
+  id: string,
+  directory: string,
+): OpenClawConfig["plugins"] {
   return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: { ...config.agents?.defaults, model: { primary: MODEL, fallbacks: [] } },
-      entries: {
-        ...config.agents?.entries,
-        qa: {
-          ...config.agents?.entries?.qa,
-          identity: { name: "Progress QA" },
-          model: { primary: MODEL, fallbacks: [] },
-        },
-      },
-    },
-    messages: {
-      ackReaction: "eyes",
-      ackReactionScope: "all",
-      removeAckAfterReply: true,
-      statusReactions: { enabled: true },
-    },
-    channels: {
-      ...config.channels,
-      ...(channel === "slack"
-        ? {
-            slack: {
-              ...config.channels?.slack,
-              replyToMode: "all",
-              streaming: { ...streaming, nativeTransport: native },
-            },
-          }
-        : {
-            discord: {
-              ...config.channels?.discord,
-              // Crabline emits a fresh guild join with the first input. This proof
-              // owns the ordinary user turn, not the separate welcome-message turn.
-              joinIntro: false,
-              ackReaction: "👀",
-              streaming,
-              commands: { native: false, nativeSkills: false },
-            },
-          }),
-    },
+    ...config.plugins,
+    allow: [...(config.plugins?.allow ?? []), id],
+    load: { ...config.plugins?.load, paths: [...(config.plugins?.load?.paths ?? []), directory] },
+    entries: { ...config.plugins?.entries, [id]: { enabled: true } },
   };
 }
 
@@ -349,140 +646,808 @@ async function waitForFact(
   }
 }
 
+async function startTablePresentationFixture(
+  params: {
+    channel: "discord" | "slack";
+    native: boolean;
+    tools: boolean;
+    compact: boolean;
+    rejectStop: boolean;
+    clearOrigin: () => Promise<void>;
+  },
+  cleanups: Array<() => Promise<void>>,
+) {
+  const { channel, native, tools, compact, rejectStop } = params;
+  const directory = await createDirectory("channel-progress-", cleanups);
+  const mutationPluginId = "qa-progress-mutation";
+  const mutationPluginDir = path.join(directory, mutationPluginId);
+  if (rejectStop) {
+    await writePluginManifest(mutationPluginDir, mutationPluginId);
+    // Mutate through the running Gateway so its session owner publishes the route loss.
+    await fs.writeFile(
+      path.join(mutationPluginDir, "index.mjs"),
+      `import { applySessionEntryPatch, getSessionEntryAsync, listSessionEntriesAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+export default {
+  id: "${mutationPluginId}",
+  register(api) {
+    api.registerGatewayMethod("${mutationPluginId}.clearOrigin", async ({ params, respond }) => {
+      const scope = { agentId: "qa", storePath: resolveStorePath(api.config.session?.store, { agentId: "qa" }) };
+      const sessions = (await listSessionEntriesAsync(scope)).filter(({ entry }) =>
+        entry.delivery?.kind === "external" && entry.delivery.context.channel === "slack" &&
+        entry.delivery.context.to?.includes(params.conversationId));
+      if (sessions.length !== 1) {
+        respond(true, { count: sessions.length });
+        return;
+      }
+      const { sessionKey, entry } = sessions[0];
+      const target = { ...scope, sessionKey };
+      await applySessionEntryPatch({ ...target, expected: { sessionId: entry.sessionId },
+        patch: { delivery: { kind: "none" }, updatedAt: Date.now() },
+        skipMaintenance: true, requireWriteSuccess: true });
+      const after = await getSessionEntryAsync({ ...target, readConsistency: "latest" });
+      respond(true, { count: sessions.length, beforeSessionId: entry.sessionId,
+        afterSessionId: after?.sessionId, delivery: after?.delivery });
+    }, { scope: "operator.admin" });
+  },
+};`,
+    );
+  }
+  const { writes, adapter, api } = await createPresentationTransport(channel, cleanups, directory, {
+    rejectStop,
+    clearOrigin: params.clearOrigin,
+  });
+  const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
+  cleanups.push(() => provider.stop());
+  const owner = createQaGatewayChild();
+  cleanups.push(() =>
+    stopQaGatewayFixture(owner, {
+      preserveToDir: path.join(
+        process.cwd(),
+        ".artifacts",
+        "channel-progress-presentation",
+        path.basename(directory),
+      ),
+    }),
+  );
+  const gateway = await owner.start({
+    ...presentationGatewayOptions(adapter, api, `${provider.baseUrl}/v1`),
+    mutateConfig: (config) => {
+      const configured = progressConfig(config, channel, native, tools, compact);
+      if (rejectStop) {
+        configured.plugins = pluginConfig(configured, mutationPluginId, mutationPluginDir);
+      }
+      if (channel === "discord") {
+        configured.channels!.discord!.proxy = api.proxyUrl;
+        const qa = configured.agents!.entries!.qa!;
+        qa.tools = {
+          ...qa.tools,
+          alsoAllow: [...(qa.tools?.alsoAllow ?? []), "message"],
+        };
+      }
+      return configured;
+    },
+  });
+  await waitForChannel(gateway, channel, ["running", "connected"]);
+  return { writes, adapter, api, gateway };
+}
+
 describe("channel progress presentation through an isolated Gateway", () => {
   const cleanups: Array<() => Promise<void>> = [];
+  const sharedSlackCleanups: Array<() => Promise<void>> = [];
+  let sharedSlackFixture:
+    | Promise<Awaited<ReturnType<typeof startTablePresentationFixture>>>
+    | undefined;
+  let sharedSlackCaseIndex = 0;
+
+  afterAll(async () => {
+    // The identical Slack cases run last; startup and every acquired owner stay joined through teardown.
+    await Promise.allSettled(sharedSlackFixture ? [sharedSlackFixture] : []);
+    await runQaGatewayFixture(async () => {}, ...sharedSlackCleanups.splice(0).toReversed());
+  });
   afterEach(async () => {
-    const errors: unknown[] = [];
-    for (const cleanup of cleanups.splice(0).toReversed()) {
-      try {
-        await cleanup();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "progress fixture cleanup failed");
-    }
+    await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
   });
 
-  it.each([
-    { channel: "discord" as const, native: false },
-    { channel: "slack" as const, native: true },
-    { channel: "slack" as const, native: false },
-  ])(
-    "keeps $channel progress quiet (native=$native)",
-    async ({ channel, native }) => {
-      const directory = await fs.mkdtemp(
-        path.join(await fs.realpath(os.tmpdir()), "channel-progress-"),
-      );
-      cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
-      const writes: WireWrite[] = [];
-      const adapter = await startOpenClawCrablineAdapter({
-        channel,
-        recorderPath: path.join(directory, "provider.jsonl"),
-      });
-      cleanups.push(() => adapter.close());
-      const api = await startPresentationApi(adapter, writes, directory);
-      cleanups.push(() => api.stop());
-      const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
-      cleanups.push(() => provider.stop());
-      const owner = createQaGatewayChild();
-      cleanups.push(() => stopQaGatewayFixture(owner));
-      const environment = adapter.createProviderReadinessEnv({});
-      if (channel === "slack") {
-        environment.SLACK_API_URL = `${api.baseUrl}/api/`;
-      } else {
-        environment.NODE_EXTRA_CA_CERTS = api.caPath;
+  it("retires unphased Slack previews across tool-only assistant messages", async () => {
+    const directory = await createDirectory("slack-preview-", cleanups);
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
+    const requestLog = path.join(directory, "model-requests.jsonl");
+    const provider = spawn(
+      process.execPath,
+      [".agents/skills/telegram-e2e-userbot/scripts/triage-mock-openai.mjs"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          MOCK_PORT: "0",
+          MOCK_REQUEST_LOG: requestLog,
+          E2E_TRIAGE_SCENARIO: "preview-tool-boundaries",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const providerExited = once(provider, "exit");
+    void providerExited.catch(() => {});
+    cleanups.push(async () => {
+      if (provider.pid) {
+        if (provider.exitCode === null && provider.signalCode === null) {
+          provider.kill("SIGTERM");
+        }
+        await providerExited;
       }
-      const gateway = await owner.start({
-        repoRoot: process.cwd(),
-        useRepoCli: true,
-        providerBaseUrl: `${provider.baseUrl}/v1`,
-        providerMode: "mock-openai",
-        primaryModel: MODEL,
-        alternateModel: MODEL,
-        controlUiEnabled: false,
-        transportBaseUrl: api.baseUrl,
-        transport: {
-          requiredPluginIds: adapter.requiredPluginIds,
-          createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
-        },
-        runtimeEnvPatch: environment,
-        mutateConfig: (config) => {
-          const configured = progressConfig(config, channel, native);
-          if (channel === "discord") {
-            configured.channels!.discord!.proxy = api.proxyUrl;
+    });
+    let providerOutput = "";
+    let providerError: Error | undefined;
+    provider.on("error", (error) => {
+      providerError = error;
+    });
+    provider.stdout.on("data", (chunk: Buffer) => {
+      providerOutput += chunk.toString();
+    });
+    provider.stderr.on("data", (chunk: Buffer) => {
+      providerOutput += chunk.toString();
+    });
+    await waitForFact(() => {
+      if (providerError) {
+        throw providerError;
+      }
+      if (provider.exitCode !== null) {
+        throw new Error(`preview provider exited: ${providerOutput}`);
+      }
+      return /mock-openai listening on \d+/.test(providerOutput);
+    }, "preview provider listener");
+    const providerPort = /mock-openai listening on (\d+)/.exec(providerOutput)![1];
+    const owner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(owner));
+    const gateway = await owner.start({
+      ...presentationGatewayOptions(adapter, api, `http://127.0.0.1:${providerPort}/v1`),
+      transport: {
+        requiredPluginIds: adapter.requiredPluginIds,
+        createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+      },
+      mutateConfig: (config) => {
+        const configured = progressConfig(config, "slack", false, true);
+        configured.channels!.slack!.streaming = { mode: "partial", nativeTransport: false };
+        const modelProvider = configured.models!.providers!["mock-openai"]!;
+        modelProvider.api = "openai-completions";
+        for (const model of modelProvider.models) {
+          model.api = "openai-completions";
+          model.reasoning = false;
+        }
+        return configured;
+      },
+    });
+    await waitForChannel(gateway, "slack", ["running"]);
+    const injected = await injectProviderMessage(
+      adapter,
+      "Inspect the workspace with two exec calls, then report the result.",
+    );
+    if (adapter.manifest.provider !== "slack") {
+      throw new Error("expected Slack fixture");
+    }
+    await deliverSlackEvent(adapter, gateway, asRecord(await injected.json()).event);
+    const finalText = "PREVIEW_FINAL_25592";
+    await waitForFact(
+      () => [...api.messages.values()].some((message) => message.text === finalText),
+      "Slack final answer",
+    );
+    await waitForFact(async () => {
+      return (await listSessions(gateway)).some(
+        (session) => String(session.key).includes(":slack:") && session.hasActiveRun === false,
+      );
+    }, "Slack turn settlement");
+    const previewWasVisible = writes.some((write) =>
+      write.accepted?.text.includes("PREVIEW_PREAMBLE_25592"),
+    );
+    expect(previewWasVisible).toBe(true);
+    const remainingMessages = [...api.messages.values()].map((message) => message.text);
+    expect(remainingMessages).toEqual([finalText]);
+    const modelRequests = (await fs.readFile(requestLog, "utf8")).trim().split("\n").map(parseBody);
+    // The shared provider log also records requests outside Chat Completions.
+    const toolResultCounts = modelRequests.flatMap((request) =>
+      Array.isArray(request.messages)
+        ? [request.messages.map(asRecord).filter((message) => message.role === "tool").length]
+        : [],
+    );
+    expect(toolResultCounts).toEqual([0, 1, 2]);
+  }, 120_000);
+
+  it("records suppressed Slack announcements without claiming delivery", async () => {
+    const directory = await createDirectory("slack-announce-", cleanups);
+    const cancelledMarker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
+    const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
+    const observerModel = "mock-openai/observer-failure-fixture";
+    const pluginId = "qa-announce-suppression";
+    const suppressionLog = "QA Slack announcement cancelled by fixture policy";
+    const pluginDir = path.join(directory, pluginId);
+    await writePluginManifest(pluginDir, pluginId);
+    await fs.writeFile(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+      id: ${JSON.stringify(pluginId)},
+      register(api) {
+        api.on("message_sending", (event) => {
+          if (!event.content.includes(${JSON.stringify(cancelledMarker)})) return;
+          api.logger.info(${JSON.stringify(suppressionLog)});
+          return { cancel: true, cancelReason: "synthetic announcement policy" };
+        });
+      }
+    };`,
+    );
+    const { writes, adapter, api } = await createPresentationTransport(
+      "slack",
+      cleanups,
+      directory,
+    );
+    const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL, observerModel] });
+    cleanups.push(() => provider.stop());
+    const completions: string[] = [];
+    const tasks: Array<Record<string, unknown>> = [];
+    let releaseRequester: (() => void) | undefined;
+    let requesterHeld = false;
+    const slowRequesterCases = new Set<string>();
+    const caseNames = ["visible", "restart"] as const;
+    const settledRequesterCases: string[] = [];
+    const observerFailures = () =>
+      gateway
+        .logs()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            const value = asRecord(JSON.parse(line));
+            return value.message === "session observer disabled after consecutive failures"
+              ? [value]
+              : [];
+          } catch {
+            return [];
           }
-          return configured;
-        },
-      });
-      await waitForFact(async () => {
-        const status = asRecord(await gateway.call("channels.status", { probe: false }));
-        const accounts = asRecord(status.channelAccounts)[channel];
-        return (
-          Array.isArray(accounts) &&
-          accounts.some((account) => {
-            const state = asRecord(account);
-            return state.running === true && (channel !== "discord" || state.connected === true);
-          })
+        });
+    // The shared terminal fixture intentionally requests a direct fallback.
+    // Supply a visible model final over HTTP to exercise automatic-final receipts.
+    const providerBaseUrl = await startProviderProxy(cleanups, async (request, response, raw) => {
+      const body = parseBody(raw);
+      const turn = resolveMockSubagentTurn(normalizeResponsesInput(body.input));
+      const currentText = turn?.text ?? "";
+      const completion = turn?.kind === "completion" || turn?.kind === "settled";
+      if (String(body.model).endsWith("observer-failure-fixture")) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: { type: "invalid_request_error", message: "synthetic observer failure" },
+          }),
         );
-      }, `${channel} ready`);
-      const inbound = adapter.createInbound({
-        input: {
-          conversation: {
-            id: channel === "slack" ? "C12345678" : "123456789012345678",
-            kind: "group",
+        return;
+      }
+      if (!requesterHeld && currentText.includes("Subagent terminal reply QA check:")) {
+        requesterHeld = true;
+        await new Promise<void>((resolve) => {
+          releaseRequester = resolve;
+        });
+      }
+      const marker = completion
+        ? [deliveredMarker, cancelledMarker].find((candidate) => currentText.includes(candidate))
+        : undefined;
+      if (marker) {
+        completions.push(marker);
+        sendCompletionResponse(response, marker, completions.length);
+        return;
+      }
+      const requesterCase = [
+        ...currentText.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
+      ].at(-1)?.[1];
+      if (requesterCase && !slowRequesterCases.has(requesterCase)) {
+        slowRequesterCases.add(requesterCase);
+        // A deliberately slow provider crosses the observer's 30s final-digest
+        // threshold; this is scenario input, not a wait for eventual delivery.
+        await sleep(31_000);
+      }
+      const workerCase = /Subagent terminal reply QA worker:\s*(visible|restart)/i
+        .exec(currentText)?.[1]
+        ?.toLowerCase();
+      if (workerCase) {
+        // Child completion starts another requester run. Keep it pending until
+        // the current observer records its outcome, or that run is superseded.
+        await waitForFact(
+          () =>
+            observerFailures().length ===
+            caseNames.findIndex((caseName) => caseName === workerCase) * 2 + 1,
+          `${workerCase} requester observer settled before child completion`,
+        );
+        settledRequesterCases.push(workerCase);
+      }
+      const upstream = await forwardProvider(request, raw, provider.baseUrl);
+      response.writeHead(upstream.status, {
+        "content-type": upstream.headers.get("content-type") ?? "application/json",
+      });
+      response.end(await upstream.text());
+    });
+    const owner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(owner));
+    const gateway = await owner.start({
+      ...presentationGatewayOptions(adapter, api, providerBaseUrl),
+      mockSessionObserverUrl: provider.sessionObserverUrl,
+      alternateModel: observerModel,
+      mutateConfig: (config) => {
+        config.logging = { ...config.logging, consoleStyle: "json" };
+        const agents = (config.agents ??= {});
+        agents.defaults = { ...agents.defaults, utilityModel: observerModel };
+        const entries = (agents.entries ??= {});
+        entries.qa = { ...entries.qa, utilityModel: observerModel };
+        config.plugins = pluginConfig(config, pluginId, pluginDir);
+        const channels = (config.channels ??= {});
+        channels.slack = {
+          ...channels.slack,
+          replyToMode: "all",
+          streaming: { mode: "off" },
+        };
+        return config;
+      },
+    });
+    await waitForChannel(gateway, "slack", ["running"]);
+    const observerEvents: Array<Record<string, unknown>> = [];
+    const client = await connectGatewayClient({
+      url: gateway.wsUrl,
+      token: gateway.token,
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      onEvent: (event) => {
+        if (event.event === "session.observer") {
+          observerEvents.push(asRecord(event.payload));
+        }
+      },
+    });
+    cleanups.push(() => disconnectGatewayClient(client));
+    await client.request("sessions.observer.visibility", { visible: true });
+    let threadId: string | undefined;
+    for (const [caseIndex, caseName] of caseNames.entries()) {
+      const injected = await injectProviderMessage(
+        adapter,
+        `Subagent terminal reply QA check: ${caseName}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`,
+        "C12345678",
+        threadId,
+      );
+      if (adapter.manifest.provider !== "slack") {
+        throw new Error("expected Slack fixture");
+      }
+      const receipt = asRecord(await injected.json());
+      threadId ??= readStringValue(asRecord(receipt.message).ts);
+      expect(threadId).toBeTypeOf("string");
+      await deliverSlackEvent(adapter, gateway, receipt.event);
+      if (caseName === "visible") {
+        await waitForFact(() => Boolean(releaseRequester), "requester model admission");
+        const session = (await listSessions(gateway)).find((entry) =>
+          String(entry.key).includes(":slack:"),
+        );
+        expect(session?.key).toBeTypeOf("string");
+        await client.request("sessions.messages.subscribe", { key: session!.key, agentId: "qa" });
+        releaseRequester!();
+      }
+      let terminalTask: Record<string, unknown> | undefined;
+      await waitForFact(async () => {
+        await provider.terminalRequesters.settle(gateway);
+        const run = readQaSubagentRuns(gateway.runtimeEnv).find(
+          (entry) => entry.label === `qa-terminal-${caseName}`,
+        );
+        terminalTask = run
+          ? {
+              sessionKey: run.requesterSessionKey,
+              status: run.execution.status,
+              deliveryStatus: run.delivery?.status,
+            }
+          : undefined;
+        return (
+          terminalTask?.status === "terminal" &&
+          ["failed", "delivered"].includes(String(terminalTask.deliveryStatus))
+        );
+      }, `settled ${caseName} task`);
+      tasks.push(terminalTask!);
+      // Child-result settlement is not evidence of a visible channel send.
+      expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe("delivered");
+      if (caseName === "visible") {
+        await waitForFact(() => gateway.logs().includes(suppressionLog), "Slack suppression hook");
+      }
+      // Delivery settlement does not join the final observer digest. Wait before
+      // admitting another turn on this session so its failure cannot be dropped.
+      await waitForFact(
+        () => observerFailures().length === (caseIndex + 1) * 2,
+        `${caseName} completion observer settled before the next Slack turn`,
+      );
+    }
+    expect(settledRequesterCases).toEqual(caseNames);
+    expect(tasks[1]?.sessionKey).toBe(tasks[0]?.sessionKey);
+    expect(completions.filter((marker) => marker === cancelledMarker)).toHaveLength(1);
+    expect(
+      writes.filter((write) => JSON.stringify(write.body).includes(cancelledMarker)),
+    ).toHaveLength(0);
+    expect(
+      [...api.messages.values()].filter((message) =>
+        (readStringValue(message.text) ?? "").includes(deliveredMarker),
+      ),
+    ).toHaveLength(1);
+    expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBe(4);
+    // Isolated completion rejects an error stop reason before observer logging and
+    // records the provider's formatted diagnostic as the cause.
+    expect(
+      observerFailures().every((failure) =>
+        String(failure.error).startsWith("400 synthetic observer failure"),
+      ),
+    ).toBe(true);
+    // The observer warning carries its run-owned consecutive-failure count;
+    // provider transport starts from overlapping runs cannot be partitioned by warning order.
+    expect(observerFailures().every((failure) => failure.consecutiveFailures === 2)).toBe(true);
+    expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
+  }, 240_000);
+
+  it("settles a consumed child result while Discord tracks an unidentified send", async () => {
+    const directory = await createDirectory("discord-announce-", cleanups);
+    const marker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
+    const { writes, adapter, api } = await createPresentationTransport(
+      "discord",
+      cleanups,
+      directory,
+      {
+        unidentifiedFinalMarker: marker,
+      },
+    );
+    const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL] });
+    cleanups.push(() => provider.stop());
+    let completions = 0;
+    const requesterKey = "agent:qa:discord:channel:123456789012345678";
+    let requesterSessionId: string | undefined;
+    let requesterSettledBeforeWorker = false;
+    let parentAcknowledged = false;
+    let taskRunId: string | undefined;
+    let childSessionKey: string | undefined;
+    const providerBaseUrl = await startProviderProxy(cleanups, async (request, response, raw) => {
+      const turn = resolveMockSubagentTurn(normalizeResponsesInput(parseBody(raw).input));
+      const currentText = turn?.text ?? "";
+      const completion = turn?.kind === "completion" || turn?.kind === "settled";
+      const worker =
+        !completion && /Subagent terminal reply QA worker:\s*visible/i.test(currentText);
+      const requester =
+        !completion && !worker && currentText.includes("Subagent terminal reply QA check:");
+      if ((requester && !requesterSessionId) || worker) {
+        await waitForFact(
+          async () => {
+            const listing = asRecord(await gateway.call("sessions.list", { limit: 100 }));
+            const row = Array.isArray(listing.sessions)
+              ? listing.sessions.map(asRecord).find((session) => session.key === requesterKey)
+              : undefined;
+            if (requester) {
+              if (row?.hasActiveRun !== true || typeof row.sessionId !== "string") {
+                return false;
+              }
+              requesterSessionId = row.sessionId;
+              return true;
+            }
+            // Exercise idle announcement delivery, not the active-requester handoff.
+            // The exact admitted session must finish before the child provider replies.
+            requesterSettledBeforeWorker = Boolean(
+              requesterSessionId &&
+              row?.sessionId === requesterSessionId &&
+              row.hasActiveRun === false,
+            );
+            return requesterSettledBeforeWorker;
           },
-          senderId: channel === "slack" ? "U12345678" : "123456789012345679",
-          text: `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`sleep 3\`. After that command completes, reply exactly \`${FINAL_MARKER}\`.`,
+          requester ? "requester admission" : "requester terminal before worker completion",
+        );
+      }
+      if (completion && currentText.includes(marker)) {
+        sendCompletionResponse(response, marker, ++completions);
+        return;
+      }
+      const upstream = await forwardProvider(request, raw, provider.baseUrl);
+      const upstreamText = await upstream.text();
+      if (requester && upstream.ok) {
+        const snapshots: unknown = await fetch(`${provider.baseUrl}/debug/requests`).then(
+          (snapshotResponse) => snapshotResponse.json(),
+        );
+        const snapshot = Array.isArray(snapshots)
+          ? snapshots.map(asRecord).findLast((entry) => entry.raw === raw)
+          : undefined;
+        const toolOutput = parseBody(readStringValue(snapshot?.toolOutput) ?? "");
+        const spawned =
+          asRecord(toolOutput.tool).name === "sessions_spawn"
+            ? asRecord(asRecord(toolOutput.result).details)
+            : toolOutput;
+        const acceptedRunId = readStringValue(spawned.runId);
+        const acceptedChildSessionKey = readStringValue(spawned.childSessionKey);
+        if (
+          snapshot?.requestKind === "tool-continuation" &&
+          spawned.status === "accepted" &&
+          acceptedRunId &&
+          acceptedChildSessionKey
+        ) {
+          // A normal final acknowledgement leaves completion with the child.
+          parentAcknowledged = true;
+          taskRunId = acceptedRunId;
+          childSessionKey = acceptedChildSessionKey;
+          sendCompletionResponse(
+            response,
+            "The worker is running; I will send its result here.",
+            0,
+          );
+          return;
+        }
+      }
+      response.writeHead(upstream.status, {
+        "content-type": upstream.headers.get("content-type") ?? "application/json",
+      });
+      response.end(upstreamText);
+    });
+    const owner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(owner));
+    const gateway = await owner.start({
+      ...presentationGatewayOptions(adapter, api, providerBaseUrl),
+      mockSessionObserverUrl: provider.sessionObserverUrl,
+      mutateConfig: (config) => ({
+        ...config,
+        channels: {
+          ...config.channels,
+          discord: {
+            ...config.channels?.discord,
+            joinIntro: false,
+            proxy: api.proxyUrl,
+            streaming: { mode: "off" },
+            commands: { native: false, nativeSkills: false },
+          },
         },
-      });
-      const injected = await fetch(inbound.providerUrl, {
-        method: "POST",
-        headers: inbound.providerHeaders,
-        body: JSON.stringify(inbound.providerBody),
-      });
-      expect(injected.ok).toBe(true);
+        tools: { ...config.tools, codeMode: false, toolSearch: false },
+      }),
+    });
+    let task: ReturnType<typeof readQaSubagentRuns>[number] | undefined;
+    let taskRuns: ReturnType<typeof readQaSubagentRuns> = [];
+    let sawUnidentifiedSendInQueue = false;
+    let delivery: NonNullable<typeof task>["delivery"];
+    const settlementHistory: Array<{ at: number; state: object }> = [];
+    let lastSettlementState: string | undefined;
+    const observedQueueIds = new Set<string>();
+    await waitForChannel(gateway, "discord", ["connected"]);
+    const injected = await injectProviderMessage(
+      adapter,
+      "Subagent terminal reply QA check: visible. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.",
+    );
+    await injected.arrayBuffer();
+    const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("isolated Gateway state directory missing");
+    }
+    await waitForFact(async () => {
+      await provider.terminalRequesters.settle(gateway);
+      const runs = readQaSubagentRuns(gateway.runtimeEnv);
+      taskRuns = runs.filter((entry) => entry.runId === taskRunId);
+      task = taskRuns[0];
+      const run = task;
+      delivery = run?.childSessionKey === childSessionKey ? run?.delivery : undefined;
+      // The child Gateway cannot invalidate this process's physical-database queue cache.
+      // Read committed rows directly, retaining the canonical filters and projection.
+      const pendingRows = withOpenClawStateDatabaseReadOnly(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, "unfinished")
+              .select("queue_name")
+              .orderBy("enqueued_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.flatMap((row) => {
+            const entry = inflateDeliveryQueueRow(row);
+            return entry ? [projectOutboundDelivery(row.queue_name, entry)] : [];
+          }),
+        { env: gateway.runtimeEnv },
+      );
+      const pending = pendingRows.find(
+        (entry) =>
+          entry.channel === "discord" &&
+          entry.lastError === "platform send returned no delivery identity",
+      );
+      // Transport recovery can reconcile the queue row independently of child settlement.
+      sawUnidentifiedSendInQueue ||= pending?.recoveryState === "unknown_after_send";
+      // Keep IDs from before the send becomes ambiguous, so a later
+      // compacted receipt can still be matched after it loses its session key.
+      for (const row of pendingRows) {
+        if (
+          observedQueueIds.size < 6 &&
+          row.channel === "discord" &&
+          (row === pending ||
+            row.session?.key === requesterKey ||
+            (childSessionKey && row.session?.key === childSessionKey))
+        ) {
+          observedQueueIds.add(row.id);
+        }
+      }
+      // Reuse the existing poll's observations, including transitions that may
+      // disappear from committed state before the deadline.
+      const state = {
+        execution: task?.execution.status ?? "unobserved",
+        delivery: delivery?.status,
+        disposition: delivery?.disposition,
+        attempts: run?.delivery?.attemptCount,
+        requesterDelivery: run?.delivery?.requesterDelivery?.state,
+        requesterVisibleFinal: Boolean(run?.delivery?.requesterVisibleFinal),
+        errorCode: deliveryErrorCode(run?.delivery?.lastError),
+        queue: pending && {
+          id: pending.id,
+          state: pending.recoveryState,
+          attempts: resolveDeliveryQueueAttemptCount(pending),
+          leaseOwnerPresent: Boolean(pending.producerClaimId || pending.platformSendAttemptId),
+          errorCode: deliveryErrorCode(pending.lastError),
+        },
+      };
+      const serialized = JSON.stringify(state);
+      if (serialized !== lastSettlementState) {
+        lastSettlementState = serialized;
+        settlementHistory.push({ at: Date.now(), state });
+        if (settlementHistory.length > 5) {
+          settlementHistory.splice(1, 1);
+        }
+      }
+      return (
+        task?.execution.status === "terminal" &&
+        delivery?.status === "delivered" &&
+        delivery.requesterDelivery?.state === "consumed" &&
+        sawUnidentifiedSendInQueue
+      );
+    }, "child settlement and unidentified Discord send").catch((error: unknown) =>
+      rethrowWithDeliveryDiagnostics(error, () => {
+        const requests = createRequestSummary();
+        for (const { method, route } of writes) {
+          const operation = /\/channels\/\d+\/(messages|typing)(?=[/?]|$)/u.exec(route)?.[1];
+          requests.record(method, operation ? `/channels/:id/${operation}` : "/other");
+        }
+        const taskQueueId = task?.delivery?.queueId;
+        return {
+          taskRunId,
+          requesterSettledBeforeWorker,
+          parentAcknowledged,
+          completions,
+          unidentifiedSends: writes.filter((write) => write.identityOmitted).length,
+          sawUnidentifiedSendInQueue,
+          settlementHistory,
+          requests: requests.snapshot(),
+          ...deliveryQueueDiagnostics(
+            gateway,
+            childSessionKey ? [requesterKey, childSessionKey] : [requesterKey],
+            [...observedQueueIds, ...(taskQueueId ? [taskQueueId] : [])],
+          ),
+        };
+      }),
+    );
+    expect(requesterSettledBeforeWorker).toBe(true);
+    expect(parentAcknowledged).toBe(true);
+    expect(taskRuns).toHaveLength(1);
+    expect(writes.filter((write) => write.identityOmitted)).toHaveLength(1);
+    expect(
+      [...api.messages.values()].filter((message) =>
+        (readStringValue(message.content) ?? "").includes(marker),
+      ),
+    ).toHaveLength(1);
+    expect(completions).toBe(1);
+  }, 180_000);
+
+  it.each([
+    progressCase("discord", true),
+    progressCase("slack", true, { native: true }),
+    progressCase("slack", false, { native: true }),
+    progressCase("slack", false),
+    progressCase("slack", true, { native: true, rejectStop: true }),
+    progressCase("slack", false, { compact: true }),
+    progressCase("slack", true, { compact: true }),
+    progressCase("discord", false, { failTool: true }),
+    progressCase("discord", true, { failTool: true }),
+    // Keep this static fixture last so no other Gateway overlaps its lifetime.
+    progressCase("slack", true),
+    progressCase("slack", true, { thread: "reply" }),
+    progressCase("slack", true, { thread: "current" }),
+  ])(
+    "renders $channel progress (native=$native, thread=$thread, rejectStop=$rejectStop, toolProgress=$tools, compact=$compact, failTool=$failTool)",
+    async ({ channel, native, thread, rejectStop, tools, compact = false, failTool = false }) => {
+      const sharedSlack =
+        channel === "slack" && !native && tools && !compact && !rejectStop && !failTool;
+      const conversationId = sharedSlack
+        ? `C${String(++sharedSlackCaseIndex).padStart(8, "0")}`
+        : channel === "slack"
+          ? "C12345678"
+          : "123456789012345678";
+      let originCleared = false;
+      const startFixture = (): ReturnType<typeof startTablePresentationFixture> =>
+        startTablePresentationFixture(
+          {
+            channel,
+            native,
+            tools,
+            compact,
+            rejectStop,
+            clearOrigin: async () => {
+              await clearOrigin();
+              originCleared = true;
+            },
+          },
+          sharedSlack ? sharedSlackCleanups : cleanups,
+        );
+      const fixture = sharedSlack
+        ? await (sharedSlackFixture ??= startFixture())
+        : await startFixture();
+      const { adapter, api, gateway } = fixture;
+      const caseWrites = () =>
+        sharedSlack
+          ? fixture.writes.filter((write) => write.body.channel === conversationId)
+          : fixture.writes;
+      const caseMessages = () =>
+        [...api.messages.values()].filter(
+          (message) => !sharedSlack || message.channel === conversationId,
+        );
+      const clearOrigin = async () => {
+        const result = asRecord(
+          await gateway.call("qa-progress-mutation.clearOrigin", { conversationId }),
+        );
+        expect(result.count).toBe(1);
+        expect(result.afterSessionId).toBe(result.beforeSessionId);
+        expect(result.delivery).toEqual({ kind: "none" });
+      };
+      let expectedThreadTs: unknown;
+      let threadId: string | undefined;
+      let inboundMessageId: unknown;
+      if (thread !== "root") {
+        // Seed only the provider's root; the Gateway receives the child below.
+        const root = asRecord(
+          await (
+            await injectProviderMessage(adapter, "Original Slack thread", conversationId)
+          ).json(),
+        );
+        threadId = readStringValue(asRecord(root.message).ts);
+        expect(threadId).toEqual(expect.any(String));
+      }
+      const finalText = `${thread === "current" ? "[[reply_to_current]] " : ""}${FINAL_MARKER}`;
+      const injected = await injectProviderMessage(
+        adapter,
+        `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${failTool ? "sleep 2; exit 1" : "sleep 2"}\`. After that command completes or fails, reply exactly \`${finalText}\`.`,
+        conversationId,
+        threadId,
+      );
       if (adapter.manifest.provider === "slack") {
         const payload = asRecord(await injected.json());
-        const body = JSON.stringify(payload.event);
-        const timestamp = String(Math.floor(Date.now() / 1000));
-        const signature = createHmac("sha256", adapter.manifest.signingSecret)
-          .update(`v0:${timestamp}:${body}`)
-          .digest("hex");
-        const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-slack-request-timestamp": timestamp,
-            "x-slack-signature": `v0=${signature}`,
-          },
-          body,
-        });
-        expect(delivered.ok).toBe(true);
+        const event = asRecord(asRecord(payload.event).event);
+        expectedThreadTs = event.thread_ts ?? event.ts;
+        inboundMessageId = event.ts;
+        if (threadId) {
+          expect(event.thread_ts).toBe(threadId);
+          expect(inboundMessageId).not.toBe(threadId);
+        }
+        await deliverSlackEvent(adapter, gateway, payload.event);
       } else {
         await injected.arrayBuffer();
       }
       const finalWrites = () =>
-        writes.filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
+        caseWrites().filter((write) => JSON.stringify(write.body).includes(FINAL_MARKER));
       const finalMessages = () =>
-        [...api.messages.values()].filter((message) =>
-          String(message.text ?? message.content ?? "").includes(FINAL_MARKER),
+        caseMessages().filter((message) =>
+          (readStringValue(message.text ?? message.content) ?? "").includes(FINAL_MARKER),
         );
-      await waitForFact(() => finalMessages().length > 0, "accepted final answer");
+      if (threadId) {
+        await waitForFact(() => finalWrites().length > 0, "thread reply attempt");
+        expect(finalWrites()[0]?.body.thread_ts).toBe(threadId);
+      }
+      if (!rejectStop) {
+        await waitForFact(() => finalMessages().length > 0, "accepted final answer");
+      }
       await waitForFact(
         () =>
           channel === "discord"
-            ? writes.some(
+            ? caseWrites().some(
                 (write) => write.method === "DELETE" && !write.route.includes("/reactions/"),
               )
             : native
-              ? writes.some((write) => write.route.endsWith("chat.stopStream"))
-              : writes.some((write) => write.route.endsWith("chat.update")),
+              ? caseWrites().some((write) => write.route.endsWith("chat.stopStream"))
+              : caseWrites().some((write) =>
+                  write.route.endsWith(compact ? "chat.delete" : "chat.update"),
+                ),
         "progress finalization",
       );
 
-      const progressWrites = writes.filter(
+      const progressWrites = caseWrites().filter(
         (write) =>
           !JSON.stringify(write.body).includes(FINAL_MARKER) &&
           (channel === "discord"
@@ -493,7 +1458,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
       const progressText = progressWrites
         .map(({ body }) =>
           channel === "discord"
-            ? String(body.content ?? "")
+            ? (readStringValue(body.content) ?? "")
             : [
                 body.text,
                 JSON.stringify(readChunks(body.blocks)),
@@ -504,8 +1469,26 @@ describe("channel progress presentation through an isolated Gateway", () => {
         )
         .join("\n");
       expect(progressText).toContain(HEADLINE);
-      expect(progressText).not.toMatch(synthesizedDecoration);
-      const reactionAdds = writes.filter((write) =>
+      const slackCard = channel === "slack" && !native && !compact;
+      const expectedToolRow = slackCard ? slackCardToolRow : toolRow;
+      if (!tools) {
+        expect(progressText).not.toMatch(expectedToolRow);
+      } else if (channel !== "slack" || !native) {
+        expect(progressText).toMatch(expectedToolRow);
+      }
+      if (slackCard) {
+        // The fallback card adds no emoji status or tool chrome.
+        expect(progressText).not.toMatch(/🛠️|🔄/u);
+      }
+      if (failTool) {
+        if (tools) {
+          expect(progressText).toMatch(failedToolRow);
+        } else {
+          expect(progressText).not.toMatch(failedToolRow);
+          expect(progressText).not.toContain("exit 1");
+        }
+      }
+      const reactionAdds = caseWrites().filter((write) =>
         channel === "discord"
           ? write.method === "PUT" && write.route.includes("/reactions/")
           : write.route.endsWith("reactions.add"),
@@ -518,68 +1501,106 @@ describe("channel progress presentation through an isolated Gateway", () => {
         ),
       );
       expect([...reactionNames]).toEqual([channel === "discord" ? "👀" : "eyes"]);
-      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
-      await fs.mkdir(evidenceDir, { recursive: true });
-      await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}-diagnostic.json`),
-        JSON.stringify(
-          {
-            writes: writes.slice(-80).map(({ at, method, route, body, accepted }) => ({
-              at,
-              method,
-              route: route.slice(0, 250),
-              markerFields: Object.entries(body)
-                .filter(([, value]) => JSON.stringify(value)?.includes(FINAL_MARKER))
-                .map(([key]) => key),
-              rendered: Object.fromEntries(
-                ["content", "text", "blocks", "chunks"]
-                  .filter((key) => body[key] !== undefined)
-                  .map((key) => [
-                    key,
-                    String(
-                      typeof body[key] === "string" ? body[key] : JSON.stringify(body[key]),
-                    ).slice(0, 250),
-                  ]),
-              ),
-              ...(accepted ? { accepted } : {}),
-            })),
-            acceptedMessages: [...api.messages].slice(-80).map(([id, message]) => ({
-              id,
-              text: String(message.text ?? message.content ?? "").slice(0, 250),
-            })),
-          },
-          null,
-          2,
-        ),
-      );
       expect(finalWrites()).toHaveLength(1);
       expect(finalMessages()).toHaveLength(1);
-      const tasks = writes
+      if (rejectStop) {
+        expect(originCleared).toBe(true);
+        expect(expectedThreadTs).toEqual(expect.any(String));
+        expect(finalMessages()[0]).toMatchObject({
+          channel: conversationId,
+          thread_ts: expectedThreadTs,
+        });
+        expect(finalWrites()[0]?.accepted).toBeDefined();
+      }
+      if (threadId) {
+        expect(finalMessages()[0]?.thread_ts).toBe(threadId);
+      }
+      const tasks = caseWrites()
         .flatMap((write) => readChunks(write.body.chunks))
         .filter((chunk) => chunk.type === "task_update");
-      if (native) {
-        expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
-        expect(new Set(tasks.map((task) => task.title)).size).toBe(1);
+      if (channel === "slack" && native) {
+        // Detailed cards give the exec call its own task row; quiet cards keep
+        // one stable summary row. Both complete with the turn.
+        expect(tasks.some((task) => nativeToolTitle.test(readStringValue(task.title) ?? ""))).toBe(
+          tools,
+        );
+        if (tools) {
+          const startedTaskIndex = tasks.findIndex(
+            (task) =>
+              task.status === "in_progress" &&
+              nativeToolTitle.test(readStringValue(task.title) ?? ""),
+          );
+          expect(startedTaskIndex).toBeGreaterThanOrEqual(0);
+          const startedTask = tasks[startedTaskIndex];
+          expect(startedTask?.id).toEqual(expect.stringMatching(/\S/u));
+          const completedTaskIndex = tasks.findIndex(
+            (task) => task.id === startedTask?.id && task.status === "complete",
+          );
+          expect(completedTaskIndex).toBeGreaterThan(startedTaskIndex);
+        } else {
+          expect(new Set(tasks.map((task) => task.id)).size).toBe(1);
+          expect(tasks[0]?.id).toEqual(expect.stringMatching(/\S/u));
+        }
         expect(tasks.at(-1)?.status).toBe("complete");
       }
-      await fs.writeFile(
-        path.join(evidenceDir, `${channel}-${native ? "native" : "draft"}.json`),
-        JSON.stringify(
-          {
-            kind: "mock-gateway",
-            channel,
-            native,
-            status: "pass",
-            progressWrites: progressWrites.length,
-            finalWrites: finalWrites().length,
-            distinctWorkingReactions: reactionNames.size,
-            taskIds: new Set(tasks.map((task) => task.id)).size,
-            syntheticDecoration: false,
-          },
-          null,
-          2,
-        ),
-      );
+      // Portable message rendering is independent of progress mode and tool outcome.
+      if (channel === "discord" && tools && !failTool) {
+        const text = [
+          "QA-PREFIX-REPORT",
+          ...Array.from(
+            { length: 80 },
+            (_, index) =>
+              `Section ${String(index).padStart(3, "0")} 😀 e\u0301: reviewed and ready.`,
+          ),
+          "QA-PREFIX-END",
+        ].join("\n");
+        const client = await connectGatewayClient({
+          url: gateway.wsUrl,
+          token: gateway.token,
+          scopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+        cleanups.push(() => disconnectGatewayClient(client));
+        const firstWrite = caseWrites().length;
+        const sent = asRecord(
+          await client.request("tools.invoke", {
+            name: "message",
+            agentId: "qa",
+            sessionKey: "agent:qa:discord:channel:123456789012345678",
+            args: {
+              action: "send",
+              channel: "discord",
+              target: "channel:123456789012345678",
+              presentation: { blocks: [{ type: "text", text }] },
+            },
+          }),
+        );
+        expect(sent.ok).toBe(true);
+        const portableWrites = () =>
+          caseWrites()
+            .slice(firstWrite)
+            .filter(
+              (write) => write.method === "POST" && /\/channels\/\d+\/messages$/u.test(write.route),
+            );
+        await waitForFact(
+          () => portableWrites().some((write) => write.accepted),
+          "portable presentation accepted",
+        );
+        expect(portableWrites()).toHaveLength(1);
+        const write = portableWrites()[0]!;
+        expect(write.accepted?.id).toEqual(expect.any(String));
+        const containers = readChunks(write.body.components);
+        expect(containers).toHaveLength(1);
+        // Discord wire types are Container (17) and TextDisplay (10).
+        expect(containers[0]?.type).toBe(17);
+        const displays = readChunks(containers[0]?.components);
+        expect(displays.length).toBeGreaterThan(1);
+        for (const display of displays) {
+          expect(display.type).toBe(10);
+          expect(display.content).toEqual(expect.any(String));
+          expect(Array.from(String(display.content)).length).toBeLessThanOrEqual(1997);
+        }
+        expect(displays.map((display) => display.content).join("")).toBe(text);
+      }
     },
     180_000,
   );

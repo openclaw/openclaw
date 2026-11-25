@@ -1,6 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { isRecord } from "../utils.js";
 import type {
   OpenClawPackageManifest,
   PackageExtensionResolution,
@@ -19,11 +19,10 @@ export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
 export function getPackageManifestMetadata(
   manifest: PackageManifest | undefined,
 ): OpenClawPackageManifest | undefined {
-  if (!manifest) {
-    return undefined;
-  }
-  return manifest[MANIFEST_KEY];
+  return manifest?.[MANIFEST_KEY];
 }
+
+export { controlUiSource } from "./manifest-control-ui.js";
 
 export function resolvePackageExtensionEntries(
   manifest: PackageManifest | undefined,

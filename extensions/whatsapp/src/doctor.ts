@@ -1,13 +1,15 @@
-// Whatsapp plugin module implements doctor behavior.
+import { realpath } from "node:fs/promises";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asObjectRecord,
   collectChannelAccountScopes,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 
 type AckScope = NonNullable<NonNullable<OpenClawConfig["messages"]>["ackReactionScope"]>;
 
@@ -34,8 +36,9 @@ function resolveLegacyAckScope(ack: Record<string, unknown>): AckScope | undefin
         : undefined;
 }
 
-function resolveDefaultAgentEmoji(cfg: OpenClawConfig): string | undefined {
-  const entries = asObjectRecord(asObjectRecord(cfg.agents)?.entries);
+function resolveDefaultAgentEmoji(cfg: unknown): string | undefined {
+  // Include-blocked Doctor candidates may retain the legacy marker until their owner repairs it.
+  const entries = asObjectRecord(asObjectRecord(asObjectRecord(cfg)?.agents)?.entries);
   const agents = entries
     ? Object.values(entries).flatMap((value) => {
         const entry = asObjectRecord(value);
@@ -111,4 +114,36 @@ export function normalizeCompatibilityConfig({
 
 export const whatsappDoctor: ChannelDoctorAdapter = {
   normalizeCompatibilityConfig,
+  async collectPreviewWarnings({ cfg, env }) {
+    const warnings: string[] = [];
+    const authDirs = new Set(
+      listWhatsAppAccountIds(cfg).map(
+        (accountId) => resolveWhatsAppAuthDir({ cfg, accountId, env }).authDir,
+      ),
+    );
+    for (const authDir of authDirs) {
+      const lockPath = `${await realpath(authDir).catch(() => authDir)}.lock`;
+      try {
+        const { buffer } = await readRegularFile({ filePath: lockPath, maxBytes: 16_384 });
+        const pid = asObjectRecord(JSON.parse(buffer.toString("utf8")))?.pid;
+        if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+          continue;
+        }
+      } catch (error) {
+        if (asObjectRecord(error)?.code === "ENOENT") {
+          continue;
+        }
+        if (!(error instanceof SyntaxError)) {
+          warnings.push(
+            `Could not inspect WhatsApp connection lock ${lockPath}. Check its permissions and file type, then rerun openclaw doctor.`,
+          );
+          continue;
+        }
+      }
+      warnings.push(
+        `WhatsApp connection lock has no valid owner PID: ${lockPath}. Doctor leaves it in place, including with --fix, because a live process may still own it. Stop every process using this auth directory, including other hosts sharing it, and verify none is running or suspended. Only then move this lock file aside and start one Gateway. Keep the auth directory and credentials unchanged.`,
+      );
+    }
+    return warnings;
+  },
 };

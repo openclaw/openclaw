@@ -1,6 +1,8 @@
 /** Bounded TypeScript-style hints for model-visible tool input and output schemas. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+export const MAX_TOOL_SCHEMA_DECLARATION_CHARS = 32_768;
+
 const MAX_COMPACT_INPUT_HINT_CHARS = 300;
 // Sized so real multi-branch contracts like web_search's four-way union stay
 // promotable with headroom; the quick index independently truncates total bytes.
@@ -16,6 +18,12 @@ const MAX_COMPACT_UNION_TYPES = 5;
 const MAX_COMPACT_ENUM_VALUES = 8;
 const MAX_COMPACT_ENUM_CHARS = 96;
 const IDENTIFIER_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const NUMERIC_INPUT_BOUNDS = [
+  ["minimum", ">="],
+  ["maximum", "<="],
+  ["exclusiveMinimum", ">"],
+  ["exclusiveMaximum", "<"],
+] as const;
 const UNSUPPORTED_SHAPE_KEYWORDS = [
   "$ref",
   "$dynamicRef",
@@ -35,23 +43,32 @@ const UNSUPPORTED_SHAPE_KEYWORDS = [
 type SchemaHint = {
   text: string;
   complete: boolean;
+  /** Some object in this hint exceeded its budget and was reduced to required keys. */
+  overflowed?: boolean;
 };
 
 type CompactSchemaLimits = {
   maxChars: number;
   maxDepth: number;
   maxProperties: number;
+  numericInputConstraints: boolean;
+  declaration?: boolean;
+  remainingNodes?: { value: number };
+  /** Render only required object keys; set once a hint overflows its budget. */
+  requiredOnly?: boolean;
 };
 
 const INPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_INPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_INPUT_DEPTH,
   maxProperties: MAX_COMPACT_INPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: true,
 };
 const OUTPUT_LIMITS: CompactSchemaLimits = {
   maxChars: MAX_COMPACT_OUTPUT_HINT_CHARS,
   maxDepth: MAX_COMPACT_OUTPUT_DEPTH,
   maxProperties: MAX_COMPACT_OUTPUT_SCHEMA_PROPERTIES,
+  numericInputConstraints: false,
 };
 
 const UNKNOWN_HINT: SchemaHint = { text: "unknown", complete: false };
@@ -96,7 +113,11 @@ function normalizeNullableSchemaForHint(
   };
 }
 
-function renderPrimitive(value: unknown): string | undefined {
+function renderPrimitive(value: unknown, maxChars: number): string | undefined {
+  // Remote schemas can carry huge literals; reject them before serializing.
+  if (typeof value === "string" && value.length > maxChars) {
+    return undefined;
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -108,16 +129,24 @@ function renderPrimitive(value: unknown): string | undefined {
   return undefined;
 }
 
-function compactLiteralUnion(values: unknown): SchemaHint | undefined {
-  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_COMPACT_ENUM_VALUES) {
+function compactLiteralUnion(values: unknown, limits: CompactSchemaLimits): SchemaHint | undefined {
+  if (
+    !Array.isArray(values) ||
+    values.length === 0 ||
+    values.length > (limits.declaration ? 256 : MAX_COMPACT_ENUM_VALUES)
+  ) {
     return undefined;
   }
-  const rendered = values.map(renderPrimitive);
+  const rendered = values.map((value) =>
+    renderPrimitive(value, limits.declaration ? limits.maxChars : MAX_COMPACT_ENUM_CHARS),
+  );
   if (rendered.some((value) => value === undefined)) {
     return undefined;
   }
   const result = [...new Set(rendered as string[])].join(" | ");
-  return result.length <= MAX_COMPACT_ENUM_CHARS ? completeHint(result) : undefined;
+  return result.length <= (limits.declaration ? limits.maxChars : MAX_COMPACT_ENUM_CHARS)
+    ? completeHint(result)
+    : undefined;
 }
 
 function compactSchemaUnion(
@@ -140,7 +169,7 @@ function compactSchemaUnion(
   if (
     !Array.isArray(variants) ||
     variants.length === 0 ||
-    variants.length > MAX_COMPACT_ENUM_VALUES
+    variants.length > (limits.declaration ? 256 : MAX_COMPACT_ENUM_VALUES)
   ) {
     return UNKNOWN_HINT;
   }
@@ -164,19 +193,34 @@ function compactSchemaUnion(
     return variant.const;
   });
   if (literalVariants.every((value) => value !== undefined)) {
-    const literalUnion = compactLiteralUnion(literalVariants);
+    const literalUnion = compactLiteralUnion(literalVariants, limits);
     if (literalUnion) {
       return literalUnion;
     }
   }
-  if (variants.length > MAX_COMPACT_UNION_TYPES) {
+  if (variants.length > (limits.declaration ? 256 : MAX_COMPACT_UNION_TYPES)) {
     return UNKNOWN_HINT;
   }
-  const rendered = variants.map((variant) => compactSchemaType(variant, depth + 1, limits));
-  if (rendered.some((hint) => !hint.complete)) {
-    return UNKNOWN_HINT;
+  return joinVariantHints(
+    variants.map((variant) => compactSchemaType(variant, depth + 1, limits)),
+    limits,
+  );
+}
+
+function joinVariantHints(rendered: SchemaHint[], limits: CompactSchemaLimits): SchemaHint {
+  const overflowed = rendered.some((hint) => hint.overflowed);
+  // Required-only variants are incomplete by design; still name their required keys.
+  if (
+    rendered.some((hint) => !hint.complete && (!limits.requiredOnly || hint.text === "unknown"))
+  ) {
+    // An overflowing variant lets the caller retry with required keys only.
+    return overflowed ? { ...UNKNOWN_HINT, overflowed } : UNKNOWN_HINT;
   }
-  return completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | "));
+  return {
+    text: [...new Set(rendered.map((hint) => hint.text))].join(" | "),
+    complete: rendered.every((hint) => hint.complete),
+    overflowed,
+  };
 }
 
 function insertLexicallyBounded(values: string[], value: string, limit: number): void {
@@ -207,6 +251,38 @@ function compactObjectHint(
   depth: number,
   limits: CompactSchemaLimits,
 ): SchemaHint {
+  if (limits.declaration) {
+    const properties = isRecord(schema.properties) ? schema.properties : {};
+    const required = new Set(Array.isArray(schema.required) ? schema.required : []);
+    const keys = [...new Set([...Object.keys(properties), ...required])];
+    if (
+      keys.length > limits.maxProperties ||
+      !keys.every(
+        (key): key is string =>
+          typeof key === "string" && key.length <= MAX_COMPACT_SCHEMA_PROPERTY_NAME_CHARS,
+      )
+    ) {
+      return UNKNOWN_HINT;
+    }
+    // oxlint-disable-next-line unicorn/no-array-sort -- keys is a private array freshly spread from the Set above.
+    const fields = keys.sort().map((key) => {
+      const hint = compactSchemaType(properties[key], depth, limits);
+      return (
+        (IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)) +
+        (required.has(key) ? "" : "?") +
+        ": " +
+        (hint.complete ? hint.text : "unknown")
+      );
+    });
+    // TS index signatures cover named fields too, unlike additionalProperties.
+    if (schema.additionalProperties !== false) {
+      const extra = compactSchemaType(schema.additionalProperties, depth, limits);
+      fields.push(
+        "[key: string]: " + (keys.length === 0 && extra.complete ? extra.text : "unknown"),
+      );
+    }
+    return completeHint(fields.length ? "{ " + fields.join("; ") + " }" : "Record<string, never>");
+  }
   if (!isRecord(schema.properties)) {
     const requiredValues = Array.isArray(schema.required) ? schema.required : [];
     const required =
@@ -259,40 +335,100 @@ function compactObjectHint(
     insertLexicallyBounded(optionalKeys, key, optionalLimit);
   }
 
-  const keys = [...requiredKeys, ...optionalKeys];
+  const requiredOnly = limits.requiredOnly === true;
+  const keys = requiredOnly ? requiredKeys : [...requiredKeys, ...optionalKeys];
   const structurallyIncomplete =
     requiredValues.length > limits.maxProperties ||
     invalidRequired ||
     missingRequired ||
     oversizedOptionalKey ||
     optionalCount > optionalLimit;
+  const droppedOptional = requiredOnly && optionalCount > 0;
   let omitted =
     structurallyIncomplete ||
+    droppedOptional ||
     schema.additionalProperties === true ||
     isRecord(schema.additionalProperties);
-  let complete = !structurallyIncomplete && schema.additionalProperties === false;
-  const parts: string[] = [];
-  for (const key of keys) {
-    const name = IDENTIFIER_RE.test(key) ? key : JSON.stringify(key);
-    const propertyHint = compactSchemaType(properties[key], depth, limits);
-    complete &&= propertyHint.complete;
-    const part = `${name}${required.has(key) ? "" : "?"}: ${propertyHint.text}`;
-    const next = `{ ${[...parts, part].join("; ")} }`;
-    if (next.length > limits.maxChars) {
-      omitted = true;
-      complete = false;
-      break;
+  let complete =
+    !structurallyIncomplete && !droppedOptional && schema.additionalProperties === false;
+  const prefixes = keys.map(
+    (key) =>
+      `${IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)}${required.has(key) ? "" : "?"}: `,
+  );
+  const hints = keys.map((key) => compactSchemaType(properties[key], depth, limits));
+  let body = keys.map((_key, index) => prefixes[index] + hints[index]!.text).join("; ");
+  // The budget includes both braces, their inner spaces and any trailing "; ...".
+  const overflowed =
+    hints.some((hint) => hint.overflowed) || body.length + 4 + (omitted ? 5 : 0) > limits.maxChars;
+  if (!overflowed) {
+    complete &&= hints.every((hint) => hint.complete);
+  } else {
+    // An overflowing hint keeps only required keys, at every level. Each keeps
+    // its full type when it fits, else a type shortened to the remaining
+    // budget, else a shallow type.
+    omitted ||= optionalCount > 0;
+    complete = false;
+    const requiredLimits = { ...limits, requiredOnly: true };
+    const requiredHints = requiredOnly
+      ? hints
+      : requiredKeys.map((key) => compactSchemaType(properties[key], depth, requiredLimits));
+    const parts = requiredKeys.map((_key, index) => prefixes[index] + requiredHints[index]!.text);
+    const budget = limits.maxChars - 4 - (omitted ? 5 : 0);
+    body = parts.join("; ");
+    if (body.length > budget) {
+      const shallow = (index: number) => {
+        const property = properties[requiredKeys[index]!];
+        const type = isRecord(property) ? property.type : undefined;
+        const shallowType =
+          type === "array"
+            ? "Array<...>"
+            : type === "object"
+              ? "{ ... }"
+              : type === "integer"
+                ? "number"
+                : typeof type === "string" && ["string", "number", "boolean", "null"].includes(type)
+                  ? type
+                  : "unknown";
+        const elided = prefixes[index] + shallowType;
+        return parts[index]!.length <= elided.length ? parts[index]! : elided;
+      };
+      let reserve = 0;
+      for (let index = 0; index < requiredKeys.length; index += 1) {
+        reserve += shallow(index).length + 2;
+      }
+      // A partial required list would read as the whole contract.
+      if (reserve - 2 > budget) {
+        return { text: "{ ... }", complete: false, overflowed: true };
+      }
+      body = "";
+      for (const [index, key] of requiredKeys.entries()) {
+        reserve -= shallow(index).length + 2;
+        const room = budget - (body ? body.length + 2 : 0) - reserve;
+        let part = parts[index]!;
+        if (part.length > room) {
+          // Leave room for an Array<...> wrapper around a shortened object.
+          const typeRoom = room - prefixes[index]!.length - "Array<>".length;
+          const shortened =
+            typeRoom > 0
+              ? prefixes[index] +
+                compactSchemaType(properties[key], depth, { ...requiredLimits, maxChars: typeRoom })
+                  .text
+              : undefined;
+          part = shortened && shortened.length <= room ? shortened : shallow(index);
+        }
+        body = body ? `${body}; ${part}` : part;
+      }
     }
-    parts.push(part);
   }
-  if (parts.length === 0) {
+  if (!body) {
     return keys.length === 0 && !omitted
       ? { text: "{}", complete }
-      : { text: "{ ... }", complete: false };
+      : { text: "{ ... }", complete: false, overflowed };
   }
   return {
-    text: `{ ${parts.join("; ")}${omitted ? "; ..." : ""} }`,
+    text: `{ ${body}${omitted ? "; ..." : ""} }`,
     complete,
+    overflowed,
   };
 }
 
@@ -301,7 +437,13 @@ function compactSchemaType(
   depth = 0,
   limits: CompactSchemaLimits = INPUT_LIMITS,
 ): SchemaHint {
+  if (limits.remainingNodes && --limits.remainingNodes.value < 0) {
+    return UNKNOWN_HINT;
+  }
   if (!isRecord(schema)) {
+    return limits.declaration && schema === false ? completeHint("never") : UNKNOWN_HINT;
+  }
+  if (limits.declaration && UNSUPPORTED_SHAPE_KEYWORDS.some((key) => Object.hasOwn(schema, key))) {
     return UNKNOWN_HINT;
   }
   // An empty schema is JSON Schema's top type: it accepts any value, so
@@ -326,11 +468,11 @@ function compactSchemaType(
   if (schemaUnion) {
     return finish(schemaUnion);
   }
-  const literal = renderPrimitive(schema.const);
+  const literal = renderPrimitive(schema.const, limits.maxChars);
   if (literal !== undefined) {
     return finish(completeHint(literal));
   }
-  const enumUnion = compactLiteralUnion(schema.enum);
+  const enumUnion = compactLiteralUnion(schema.enum, limits);
   if (enumUnion) {
     return finish(enumUnion);
   }
@@ -344,20 +486,40 @@ function compactSchemaType(
     ) {
       return UNKNOWN_HINT;
     }
-    const rendered = type.map((value) =>
-      compactSchemaType({ ...schema, type: value }, depth + 1, limits),
+    return finish(
+      joinVariantHints(
+        type.map((value) => compactSchemaType({ ...schema, type: value }, depth + 1, limits)),
+        limits,
+      ),
     );
-    if (rendered.some((hint) => !hint.complete)) {
-      return UNKNOWN_HINT;
-    }
-    return finish(completeHint([...new Set(rendered.map((hint) => hint.text))].join(" | ")));
   }
   if (type === "integer" || type === "number") {
-    return finish(completeHint("number"));
+    if (!limits.numericInputConstraints) {
+      return finish(completeHint("number"));
+    }
+    // Inputs need valid argument ranges; output hints retain their existing shapes.
+    const constraints = type === "integer" ? ["integer"] : [];
+    for (const [key, operator] of NUMERIC_INPUT_BOUNDS) {
+      const bound = schema[key];
+      if (bound === undefined) {
+        continue;
+      }
+      if (typeof bound !== "number" || !Number.isFinite(bound)) {
+        return UNKNOWN_HINT;
+      }
+      constraints.push(`${operator} ${bound}`);
+    }
+    return finish(
+      completeHint(`number${constraints.length > 0 ? ` /* ${constraints.join(", ")} */` : ""}`),
+    );
   }
   if (type === "array") {
     const itemHint = compactSchemaType(schema.items, depth + 1, limits);
-    return finish({ text: `Array<${itemHint.text}>`, complete: itemHint.complete });
+    return finish({
+      text: `Array<${itemHint.text}>`,
+      complete: itemHint.complete,
+      overflowed: itemHint.overflowed,
+    });
   }
   if (type === "object") {
     return finish(compactObjectHint(schema, depth + 1, limits));
@@ -368,15 +530,36 @@ function compactSchemaType(
   return UNKNOWN_HINT;
 }
 
+/** Full bounded declaration from the same schema as the compact hints.
+ * Unsupported shapes remain unknown; runtime validation still owns constraints.
+ */
+export function toolSchemaDeclaration(schema: unknown): string {
+  const limits: CompactSchemaLimits = {
+    maxChars: MAX_TOOL_SCHEMA_DECLARATION_CHARS,
+    maxDepth: 12,
+    maxProperties: 256,
+    numericInputConstraints: true,
+    declaration: true,
+    remainingNodes: { value: 4096 },
+  };
+  const hint = compactSchemaType(schema, 0, limits);
+  return hint.complete && hint.text.length <= limits.maxChars ? hint.text : "unknown";
+}
+
 /** Compact one tool input schema. Unknown inputs remain explicit for safe describe fallback. */
 export function compactToolInputHint(schema: unknown): string {
   if (!isRecord(schema)) {
     return "unknown";
   }
-  const hint =
-    schema.type === "object"
-      ? compactObjectHint(schema, 0, INPUT_LIMITS)
-      : compactSchemaType(schema, 0, INPUT_LIMITS);
+  if (schema.type === "object") {
+    const hint = compactObjectHint(schema, 0, INPUT_LIMITS);
+    return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
+  }
+  let hint = compactSchemaType(schema, 0, INPUT_LIMITS);
+  // A root union has no enclosing object to retry with required keys only.
+  if (hint.overflowed || hint.text.length > INPUT_LIMITS.maxChars) {
+    hint = compactSchemaType(schema, 0, { ...INPUT_LIMITS, requiredOnly: true });
+  }
   return hint.text.length <= INPUT_LIMITS.maxChars ? hint.text : "unknown";
 }
 

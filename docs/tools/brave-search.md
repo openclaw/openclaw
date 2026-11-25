@@ -43,7 +43,7 @@ OpenClaw supports Brave Search API as a `web_search` provider.
 }
 ```
 
-Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the canonical config path.
+Provider-specific Brave search settings live under `plugins.entries.brave.config.webSearch.*`; this is the config path to use.
 
 `webSearch.mode` controls the Brave transport:
 
@@ -119,6 +119,12 @@ await web_search({
 ```
 
 ## Notes
+
+- Results expose `published` from Brave's ISO publication metadata: `page_age`
+  in web mode and the matching source's ISO timestamp or date in `llm-context`
+  mode. Relative age and fetch timestamps are not publication dates. Offsetless
+  timestamps remain offsetless; OpenClaw does not invent a timezone. Verify the
+  source date when freshness matters.
 
 - OpenClaw uses the Brave **Search** plan. If you have a legacy subscription (e.g. the original Free plan with 2,000 queries/month), it remains valid but does not include newer features like LLM Context or higher rate limits.
 - Each Brave plan includes **\$5/month in free credit** (renewing). The Search plan costs \$5 per 1,000 requests, so the credit covers 1,000 queries/month. Set your usage limit in the Brave dashboard to avoid unexpected charges. See the [Brave API portal](https://brave.com/search/api/) for current plans.

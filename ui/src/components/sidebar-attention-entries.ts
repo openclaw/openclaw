@@ -1,39 +1,39 @@
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
+import {
+  resolveScopeUpgradeDismissal,
+  type SidebarAttentionDismissal,
+  type SidebarAttentionKind,
+} from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-const SIDEBAR_ATTENTION_ITEM_KINDS = ["cronFailed", "cronOverdue", "modelAuthExpired"] as const;
-type SidebarAttentionItemKind = (typeof SIDEBAR_ATTENTION_ITEM_KINDS)[number];
-
-export const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
-  ...SIDEBAR_ATTENTION_ITEM_KINDS,
-  "scopeUpgrade",
-  "updateAvailable",
-] as const;
-export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
-
-export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
-
-type SidebarInboxEntryBase<Category extends Exclude<IssueTab, "all">> = {
+type SidebarInboxEntryBase<
+  Category extends Exclude<IssueTab, "all"> | "automations",
+  Severity extends "error" | "warning" | "neutral" = "error" | "warning",
+> = {
   category: Category;
   dismissal: SidebarAttentionDismissal | null;
   requiresAction: boolean;
-  severity: "error" | "warning";
+  severity: Severity;
 };
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: SidebarAttentionItemKind;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
-  meta?: { context?: string; status: string; time: string };
+  meta?: { context?: string; status: string };
+  arrivedAtMs?: number;
   action:
-    | { kind: "navigate"; routeId: NavigationRouteId }
-    | { kind: "askCustodian"; alert: CustodianAlert };
+    | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
+    | { kind: "askCustodian"; alert: CustodianAlert }
+    | { kind: "openClawIdRecovery"; label: string }
+    | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };
   signature: string;
 };
@@ -48,7 +48,20 @@ export type SidebarInboxEntry =
       type: "scopeUpgrade";
       state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
     })
-  | (SidebarInboxEntryBase<"system"> & { type: "update" });
+  | (SidebarInboxEntryBase<"mentions", "neutral"> & { type: "mention"; mention: MentionInboxItem })
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "outbox";
+      id: string;
+      sessionKey: string;
+      agentId?: string;
+      held: boolean;
+      command: boolean;
+    })
+  | (SidebarInboxEntryBase<"system"> & {
+      type: "update";
+      /** A stored dismissal kept while the row is shown without offering it. */
+      retainedDismissal?: SidebarAttentionDismissal | null;
+    });
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;
@@ -57,18 +70,10 @@ export function buildScopeUpgradeInboxEntry(params: {
   if (params.state.phase === "hidden") {
     return null;
   }
-  const dismissal =
-    (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
-      ? {
-          kind: "scopeUpgrade" as const,
-          // Manual repair and an actionable upgrade are distinct incidents.
-          signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
-        }
-      : null;
   return {
     type: "scopeUpgrade",
     category: "system",
-    dismissal,
+    dismissal: resolveScopeUpgradeDismissal(params),
     requiresAction: true,
     severity:
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
@@ -76,29 +81,24 @@ export function buildScopeUpgradeInboxEntry(params: {
   };
 }
 
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
+function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
+  switch (entry.type) {
+    case "approval":
+      return entry.approval.createdAtMs;
+    case "mention":
+      return entry.mention.createdAt;
+    case "attention":
+      return entry.arrivedAtMs;
+    default:
+      return undefined;
   }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
-  };
 }
 
 export function buildSidebarInboxEntries(params: {
   approvals: readonly ExecApprovalRequest[];
   attention: readonly SidebarAttentionItem[];
+  outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
+  mentions: readonly MentionInboxItem[];
   scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
   update: Extract<SidebarInboxEntry, { type: "update" }> | null;
 }): SidebarInboxEntry[] {
@@ -112,19 +112,40 @@ export function buildSidebarInboxEntries(params: {
   }));
   const errors = params.attention.filter((entry) => entry.severity === "error");
   const warnings = params.attention.filter((entry) => entry.severity === "warning");
-  // Preserve the Inbox's action-first order while every tab reads one list.
-  return [
+  const mentions: SidebarInboxEntry[] = params.mentions
+    .toSorted((left, right) => right.createdAt - left.createdAt || left.id.localeCompare(right.id))
+    .map((mention) => ({
+      type: "mention",
+      mention,
+      category: "mentions",
+      dismissal: null,
+      requiresAction: true,
+      severity: "neutral",
+    }));
+  // Newest first. Live states have no arrival time, so they stay on top; ties keep action order.
+  const entries: SidebarInboxEntry[] = [
     ...approvals,
+    ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
     ...(params.scopeUpgrade ? [params.scopeUpgrade] : []),
     ...errors,
     ...(params.update?.severity === "warning" ? [params.update] : []),
     ...warnings,
+    ...mentions,
   ];
+  return entries.toSorted((left, right) => {
+    const leftAt = inboxEntryArrivedAt(left) ?? Infinity;
+    const rightAt = inboxEntryArrivedAt(right) ?? Infinity;
+    return leftAt === rightAt ? 0 : rightAt - leftAt;
+  });
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
-  return tab === "all" || entry.category === tab;
+  return (
+    tab === "all" ||
+    entry.category === tab ||
+    (tab === "system" && entry.category === "automations")
+  );
 }
 
 export function sidebarInboxTabCounts(
@@ -134,7 +155,7 @@ export function sidebarInboxTabCounts(
   return {
     all: actionEntries.length,
     approvals: actionEntries.filter((entry) => entry.category === "approvals").length,
-    automations: actionEntries.filter((entry) => entry.category === "automations").length,
-    system: actionEntries.filter((entry) => entry.category === "system").length,
+    mentions: actionEntries.filter((entry) => entry.category === "mentions").length,
+    system: actionEntries.filter((entry) => sidebarInboxEntryMatchesTab(entry, "system")).length,
   };
 }

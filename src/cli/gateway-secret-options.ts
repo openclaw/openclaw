@@ -1,24 +1,18 @@
-// Gateway auth option parser: supports direct values and file-backed secrets with CLI warnings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readSecretFromFile } from "../acp/secret-file.js";
 import { defaultRuntime } from "../runtime.js";
 
-function resolveGatewaySecretOption(params: {
-  direct?: unknown;
-  file?: unknown;
-  directFlag: string;
-  fileFlag: string;
-  label: string;
-}): string | undefined {
-  const direct = normalizeOptionalString(params.direct);
-  const file = normalizeOptionalString(params.file);
+function resolveGatewaySecretOption(
+  directValue: unknown,
+  fileValue: unknown,
+  kind: "token" | "password",
+): string | undefined {
+  const direct = normalizeOptionalString(directValue);
+  const file = normalizeOptionalString(fileValue);
   if (direct && file) {
-    throw new Error(`Use either ${params.directFlag} or ${params.fileFlag} for ${params.label}.`);
+    throw new Error(`Use either --${kind} or --${kind}-file for Gateway ${kind}.`);
   }
-  if (file) {
-    return readSecretFromFile(file, params.label);
-  }
-  return direct || undefined;
+  return file ? readSecretFromFile(file, `Gateway ${kind}`) : direct;
 }
 
 function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
@@ -27,30 +21,14 @@ function warnGatewaySecretCliFlag(flag: "--token" | "--password"): void {
   );
 }
 
-/** Normalize gateway token/password options and reject ambiguous direct+file pairs. */
 export function resolveGatewayAuthOptions(opts: {
   token?: unknown;
   tokenFile?: unknown;
   password?: unknown;
   passwordFile?: unknown;
-}): {
-  gatewayToken?: string;
-  gatewayPassword?: string;
-} {
-  const gatewayToken = resolveGatewaySecretOption({
-    direct: opts.token,
-    file: opts.tokenFile,
-    directFlag: "--token",
-    fileFlag: "--token-file",
-    label: "Gateway token",
-  });
-  const gatewayPassword = resolveGatewaySecretOption({
-    direct: opts.password,
-    file: opts.passwordFile,
-    directFlag: "--password",
-    fileFlag: "--password-file",
-    label: "Gateway password",
-  });
+}) {
+  const gatewayToken = resolveGatewaySecretOption(opts.token, opts.tokenFile, "token");
+  const gatewayPassword = resolveGatewaySecretOption(opts.password, opts.passwordFile, "password");
   if (opts.token) {
     warnGatewaySecretCliFlag("--token");
   }

@@ -1,203 +1,510 @@
-/** Prepares the session-owned runtime used by one embedded attempt. */
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
+import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
+import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import {
+  readRunOperatorAuthority,
+  resolveAdmittedRunActiveAssertion,
+} from "../../admitted-run-context.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import {
+  sessionManagerReadToolResultProjectionEntries,
+  sessionManagerReadTranscriptBranch,
+} from "../../sessions/session-manager-view-types.js";
+import { resolveToolSearchConfig } from "../../tool-search-config.js";
+import {
+  readToolUsageRankingSnapshot,
+  type ToolUsageRankingSnapshot,
+} from "../../tool-usage-ranking.js";
+import { decayToolUsage } from "../../tool-usage.js";
+import type { AnyAgentTool } from "../../tools/common.js";
+import { log } from "../logger.js";
+import {
+  declarePromptSystemPromptRebuild,
+  declarePromptToolPin,
+} from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
-import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
-import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
+import { listSessionForkTools } from "../session-fork-request.js";
+import {
+  retainEmbeddedSessionPromptState,
+  beginSessionSystemPrompt,
+  buildSystemPromptRouteKey,
+  prepareSessionSystemPrompt,
+  prepareSessionToolUsageRanking,
+  prepareSessionToolSurface,
+  prepareSessionPublicationToolListing,
+  retireSessionSystemPrompt,
+} from "../session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
+import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
+import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
+import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
+import type { SystemPromptUpdatePreparation } from "./attempt-permission-prompt.js";
 import {
   prepareEmbeddedAttemptAgentSession,
   prepareEmbeddedAttemptSessionBoundary,
   prepareEmbeddedAttemptSessionManager,
 } from "./attempt-session-prepare.js";
-import { createEmbeddedAttemptSessionSettleTracker } from "./attempt-session-settle.js";
-import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+import {
+  createEmbeddedAttemptSessionSettleTracker,
+  type EmbeddedAttemptSessionResources,
+} from "./attempt-session-settle.js";
+import { installEmbeddedAttemptContextGuards, type EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
-import { prepareEmbeddedAttemptTrajectory } from "./attempt-trajectory.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
+import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
+import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
+import { projectTrajectorySessionTarget } from "./shared-run-context.js";
+import type { EmbeddedAttemptExternalAbortController, EmbeddedRunAttemptResult } from "./types.js";
 
-type SessionManagerInput = Parameters<typeof prepareEmbeddedAttemptSessionManager>[0];
-type AgentSessionInput = Parameters<typeof prepareEmbeddedAttemptAgentSession>[0];
-type ContextGuardsInput = Parameters<typeof installEmbeddedAttemptContextGuards>[0];
-type TransportInput = Parameters<typeof prepareEmbeddedAttemptTransport>[0];
-type TrajectoryInput = Parameters<typeof prepareEmbeddedAttemptTrajectory>[0];
-type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 type SessionSettleTracker = ReturnType<typeof createEmbeddedAttemptSessionSettleTracker>;
-type TrajectoryRecorder = Awaited<ReturnType<typeof prepareEmbeddedAttemptTrajectory>>;
-
-type ExternalAbortController = Pick<
-  ReturnType<typeof createEmbeddedAttemptExternalAbortController>,
-  "setActiveSessionAbort"
->;
 
 type EmbeddedAttemptSessionRuntimeState = {
   currentTurnImageFailureCount: number;
   prePromptMessageCount: number;
   promptCache: EmbeddedRunAttemptResult["promptCache"];
   systemPromptText: string;
+  systemPromptSeries?: ReturnType<typeof prepareSessionSystemPrompt>["seriesStatus"];
 };
 
 export async function prepareEmbeddedAttemptSessionRuntime(input: {
-  attempt: EmbeddedRunAttemptParams;
-  activeContextEngine?: SessionManagerInput["activeContextEngine"];
+  attempt: EmbeddedRunAttemptInternalParams;
+  activeContextEngine?: ContextEngine;
   agentDir: string;
-  effectiveCwd: string;
-  effectiveFsWorkspaceOnly: boolean;
-  effectiveWorkspace: string;
-  initialSystemPrompt: string;
   isRawModelRun: boolean;
-  nestedToolActivities: AgentSessionInput["nestedToolActivities"];
-  sessionManager: Pick<
-    SessionManagerInput,
-    | "replayAllowedToolNames"
-    | "resolveActiveContextEnginePluginId"
-    | "sessionAgentId"
-    | "transcriptLifecycle"
-    | "withOwnedTranscriptWrite"
-  >;
-  agentSession: Pick<
-    AgentSessionInput,
-    | "agentCoreThinkingLevel"
-    | "clientToolPreparation"
-    | "getCurrentAttemptPluginMetadataSnapshot"
-    | "markStage"
-    | "runAbortSignal"
-  >;
-  contextGuards: Pick<ContextGuardsInput, "computerContextEpoch">;
-  trajectory: Pick<
-    TrajectoryInput,
-    "effectiveToolCount" | "localModelLeanEnabled" | "systemPromptReport"
-  >;
-  transport: Pick<
-    TransportInput,
-    | "abortSignal"
-    | "codeModeControlsEnabled"
-    | "getProviderRuntimeHandle"
-    | "providerThinkingLevel"
-    | "sandbox"
-    | "sandboxSessionKey"
-  >;
-  externalAbortController: ExternalAbortController;
-  lifecycle: {
-    onContextGuardsInstalled: (remove: () => void) => void;
-    onSessionCreated: (session: AgentSession) => void;
-    onSessionManagerCreated: (sessionManager: AttemptSessionManager) => void;
-    onSessionSettleTrackerReady: (
-      buildAbortSettlePromise: SessionSettleTracker["buildAbortSettlePromise"],
-    ) => void;
-    onSessionYieldReady: (input: {
-      abortActiveSession: SessionSettleTracker["abortActiveSession"];
-      activeSession: AgentSession;
-    }) => void;
-    onTrajectoryRecorderCreated: (recorder: TrajectoryRecorder) => void;
-  };
+  resolveActiveContextEnginePluginId: () => string | undefined;
+  setup: EmbeddedAttemptSetup;
+  toolBase: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolBase>>;
+  toolCatalog: Awaited<ReturnType<typeof prepareEmbeddedAttemptToolCatalog>>;
+  bundleTools: Awaited<ReturnType<typeof prepareEmbeddedAttemptBundleTools>>;
+  prepareSystemPrompt: (
+    getUsageRanking: () => ToolUsageRankingSnapshot | undefined,
+  ) => Promise<Awaited<ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>>>;
+  sessionLock: Awaited<ReturnType<typeof prepareEmbeddedAttemptTranscriptLifecycle>>;
+  runAbortSignal: AbortSignal;
+  externalAbortController: Pick<EmbeddedAttemptExternalAbortController, "setActiveSessionAbort">;
+  resources: EmbeddedAttemptSessionResources;
+  onSessionYieldReady: (input: {
+    abortActiveSession: SessionSettleTracker["abortActiveSession"];
+    activeSession: AgentSession;
+  }) => void;
 }) {
-  const { attempt } = input;
-  const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
+  const { attempt, resources, runAbortSignal, sessionLock, toolBase } = input;
+  const {
+    agentCoreThinkingLevel,
+    effectiveCwd,
+    effectiveFsWorkspaceOnly,
+    effectiveWorkspace,
+    getCurrentAttemptPluginMetadataSnapshot,
+    getProviderRuntimeHandle,
+    prepStages,
+    providerThinkingLevel,
+    sandbox,
+    sandboxSessionKey,
+    sessionAgentId,
+  } = input.setup;
+  const { catalogToolHookContext, effectiveTools } = input.toolCatalog;
+  const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
+  const {
+    codeModeControlsEnabledForRun,
+    computerContextEpoch,
+    localModelLeanEnabled,
+    replaySafetyOptions,
+    toolSearchCatalogRef,
+    toolSearchRuntimeConfig,
+  } = toolBase;
+  const sessionPreparation = {
     attempt,
+    assertCurrent: () => {
+      runAbortSignal.throwIfAborted();
+      sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      sessionLock.ownedTranscriptWriteContext.initialWriter?.assertActive();
+    },
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     agentDir: input.agentDir,
-    effectiveCwd: input.effectiveCwd,
-    effectiveWorkspace: input.effectiveWorkspace,
-    onSessionManagerCreated: input.lifecycle.onSessionManagerCreated,
-    replayAllowedToolNames: input.sessionManager.replayAllowedToolNames,
-    resolveActiveContextEnginePluginId: input.sessionManager.resolveActiveContextEnginePluginId,
-    sessionAgentId: input.sessionManager.sessionAgentId,
-    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
-    withOwnedTranscriptWrite: input.sessionManager.withOwnedTranscriptWrite,
-  });
+    effectiveCwd,
+    effectiveWorkspace,
+    sessionAgentId,
+  };
+  const preparedSessionManager = await measureEmbeddedAgentPreparation(
+    "attempt.history",
+    () =>
+      prepareEmbeddedAttemptSessionManager({
+        ...sessionPreparation,
+        sessionTarget: sessionLock.ownedTranscriptWriteContext.sessionTarget,
+        runAbortSignal,
+        onSessionManagerCreated: (manager) => {
+          resources.sessionManager = manager;
+          resources.ownsSessionManager = manager !== attempt.sessionManager;
+        },
+        resolveActiveContextEnginePluginId: input.resolveActiveContextEnginePluginId,
+        withOwnedTranscriptWrite: sessionLock.withOwnedTranscriptWrite,
+      }),
+    { config: attempt.config },
+  );
   const { isOpenAIResponsesApi, preparedUserTurnMessage, sessionManager, transcriptPolicy } =
     preparedSessionManager;
+  if (codeModeControlsEnabledForRun && toolSearchCatalogRef) {
+    bindCodeModeSessionStore(
+      toolSearchCatalogRef,
+      sessionManager,
+      sessionLock.withOwnedTranscriptWrite,
+    );
+  }
+  const promptStateLease = retainEmbeddedSessionPromptState(attempt.sessionId);
+  resources.promptStateLease = promptStateLease;
+  const sessionPromptState = promptStateLease.state;
+  // Every session pins its system prompt and tool definitions on every route; see
+  // prepareSessionSystemPrompt for the closed set of rebuild points.
+  const usesSystemPromptSeries =
+    !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const toolSurface = codeModeControlsEnabledForRun
+    ? "code-mode"
+    : toolBase.toolSearchControlsEnabledForRun
+      ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+      : "direct";
+  // A move ends the default-workspace series, retiring its guidance and tool pin.
+  const offersProjectMove = effectiveTools.some((tool) => tool.name === "session_project");
+  const promptRouteKey = buildSystemPromptRouteKey({
+    provider: attempt.provider,
+    model: attempt.modelId,
+    api: attempt.model.api,
+    baseUrl: attempt.model.baseUrl,
+    inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates === true,
+    // The session's selected human, never the current turn's sender classification.
+    personalProfile: attempt.sessionUserProfileId,
+    harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
+    surface: offersProjectMove ? `${toolSurface}:project-move` : toolSurface,
+  });
+  const rankingEnabled =
+    usesSystemPromptSeries &&
+    attempt.config?.agents?.defaults?.experimental?.usageRankedToolIndex === true;
+  const inheritedRanking = rankingEnabled
+    ? readToolUsageRankingSnapshot(attempt.toolUsageRankingSeed)
+    : undefined;
+  let usageRanking: ToolUsageRankingSnapshot | undefined;
+  const prepareUsageRanking = async () => {
+    if (
+      !usesSystemPromptSeries ||
+      (!rankingEnabled &&
+        sessionPromptState.usageRanking &&
+        !sessionPromptState.usageRanking.snapshot)
+    ) {
+      return undefined;
+    }
+    const now = Date.now();
+    usageRanking = await prepareSessionToolUsageRanking({
+      state: sessionPromptState,
+      routeKey: promptRouteKey,
+      entries: sessionManager[sessionManagerReadTranscriptBranch](),
+      historyBoundaryCount: sessionManager.getBoundaryCount(),
+      enabled: rankingEnabled,
+      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
+      inherited: inheritedRanking,
+      now,
+      readRankedIds: async () => {
+        try {
+          const { readAgentToolUsage } = await import("../../../config/sessions/tool-usage.js");
+          const usage = await readAgentToolUsage({
+            agentId: sessionAgentId,
+            config: attempt.config,
+          });
+          sessionPreparation.assertCurrent();
+          return usage
+            .toSorted(
+              (a, b) =>
+                decayToolUsage(b, now) - decayToolUsage(a, now) ||
+                (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
+            )
+            .map((row) => row.toolId);
+        } catch (error) {
+          log.warn(`Tool usage ranking unavailable: ${String(error)}`);
+          return [];
+        }
+      },
+    });
+    sessionPreparation.assertCurrent();
+    return usageRanking;
+  };
+  await prepareUsageRanking();
+  const systemPrompt = await input.prepareSystemPrompt(() => usageRanking);
+  const { systemPromptReport } = systemPrompt;
+  let systemPromptText = systemPrompt.systemPromptText;
+  // Retire old overrides before new carriers without checkpointing unadmitted notices.
+  const retireSystemPromptUpdates = () =>
+    sessionLock.withOwnedTranscriptWrite(() =>
+      withSessionManagerAppend(sessionManager, async () => {
+        runAbortSignal.throwIfAborted();
+        await retireSessionSystemPrompt(sessionPromptState, promptRouteKey, (customType, data) =>
+          sessionManager.appendCustomEntryAsync(customType, data),
+        );
+      }),
+    );
+  if (usesSystemPromptSeries) {
+    beginSessionSystemPrompt(sessionPromptState);
+  }
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(
+    attempt.config,
+    sessionAgentId,
+    readRunOperatorAuthority(attempt)?.participationCeiling,
+  );
+  if (usesSystemPromptSeries) {
+    const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
+      prepareSessionPublicationToolListing({
+        state: sessionPromptState,
+        routeKey: promptRouteKey,
+        toolPolicy: toolPolicyDigest,
+        getEntries: () => sessionManager[sessionManagerReadTranscriptBranch](),
+        historyBoundaryCount: sessionManager.getBoundaryCount(),
+        tools,
+        refresh,
+      }),
+    );
+    if (changed) {
+      const prepare = systemPrompt.prepareToolPrompt;
+      if (!prepare) {
+        throw new Error("Restoring a session tool listing requires prompt preparation support.");
+      }
+      const refresh = await prepare(effectiveTools);
+      systemPromptText = refresh(systemPromptText);
+    }
+  }
+  const effectiveToolCount = effectiveTools.length;
+  let freshSystemPrompt = systemPromptText;
+  let projectedSystemPrompt: string | undefined;
+  // Assigned once the session exists; earlier prompt preparations keep their ranking.
+  const sessionTools: { refresh?: () => void } = {};
+  // A session fork sends its source's pinned prompt and tool list unchanged.
+  const forkPin = attempt.sessionForkRequest?.pin;
+  const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
+    usesSystemPromptSeries
+      ? async (nextPrompt: string, freshlyRendered = false) => {
+          if (forkPin) {
+            return {
+              systemPrompt: forkPin.prefix,
+              update: undefined,
+              restart: false,
+              seriesStatus: "pinned" as const,
+              commit: () => {},
+            };
+          }
+          let preparedPrompt = nextPrompt;
+          let wasFreshlyRendered = freshlyRendered;
+          const previousRanking = usageRanking;
+          await prepareUsageRanking();
+          if (usageRanking !== previousRanking) {
+            // A refreshed snapshot starts a new series: re-pin the tool definitions before
+            // the first request that uses it.
+            sessionTools.refresh?.();
+          }
+          if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
+            const refresh = await systemPrompt.prepareToolPrompt(
+              resources.session?.agent.state.tools ?? effectiveTools,
+            );
+            preparedPrompt = refresh(nextPrompt);
+            wasFreshlyRendered = true;
+          }
+          if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
+            freshSystemPrompt = preparedPrompt;
+          }
+          const entries = sessionManager[sessionManagerReadTranscriptBranch]();
+          const prepared = prepareSessionSystemPrompt({
+            state: sessionPromptState,
+            routeKey: promptRouteKey,
+            systemPrompt: freshSystemPrompt,
+            entries,
+            historyBoundaryCount: sessionManager.getBoundaryCount(),
+          });
+          // Keep an attempt's restart visible through subsequent continuation preparations.
+          if (prepared.restart || state.systemPromptSeries === undefined) {
+            state.systemPromptSeries = prepared.seriesStatus;
+          }
+          // Only an allowed rebuild point may change the prompt within a session; a lost
+          // series ("new" on a known session) stays a reported prefix change.
+          if (prepared.restart && prepared.seriesStatus !== "restarted:new") {
+            declarePromptSystemPromptRebuild(attempt);
+          }
+          let restartRecorded = false;
+          if (prepared.restart && resources.session) {
+            await retireSystemPromptUpdates();
+            restartRecorded = true;
+            const messages = resources.session.messages;
+            const retired = (message: (typeof messages)[number]) =>
+              getOpenClawSystemUpdateKind(message) === "prompt-update";
+            // Retiring history rows moves this turn's first message; the fence follows it,
+            // or its readers would file the current user message under accepted history.
+            state.prePromptMessageCount -= messages
+              .slice(0, state.prePromptMessageCount)
+              .filter(retired).length;
+            resources.session.agent.state.messages = messages.filter(
+              (message) => !retired(message),
+            );
+          }
+          if (resources.session) {
+            resources.session.agent.state.messages = retireUserRowPromptUpdates(
+              resources.session.agent.state.messages,
+              entries,
+              prepared.restart,
+            );
+          }
+          projectedSystemPrompt = prepared.systemPrompt;
+          return { ...prepared, commit: () => prepared.commit(restartRecorded) };
+        }
+      : undefined;
+  resources.getUserTranscriptContexts =
+    preparedSessionManager.userMessageBoundary.getUserTranscriptContexts;
 
+  // Every turn of the session sends the pinned tool definitions, on any route. A tool
+  // policy change starts a new pin, so configured removals leave the provider request.
+  const pinTools = usesSystemPromptSeries
+    ? (tools: AnyAgentTool[]) => {
+        if (forkPin) {
+          return listSessionForkTools(forkPin, tools);
+        }
+        const pending = sessionPromptState.pendingToolSurface;
+        const pinned = prepareSessionToolSurface({
+          state: sessionPromptState,
+          routeKey: promptRouteKey,
+          toolPolicy: toolPolicyDigest,
+          entries: sessionManager[sessionManagerReadTranscriptBranch](),
+          historyBoundaryCount: sessionManager.getBoundaryCount(),
+          tools,
+          admitNewTools: !toolBase.fixedListing,
+        });
+        if (sessionPromptState.pendingToolSurface !== pending) {
+          declarePromptToolPin(attempt);
+        }
+        return pinned;
+      }
+    : undefined;
   const state: EmbeddedAttemptSessionRuntimeState = {
     currentTurnImageFailureCount: 0,
     prePromptMessageCount: 0,
     promptCache: undefined,
-    systemPromptText: input.initialSystemPrompt,
+    systemPromptText,
   };
-  const preparedAgentSession = await prepareEmbeddedAttemptAgentSession({
-    attempt,
-    ...(input.activeContextEngine
-      ? { activeContextEngineInfo: input.activeContextEngine.info }
-      : {}),
-    agentCoreThinkingLevel: input.agentSession.agentCoreThinkingLevel,
-    agentDir: input.agentDir,
-    clientToolPreparation: input.agentSession.clientToolPreparation,
-    effectiveCwd: input.effectiveCwd,
-    getCurrentAttemptPluginMetadataSnapshot:
-      input.agentSession.getCurrentAttemptPluginMetadataSnapshot,
-    initialSystemPrompt: state.systemPromptText,
-    markStage: input.agentSession.markStage,
-    onSessionCreated: input.lifecycle.onSessionCreated,
-    onSystemPromptChanged: (systemPromptText) => {
-      state.systemPromptText = systemPromptText;
-    },
-    runAbortSignal: input.agentSession.runAbortSignal,
-    sessionAgentId: input.sessionManager.sessionAgentId,
-    transcriptLifecycle: input.sessionManager.transcriptLifecycle,
-    sessionManager,
-    nestedToolActivities: input.nestedToolActivities,
-  });
+  const preparedAgentSession = await withOwnedSessionTranscriptWrites(
+    sessionLock.ownedTranscriptWriteContext,
+    async () =>
+      measureEmbeddedAgentPreparation(
+        "attempt.actor",
+        () =>
+          prepareEmbeddedAttemptAgentSession({
+            ...sessionPreparation,
+            ...(input.activeContextEngine
+              ? { activeContextEngineInfo: input.activeContextEngine.info }
+              : {}),
+            agentCoreThinkingLevel,
+            clientToolPreparation: {
+              catalogToolHookContext,
+              clientTools,
+              codeModeControlsEnabledForRun,
+              deferredDirectoryToolsCallable: input.toolCatalog.deferredDirectoryToolsCallable,
+              effectiveTools,
+              pinTools,
+              replaySafetyOptions,
+              sandboxSessionKey,
+              sessionAgentId,
+              toolSearchCatalogRef,
+              toolSearchRuntimeConfig,
+              uncompactedEffectiveTools,
+              getToolAbortSignal: () => toolBase.toolAbortSignal,
+            },
+            getCurrentAttemptPluginMetadataSnapshot,
+            initialSystemPrompt: state.systemPromptText,
+            prepareSystemPromptUpdate,
+            markStage: (stage) => prepStages.mark(stage),
+            onSessionCreated: (session) => {
+              resources.session = session;
+            },
+            onSystemPromptChanged: (nextSystemPrompt) => {
+              state.systemPromptText = nextSystemPrompt;
+            },
+            runAbortSignal,
+            transcriptLifecycle: sessionLock.transcriptLifecycle,
+            sessionManager,
+            prepareInitialUserTurnReplay: preparedSessionManager.prepareInitialUserTurnReplay,
+          }),
+        { config: attempt.config },
+      ),
+  );
   const { activeSession, setActiveSessionSystemPrompt, settingsManager } = preparedAgentSession;
+  sessionTools.refresh = preparedAgentSession.refreshTools;
   const recordCurrentTurnImageFailure = (count: number) => {
     state.currentTurnImageFailureCount = Math.max(state.currentTurnImageFailureCount, count);
   };
   await attempt.userTurnTranscriptRecorder?.waitForRuntimePersistence();
-  const boundary = await input.sessionManager.withOwnedTranscriptWrite(() =>
-    prepareEmbeddedAttemptSessionBoundary({
-      abortSignal: input.agentSession.runAbortSignal,
-      activeSession,
-      attempt,
-      ...preparedSessionManager.userMessageBoundary,
-      isRawModelRun: input.isRawModelRun,
-      sessionManager,
-      setActiveSessionSystemPrompt,
-    }),
+  const boundary = await measureEmbeddedAgentPreparation(
+    "attempt.history-boundary",
+    () =>
+      sessionLock.withOwnedTranscriptWrite(() =>
+        prepareEmbeddedAttemptSessionBoundary({
+          abortSignal: runAbortSignal,
+          activeSession,
+          appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
+          inHistorySystemUpdates: transcriptPolicy.inHistorySystemUpdates,
+          attempt,
+          ...preparedSessionManager.userMessageBoundary,
+          isRawModelRun: input.isRawModelRun,
+          sessionManager,
+          setActiveSessionSystemPrompt,
+        }),
+      ),
+    { config: attempt.config },
   );
   state.prePromptMessageCount = activeSession.messages.length;
 
   // Session-owned projections survive attempt teardown so already-sent tool results
   // cannot rewrite the provider prompt-cache tail between turns (#99495).
-  const sessionPromptState = getEmbeddedSessionPromptState(attempt.sessionId);
   const toolResultPromptProjectionState = sessionPromptState.toolResults;
+  if (!input.isRawModelRun) {
+    restoreCacheTtlToolResultProjections(
+      toolResultPromptProjectionState,
+      sessionManager[sessionManagerReadToolResultProjectionEntries](),
+    );
+  }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
   input.externalAbortController.setActiveSessionAbort(settleTracker.abortActiveSession);
-  input.lifecycle.onSessionSettleTrackerReady(settleTracker.buildAbortSettlePromise);
-  input.lifecycle.onSessionYieldReady({
+  resources.buildAbortSettlePromise = settleTracker.buildAbortSettlePromise;
+  input.onSessionYieldReady({
     abortActiveSession: settleTracker.abortActiveSession,
     activeSession,
   });
 
   // Guard hooks execute during prompt submission, after transport preparation.
   const contextGuards = installEmbeddedAttemptContextGuards({
-    ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
+    ...sessionPreparation,
     activeSession,
-    agentDir: input.agentDir,
-    attempt,
-    computerContextEpoch: input.contextGuards.computerContextEpoch,
+    computerContextEpoch,
     dropThinkingBlocksForEstimate: transcriptPolicy.dropThinkingBlocks,
-    effectiveCwd: input.effectiveCwd,
-    effectiveFsWorkspaceOnly: input.effectiveFsWorkspaceOnly,
-    effectiveWorkspace: input.effectiveWorkspace,
+    effectiveFsWorkspaceOnly,
     getPrePromptMessageCount: () => state.prePromptMessageCount,
     getPromptCache: () => state.promptCache,
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
     getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
     getCompactionReplayEnabled: () => transport.compactionReplayEnabled,
+    getServerToolClearingEnabled: () => transport.serverToolClearingEnabled,
+    toolResultPromptProjectionState,
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
-    sessionAgentId: input.sessionManager.sessionAgentId,
     sessionManager,
     settingsManager,
-    sandbox: input.transport.sandbox,
+    sandbox,
   });
-  input.lifecycle.onContextGuardsInstalled(contextGuards.remove);
+  resources.removeToolResultContextGuard = contextGuards.remove;
 
-  const cacheTrace = createCacheTrace({
-    cfg: attempt.config,
+  const traceContext = {
     env: process.env,
     runId: attempt.runId,
     sessionId: activeSession.sessionId,
@@ -206,46 +513,138 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     modelId: attempt.modelId,
     modelApi: attempt.model.api,
     workspaceDir: attempt.workspaceDir,
-  });
-  const anthropicPayloadLogger = createAnthropicPayloadLogger({
-    env: process.env,
-    runId: attempt.runId,
-    sessionId: activeSession.sessionId,
-    sessionKey: attempt.sessionKey,
-    provider: attempt.provider,
-    modelId: attempt.modelId,
-    modelApi: attempt.model.api,
-    workspaceDir: attempt.workspaceDir,
-  });
-  const trajectoryRecorder = await prepareEmbeddedAttemptTrajectory({
-    activeSession,
-    attempt,
-    clientToolCount: preparedAgentSession.clientToolDefs.length,
-    effectiveToolCount: input.trajectory.effectiveToolCount,
-    effectiveWorkspace: input.effectiveWorkspace,
-    localModelLeanEnabled: input.trajectory.localModelLeanEnabled,
-    sessionAgentId: input.sessionManager.sessionAgentId,
-    ...(input.trajectory.systemPromptReport
-      ? { systemPromptReport: input.trajectory.systemPromptReport }
-      : {}),
-  });
-  input.lifecycle.onTrajectoryRecorderCreated(trajectoryRecorder);
+  };
+  const cacheTrace = createCacheTrace({ cfg: attempt.config, ...traceContext });
+  const anthropicPayloadLogger = createAnthropicPayloadLogger(traceContext);
+  let trajectoryRecorder: Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>> = null;
+  {
+    const clientToolCount = preparedAgentSession.clientToolDefs.length;
+    const candidate = sessionLock.ownedTranscriptWriteContext?.sessionTarget;
+    const sessionKey = candidate?.sessionKey;
+    const assertCommitAllowed = sessionLock.ownedTranscriptWriteContext?.assertCommitAllowed;
+    const initialWriter = sessionLock.ownedTranscriptWriteContext?.initialWriter;
+    // Reuse only the lock owner's descriptive key; recorder persistence retains its own authority.
+    const retained =
+      candidate &&
+      sessionKey &&
+      assertCommitAllowed &&
+      candidate.agentId === sessionAgentId &&
+      candidate.sessionId === activeSession.sessionId &&
+      sessionKey === attempt.sessionKey &&
+      candidate.storePath &&
+      candidate.storePath === attempt.sessionTarget?.storePath
+        ? {
+            sessionKey,
+            assertCurrent() {
+              assertCommitAllowed();
+              initialWriter?.assertActive();
+            },
+          }
+        : undefined;
+    retained?.assertCurrent();
+    const trajectorySessionFile = retained
+      ? retained.sessionKey
+      : await resolveAttemptTrajectorySessionFile({
+          agentId: sessionAgentId,
+          config: attempt.config,
+          sessionFile: attempt.sessionFile,
+          sessionId: activeSession.sessionId,
+          sessionKey: attempt.sessionKey,
+          sessionTarget: attempt.sessionTarget,
+        });
+    if (!attempt.disableTrajectory && attempt.sessionPersistence !== "detached") {
+      const assertActive = resolveAdmittedRunActiveAssertion(
+        attempt.admittedRunContext,
+        attempt.abortSignal,
+      );
+      if (!assertActive) {
+        throw new Error("trajectory preparation requires an active admitted run");
+      }
+      assertActive();
+      retained?.assertCurrent();
+      const { sessionTarget } = projectTrajectorySessionTarget(attempt.sessionTarget);
+      const recorder = await createTrajectoryRuntimeRecorder({
+        cfg: attempt.config,
+        env: process.env,
+        runId: attempt.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: attempt.sessionKey,
+        sessionFile: trajectorySessionFile,
+        sessionTarget,
+        provider: attempt.provider,
+        modelId: attempt.modelId,
+        modelApi: attempt.model.api,
+        workspaceDir: attempt.workspaceDir,
+      });
+      assertActive();
+      retained?.assertCurrent();
+      recorder?.recordEvent("session.started", {
+        trigger: attempt.trigger,
+        sessionFile: attempt.sessionFile,
+        workspaceDir: effectiveWorkspace,
+        agentId: sessionAgentId,
+        messageProvider: attempt.messageProvider,
+        messageChannel: attempt.messageChannel,
+        localModelLean: localModelLeanEnabled,
+        toolCount: effectiveToolCount,
+        clientToolCount,
+      });
+      const fastMode = typeof attempt.fastMode === "boolean" ? attempt.fastMode : undefined;
+      recorder?.recordEvent(
+        "trace.metadata",
+        buildTrajectoryRunMetadata({
+          env: process.env,
+          config: attempt.config,
+          ...(attempt.preparedModelRuntime?.metadataSnapshot
+            ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+            : {}),
+          workspaceDir: effectiveWorkspace,
+          sessionFile: attempt.sessionFile,
+          sessionKey: attempt.sessionKey,
+          agentId: sessionAgentId,
+          trigger: attempt.trigger,
+          messageProvider: attempt.messageProvider,
+          messageChannel: attempt.messageChannel,
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+          modelApi: attempt.model.api,
+          timeoutMs: attempt.timeoutMs,
+          fastMode,
+          thinkLevel: attempt.thinkLevel,
+          reasoningLevel: attempt.reasoningLevel,
+          toolResultFormat: attempt.toolResultFormat,
+          disableTools: attempt.disableTools,
+          toolsAllow: attempt.toolsAllow,
+          skillsSnapshot: attempt.skillsSnapshot,
+          systemPromptReport,
+        }),
+      );
+      trajectoryRecorder = recorder;
+    }
+  }
+  resources.trajectoryRecorder = trajectoryRecorder;
 
   const transport = await prepareEmbeddedAttemptTransport({
     attempt,
+    contextEngineInfo: input.activeContextEngine?.info,
+    assertCronRootCurrent: sessionLock.assertCronRootCurrent,
     session: activeSession,
     settingsManager,
-    providerThinkingLevel: input.transport.providerThinkingLevel,
-    sessionAgentId: input.sessionManager.sessionAgentId,
-    workspaceDir: input.effectiveWorkspace,
-    workspaceOnly: input.effectiveFsWorkspaceOnly,
+    providerThinkingLevel,
+    sessionAgentId,
+    workspaceDir: effectiveWorkspace,
+    workspaceOnly: effectiveFsWorkspaceOnly,
     agentDir: input.agentDir,
-    abortSignal: input.transport.abortSignal,
-    getProviderRuntimeHandle: input.transport.getProviderRuntimeHandle,
+    abortSignal: runAbortSignal,
+    getProviderRuntimeHandle,
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
-    sandboxSessionKey: input.transport.sandboxSessionKey,
-    ...(input.transport.sandbox !== undefined ? { sandbox: input.transport.sandbox } : {}),
-    codeModeControlsEnabled: input.transport.codeModeControlsEnabled,
+    sandboxSessionKey,
+    ...(sandbox !== undefined ? { sandbox } : {}),
+    codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    getDeferredToolEntries: () =>
+      input.toolCatalog.deferredDirectoryToolsCallable
+        ? toolSearchCatalogRef?.current?.entries
+        : undefined,
     providerPromptState: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(
@@ -259,6 +658,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   });
 
   return {
+    systemPrompt,
     agentSession: preparedAgentSession,
     anthropicPayloadLogger,
     boundary,
@@ -266,6 +666,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     contextGuards,
     isOpenAIResponsesApi,
     preparedUserTurnMessage,
+    prepareSystemPromptUpdate,
     sessionManager,
     sessionPromptState,
     settleTracker,

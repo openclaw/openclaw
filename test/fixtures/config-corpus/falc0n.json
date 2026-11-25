@@ -1,0 +1,234 @@
+{
+  "gateway": {
+    "port": 18819,
+    "mode": "local",
+    "bind": "loopback",
+    "controlUi": {
+      "enabled": true,
+      "allowedOrigins": [
+        "https://fixture-1.invalid/"
+      ]
+    },
+    "auth": {
+      "mode": "token",
+      "token": {
+        "source": "env",
+        "provider": "default",
+        "id": "OPENCLAW_GATEWAY_PASSWORD"
+      }
+    },
+    "tailscale": {
+      "mode": "off"
+    },
+    "trustedProxies": [
+      "fixture.invalid"
+    ]
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.4"
+      },
+      "models": {
+        "openai/gpt-5.4": {
+          "alias": "fixture-2",
+          "agentRuntime": {
+            "id": "openclaw"
+          },
+          "params": {
+            "responsesServerCompaction": true,
+            "responsesCompactEndpoint": true
+          }
+        },
+        "anthropic/fixture-model-2": {
+          "alias": "fixture-3",
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-3": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-4": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        },
+        "anthropic/fixture-model-5": {
+          "agentRuntime": {
+            "id": "claude-cli"
+          }
+        }
+      },
+      "modelPolicy": {
+        "allow": []
+      },
+      "workspace": "/home/fixture/path0-3/path1-3/path2-3",
+      "thinkingDefault": "high",
+      "userTimezone": "UTC",
+      "maxConcurrent": 16,
+      "subagents": {
+        "maxConcurrent": 8,
+        "archiveAfterMinutes": 60
+      },
+      "systemAgent": {
+        "agentId": "main"
+      },
+      "heartbeat": {
+        "agentId": "main"
+      }
+    },
+    "entries": {
+      "main": {
+        "identity": {
+          "name": "Fixture Agent",
+          "emoji": "🧪",
+          "theme": "Helpful test assistant."
+        },
+        "models": {},
+        "model": "openai/gpt-5.4",
+        "workspace": "/home/fixture/path0-3/path1-3/path2-3"
+      }
+    }
+  },
+  "tools": {
+    "profile": "full"
+  },
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "noSandbox": false,
+    "defaultProfile": "openclaw",
+    "profiles": {
+      "openclaw": {
+        "cdpPort": 18900,
+        "executablePath": "/home/fixture/path0-5/path1-5/path2-5/path3-5/path4-5/path5-5/path6-5"
+      }
+    }
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true
+    },
+    "lastTouchedVersion": "2026.9.2"
+  },
+  "ui": {
+    "prefs": {
+      "theme": "absolutely"
+    }
+  },
+  "desktop": {
+    "host": {
+      "enabled": true
+    }
+  },
+  "plugins": {
+    "entries": {
+      "openai": {
+        "enabled": true
+      },
+      "anthropic": {
+        "enabled": true
+      },
+      "browser": {
+        "enabled": true
+      }
+    }
+  },
+  "wizard": {
+    "lastRunAt": "2026-01-01T00:00:00.000Z",
+    "lastRunVersion": "2026.8.1",
+    "lastRunCommand": "doctor",
+    "lastRunMode": "local"
+  },
+  "skills": {
+    "entries": {
+      "1password": {
+        "enabled": false
+      },
+      "blogwatcher": {
+        "enabled": false
+      },
+      "blucli": {
+        "enabled": false
+      },
+      "camsnap": {
+        "enabled": false
+      },
+      "coding-agent": {
+        "enabled": false
+      },
+      "eightctl": {
+        "enabled": false
+      },
+      "gemini": {
+        "enabled": false
+      },
+      "gifgrep": {
+        "enabled": false
+      },
+      "gog": {
+        "enabled": false
+      },
+      "goplaces": {
+        "enabled": false
+      },
+      "himalaya": {
+        "enabled": false
+      },
+      "mcporter": {
+        "enabled": false
+      },
+      "model-usage": {
+        "enabled": false
+      },
+      "nano-pdf": {
+        "enabled": false
+      },
+      "obsidian": {
+        "enabled": false
+      },
+      "openai-whisper": {
+        "enabled": false
+      },
+      "openhue": {
+        "enabled": false
+      },
+      "oracle": {
+        "enabled": false
+      },
+      "ordercli": {
+        "enabled": false
+      },
+      "sag": {
+        "enabled": false
+      },
+      "sherpa-onnx-tts": {
+        "enabled": false
+      },
+      "songsee": {
+        "enabled": false
+      },
+      "sonoscli": {
+        "enabled": false
+      },
+      "spotify-player": {
+        "enabled": false
+      },
+      "summarize": {
+        "enabled": false
+      },
+      "trello": {
+        "enabled": false
+      },
+      "xurl": {
+        "enabled": false
+      }
+    }
+  },
+  "talk": {
+    "agentId": "main"
+  }
+}

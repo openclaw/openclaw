@@ -17,11 +17,8 @@ export const FOLDED_SINGLETON_STATE_TABLES_V12 = [
   "web_push_vapid_keys",
 ] as const;
 
-export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 12) {
-    return false;
-  }
-  // Older schemas can reach this migration before canonical schema creation.
+/** Preserve the table's original catalog SQL for fresh creation and historical migration. */
+export function createStateConfigMachineTable(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS config_machine_state (
       state_key TEXT NOT NULL PRIMARY KEY,
@@ -29,6 +26,14 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
       updated_at_ms INTEGER NOT NULL
     ) STRICT;
   `);
+}
+
+export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion: number): boolean {
+  if (previousVersion >= 12) {
+    return false;
+  }
+  // Older schemas can reach this migration before canonical schema creation.
+  createStateConfigMachineTable(db);
   const importState = db.prepare(
     "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(state_key) DO NOTHING",
   );
@@ -151,18 +156,15 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
       .get();
     if (nodeHost) {
       const gateway = {
-        ...(nodeHost.gateway_host == null ? {} : { host: nodeHost.gateway_host }),
-        ...(nodeHost.gateway_port == null ? {} : { port: nodeHost.gateway_port }),
-        ...(nodeHost.gateway_tls == null ? {} : { tls: nodeHost.gateway_tls === 1 }),
-        ...(nodeHost.gateway_tls_fingerprint == null
-          ? {}
-          : { tlsFingerprint: nodeHost.gateway_tls_fingerprint }),
-        ...(nodeHost.gateway_context_path == null
-          ? {}
-          : { contextPath: nodeHost.gateway_context_path }),
-        ...(nodeHost.gateway_cloudflare_access_json == null
-          ? {}
-          : { cloudflareAccess: JSON.parse(String(nodeHost.gateway_cloudflare_access_json)) }),
+        host: nodeHost.gateway_host ?? undefined,
+        port: nodeHost.gateway_port ?? undefined,
+        tls: nodeHost.gateway_tls == null ? undefined : nodeHost.gateway_tls === 1,
+        tlsFingerprint: nodeHost.gateway_tls_fingerprint ?? undefined,
+        contextPath: nodeHost.gateway_context_path ?? undefined,
+        cloudflareAccess:
+          nodeHost.gateway_cloudflare_access_json == null
+            ? undefined
+            : JSON.parse(String(nodeHost.gateway_cloudflare_access_json)),
       };
       importState.run(
         "nodeHost.config",
@@ -170,7 +172,9 @@ export function migrateSingletonStateFoldInV12(db: DatabaseSync, previousVersion
           version: nodeHost.version,
           nodeId: nodeHost.node_id,
           ...(nodeHost.display_name == null ? {} : { displayName: nodeHost.display_name }),
-          ...(Object.keys(gateway).length === 0 ? {} : { gateway }),
+          gateway: Object.values(gateway).some((value) => value !== undefined)
+            ? gateway
+            : undefined,
           installedAppsSharing: nodeHost.installed_apps_sharing === 1,
         }),
         Number(nodeHost.updated_at_ms),

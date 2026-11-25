@@ -44,7 +44,7 @@ export function hasUserPinnedModelSelection(
   if (entry.modelOverrideSource === "user") {
     return true;
   }
-  if (entry.modelOverrideSource === "auto") {
+  if (entry.modelOverrideSource !== undefined) {
     return false;
   }
   return !hasSessionAutoModelFallbackProvenance(entry);
@@ -54,13 +54,26 @@ export function hasUserPinnedModelSelection(
 export function resolveSessionModelOverrideSource(
   entry: ModelOverrideProvenanceEntry | undefined,
 ): "auto" | "user" | null {
+  if (entry?.modelOverrideSource === "default") {
+    return null;
+  }
   if (!normalizeOptionalString(entry?.modelOverride)) {
     return null;
   }
-  if (entry?.modelOverrideSource) {
+  if (entry?.modelOverrideSource === "user" || entry?.modelOverrideSource === "auto") {
     return entry.modelOverrideSource;
   }
   return hasUserPinnedModelSelection(entry) ? "user" : "auto";
+}
+
+/** Retains automatic execution selections only when their stored origin is complete. */
+export function hasSessionAutoModelSelection(
+  entry: ModelOverrideProvenanceEntry | undefined,
+): boolean {
+  return (
+    resolveSessionModelOverrideSource(entry) === "auto" &&
+    hasSessionAutoModelFallbackProvenance(entry)
+  );
 }
 
 /** Resolves persisted route provenance, including fallback pins from before the marker existed. */

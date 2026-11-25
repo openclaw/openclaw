@@ -58,25 +58,59 @@ struct GatewaySleepCycleControllerTests {
         #expect(resumedIDs == ["late-suspension"])
     }
 
-    @Test func `resume retries after a transport failure and succeeds`() async {
+    @Test(arguments: [false, true])
+    func `pending preparation never adopts a replacement route`(wakeBeforeReply: Bool) async {
+        var route = "ws://127.0.0.1:18789"
+        var resumedIDs: [String] = []
+        let prepareStarted = AsyncTestGate()
+        let releasePrepare = AsyncTestGate()
+        let controller = GatewaySleepCycleController(
+            requestID: "macos-sleep-test-run",
+            currentRoute: { route },
+            prepare: { _ in
+                prepareStarted.open()
+                await releasePrepare.wait()
+                return .ready(suspensionID: "original-route-suspension")
+            },
+            resume: { resumedIDs.append($0) },
+            refresh: {},
+            log: { _ in })
+
+        let sleepTask = Task { await controller.willSleep(mode: .local) }
+        await prepareStarted.wait()
+        route = "ws://127.0.0.1:19001"
+        if wakeBeforeReply { await controller.didWake(mode: .local) }
+        releasePrepare.open()
+        await sleepTask.value
+        await controller.didWake(mode: .local)
+
+        #expect(resumedIDs.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func `resume retries only while its original route remains selected`(changeRouteDuringRetry: Bool) async {
+        var route = "ws://127.0.0.1:18789"
         var resumeAttempts = 0
         var delays = 0
         let controller = GatewaySleepCycleController(
             requestID: "macos-sleep-test-run",
-            currentRoute: { "ws://127.0.0.1:18789" },
+            currentRoute: { route },
             prepare: { _ in .ready(suspensionID: "suspension-retry") },
             resume: { _ in
                 resumeAttempts += 1
                 if resumeAttempts == 1 { throw PrepareFailure() }
             },
             refresh: {},
-            retryDelay: { _ in delays += 1 },
+            retryDelay: { _ in
+                delays += 1
+                if changeRouteDuringRetry { route = "ws://127.0.0.1:19001" }
+            },
             log: { _ in })
 
         await controller.willSleep(mode: .local)
         await controller.didWake(mode: .local)
 
-        #expect(resumeAttempts == 2)
+        #expect(resumeAttempts == (changeRouteDuringRetry ? 1 : 2))
         #expect(delays == 1)
     }
 

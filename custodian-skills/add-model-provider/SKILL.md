@@ -44,29 +44,29 @@ To change a default model, use the in-session `set_default_model` action (with `
 ## Repair
 
 ```
-openclaw doctor --non-interactive
+openclaw doctor --lint
 ```
 
-If it reports a config repair, get approval, run `openclaw doctor --fix --non-interactive`, then re-run the Gather reads.
+`doctor --lint` can exit `1` for findings: read the report and continue the remaining checks. Ordinary `doctor` and `doctor --non-interactive` can write config/state; do not use them for diagnosis before approval. If a repair is needed, get explicit approval, run `openclaw doctor --fix --non-interactive`, then re-run the Gather reads.
 
 ## Prove
 
-Roster-safe probe (works in every setup; use your own agent id or any configured agent):
+Roster-safe test (works in every setup; use your own agent id or any configured agent):
 
 ```
 openclaw agent --agent <agentId> --model openai/gpt-5.4 -m "Reply with exactly: PROVIDER-PROOF-OK"
 ```
 
-Single-agent installs can use the lighter completion probe instead — it has no `--agent` flag and fails with "no explicit owner" on multi-agent rosters, so do not retry it there:
+Single-agent installs can use the lighter completion test instead — it has no `--agent` flag and fails with "no explicit owner" on multi-agent rosters, so do not retry it there:
 
 ```
 openclaw infer model run --gateway --model openai/gpt-5.4 --prompt "Reply with exactly: PROVIDER-PROOF-OK"
 ```
 
-Expect the exact probe string; record model id and wall time. Known dependency: OpenAI routes need the codex harness plugin at runtime — if the probe reports the runtime unavailable, run `openclaw plugins install @openclaw/codex` and restart the gateway, then re-probe.
+Expect the exact requested reply; record model id and wall time. Known dependency: OpenAI routes need the codex harness plugin at runtime — if the test reports the runtime unavailable, run `openclaw plugins install @openclaw/codex` and restart the gateway, then test again.
 
 ## Report
 
-State the provider added, the SecretRef path written (never the value), the probe result with model id and latency, and whether the default model changed. If the probe failed, report the exact error and the next command to try.
+State the provider added, the SecretRef path written (never the value), the test result with model id and latency, and whether the default model changed. If the test failed, report the exact error and the next command to try.
 
 Further reference: https://docs.openclaw.ai/providers/models and https://docs.openclaw.ai/providers/openai

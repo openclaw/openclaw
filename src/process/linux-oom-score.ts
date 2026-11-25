@@ -1,43 +1,35 @@
-// Linux OOM score helpers adjust child process OOM priority when supported.
 import fs from "node:fs";
+import { readChildRuntimeViability } from "../infra/child-runtime-viability.js";
+import {
+  isWrapped,
+  OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT,
+  OOM_SCORE_WRAP_SCRIPT,
+  OOM_SCORE_WRAP_SHELL,
+  raiseChildOomScore,
+  shouldAdjustChildOomScore,
+  type OomWrapOptions,
+} from "./linux-oom-score-spawn.js";
+
+export { spawnOomScoreAdjusted, type OomWrapOptions } from "./linux-oom-score-spawn.js";
 
 /**
- * On Linux, children spawned by a long-lived parent (e.g., the gateway) inherit
- * the parent's `oom_score_adj`. Under cgroup memory pressure the kernel tends
- * to pick the largest-RSS process as the OOM victim, which is usually the
- * gateway rather than its transient workers. See issue #70404.
- *
- * Since Linux 2.6.20 any unprivileged process may voluntarily *raise* its own
- * `oom_score_adj` without `CAP_SYS_RESOURCE`. We exploit that by wrapping the
- * child argv in a tiny `/bin/sh` shim that raises the score in the post-fork
- * child and then `exec`s the real command, so there is no extra long-lived
- * shell process and no change to the final process identity.
- *
- * Opt out per-process by setting `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` (also
- * accepts `false`/`no`/`off`). Callers may also provide the key via
- * `params.env` for per-child overrides.
+ * Linux children inherit the Gateway's OOM score, leaving the larger Gateway
+ * vulnerable under memory pressure (#70404). Raise children to 1000 through a
+ * shell that execs the command, or after native spawn when argv0 must be retained.
+ * Raising a same-user child's score needs no CAP_SYS_RESOURCE.
+ * OPENCLAW_CHILD_OOM_SCORE_ADJ=0 (also false/no/off) opts out per child or process.
  */
 
-const CHILD_OOM_SCORE_ADJ_ENV_KEY = "OPENCLAW_CHILD_OOM_SCORE_ADJ";
-const OOM_SCORE_WRAP_SHELL = "/bin/sh";
-const OOM_SCORE_WRAP_SCRIPT = 'echo 1000 > /proc/self/oom_score_adj 2>/dev/null; exec "$0" "$@"';
-
-// Env keys that can cause /bin/sh (especially bash invoked as sh) to source
-// caller-influenced startup files before the final `exec`. Stripped when we
-// wrap so the shim can't become an env-controlled code-exec primitive.
-const SHELL_INIT_ENV_KEYS = ["BASH_ENV", "ENV", "CDPATH"] as const;
-
-function isDisabled(value: string | undefined): boolean {
-  switch (value?.trim().toLowerCase()) {
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return true;
-    default:
-      return false;
-  }
-}
+// Env keys that can make /bin/sh (especially Bash invoked as sh) execute or
+// expose caller-influenced startup behavior before the final `exec`. Stripped
+// when we wrap so the shim can't become an env-controlled code-exec primitive.
+const SHELL_INIT_ENV_CARRIERS = [
+  ["BASH_ENV", "OC_INTERNAL_OOM_EXEC_BASH_ENV"],
+  ["ENV", "OC_INTERNAL_OOM_EXEC_ENV"],
+  ["CDPATH", "OC_INTERNAL_OOM_EXEC_CDPATH"],
+  ["PS4", "OC_INTERNAL_OOM_EXEC_PS4"],
+] as const;
+const NON_RESTORABLE_BASH_ENV_KEY = /^(?:SHELLOPTS|BASHOPTS|BASH_FUNC_.*)$/u;
 
 let cachedShellAvailable: boolean | null = null;
 function defaultShellAvailable(): boolean {
@@ -52,56 +44,33 @@ function defaultShellAvailable(): boolean {
   return cachedShellAvailable;
 }
 
-export type OomWrapOptions = {
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  argv0?: string;
-  shellAvailable?: () => boolean;
-};
-
 export type OomScoreAdjustedSpawn = {
   command: string;
   args: string[];
   argv0?: string;
   env: NodeJS.ProcessEnv | undefined;
   wrapped: boolean;
+  afterSpawn?: (pid: number | undefined) => void;
 };
-
-function shouldWrapChildForOomScore(options: OomWrapOptions | undefined): boolean {
-  const platform = options?.platform ?? process.platform;
-  if (platform !== "linux") {
-    return false;
-  }
-  const env = options?.env ?? process.env;
-  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
-    return false;
-  }
-  return (options?.shellAvailable ?? defaultShellAvailable)();
-}
-
-function isWrapped(command: string, args: readonly string[]): boolean {
-  return command === OOM_SCORE_WRAP_SHELL && args[0] === "-c" && args[1] === OOM_SCORE_WRAP_SCRIPT;
-}
-
-function canUseShellExecCommand(command: string): boolean {
-  // POSIX sh implementations such as dash do not support `exec --`. A command
-  // starting with "-" could be parsed as an exec option, so keep that rare
-  // shape on the original direct-spawn path instead of wrapping it.
-  return !command.startsWith("-");
-}
 
 function hardenShellEnv(baseEnv: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const next: NodeJS.ProcessEnv = { ...(baseEnv ?? process.env) };
-  for (const key of SHELL_INIT_ENV_KEYS) {
+  for (const [key] of SHELL_INIT_ENV_CARRIERS) {
     delete next[key];
+  }
+  for (const key of Object.keys(next)) {
+    if (NON_RESTORABLE_BASH_ENV_KEY.test(key)) {
+      delete next[key];
+    }
   }
   return next;
 }
 
-export function prepareOomScoreAdjustedSpawn(
+function prepareOomScoreAdjustedSpawnWithExecEnvPolicy(
   command: string,
   args: readonly string[] = [],
   options?: OomWrapOptions,
+  preserveExecEnv = false,
 ): OomScoreAdjustedSpawn {
   const copy = [...args];
   const directSpawn: OomScoreAdjustedSpawn = {
@@ -111,22 +80,71 @@ export function prepareOomScoreAdjustedSpawn(
     env: options?.env,
     wrapped: false,
   };
+  // POSIX sh lacks `exec --`; a leading dash would become an exec option.
   if (
     !command ||
-    !canUseShellExecCommand(command) ||
-    !shouldWrapChildForOomScore(options) ||
-    (options?.argv0 !== undefined && options.argv0 !== command)
+    command.startsWith("-") ||
+    !shouldAdjustChildOomScore(options) ||
+    // A shell would start successfully and hide the removed runtime's native ENOENT.
+    (command === process.execPath && !readChildRuntimeViability().available)
   ) {
-    // POSIX sh cannot preserve an argv0 that differs from the exec pathname.
     return directSpawn;
   }
-  if (isWrapped(command, copy)) {
+  if (options?.argv0 !== undefined && options.argv0 !== command) {
+    // POSIX sh cannot preserve argv0. Adjust immediately after native spawn;
+    // the child (and early descendants) can run briefly at the inherited score.
+    return { ...directSpawn, afterSpawn: raiseChildOomScore };
+  }
+  if (!(options?.shellAvailable ?? defaultShellAvailable)()) {
+    return directSpawn;
+  }
+  if (!preserveExecEnv && isWrapped(command, copy)) {
     return { command, args: copy, env: hardenShellEnv(options?.env), wrapped: true };
   }
+  const effectiveEnv = options?.env ?? process.env;
+  if (
+    preserveExecEnv &&
+    Object.entries(effectiveEnv).some(
+      ([key, value]) => value !== undefined && NON_RESTORABLE_BASH_ENV_KEY.test(key),
+    )
+  ) {
+    // Bash consumes these readonly/imported controls before the shim can
+    // neutralize and restore them, so only direct spawn preserves exact env.
+    return directSpawn;
+  }
+  const wrappedEnv = hardenShellEnv(effectiveEnv);
+  if (preserveExecEnv) {
+    for (const [key, carrier] of SHELL_INIT_ENV_CARRIERS) {
+      if (effectiveEnv[carrier] !== undefined) {
+        return directSpawn;
+      }
+      delete wrappedEnv[carrier];
+      if (effectiveEnv[key] !== undefined) {
+        wrappedEnv[carrier] = effectiveEnv[key];
+      }
+    }
+  }
+  const wrapScript = preserveExecEnv ? OOM_SCORE_RESTORE_EXEC_ENV_SCRIPT : OOM_SCORE_WRAP_SCRIPT;
   return {
     command: OOM_SCORE_WRAP_SHELL,
-    args: ["-c", OOM_SCORE_WRAP_SCRIPT, command, ...copy],
-    env: hardenShellEnv(options?.env),
+    args: ["-c", wrapScript, command, ...copy],
+    env: wrappedEnv,
     wrapped: true,
   };
+}
+
+export function prepareOomScoreAdjustedSpawn(
+  command: string,
+  args: readonly string[] = [],
+  options?: OomWrapOptions,
+): OomScoreAdjustedSpawn {
+  return prepareOomScoreAdjustedSpawnWithExecEnvPolicy(command, args, options);
+}
+
+export function prepareOomScoreAdjustedSpawnPreservingExecEnv(
+  command: string,
+  args: readonly string[] = [],
+  options?: OomWrapOptions,
+): OomScoreAdjustedSpawn {
+  return prepareOomScoreAdjustedSpawnWithExecEnvPolicy(command, args, options, true);
 }

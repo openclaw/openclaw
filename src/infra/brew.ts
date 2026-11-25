@@ -1,16 +1,7 @@
-// Discovers Homebrew paths and package metadata for diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-function isExecutable(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { canAccessSync } from "./path-existence.js";
 
 type BrewResolutionOptions = {
   homeDir?: string;
@@ -21,35 +12,18 @@ type BrewResolutionOptions = {
   env?: NodeJS.ProcessEnv;
 };
 
-function resolveBrewFromPath(pathEnv = process.env.PATH): string | undefined {
-  for (const dir of (pathEnv ?? "").split(path.delimiter)) {
-    const trimmed = dir.trim();
-    if (!trimmed || !path.isAbsolute(trimmed)) {
-      continue;
-    }
-    const candidate = path.join(trimmed, "brew");
-    if (isExecutable(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
 /** Returns standard Homebrew bin directories suitable for PATH augmentation. */
 export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   const homeDir = opts?.homeDir ?? os.homedir();
 
-  const dirs: string[] = [];
-
-  // Linuxbrew defaults.
-  dirs.push(path.join(homeDir, ".linuxbrew", "bin"));
-  dirs.push(path.join(homeDir, ".linuxbrew", "sbin"));
-  dirs.push("/home/linuxbrew/.linuxbrew/bin", "/home/linuxbrew/.linuxbrew/sbin");
-
-  // macOS defaults (also used by some Linux setups).
-  dirs.push("/opt/homebrew/bin", "/usr/local/bin");
-
-  return dirs;
+  return [
+    path.join(homeDir, ".linuxbrew", "bin"),
+    path.join(homeDir, ".linuxbrew", "sbin"),
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
 }
 
 /** Resolves an executable `brew` path from trusted PATH entries or standard install roots. */
@@ -58,25 +32,53 @@ export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | un
 
   // Use the real process PATH, not opts.env, because callers may pass workspace
   // env loaded from untrusted project state.
-  const pathBrew = resolveBrewFromPath();
-  if (pathBrew) {
-    return pathBrew;
-  }
-
-  const candidates: string[] = [];
-
-  // Linuxbrew defaults.
-  candidates.push(path.join(homeDir, ".linuxbrew", "bin", "brew"));
-  candidates.push("/home/linuxbrew/.linuxbrew/bin/brew");
-
-  // macOS defaults.
-  candidates.push("/opt/homebrew/bin/brew", "/usr/local/bin/brew");
-
-  for (const candidate of candidates) {
-    if (isExecutable(candidate)) {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const trimmed = dir.trim();
+    if (!trimmed || !path.isAbsolute(trimmed)) {
+      continue;
+    }
+    const candidate = path.join(trimmed, "brew");
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
       return candidate;
     }
   }
 
-  return undefined;
+  return [
+    path.join(homeDir, ".linuxbrew", "bin", "brew"),
+    "/home/linuxbrew/.linuxbrew/bin/brew",
+    "/opt/homebrew/bin/brew",
+    "/usr/local/bin/brew",
+  ].find((candidate) => canAccessSync(candidate, fs.constants.X_OK));
+}
+
+/** Recognize formula-owned OpenClaw files and keep service paths independent of the keg version. */
+export async function resolveBrewOpenClawPath(inputPath: string): Promise<string | null> {
+  const match =
+    /^(.*)\/(?:Cellar\/openclaw-cli\/[^/]+|opt\/openclaw-cli)(\/libexec(?:\/.*)?)$/u.exec(
+      inputPath,
+    );
+  if (!match || process.platform === "win32") {
+    return null;
+  }
+  const [, prefix, suffix] = match;
+  const prefixes = [
+    process.env.HOMEBREW_PREFIX,
+    ...resolveBrewPathDirs().map((dir) => path.dirname(dir)),
+  ];
+  if (
+    !prefixes.some((value) => value && path.isAbsolute(value) && path.resolve(value) === prefix)
+  ) {
+    const brew = resolveBrewExecutable();
+    if (!brew) {
+      return null;
+    }
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const result = await runCommandWithTimeout([brew, "--prefix"], { timeoutMs: 5_000 }).catch(
+      () => null,
+    );
+    if (result?.code !== 0 || result.stdout.trim() !== prefix) {
+      return null;
+    }
+  }
+  return path.join(prefix!, "opt", "openclaw-cli", suffix!);
 }

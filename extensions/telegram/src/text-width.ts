@@ -9,8 +9,11 @@ const TELEGRAM_WIDE_CODE_POINT_PATTERN =
   /[\u1100-\u115F\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFE30-\uFE4F\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/u;
 const EMOJI_PRESENTATION_PATTERN = /\p{Emoji_Presentation}/u;
 const EXTENDED_PICTOGRAPHIC_PATTERN = /\p{Extended_Pictographic}/u;
+// Keep these properties in one character class. They overlap (U+200C is both Format
+// and Default_Ignorable), and a repeated alternation of overlapping branches backtracks
+// exponentially on a grapheme that ends in a printable Extend character.
 const NON_PRINTING_ONLY_PATTERN =
-  /^(?:\p{Default_Ignorable_Code_Point}|\p{Control}|\p{Format}|\p{Mark})+$/u;
+  /^[\p{Default_Ignorable_Code_Point}\p{Control}\p{Format}\p{Mark}]+$/u;
 const EMOJI_PRESENTATION_SELECTOR = "\uFE0F";
 const KEYCAP_COMBINING_MARK = "\u20E3";
 
@@ -18,11 +21,10 @@ function telegramMonospaceGraphemeWidth(grapheme: string): number {
   if (
     grapheme.includes(KEYCAP_COMBINING_MARK) ||
     EMOJI_PRESENTATION_PATTERN.test(grapheme) ||
-    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) && EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme))
+    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) &&
+      EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme)) ||
+    TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)
   ) {
-    return 2;
-  }
-  if (TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)) {
     return 2;
   }
   return NON_PRINTING_ONLY_PATTERN.test(grapheme) ? 0 : 1;
@@ -44,11 +46,10 @@ export function renderTelegramMonospaceGrid(
   rows: readonly (readonly string[])[],
   options: { headerSeparator?: boolean } = {},
 ): string {
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
+  const widths: number[] = [];
   for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(row[index] ?? ""));
+    for (const [index, text] of row.entries()) {
+      widths[index] = Math.max(widths[index] ?? 3, telegramMonospaceWidth(text ?? ""));
     }
   }
   const renderRow = (row: readonly string[]) =>

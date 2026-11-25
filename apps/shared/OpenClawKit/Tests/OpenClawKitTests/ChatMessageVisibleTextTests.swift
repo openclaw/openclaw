@@ -156,17 +156,23 @@ struct ChatMessageVisibleTextTests {
             tokensAfter: 9000))
     }
 
-    @Test func `transcript metadata survives message coding round trip`() throws {
-        let original = OpenClawChatMessage(
-            role: "assistant",
-            content: [textContent("short\n...(truncated)...")],
-            timestamp: 1,
-            transcriptMessageID: "msg-round-trip",
-            isTruncated: true)
+    @Test @MainActor func `transcript metadata survives message coding round trip`() throws {
+        let original = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(
+                #"{"role":"assistant","content":"short","timestamp":1,"__openclaw":{"id":"msg-round-trip","runId":"run-round-trip","truncated":true}}"#
+                    .utf8))
 
+        let adopted = OpenClawChatViewModel.adoptingCanonicalMessage(
+            original,
+            over: OpenClawChatMessage(role: "assistant", content: [textContent("short")], timestamp: 0))
+        let cacheable = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([adopted]).first)
+        let encoded = try JSONEncoder().encode(cacheable)
         let decoded = try JSONDecoder().decode(
             OpenClawChatMessage.self,
-            from: JSONEncoder().encode(original))
+            from: encoded)
+        let encodedObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let encodedMetadata = encodedObject["__openclaw"] as? [String: Any]
         let systemRow = OpenClawChatMessage(
             role: "system",
             content: [],
@@ -184,6 +190,7 @@ struct ChatMessageVisibleTextTests {
             from: JSONEncoder().encode(systemRow))
 
         #expect(decoded.transcriptMessageID == "msg-round-trip")
+        #expect(encodedMetadata?["runId"] as? String == "run-round-trip")
         #expect(decoded.isTruncated)
         #expect(decodedSystemRow.provenance == systemRow.provenance)
         #expect(decodedSystemRow.historyMarker == systemRow.historyMarker)
@@ -217,5 +224,58 @@ struct ChatMessageVisibleTextTests {
         #expect(!ChatMessageVisibleText.hasVisibleText(in: blank))
         #expect(!ChatMessageVisibleText.hasVisibleText(in: thinkingOnly))
         #expect(ChatMessageVisibleText.hasVisibleText(in: spoken))
+    }
+
+    @Test func `desktop failure summary is macOS only and survives message round trip`() throws {
+        let message = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(#"""
+            {
+              "role": "custom",
+              "content": [{ "type": "text", "text": "Generic failure" }],
+              "openclawRunError": {
+                "runId": "failed-run",
+                "summary": "Generic failure",
+                "desktopSummary": "  Review this chat's permissions before retrying.  "
+              }
+            }
+            """#.utf8))
+        let roundTrip = try JSONDecoder().decode(
+            OpenClawChatMessage.self, from: JSONEncoder().encode(message))
+        #expect(message.content.first?.text == "Generic failure")
+        #if os(macOS)
+        let expected = "Review this chat's permissions before retrying."
+        #else
+        let expected = "Generic failure"
+        #endif
+        #expect(ChatMessageVisibleText.displayText(in: message, includeThinking: false) == expected)
+        #expect(ChatMessageVisibleText.visibleText(in: roundTrip) == expected)
+
+        var ordinaryMessage = message
+        ordinaryMessage.role = "assistant"
+        #expect(ChatMessageVisibleText.visibleText(in: ordinaryMessage) == "Generic failure")
+    }
+
+    @Test(arguments: [
+        #"{}"#,
+        #"{ "desktopSummary": "Unscoped text" }"#,
+        #"{ "runId": "failed-run", "desktopSummary": "Missing shared summary" }"#,
+        #"{ "runId": "failed-run", "summary": " ", "desktopSummary": "Blank shared summary" }"#,
+        #"{ "runId": "failed-run", "summary": 42, "desktopSummary": "Invalid shared summary" }"#,
+        #"{ "runId": "failed-run", "summary": "Generic failure", "desktopSummary": " " }"#,
+        #"{ "runId": "failed-run", "summary": "Generic failure", "desktopSummary": 42 }"#,
+        #"["Unexpected metadata"]"#,
+    ])
+    func `missing or invalid desktop summary preserves shared failure text`(_ metadata: String) throws {
+        let message = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data("""
+            {
+              "role": "custom",
+              "content": [{ "type": "text", "text": "Generic failure" }],
+              "openclawRunError": \(metadata)
+            }
+            """.utf8))
+        #expect(ChatMessageVisibleText.visibleText(in: message) == "Generic failure")
     }
 }

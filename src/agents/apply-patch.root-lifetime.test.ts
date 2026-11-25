@@ -18,7 +18,7 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 
-it("awaits one patch-owned root before completing a host no-op envelope", async () => {
+it("awaits one patch-owned root before completing a contained host no-op envelope", async () => {
   const dir = tempDirs.make("patch-root-lifetime-");
   const filePath = path.join(dir, "note.txt");
   await fs.writeFile(filePath, "unchanged\n");
@@ -43,7 +43,7 @@ it("awaits one patch-owned root before completing a host no-op envelope", async 
     rootCalls += 1;
     return pendingRoot;
   };
-  const execution = createApplyPatchTool({ cwd: dir }).execute(
+  const execution = createApplyPatchTool({ cwd: dir, workspaceOnly: true }).execute(
     "no-op",
     {
       input: `*** Begin Patch
@@ -67,11 +67,12 @@ it("awaits one patch-owned root before completing a host no-op envelope", async 
       ]),
     ).resolves.toBe("root awaited");
     initialization.resolve(root);
-    await expect(execution).resolves.toMatchObject({
+    const result = await execution;
+    expect(result).toMatchObject({
       content: [{ type: "text", text: "No changes made to note.txt." }],
       details: { summary: { added: [], modified: [], deleted: [] } },
-      terminate: true,
     });
+    expect(result.terminate).toBeUndefined();
     expect(rootCalls).toBe(1);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("unchanged\n");
   } finally {

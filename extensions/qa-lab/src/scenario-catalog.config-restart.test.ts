@@ -1,36 +1,91 @@
-// Qa Lab tests cover config-restart scenario ordering.
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expect, it, vi } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { applyQaMergePatch } from "./suite-merge-patch.js";
 
-describe("QA config-restart scenario catalog", () => {
-  it("waits for the restart wake before using restored capabilities", () => {
-    const flow = JSON.stringify(readQaScenarioById("config-restart-capability-flip"));
-    const restartPatchIndex = flow.indexOf('"note":{"ref":"wakeMarker"}');
-    const restartOwnedPathIndex = flow.indexOf('"gateway.terminal.enabled"');
-    const wakeWaitIndex = flow.indexOf("candidate.text.includes(wakeMarker)");
-    const capabilityPollIndex = flow.indexOf('"saveAs":"afterTools"');
+function runConfigFlow(scenarioId: string, api: Record<string, unknown>) {
+  return runLoadedScenarioFlow(scenarioId, {
+    api: {
+      env: {},
+      randomUUID,
+      createSession: vi.fn(),
+      ...api,
+    },
+  });
+}
 
-    expect(restartPatchIndex).toBeGreaterThanOrEqual(0);
-    expect(restartOwnedPathIndex).toBeGreaterThanOrEqual(0);
-    expect(restartOwnedPathIndex).toBeLessThan(wakeWaitIndex);
-    expect(wakeWaitIndex).toBeGreaterThan(restartPatchIndex);
-    expect(capabilityPollIndex).toBeGreaterThan(wakeWaitIndex);
-    expect(flow.indexOf('"call":"runAgentPrompt"')).toBeGreaterThan(capabilityPollIndex);
+it("applies a changed serving path without changing other config", async () => {
+  const basePath = "/qa-restart-wakeup";
+  const original = {
+    gateway: {
+      controlUi: { enabled: false, allowedOrigins: ["https://qa.example"], basePath },
+    },
+    channels: { "qa-channel": { defaultTo: "channel:qa-room" } },
+  };
+  const applied = new Error("config.apply captured");
+  const expectedDelivery = { channel: "qa-channel", to: "dm:qa-operator" };
+  type ApplyInput = { nextConfig: typeof original; deliveryContext: typeof expectedDelivery };
+  const applyConfig = vi.fn(({ nextConfig, deliveryContext }: ApplyInput) => {
+    expect(nextConfig.gateway.controlUi.basePath).toEqual(expect.any(String));
+    expect(nextConfig.gateway.controlUi.basePath).not.toBe(basePath);
+    const restored = structuredClone(nextConfig);
+    restored.gateway.controlUi.basePath = basePath;
+    expect(restored).toEqual(original);
+    expect(deliveryContext).toEqual(expectedDelivery);
+    throw applied;
+  });
+  await expect(
+    runConfigFlow("config-apply-restart-wakeup", {
+      reset: vi.fn(),
+      buildAgentSessionKey: () => "agent:qa:qa-channel:channel:qa-room",
+      runAgentPrompt: vi.fn(),
+      readConfigSnapshot: () => ({ config: structuredClone(original) }),
+      applyConfig,
+    }),
+  ).rejects.toBe(applied);
+  expect(applyConfig).toHaveBeenCalledOnce();
+});
+
+it("waits for the restart wake before using restored capabilities", () => {
+  const flow = JSON.stringify(readQaScenarioById("config-restart-capability-flip"));
+  const restartPatchIndex = flow.indexOf('"note":{"ref":"wakeMarker"}');
+  const restartOwnedPathIndex = flow.indexOf('"gateway.controlUi.basePath"');
+  const wakeWaitIndex = flow.indexOf("candidate.text.includes(wakeMarker)");
+  const capabilityPollIndex = flow.indexOf('"saveAs":"afterTools"');
+
+  expect(restartPatchIndex).toBeGreaterThanOrEqual(0);
+  expect(restartOwnedPathIndex).toBeGreaterThanOrEqual(0);
+  expect(restartOwnedPathIndex).toBeLessThan(wakeWaitIndex);
+  expect(wakeWaitIndex).toBeGreaterThan(restartPatchIndex);
+  expect(capabilityPollIndex).toBeGreaterThan(wakeWaitIndex);
+  expect(flow.indexOf('"call":"runAgentPrompt"')).toBeGreaterThan(capabilityPollIndex);
+});
+
+it("restores an absent Control UI config after a failed wake", async () => {
+  const original: OpenClawConfig = {
+    gateway: {},
+    tools: { deny: ["browser"] },
+    agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
+  };
+  let current = structuredClone(original);
+  const wakeError = new Error("restart wake unavailable");
+  const pending = runConfigFlow("config-restart-capability-flip", {
+    ensureImageGenerationConfigured: vi.fn(),
+    readConfigSnapshot: () => ({ config: structuredClone(current) }),
+    patchConfig: ({ patch }: { patch: Record<string, unknown> }) => {
+      current = applyQaMergePatch(current, patch) as typeof original;
+    },
+    waitForGatewayHealthy: vi.fn(),
+    waitForQaChannelReady: vi.fn(),
+    readEffectiveTools: () => new Set(),
+    waitForOutboundMessage: () => {
+      expect(current.gateway?.controlUi?.basePath).toEqual(expect.any(String));
+      throw wakeError;
+    },
   });
 
-  it("restores the complete terminal subtree, including its absence", () => {
-    const flow = JSON.stringify(readQaScenarioById("config-restart-capability-flip"));
-
-    expect(flow).toContain(
-      '"expr":"original.config.gateway && Object.prototype.hasOwnProperty.call(original.config.gateway, \'terminal\') ? structuredClone(original.config.gateway.terminal) : undefined"',
-    );
-    expect(flow).toContain('"expr":"originalTerminal?.enabled === false ? true : false"');
-    expect(flow).toContain(
-      '"expr":"originalTerminal !== undefined && Object.prototype.hasOwnProperty.call(originalTerminal, \'enabled\')"',
-    );
-    expect(flow).toContain(
-      '"terminal":{"expr":"originalTerminal === undefined ? null : (originalTerminalEnabledPresent ? originalTerminal : { ...originalTerminal, enabled: null })"}',
-    );
-    expect(flow.match(/"gateway\.terminal\.enabled"/g)).toHaveLength(1);
-  });
+  await expect(pending).rejects.toBe(wakeError);
+  expect(current).toEqual(original);
 });

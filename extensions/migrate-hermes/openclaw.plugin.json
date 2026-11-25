@@ -1,5 +1,6 @@
 {
   "id": "migrate-hermes",
+  "categories": ["integrations"],
   "activation": {
     "onStartup": false
   },
@@ -12,5 +13,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Preview a Hermes migration with a dry run and explain the proposed imports.",
+    "Help me plan a selective Hermes migration that preserves my existing OpenClaw data."
+  ]
 }

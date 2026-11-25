@@ -1,77 +1,72 @@
-// Role allowlist update tests cover operator-driven gateway updates, node lists,
-// device/node pairing state, restart sentinels, and runtime plugin visibility.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { DeviceIdentity } from "../infra/device-identity.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
-import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import { getUpdateRun } from "../infra/update-run-ledger.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { captureEnv, deleteTestEnvValue } from "../test-utils/env.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientName,
-} from "../utils/message-channel.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
+import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 
-vi.mock("../infra/update-runner.js", () => ({
-  resolveUpdateInstallSurface: vi.fn(async () => ({
-    kind: "git",
-    mode: "git",
-    root: "/repo",
-    packageRoot: "/repo",
-  })),
-  runGatewayUpdate: vi.fn(async () => ({
-    status: "ok",
-    mode: "git",
-    root: "/repo",
-    steps: [],
-    durationMs: 12,
-  })),
-}));
+const readonlyPreparation = vi.hoisted(() => [] as string[]);
 
-import { runGatewayUpdate } from "../infra/update-runner.js";
+vi.mock("../infra/sqlite-snapshot-source.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/sqlite-snapshot-source.js")>();
+  const track =
+    <Args extends [string, ...unknown[]], Result>(prepare: (...args: Args) => Result) =>
+    (...args: Args) => {
+      readonlyPreparation.push(args[0]);
+      return prepare(...args);
+    };
+  return {
+    ...actual,
+    prepareSqliteReadOnlyLocationSync: track(actual.prepareSqliteReadOnlyLocationSync),
+    prepareSqliteReadOnlyLocation: track(actual.prepareSqliteReadOnlyLocation),
+    startSqliteReadOnlyLocationAsync: track(actual.startSqliteReadOnlyLocationAsync),
+  };
+});
+
+const reloadFixture = vi.hoisted<{
+  reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
+}>(() => ({}));
+
+vi.mock("./server-reload-managed.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-managed.js")>();
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {
+      reloadFixture.reconcileRuntimePolicy = params.reconcileRuntimePolicy;
+      return actual.startManagedGatewayConfigReloader(params);
+    },
+  };
+});
+
+import { registerGatewayUpdateHistoryTests } from "./server.update-history.test-support.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
+const nodeClients: GatewayClient[] = [];
+afterEach(async () => {
+  for (const client of nodeClients.splice(0).toReversed()) {
+    await client.stopAndWait();
+  }
+});
 installGatewayTestHooks({ scope: "suite" });
+const updateDirs = useAutoCleanupTempDirTracker(afterEach);
 const FAST_WAIT_OPTS = { timeout: 5_000, interval: 10 } as const;
-type PollWaitOptions = { timeout: number; interval: number };
 
 let ws: WebSocket;
 let port: number;
-
-async function withoutSupervisorHints<T>(fn: () => Promise<T>): Promise<T> {
-  const envSnapshot = captureEnv([...SUPERVISOR_HINT_ENV_VARS]);
-  for (const key of SUPERVISOR_HINT_ENV_VARS) {
-    deleteTestEnvValue(key);
-  }
-
-  try {
-    return await fn();
-  } finally {
-    envSnapshot.restore();
-  }
-}
-
-function countConnectedNodes(nodes: readonly { connected?: boolean }[] | undefined): number {
-  let count = 0;
-  for (const node of nodes ?? []) {
-    if (node.connected) {
-      count++;
-    }
-  }
-  return count;
-}
 
 function installCanvasNodePolicyForTest() {
   const registry = getActiveRuntimePluginRegistry();
@@ -98,74 +93,44 @@ function installCanvasNodePolicyForTest() {
   });
 }
 
-beforeEach(() => {
-  installCanvasNodePolicyForTest();
-});
+beforeEach(installCanvasNodePolicyForTest);
 
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
   port = started.port;
 });
 
-const connectNodeClient = async (params: {
-  port: number;
+type NodeFixture = Pick<
+  Parameters<typeof connectGatewayClient>[0],
+  "platform" | "deviceFamily" | "deviceIdentity" | "clientName" | "onEvent"
+> & {
+  displayName: string;
   commands: string[];
-  platform?: string;
-  deviceFamily?: string;
-  deviceIdentity?: DeviceIdentity;
-  clientName?: GatewayClientName;
-  instanceId?: string;
-  displayName?: string;
-  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-}) => {
+};
+const connectNodeClient = async ({ displayName, ...params }: NodeFixture) => {
   const token = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (!token) {
     throw new Error("OPENCLAW_GATEWAY_TOKEN is required for node test clients");
   }
-  return await connectGatewayClient({
-    url: `ws://127.0.0.1:${params.port}`,
+  const client = await connectGatewayClient({
+    url: `ws://127.0.0.1:${port}`,
     token,
     role: "node",
+    ...params,
     clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientVersion: "1.0.0",
-    clientDisplayName: params.displayName,
+    clientDisplayName: displayName,
     platform: params.platform ?? "ios",
-    deviceFamily: params.deviceFamily,
     mode: GATEWAY_CLIENT_MODES.NODE,
-    instanceId: params.instanceId,
+    instanceId: displayName,
     scopes: [],
-    commands: params.commands,
-    deviceIdentity: params.deviceIdentity,
-    onEvent: params.onEvent,
     timeoutMessage: "timeout waiting for node to connect",
   });
+  nodeClients.push(client);
+  return client;
 };
 
-function requireNodeId(nodeId: string | undefined, label: string): string {
-  if (!nodeId) {
-    throw new Error(`expected connected node id for ${label}`);
-  }
-  return nodeId;
-}
-
-const approveAllPendingPairings = async () => {
-  const list = await listDevicePairing();
-  for (const pending of list.pending) {
-    await approveDevicePairing(pending.requestId, {
-      callerScopes: pending.scopes ?? ["operator.admin"],
-    });
-  }
-};
-
-function getGatewayTestConfigPath(): string {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required in the gateway test environment");
-  }
-  return configPath;
-}
-
-const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
+const connectNodeClientWithPairing = async (params: NodeFixture) => {
   try {
     return await connectNodeClient(params);
   } catch (error) {
@@ -173,28 +138,18 @@ const connectNodeClientWithPairing = async (params: Parameters<typeof connectNod
     if (!message.includes("pairing required")) {
       throw error;
     }
-    await approveAllPendingPairings();
+    for (const pending of (await listDevicePairing()).pending) {
+      await approveDevicePairing(pending.requestId, {
+        callerScopes: pending.scopes ?? ["operator.admin"],
+      });
+    }
     return await connectNodeClient(params);
   }
 };
 
-const connectNodeClientWithNodePairing = async (
-  params: Parameters<typeof connectNodeClient>[0],
-) => {
+const connectNodeClientWithNodePairing = async (params: NodeFixture) => {
   const provisionalClient = await connectNodeClientWithPairing(params);
-  const listRes = await rpcReq<{
-    nodes?: Array<{ nodeId: string; displayName?: string; connected?: boolean }>;
-  }>(ws, "node.list", {});
-  const provisionalNode = (listRes.payload?.nodes ?? []).find((node) => {
-    if (!node.connected) {
-      return false;
-    }
-    if (params.displayName) {
-      return node.displayName === params.displayName;
-    }
-    return true;
-  });
-  const nodeId = requireNodeId(provisionalNode?.nodeId, params.displayName ?? "node pairing");
+  const nodeId = await findConnectedNodeIdByDisplayName(params.displayName);
 
   await provisionalClient.stopAndWait();
 
@@ -212,55 +167,43 @@ const connectNodeClientWithNodePairing = async (
   return await connectNodeClient(params);
 };
 
-async function findConnectedNodeByDisplayName(displayName: string) {
-  const listRes = await rpcReq<{
-    nodes?: Array<{
-      nodeId: string;
-      displayName?: string;
-      connected?: boolean;
-      commands?: string[];
-    }>;
+async function connectedNodes() {
+  const result = await rpcReq<{
+    nodes?: { nodeId: string; displayName?: string; connected?: boolean; commands?: string[] }[];
   }>(ws, "node.list", {});
-  return (listRes.payload?.nodes ?? []).find(
-    (node) => node.connected && node.displayName === displayName,
-  );
+  return result.payload?.nodes?.filter((node) => node.connected) ?? [];
+}
+
+async function findConnectedNodeByDisplayName(displayName: string) {
+  return (await connectedNodes()).find((node) => node.displayName === displayName);
 }
 
 async function findConnectedNodeIdByDisplayName(displayName: string) {
   const node = await findConnectedNodeByDisplayName(displayName);
-  return requireNodeId(node?.nodeId, displayName);
+  if (!node?.nodeId) {
+    throw new Error(`expected connected node id for ${displayName}`);
+  }
+  return node.nodeId;
 }
 
 async function expectConnectedCommands(
   displayName: string,
   commands: string[],
-  opts: PollWaitOptions = FAST_WAIT_OPTS,
+  opts: { timeout: number; interval: number } = FAST_WAIT_OPTS,
 ) {
   await expect
     .poll(async () => {
-      const node = await findConnectedNodeByDisplayName(displayName);
-      return node?.commands?.toSorted() ?? [];
+      return (await findConnectedNodeByDisplayName(displayName))?.commands?.toSorted() ?? [];
     }, opts)
     .toEqual(commands);
 }
 
 async function expectConnectedNodeCount(count: number) {
-  await expect
-    .poll(async () => {
-      const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(ws, "node.list", {});
-      return countConnectedNodes(listRes.payload?.nodes);
-    }, FAST_WAIT_OPTS)
-    .toBe(count);
+  await expect.poll(async () => (await connectedNodes()).length, FAST_WAIT_OPTS).toBe(count);
 }
 
 async function expectPendingPairingCommands(nodeId: string, commands: string[]) {
-  const pairingList = await rpcReq<{
-    pending?: Array<{ nodeId?: string; commands?: string[] }>;
-  }>(ws, "node.pair.list", {});
-  expect(pairingList.ok).toBe(true);
-  const pending = (pairingList.payload?.pending ?? []).find((entry) => entry.nodeId === nodeId);
-  expect(pending?.nodeId).toBe(nodeId);
-  expect(pending?.commands).toEqual(commands);
+  expect(await getPendingNodePairing(nodeId)).toMatchObject({ nodeId, commands });
 }
 
 async function getPendingNodePairing(nodeId: string) {
@@ -280,7 +223,7 @@ async function approvePendingNodePairing(nodeId: string, commands: string[]) {
 }
 
 async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
-  return rpcReq(ws, "node.invoke", {
+  return rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(ws, "node.invoke", {
     nodeId,
     command: "canvas.snapshot",
     params: { format: "png" },
@@ -289,37 +232,37 @@ async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
 }
 
 async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string) {
-  const res = await invokeCanvasSnapshot(nodeId, idempotencyKey);
-  expect(res.ok).toBe(false);
-  expect(res.error?.message ?? "").toContain("node command not allowed");
+  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey)).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("node command not allowed") },
+  });
 }
 
 function createInvokeCapture() {
-  let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
-  const pendingPayloads: Array<{ id?: string; nodeId?: string }> = [];
+  type Payload = { id?: string; nodeId?: string };
+  let waiting: ReturnType<typeof Promise.withResolvers<Payload>> | undefined;
+  const pendingPayloads: Payload[] = [];
   return {
     waitForInvoke: () => {
       const pending = pendingPayloads.shift();
       if (pending) {
         return Promise.resolve(pending);
       }
-      if (resolveInvoke) {
+      if (waiting) {
         throw new Error("already waiting for a node invoke request");
       }
-      return new Promise<{ id?: string; nodeId?: string }>((resolve) => {
-        resolveInvoke = resolve;
-      });
+      waiting = Promise.withResolvers<Payload>();
+      return waiting.promise;
     },
     onEvent: (evt: { event?: string; payload?: unknown }) => {
       if (evt.event === "node.invoke.request") {
-        const payload = evt.payload as { id?: string; nodeId?: string };
-        if (resolveInvoke) {
-          const resolve = resolveInvoke;
-          resolveInvoke = null;
-          resolve(payload);
-          return;
+        const payload = evt.payload as Payload;
+        if (waiting) {
+          waiting.resolve(payload);
+          waiting = undefined;
+        } else {
+          pendingPayloads.push(payload);
         }
-        pendingPayloads.push(payload);
       }
     },
   };
@@ -329,608 +272,335 @@ async function respondToInvoke(
   client: GatewayClient,
   payload: { id?: string; nodeId?: string },
   fallbackNodeId: string,
-  payloadJSON: string | null = JSON.stringify({ ok: true }),
 ) {
   await client.request("node.invoke.result", {
     id: payload.id ?? "",
     nodeId: payload.nodeId ?? fallbackNodeId,
     ok: true,
-    payloadJSON,
+    payloadJSON: JSON.stringify({ ok: true }),
   });
 }
 
 function createDeviceIdentityForTest(prefix: string) {
   return loadOrCreateDeviceIdentity({
-    path: path.join(
-      os.tmpdir(),
-      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
-    ),
+    path: path.join(updateDirs.make(`${prefix}-`), "client", "credentials.sqlite"),
   });
 }
 
-describe("gateway role enforcement", () => {
-  test("enforces operator and node permissions", async () => {
-    let nodeClient: GatewayClient | undefined;
+test("gateway enforces operator and node permissions", async () => {
+  for (const [method, params] of [
+    ["node.event", { event: "test", payload: { ok: true } }],
+    ["node.invoke.result", { id: "invoke-1", nodeId: "node-1", ok: true }],
+  ] as const) {
+    expect(await rpcReq(ws, method, params)).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("unauthorized role") },
+    });
+  }
 
+  const nodeClient = await connectNodeClientWithNodePairing({
+    commands: [],
+    displayName: "node-role-enforcement",
+  });
+
+  const event = "test.unsupported";
+  expect(await nodeClient.request("node.event", { event, payload: { ok: true } })).toEqual({
+    ok: true,
+    event,
+    handled: false,
+    reason: "unsupported_event",
+  });
+
+  const binsPayload = await nodeClient.request("skills.bins", {});
+  expect(Array.isArray(binsPayload?.bins)).toBe(true);
+
+  await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
+
+  expect((await nodeClient.request<HealthSummary>("health", {})).ok).toBe(true);
+});
+
+registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
+
+test("a write-scoped client cannot start an installation update", async () => {
+  const install = await import("../infra/update-install-status.js");
+  const root = updateDirs.make("denied-installation-update-");
+  const entry = path.join(root, "index.js");
+  const initial = "// installed runtime fixture\n";
+  await fs.writeFile(entry, initial);
+  const discovery = vi.spyOn(install, "resolveStartupInstallStatus").mockResolvedValue({
+    root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
+  });
+  try {
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      scopes: ["operator.read", "operator.write"],
+    });
     try {
-      const eventRes = await rpcReq(ws, "node.event", { event: "test", payload: { ok: true } });
-      expect(eventRes.ok).toBe(false);
-      expect(eventRes.error?.message ?? "").toContain("unauthorized role");
-
-      const invokeRes = await rpcReq(ws, "node.invoke.result", {
-        id: "invoke-1",
-        nodeId: "node-1",
-        ok: true,
-      });
-      expect(invokeRes.ok).toBe(false);
-      expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
-
-      nodeClient = await connectNodeClientWithNodePairing({
-        port,
-        commands: [],
-        instanceId: "node-role-enforcement",
-        displayName: "node-role-enforcement",
-      });
-
-      const unsupportedEvent = await nodeClient.request<{
-        ok: boolean;
-        event?: string;
-        handled?: boolean;
-        reason?: string;
-      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
-      expect(unsupportedEvent).toEqual({
-        ok: true,
-        event: "test.unsupported",
-        handled: false,
-        reason: "unsupported_event",
-      });
-
-      const binsPayload = await nodeClient.request("skills.bins", {});
-      expect(Array.isArray(binsPayload?.bins)).toBe(true);
-
-      await expect(nodeClient.request("status", {})).rejects.toThrow("unauthorized role");
-
-      const healthPayload = await nodeClient.request<HealthSummary>("health", {});
-      expect(healthPayload.ok).toBe(true);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
+      await expect(client.request("update.run", {})).rejects.toThrow(/operator\.admin/);
+      expect(discovery).not.toHaveBeenCalled();
+      expect(await fs.readdir(root)).toEqual(["index.js"]);
+      expect(await fs.readFile(entry, "utf8")).toBe(initial);
+      expect((await client.request<HealthSummary>("health", {})).ok).toBe(true);
     } finally {
-      nodeClient?.stop();
+      await client.stopAndWait();
     }
-  });
+  } finally {
+    discovery.mockRestore();
+  }
 });
 
-describe("gateway update.run", () => {
-  test("writes sentinel and schedules restart", async () => {
-    await withoutSupervisorHints(async () => {
-      const sigusr1 = vi.fn();
-      process.on("SIGUSR1", sigusr1);
-
+test("an authorized client starts a package release update and observes its recorded outcome", async () => {
+  await withEnvAsync(
+    Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, undefined])),
+    async () => {
+      const [installStatus, releaseUpdate] = await Promise.all([
+        import("../infra/update-install-status.js"),
+        import("../update/run.js"),
+      ]);
+      const root = updateDirs.make("openclaw-update-role-");
+      const installation = vi
+        .spyOn(installStatus, "resolveStartupInstallStatus")
+        .mockResolvedValue({
+          root,
+          status: { root, installKind: "package", packageManager: "pnpm" },
+          installReceipt: null,
+        });
+      const prepare = vi.spyOn(releaseUpdate, "prepareUpdate");
+      const link = fs.link;
+      const lockFailure = vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+        if (path.basename(destination.toString()) === ".update.lock") {
+          throw new Error("synthetic update lock failure");
+        }
+        return await link(source, destination);
+      });
       try {
-        const id = "req-update";
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "update.run",
-            params: {
-              sessionKey: "agent:main:whatsapp:dm:+15555550123",
-              restartDelayMs: 0,
-            },
-          }),
-        );
-        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
-        expect(res.ok).toBe(true);
-
+        const res = await rpcReq<{ runId: string; ok: boolean }>(ws, "update.run", {
+          sessionKey: "agent:main:whatsapp:dm:+15555550123",
+          restartDelayMs: 0,
+        });
+        expect(res).toMatchObject({
+          ok: true,
+          payload: { ok: true, runId: expect.any(String) },
+        });
+        const runId = res.payload!.runId;
         await vi.waitFor(() => {
-          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
-        }, FAST_WAIT_OPTS);
-        expect(sigusr1).toHaveBeenCalled();
-
-        const sentinel = await readRestartSentinel();
-        expect(sentinel?.payload.kind).toBe("update");
-        expect(sentinel?.payload.stats?.mode).toBe("git");
-      } finally {
-        process.off("SIGUSR1", sigusr1);
-      }
-    });
-  });
-
-  test("uses configured update channel", async () => {
-    await withoutSupervisorHints(async () => {
-      const sigusr1 = vi.fn();
-      process.on("SIGUSR1", sigusr1);
-
-      try {
-        const configPath = getGatewayTestConfigPath();
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
-        const updateMock = vi.mocked(runGatewayUpdate);
-        updateMock.mockClear();
-
-        const id = "req-update-channel";
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id,
-            method: "update.run",
-            params: {
-              restartDelayMs: 0,
-            },
-          }),
-        );
-        const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
-        expect(res.ok).toBe(true);
-        await vi.waitFor(() => {
-          expect(updateMock).toHaveBeenCalledOnce();
-        }, FAST_WAIT_OPTS);
-        await vi.waitFor(() => {
-          expect(sigusr1).toHaveBeenCalled();
+          expect(prepare).toHaveBeenCalledWith(
+            expect.objectContaining({ runId, runningRoot: root }),
+          );
+          expect(getUpdateRun(runId)).toMatchObject({
+            status: "failed",
+            reason: "update-failed",
+          });
         }, FAST_WAIT_OPTS);
       } finally {
-        process.off("SIGUSR1", sigusr1);
+        lockFailure.mockRestore();
+        prepare.mockRestore();
+        installation.mockRestore();
       }
-    });
-  });
+    },
+  );
 });
+
+async function connectPendingNode(fixture: NodeFixture) {
+  await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveLocal: false } } } });
+  const client = await connectNodeClientWithPairing(fixture);
+  return { client, nodeId: await findConnectedNodeIdByDisplayName(fixture.displayName) };
+}
+
+function nodeFixture(displayName: string, options: Partial<Omit<NodeFixture, "displayName">> = {}) {
+  return {
+    displayName,
+    commands: ["canvas.snapshot"],
+    platform: "macos",
+    deviceFamily: "Mac",
+    deviceIdentity: createDeviceIdentityForTest(displayName),
+    ...options,
+  };
+}
 
 describe("gateway node command allowlist", () => {
   test("enforces command allowlists across node clients", async () => {
-    const waitForConnectedCount = async (count: number) => {
-      await expect
-        .poll(async () => {
-          const listRes = await rpcReq<{
-            nodes?: Array<{ nodeId: string; connected?: boolean }>;
-          }>(ws, "node.list", {});
-          return countConnectedNodes(listRes.payload?.nodes);
-        }, FAST_WAIT_OPTS)
-        .toBe(count);
-    };
+    const empty = nodeFixture("node-empty", {
+      commands: [],
+      platform: "ios",
+      deviceFamily: undefined,
+    });
+    const emptyClient = await connectNodeClientWithNodePairing(empty);
+    const emptyNodeId = await findConnectedNodeIdByDisplayName(empty.displayName);
+    await expectCanvasSnapshotDenied(emptyNodeId, "allowlist-2");
+    await emptyClient.stopAndWait();
+    await expectConnectedNodeCount(0);
 
-    const getConnectedNodeId = async () => {
-      const listRes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
-        ws,
-        "node.list",
-        {},
-      );
-      return requireNodeId(
-        listRes.payload?.nodes?.find((node) => node.connected)?.nodeId,
-        "allowlist invocation",
-      );
-    };
-
-    let systemClient: GatewayClient | undefined;
-    let emptyClient: GatewayClient | undefined;
-    let allowedClient: GatewayClient | undefined;
     const invokeCapture = createInvokeCapture();
-
-    try {
-      const systemDeviceIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(
-          os.tmpdir(),
-          `openclaw-node-system-run-${Date.now()}-${Math.random()}.sqlite`,
-        ),
-      });
-      const emptyDeviceIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.sqlite`),
-      });
-      const allowedDeviceIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
-      });
-
-      systemClient = await connectNodeClientWithNodePairing({
-        port,
-        commands: ["system.run"],
-        instanceId: "node-system-run",
-        displayName: "node-system-run",
-        deviceIdentity: systemDeviceIdentity,
-      });
-      const systemNodeId = await getConnectedNodeId();
-      const disallowedRes = await rpcReq(ws, "node.invoke", {
-        nodeId: systemNodeId,
-        command: "system.run",
-        params: { command: "echo hi" },
-        idempotencyKey: "allowlist-1",
-      });
-      expect(disallowedRes.ok).toBe(false);
-      expect(disallowedRes.error?.message).toContain("node command not allowed");
-      await systemClient.stopAndWait();
-      await waitForConnectedCount(0);
-
-      emptyClient = await connectNodeClientWithNodePairing({
-        port,
-        commands: [],
-        instanceId: "node-empty",
-        displayName: "node-empty",
-        deviceIdentity: emptyDeviceIdentity,
-      });
-      const emptyNodeId = await getConnectedNodeId();
-      const missingRes = await rpcReq(ws, "node.invoke", {
-        nodeId: emptyNodeId,
-        command: "canvas.snapshot",
-        params: {},
-        idempotencyKey: "allowlist-2",
-      });
-      expect(missingRes.ok).toBe(false);
-      expect(missingRes.error?.message).toContain("node command not allowed");
-      await emptyClient.stopAndWait();
-      await waitForConnectedCount(0);
-
-      allowedClient = await connectNodeClientWithNodePairing({
-        port,
-        commands: ["canvas.snapshot"],
-        instanceId: "node-allowed",
-        displayName: "node-allowed",
-        deviceIdentity: allowedDeviceIdentity,
-        onEvent: invokeCapture.onEvent,
-      });
-      const allowedNodeId = await getConnectedNodeId();
-
-      const invokeResP = rpcReq(ws, "node.invoke", {
-        nodeId: allowedNodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-3",
-      });
-      const payload = await invokeCapture.waitForInvoke();
-      const requestId = payload?.id ?? "";
-      const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
-      for (const [progress, message] of [
-        [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
-        [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
-      ] as const) {
-        await expect(
-          allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
-        ).rejects.toThrow(message);
-      }
+    const allowed = nodeFixture("node-allowed", {
+      platform: "ios",
+      deviceFamily: undefined,
+      onEvent: invokeCapture.onEvent,
+    });
+    const allowedClient = await connectNodeClientWithNodePairing(allowed);
+    const allowedNodeId = await findConnectedNodeIdByDisplayName(allowed.displayName);
+    const invokeResP = invokeCanvasSnapshot(allowedNodeId, "allowlist-3");
+    const payload = await invokeCapture.waitForInvoke();
+    const requestId = payload.id ?? "";
+    const nodeIdFromReq = payload.nodeId ?? "node-allowed";
+    for (const [progress, message] of [
+      [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
+      [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
+    ] as const) {
       await expect(
-        allowedClient.request("node.invoke.progress", {
-          invokeId: requestId,
-          nodeId: nodeIdFromReq,
-          seq: 0,
-          chunk: "",
-        }),
-      ).resolves.toEqual({ ok: true, ignored: true });
-      await allowedClient.request("node.invoke.result", {
-        id: requestId,
+        allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
+      ).rejects.toThrow(message);
+    }
+    await expect(
+      allowedClient.request("node.invoke.progress", {
+        invokeId: requestId,
         nodeId: nodeIdFromReq,
-        ok: true,
-        payloadJSON: JSON.stringify({ ok: true }),
-      });
-      const invokeRes = await invokeResP;
-      expect(invokeRes.ok).toBe(true);
-
-      for (const [id, result, expectedPayload] of [
-        ["null", { payloadJSON: null, error: null }, undefined],
-        ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
-        [
-          "explicit",
-          { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
-          { source: "payload" },
-        ],
-      ] as const) {
-        const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
-          ws,
-          "node.invoke",
-          {
-            nodeId: allowedNodeId,
-            command: "canvas.snapshot",
-            params: { format: "png" },
-            idempotencyKey: `allowlist-${id}-payloadjson`,
-          },
-        );
-        const captured = await invokeCapture.waitForInvoke();
-        await allowedClient.request("node.invoke.result", {
-          id: captured.id,
-          nodeId: captured.nodeId,
-          ok: true,
-          ...result,
-        });
-        const response = await invokeResult;
-        expect(response.ok).toBe(true);
-        expect(response.payload?.payloadJSON).toBeNull();
-        expect(response.payload?.payload).toEqual(expectedPayload);
-      }
-    } finally {
-      await systemClient?.stopAndWait();
-      await emptyClient?.stopAndWait();
-      await allowedClient?.stopAndWait();
-    }
+        seq: 0,
+        chunk: "",
+      }),
+    ).resolves.toEqual({ ok: true, ignored: true });
+    await respondToInvoke(allowedClient, payload, allowedNodeId);
+    expect((await invokeResP).ok).toBe(true);
   });
 
-  test("hides allowlisted declared commands before node pairing is approved", async () => {
-    const displayName = "node-device-paired-only";
-    let nodeClient: GatewayClient | undefined;
-
-    try {
-      nodeClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["canvas.snapshot", "system.run"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-      });
-
-      await expectConnectedCommands(displayName, []);
-
-      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
-
-      await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-      const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
-      expect(denied.ok).toBe(false);
-      expect(denied.error?.details).toMatchObject({ code: "PAIRING_CHANGED" });
-    } finally {
-      await nodeClient?.stopAndWait();
-    }
-  });
-
-  test("refreshes live commands when pending node pairing is approved", async () => {
-    const displayName = "node-approve-live-commands";
-    let nodeClient: GatewayClient | undefined;
+  test("exposes and invokes live commands only after pending node pairing is approved", async () => {
     const invokeCapture = createInvokeCapture();
+    const fixture = nodeFixture("node-approve-live-commands", {
+      commands: ["canvas.snapshot", "system.run"],
+      onEvent: invokeCapture.onEvent,
+    });
+    const { client: nodeClient, nodeId } = await connectPendingNode(fixture);
+    await expectConnectedCommands(fixture.displayName, []);
+    await expectPendingPairingCommands(nodeId, fixture.commands);
+    expect(await invokeCanvasSnapshot(nodeId, "pending-node-canvas")).toMatchObject({
+      ok: false,
+      error: { details: { code: "PAIRING_CHANGED" } },
+    });
 
-    try {
-      nodeClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["canvas.snapshot"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        onEvent: invokeCapture.onEvent,
-      });
-
-      await expectConnectedCommands(displayName, []);
-
-      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
-
-      await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
-
-      await expectConnectedCommands(displayName, ["canvas.snapshot"], {
-        timeout: 2_000,
-        interval: 10,
-      });
-
-      const invokeResP = invokeCanvasSnapshot(nodeId, "approved-live-node-command");
-      await respondToInvoke(nodeClient, await invokeCapture.waitForInvoke(), nodeId);
-      const invokeRes = await invokeResP;
-      expect(invokeRes.ok).toBe(true);
-    } finally {
-      await nodeClient?.stopAndWait();
-    }
+    await approvePendingNodePairing(nodeId, fixture.commands);
+    await expectConnectedCommands(fixture.displayName, fixture.commands, {
+      timeout: 2_000,
+      interval: 10,
+    });
+    const invokeResP = invokeCanvasSnapshot(nodeId, "approved-live-node-command");
+    await respondToInvoke(nodeClient, await invokeCapture.waitForInvoke(), nodeId);
+    expect((await invokeResP).ok).toBe(true);
   });
 
   test("rechecks current allowlist before exposing approved live commands", async () => {
-    const displayName = "node-approve-live-commands-current-allowlist";
-    let nodeClient: GatewayClient | undefined;
-    let configPath: string | undefined;
-
+    let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
+    if (!reconcileRuntimePolicy) {
+      throw new Error("gateway runtime policy reconciliation is required");
+    }
+    const fixture = nodeFixture("node-approve-live-commands-current-allowlist");
+    const { client: nodeClient, nodeId } = await connectPendingNode(fixture);
     try {
-      const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
-      nodeClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["canvas.snapshot"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-
-      await expectConnectedCommands(displayName, []);
-
-      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
-
-      configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await expectConnectedCommands(fixture.displayName, []);
+      originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
-          null,
-          2,
-        ),
+        originalConfig.path,
+        JSON.stringify({ gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } }),
       );
-
-      await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
-
-      await expectConnectedCommands(displayName, []);
-
+      // The shared minimal Gateway skips file watching; drive its real commit hook.
+      await reconcileRuntimePolicy((await readConfigFileSnapshot()).config, "committed");
+      await approvePendingNodePairing(nodeId, fixture.commands);
+      await expectConnectedCommands(fixture.displayName, []);
       await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
-      if (configPath) {
-        await fs.writeFile(configPath, "{}\n");
+      await nodeClient.stopAndWait();
+      if (originalConfig) {
+        await fs.writeFile(originalConfig.path, originalConfig.raw ?? "{}\n");
+        await reconcileRuntimePolicy(originalConfig.config, "committed");
       }
-      await nodeClient?.stopAndWait();
     }
   });
 
   test("records only allowlisted commands in pending node pairing requests", async () => {
-    const deviceIdentity = createDeviceIdentityForTest("openclaw-allowlisted-pending");
-    const displayName = "node-pending-allowlisted-only";
-    let nodeClient: GatewayClient | undefined;
-
-    try {
-      nodeClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["system.run", "canvas.snapshot"],
-        platform: "İOS",
-        deviceFamily: "iPhone",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-
-      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
-
-      await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
-    } finally {
-      await nodeClient?.stopAndWait();
-    }
+    const fixture = nodeFixture("node-pending-allowlisted-only", {
+      commands: ["system.run", "canvas.snapshot"],
+      platform: "İOS",
+      deviceFamily: "iPhone",
+    });
+    const { nodeId } = await connectPendingNode(fixture);
+    await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
   });
 
-  test("rejects reconnect metadata spoof for paired node devices", async () => {
-    const deviceIdentity = createDeviceIdentityForTest("openclaw-spoof-test-device");
-
-    let iosClient: GatewayClient | undefined;
-    try {
-      iosClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["canvas.snapshot"],
-        platform: "ios",
-        deviceFamily: "iPhone",
-        instanceId: "node-platform-pin",
-        displayName: "node-platform-pin",
-        deviceIdentity,
-      });
-      await iosClient.stopAndWait();
+  test.each([
+    ["metadata spoof", "ios", "iPhone", "linux", true],
+    ["legacy platform normalization", "darwin", "Mac", "macos", false],
+  ] as const)(
+    "%s on a paired node reconnect",
+    async (_name, platform, deviceFamily, next, rejects) => {
+      const fixture = nodeFixture("node-platform-reconnect", { platform, deviceFamily });
+      const client = await connectNodeClientWithPairing(fixture);
+      await client.stopAndWait();
       await expectConnectedNodeCount(0);
-
-      await expect(
-        connectNodeClient({
-          port,
-          commands: ["system.run"],
-          platform: "linux",
-          deviceFamily: "linux",
-          instanceId: "node-platform-pin",
-          displayName: "node-platform-pin",
-          deviceIdentity,
-        }),
-      ).rejects.toThrow(/device metadata change pending approval/i);
-    } finally {
-      await iosClient?.stopAndWait();
-    }
-  });
+      const reconnect = connectNodeClient({
+        ...fixture,
+        commands: ["system.run"],
+        platform: next,
+        deviceFamily: rejects ? "linux" : fixture.deviceFamily,
+      });
+      if (rejects) {
+        await expect(reconnect).rejects.toThrow(/device metadata change pending approval/i);
+      } else {
+        await reconnect;
+        await expect
+          .poll(
+            async () =>
+              (await findConnectedNodeByDisplayName(fixture.displayName))?.connected ?? false,
+            FAST_WAIT_OPTS,
+          )
+          .toBe(true);
+        const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
+        expect((await getPendingNodePairing(nodeId))?.commands).toEqual(["system.run"]);
+      }
+    },
+  );
 
   test("does not promote paired desktop client id changes into host command defaults", async () => {
-    const deviceIdentity = createDeviceIdentityForTest("openclaw-client-id-promotion");
-    const displayName = "node-client-id-promotion";
-
-    let macClient: GatewayClient | undefined;
-    let spoofClient: GatewayClient | undefined;
-    let secondSpoofClient: GatewayClient | undefined;
-    try {
-      macClient = await connectNodeClientWithNodePairing({
-        port,
-        clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
-        commands: ["canvas.snapshot"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-      await macClient.stopAndWait();
-
-      spoofClient = await connectNodeClient({
-        port,
+    const fixture = nodeFixture("node-client-id-promotion", {
+      clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
+    });
+    const macClient = await connectNodeClientWithNodePairing(fixture);
+    await macClient.stopAndWait();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const spoofClient = await connectNodeClient({
+        ...fixture,
         clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         commands: ["system.run"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
       });
-      await expectConnectedCommands(displayName, []);
+      await expectConnectedCommands(fixture.displayName, []);
       await spoofClient.stopAndWait();
-
-      secondSpoofClient = await connectNodeClient({
-        port,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        commands: ["system.run"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-      await expectConnectedCommands(displayName, []);
-    } finally {
-      await secondSpoofClient?.stopAndWait();
-      await spoofClient?.stopAndWait();
-      await macClient?.stopAndWait();
-    }
-  });
-
-  test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
-    const deviceIdentity = createDeviceIdentityForTest("openclaw-node-host-platform-upgrade");
-    const displayName = "node-host-platform-upgrade";
-
-    let legacyClient: GatewayClient | undefined;
-    let upgradedClient: GatewayClient | undefined;
-    try {
-      legacyClient = await connectNodeClientWithPairing({
-        port,
-        commands: ["canvas.snapshot"],
-        platform: "darwin",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-      await legacyClient.stopAndWait();
-      await expectConnectedNodeCount(0);
-
-      upgradedClient = await connectNodeClient({
-        port,
-        commands: ["system.run"],
-        platform: "macos",
-        deviceFamily: "Mac",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-
-      await expect
-        .poll(async () => {
-          const node = await findConnectedNodeByDisplayName(displayName);
-          return node?.connected ?? false;
-        }, FAST_WAIT_OPTS)
-        .toBe(true);
-
-      const node = await findConnectedNodeByDisplayName(displayName);
-      const nodeId = requireNodeId(node?.nodeId, displayName);
-      const pending = await getPendingNodePairing(nodeId);
-      expect(pending?.commands).toEqual(["system.run"]);
-    } finally {
-      await upgradedClient?.stopAndWait();
-      await legacyClient?.stopAndWait();
     }
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {
-    const deviceIdentity = createDeviceIdentityForTest("openclaw-confusable-node-greek-omicron");
-    const displayName = "node-greek-omicron-family";
-
-    let client: GatewayClient | undefined;
-    try {
-      client = await connectNodeClientWithNodePairing({
-        port,
-        commands: ["system.run", "canvas.snapshot"],
-        platform: "ios",
-        deviceFamily: "iPhοne",
-        instanceId: displayName,
-        displayName,
-        deviceIdentity,
-      });
-
-      await expectConnectedCommands(displayName, ["canvas.snapshot"], {
-        timeout: 2_000,
-        interval: 10,
-      });
-
-      const nodeId = await findConnectedNodeIdByDisplayName(displayName);
-
-      const systemRunRes = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "system.run",
-        params: { command: "echo blocked" },
-        idempotencyKey: "allowlist-confusable-greek-omicron",
-      });
-      expect(systemRunRes.ok).toBe(false);
-      expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
-    } finally {
-      await client?.stopAndWait();
-    }
+    const fixture = nodeFixture("node-greek-omicron-family", {
+      commands: ["system.run", "canvas.snapshot"],
+      platform: "ios",
+      deviceFamily: "iPhοne",
+    });
+    await connectNodeClientWithNodePairing(fixture);
+    await expectConnectedCommands(fixture.displayName, ["canvas.snapshot"], {
+      timeout: 2_000,
+      interval: 10,
+    });
+    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
+    const systemRunRes = await rpcReq(ws, "node.invoke", {
+      nodeId,
+      command: "system.run",
+      params: { command: "echo blocked" },
+      idempotencyKey: "allowlist-confusable-greek-omicron",
+    });
+    expect(systemRunRes.ok).toBe(false);
+    expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
   });
 });

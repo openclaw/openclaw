@@ -18,6 +18,7 @@ type ReleaseTrain =
   | "unsupported-extended-stable-correction";
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null;
+export function parsePinnedReleaseVersion(version: string): string | null;
 export function classifyReleaseTrain(parsedVersion: ParsedReleaseVersion): ReleaseTrain;
 export function resolveReleaseTagPackageIdentity(
   releaseTag: string,
@@ -27,3 +28,6 @@ export function collectReleaseVersionFloorErrors(
   version: string | ParsedReleaseVersion | null,
 ): string[];
 export function compareReleaseVersions(left: string, right: string): number | null;
+export function isStableReleaseVersionAtLeast(version: string, minimum: string): boolean;
+
+export function validateRetiredLineReason(reason: unknown): string;

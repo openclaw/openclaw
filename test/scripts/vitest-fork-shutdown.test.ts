@@ -1,18 +1,87 @@
 import { execFileSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { expect, it } from "vitest";
-import { isProcessAlive, waitForDead, waitForFile } from "../helpers/process-wait.js";
+import { setTimeout as waitForReaper } from "node:timers/promises";
+import { afterAll, expect, it, vi, type TestContext } from "vitest";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
+import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 
-const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
+// Preparation belongs to collection, before the unchanged per-scenario shutdown deadline.
+const fixtureWorkers = createVitestWorkerRun();
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
+}
+
+const fixture = path.resolve(import.meta.dirname, "../fixtures/vitest-fork-shutdown.mjs");
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
-const fixtureRoots = fileURLToPath(
-  new URL("../../.artifacts/vitest-fork-shutdown/", import.meta.url),
-);
+const fixtureRoots = path.resolve(import.meta.dirname, "../../.artifacts/vitest-fork-shutdown/");
 fs.mkdirSync(fixtureRoots, { recursive: true });
+
+function observeReadyLine(child: ChildProcess, line: string, ready: () => void) {
+  let output = "";
+  const observe = (chunk: Buffer) => {
+    output += chunk.toString();
+    if (output.includes(line)) {
+      child.stdout!.off("data", observe);
+      ready();
+    }
+  };
+  child.stdout!.on("data", observe);
+}
+
+function expectClosedPipes(child: ChildProcess) {
+  expect(child.stdout?.closed).toBe(true);
+  expect(child.stderr?.closed).toBe(true);
+}
+
+function observeOutcome<T>(invocation: Promise<T>) {
+  return invocation.then(
+    (result) => ({ result, error: undefined }),
+    (error: unknown) => ({ result: undefined, error }),
+  );
+}
+
+const readPs = (args: string[]) =>
+  execFileSync("ps", args, { encoding: "utf8", timeout: 1_000 }).trim();
+function processRows(args: string[]) {
+  return readPs(args)
+    .split("\n")
+    .map((row) => {
+      const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
+      return { pid: pid!, ppid: ppid!, pgid: pgid! };
+    });
+}
+
+async function waitForFixtureProcessesDead(pids: number[], signal: AbortSignal) {
+  // Group completion can precede Darwin's foreign-zombie reap. The harness
+  // has no child handles for those PIDs; only the owning test bounds observation.
+  try {
+    while (pids.some(isProcessAlive)) {
+      await waitForReaper(5, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`process still alive: ${pids.filter(isProcessAlive).join(", ")}`, { cause });
+  }
+}
+
+function runJoinedShutdownTest(context: TestContext, body: () => Promise<void>) {
+  // Register before the body starts: outer cancellation must join every continuation and finally.
+  const run = Promise.resolve().then(() => {
+    context.signal.throwIfAborted();
+    return body();
+  });
+  context.onTestFinished(() => run);
+  return run;
+}
 
 function expectReleasedNamespace(root: string) {
   if (process.platform !== "win32") {
@@ -27,13 +96,15 @@ async function runFixture(
   root: string,
   options: { scenario: string; setup: string; fail: boolean },
   nodeArgs: string[] = [],
-  onReady?: (child: ChildProcess) => void,
+  commandOptions: Pick<Parameters<typeof runVitestShutdownCommand>[0], "onReady" | "signal"> = {},
 ) {
   try {
     const result = await runVitestShutdownCommand({
-      args: [...nodeArgs, fixture, root, JSON.stringify(options)],
+      nodeArgs,
+      args: [fixture, root, JSON.stringify(options)],
+      workerRun: options.setup === "shared" ? fixtureWorkers : undefined,
       timeoutMs: 20_000,
-      onReady,
+      ...commandOptions,
     });
     if (result.code !== 0) {
       throw Object.assign(new Error(`Shutdown fixture exited with code ${result.code}`), result);
@@ -49,7 +120,7 @@ async function runFixture(
   }
 }
 
-it.each([
+it.for([
   { scenario: "slow-exit", setup: "shared", fail: false },
   { scenario: "slow-exit", setup: "env", fail: true },
   { scenario: "natural-exit", setup: "raw", fail: false },
@@ -62,184 +133,336 @@ it.each([
   { scenario: "hung-exit", setup: "shared", fail: false },
   { scenario: "bad-exit", setup: "shared", fail: false },
   { scenario: "forced", setup: "raw", fail: false },
-])("joins $scenario shutdown with $setup setup (test failure: $fail)", async (options) => {
-  const tempDirs = createTempDirTracker();
-  const root = tempDirs.make("vitest-fork-shutdown-", fixtureRoots);
-  const { stdout } = await runFixture(root, options);
-  const result = JSON.parse(stdout);
-  console.log(JSON.stringify({ root, options, ...result, output: undefined }));
-  const { scenario, setup, fail } = options;
-  if (scenario === "forced") {
-    // Node uses TerminateProcess for TERM on Windows; POSIX exercises escalation.
-    expect(result.signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-    expect(result.stopped).toBe(true);
-    expect(isProcessAlive(result.workerPid)).toBe(false);
+  { scenario: "unexpected-exit-zero", setup: "raw", fail: false },
+  { scenario: "unexpected-exit-nonzero", setup: "raw", fail: false },
+  { scenario: "unexpected-start", setup: "raw", fail: false },
+  ...(process.platform === "win32"
+    ? []
+    : [{ scenario: "unexpected-signal", setup: "raw", fail: false }]),
+])("joins $scenario shutdown with $setup setup (test failure: $fail)", (options, context) =>
+  runJoinedShutdownTest(context, async () => {
+    const tempDirs = createTempDirTracker();
+    const root = tempDirs.make("vitest-fork-shutdown-", fixtureRoots);
+    const { stdout } = await runFixture(root, options, [], { signal: context.signal });
+    const result = JSON.parse(stdout);
+    const { scenario, setup, fail } = options;
+    const hasEvent = (name: string) =>
+      result.events.some((event: { event: string }) => event.event === name);
+    if (scenario === "forced") {
+      // Node uses TerminateProcess for TERM on Windows; POSIX exercises escalation.
+      expect(result.signal).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      expect(result.stopped).toBe(true);
+      expect(isProcessAlive(result.workerPid)).toBe(false);
+      expectReleasedNamespace(root);
+      tempDirs.cleanup();
+      return;
+    }
+    const brokenShutdown = scenario.startsWith("hung-") || scenario === "bad-exit";
+    const unexpectedExit = scenario.startsWith("unexpected-");
+    expect(result.code, result.output).toBe(fail || brokenShutdown || unexpectedExit ? 1 : 0);
+    if (fail) {
+      expect(result.output).toContain("intentional fixture failure");
+    }
+    expect(result.workerStopped).toBe(true);
+    if (scenario === "threads") {
+      expect(result.worker.threadId).toBeGreaterThan(0);
+    } else {
+      expect(result.worker.threadId).toBe(0);
+    }
+    if (setup !== "raw") {
+      // Windows has no wrapper-owned group cleanup after a forced termination.
+      // Its unfinished home is released after this test verifies the worker stopped.
+      expect(result.homeRemoved).toBe(
+        !(process.platform === "win32" && scenario === "hung-cleanup"),
+      );
+    }
+    expect(result.callerPreserved).toBe(true);
+    if (unexpectedExit) {
+      expect(result.output).toContain("Worker exited unexpectedly");
+      if (scenario === "unexpected-start") {
+        expect(result.output).toContain("during starting state");
+      }
+      expect(result.output).toContain("unexpected-exit-tail");
+      expect(result.output).not.toContain("[test] passed");
+      expect(hasEvent("terminate")).toBe(false);
+    } else if (scenario.startsWith("hung-")) {
+      // Advance the real stop deadline only after the worker reaches the hung boundary.
+      expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
+      expect(result.output).toContain("Timeout waiting for worker to respond");
+      expect(hasEvent("terminate")).toBe(true);
+    } else if (scenario === "bad-exit") {
+      expect(result.output).toContain("Worker exited during graceful shutdown");
+    } else if (scenario === "custom") {
+      expect(result.output).toContain("1 passed");
+      expect(result.events).toContainEqual({ event: "stopped-consumed" });
+      expect(result.events).toContainEqual({ event: "parent-stop" });
+      expect(hasEvent("deadline")).toBe(false);
+      expect(result.events).toContainEqual({ event: "terminate", signal: "SIGTERM" });
+    } else if (scenario !== "plain") {
+      expect(result.profiles.cpu, result.output).toBeGreaterThan(0);
+      expect(result.profiles.heap, result.output).toBeGreaterThan(0);
+      expect(hasEvent("terminate")).toBe(false);
+      if (scenario === "slow-exit") {
+        expect(result.events).toContainEqual({ event: "home-removed" });
+      }
+    }
+    // Only release after execution and shutdown assertions certify completion.
     expectReleasedNamespace(root);
     tempDirs.cleanup();
-    return;
-  }
-  const brokenShutdown = scenario.startsWith("hung-") || scenario === "bad-exit";
-  expect(result.code, result.output).toBe(fail || brokenShutdown ? 1 : 0);
-  if (fail) {
-    expect(result.output).toContain("intentional fixture failure");
-  }
-  expect(result.workerStopped).toBe(true);
-  if (scenario === "threads") {
-    expect(result.worker.threadId).toBeGreaterThan(0);
-  } else {
-    expect(result.worker.threadId).toBe(0);
-  }
-  if (setup !== "raw") {
-    // Windows has no wrapper-owned group cleanup after a forced termination.
-    // Its unfinished home is released after this test verifies the worker stopped.
-    expect(result.homeRemoved).toBe(!(process.platform === "win32" && scenario === "hung-cleanup"));
-  }
-  expect(result.callerPreserved).toBe(true);
-  if (scenario.startsWith("hung-")) {
-    // Advance the real stop deadline only after the worker reaches the hung boundary.
-    expect(result.events).toContainEqual({ event: "deadline", delay: 60_000 });
-    expect(result.output).toContain("Timeout waiting for worker to respond");
-    expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
-      true,
-    );
-  } else if (scenario === "bad-exit") {
-    expect(result.output).toContain("Worker exited during graceful shutdown");
-  } else if (scenario === "custom") {
-    expect(result.output).toContain("1 passed");
-    expect(result.events).toContainEqual({ event: "stopped-consumed" });
-    expect(result.events).toContainEqual({ event: "parent-stop" });
-    expect(result.events.some((event: { event: string }) => event.event === "deadline")).toBe(
-      false,
-    );
-    expect(result.events).toContainEqual({ event: "terminate", signal: "SIGTERM" });
-  } else if (scenario !== "plain") {
-    expect(result.profiles.cpu, result.output).toBeGreaterThan(0);
-    expect(result.profiles.heap, result.output).toBeGreaterThan(0);
-    expect(result.events.some((event: { event: string }) => event.event === "terminate")).toBe(
-      false,
-    );
-    if (scenario === "slow-exit") {
-      expect(result.events).toContainEqual({ event: "home-removed" });
-    }
-  }
-  // Only release after execution and shutdown assertions certify completion.
-  expectReleasedNamespace(root);
-  tempDirs.cleanup();
-});
+  }),
+);
 
-it.runIf(process.platform !== "win32").each(["signal", "timeout"])(
-  "rejects fixture cancellation by %s and joins descendants",
-  async (mode) => {
-    const ownedDirs = createTempDirTracker();
-    const root = ownedDirs.make("vitest-fork-cancellation-", fixtureRoots);
-    const control = new URL("../fixtures/vitest-shutdown-cancellation.mjs", import.meta.url);
-    control.searchParams.set("root", root);
-    let watcher: fs.FSWatcher;
-    const ready = new Promise<{ shim: number; worker: number }>((resolve) => {
-      watcher = fs.watch(root, () => {
-        if (!fs.existsSync(path.join(root, "worker.pid"))) {
-          return;
-        }
-        resolve({
-          shim: Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8")),
-          worker: Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8")),
+it.for([
+  { maxBytes: undefined, limit: 2 * 1024 * 1024 },
+  { maxBytes: 16 * 1024 * 1024, limit: 16 * 1024 * 1024 },
+])("enforces the $limit byte output limit without accepting truncation", (options, context) =>
+  runJoinedShutdownTest(context, async () => {
+    for (const stream of ["stdout", "stderr"] as const) {
+      for (const excess of [0, 1]) {
+        context.signal.throwIfAborted();
+        let child!: ChildProcess;
+        // Overflow must cancel a live writer; taskkill cannot certify a vanished leader.
+        const keepAlive = excess ? "setInterval(() => {}, 1000);" : "";
+        const command = runVitestShutdownCommand({
+          args: [
+            "-e",
+            `${keepAlive}process.${stream}.write(Buffer.alloc(${options.limit + excess}, 120))`,
+          ],
+          maxBytes: options.maxBytes,
+          signal: context.signal,
+          onReady(owned) {
+            child = owned;
+          },
         });
-      });
-    });
-    let child!: ChildProcess;
-    const invocation = runFixture(
-      root,
-      { scenario: "slow-exit", setup: "shared", fail: false },
-      ["--import", control.href],
-      (owned) => {
-        child = owned;
-      },
-    );
-    const outcome = invocation.then(
-      (result) => ({ result, error: undefined }),
-      (error: unknown) => ({ result: undefined, error }),
-    );
-    const pids: number[] = [];
-    try {
-      const { worker, shim } = await Promise.race([
-        ready,
-        outcome.then((result) => {
-          throw new Error(`Fixture exited before worker receipt: ${JSON.stringify(result)}`, {
-            cause: result.error,
-          });
-        }),
-      ]);
-      pids.push(shim, worker);
-      process.kill(shim, "SIGSTOP");
-      for (const pid of pids) {
-        await expect
-          .poll(() =>
-            execFileSync("ps", ["-o", "stat=", "-p", String(pid)], {
-              encoding: "utf8",
-              timeout: 1_000,
-            }).trim(),
-          )
-          .toMatch(/^T/);
+        const proof = excess
+          ? expect(command).rejects.toMatchObject({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" })
+          : command.then((result) => {
+              expect(result.code).toBe(0);
+              expect(Buffer.byteLength(result[stream], "utf8")).toBe(options.limit);
+            });
+        await proof;
+        expectClosedPipes(child);
       }
-      const rows = execFileSync("ps", ["-axo", "pid=,ppid=,pgid="], {
-        encoding: "utf8",
-        timeout: 1_000,
-      })
-        .trim()
-        .split("\n")
-        .map((row) => {
-          const [pid, ppid, pgid] = row.trim().split(/\s+/).map(Number);
-          return { pid: pid!, ppid: ppid!, pgid: pgid! };
-        });
-      const owned = new Set([child.pid!]);
-      for (let previous = 0; previous !== owned.size;) {
-        previous = owned.size;
-        for (const row of rows) {
-          if (owned.has(row.ppid)) {
-            owned.add(row.pid);
+    }
+  }),
+);
+
+it.runIf(process.platform !== "win32").for(["signal", "timeout"])(
+  "rejects fixture cancellation by %s and joins descendants",
+  (mode, context) =>
+    runJoinedShutdownTest(context, async () => {
+      const ownedDirs = createTempDirTracker();
+      const root = ownedDirs.make("vitest-fork-cancellation-", fixtureRoots);
+      const control = new URL("../fixtures/vitest-shutdown-cancellation.mjs", import.meta.url);
+      const preload = path.join(root, "cancellation-preload.mjs");
+      fs.writeFileSync(
+        preload,
+        `import {installVitestShutdownCancellation} from ${JSON.stringify(control.href)};
+installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.meta.url});
+`,
+      );
+      let child!: ChildProcess;
+      const workerReady = createDeferred();
+      let fireDeadline: (() => void) | undefined;
+      const schedule = globalThis.setTimeout;
+      // Capture only this command's deadline; readiness and native cleanup keep real timers.
+      const deadlineSpy =
+        mode === "timeout"
+          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+              if (ms !== 20_000 || fireDeadline) {
+                return schedule(callback, ms, ...args);
+              }
+              let pending = true;
+              const fire = () => {
+                if (!pending) {
+                  return;
+                }
+                pending = false;
+                clearTimeout(timer);
+                callback(...args);
+              };
+              // Keep the original deadline as a failsafe if readiness never arrives.
+              const timer = schedule(fire, ms);
+              fireDeadline = fire;
+              return timer;
+            })
+          : undefined;
+      let invocation: ReturnType<typeof runFixture>;
+      try {
+        invocation = runFixture(
+          root,
+          { scenario: "slow-exit", setup: "shared", fail: false },
+          fixturePreloadArgs(preload),
+          {
+            onReady(owned) {
+              child = owned;
+              observeReadyLine(child, "shutdown-worker-ready\n", () => workerReady.resolve());
+            },
+            signal: context.signal,
+          },
+        );
+      } finally {
+        deadlineSpy?.mockRestore();
+      }
+      const outcome = observeOutcome(invocation);
+      const pids: number[] = [];
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            workerReady.promise,
+            invocation,
+            `Child exited before writing ${path.join(root, "worker.pid")}`,
+          ),
+          context.signal,
+        );
+        const shim = Number(fs.readFileSync(path.join(root, "shim.pid"), "utf8"));
+        const worker = Number(fs.readFileSync(path.join(root, "worker.pid"), "utf8"));
+        context.signal.throwIfAborted();
+        pids.push(shim, worker);
+        process.kill(shim, "SIGSTOP");
+        for (const pid of pids) {
+          await expect.poll(() => readPs(["-o", "stat=", "-p", String(pid)])).toMatch(/^T/);
+        }
+        const rows = processRows(["-axo", "pid=,ppid=,pgid="]);
+        const owned = new Set([child.pid!]);
+        for (let previous = 0; previous !== owned.size;) {
+          previous = owned.size;
+          for (const row of rows) {
+            if (owned.has(row.ppid)) {
+              owned.add(row.pid);
+            }
           }
         }
-      }
-      expect(owned.has(shim) && owned.has(worker)).toBe(true);
-      pids.splice(0, pids.length, ...owned);
-      if (mode === "signal") {
-        child.kill("SIGTERM");
-      }
-      const result = await outcome;
-      await waitForFile(path.join(root, "term-received"), 1_000);
-      console.log(
-        JSON.stringify({
-          mode,
-          root,
-          fixture: child.pid,
-          pids,
-          processes: rows.filter((row) => owned.has(row.pid)),
-          exitCode: child.exitCode,
-          signalCode: child.signalCode,
-          ...result,
-        }),
-      );
-      expect(result.error).toMatchObject({ code: mode === "timeout" ? "ETIMEDOUT" : 143 });
-      expect(result.error).toMatchObject({
-        stderr: expect.stringContaining("exit code 143"),
-      });
-      expect(pids.filter(isProcessAlive)).toEqual([]);
-      expectReleasedNamespace(root);
-      ownedDirs.cleanup();
-    } finally {
-      watcher!.close();
-      for (const pid of pids) {
-        if (isProcessAlive(pid)) {
-          process.kill(pid, "SIGCONT");
+        expect(owned.has(shim) && owned.has(worker)).toBe(true);
+        pids.splice(0, pids.length, ...owned);
+        if (mode === "signal") {
+          child.kill("SIGTERM");
+        } else {
+          expect(
+            fireDeadline,
+            "managed command deadline must be armed before readiness",
+          ).toBeTypeOf("function");
+          fireDeadline!();
         }
+        const result = await withinTest(outcome, context.signal);
+        // The fixture writes this synchronously in its TERM handler, before exit.
+        expect(fs.existsSync(path.join(root, "term-received"))).toBe(true);
+        expect(result.error).toMatchObject({
+          code: mode === "timeout" ? "ETIMEDOUT" : 143,
+          stderr: expect.stringContaining("exit code 143"),
+        });
+        expect(pids.filter(isProcessAlive)).toEqual([]);
+        expectClosedPipes(child);
+        expectReleasedNamespace(root);
+        ownedDirs.cleanup();
+      } finally {
+        for (const pid of pids) {
+          if (isProcessAlive(pid)) {
+            process.kill(pid, "SIGCONT");
+          }
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGTERM");
+        }
+        await outcome;
+        await waitForFixtureProcessesDead(pids, context.signal);
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
+    }),
+);
+
+it.runIf(process.platform !== "win32")(
+  "rejects fixture cancellation by caller signal and joins descendants",
+  (context) =>
+    runJoinedShutdownTest(context, async () => {
+      const ownedDirs = createTempDirTracker();
+      const root = ownedDirs.make("managed-caller-signal-", fixtureRoots);
+      const descendantPidPath = path.join(root, "descendant.pid");
+      // Reuse the managed-owner tests' TERM-resistant tree and atomic ready PID.
+      // This proves the shared helper boundary, not cold Vitest initialization.
+      const resistTerm = (role: string) => `
+process.on("SIGTERM", () => {
+  process.stdout.write("${role}-out\\n");
+  process.stderr.write("${role}-err\\n");
+});
+setInterval(() => {}, 1000);
+`;
+      const descendantSource = `
+const fs = require("node:fs");
+${resistTerm("descendant")}
+fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
+fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
+process.stdout.write("descendant-ready\\n");
+`;
+      const controller = new AbortController();
+      const descendantReady = createDeferred();
+      let child!: ChildProcess;
+      const invocation = runVitestShutdownCommand({
+        args: [
+          "-e",
+          `
+const { spawn } = require("node:child_process");
+${resistTerm("leader")}
+spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv[1]], {
+  stdio: ["ignore", "inherit", "inherit"],
+});
+`,
+          descendantPidPath,
+        ],
+        timeoutMs: 20_000,
+        signal: AbortSignal.any([context.signal, controller.signal]),
+        onReady(owned) {
+          child = owned;
+          observeReadyLine(child, "descendant-ready\n", () => descendantReady.resolve());
+        },
+      });
+      const outcome = observeOutcome(invocation);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            descendantReady.promise,
+            invocation,
+            `Child exited before writing ${descendantPidPath}`,
+          ),
+          context.signal,
+        );
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        if (!Number.isSafeInteger(descendantPid) || descendantPid <= 0) {
+          throw new Error("Invalid descendant PID receipt");
+        }
+        context.signal.throwIfAborted();
+        const childPid = child.pid!;
+        const processes = processRows([
+          "-p",
+          `${childPid},${descendantPid}`,
+          "-o",
+          "pid=,ppid=,pgid=",
+        ]);
+        expect(processes).toEqual(
+          expect.arrayContaining([
+            { pid: childPid, ppid: process.pid, pgid: childPid },
+            { pid: descendantPid, ppid: childPid, pgid: childPid },
+          ]),
+        );
+        expect([childPid, descendantPid].every(isProcessAlive)).toBe(true);
+        expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("live");
+
+        controller.abort();
+        const result = await withinTest(outcome, context.signal);
+        expect(result.error).toMatchObject({ code: "ABORT_ERR" });
+        for (const role of ["leader", "descendant"]) {
+          expect(result.error).toMatchObject({
+            stdout: expect.stringContaining(`${role}-out\n`),
+            stderr: expect.stringContaining(`${role}-err\n`),
+          });
+        }
+        expect(child).toMatchObject({ exitCode: null, signalCode: "SIGKILL" });
+        expect([childPid, descendantPid].filter(isProcessAlive)).toEqual([]);
+        expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
+        expectClosedPipes(child);
+      } finally {
+        controller.abort();
+        expect((await outcome).error).toMatchObject({ code: "ABORT_ERR" });
       }
-      await outcome;
-      for (const pid of pids) {
-        await waitForDead(pid, 5_000);
-      }
-    }
-  },
+      ownedDirs.cleanup();
+    }),
 );

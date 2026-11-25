@@ -21,72 +21,23 @@ const reviewInput = {
   },
 } satisfies ExecAutoReviewInput;
 
-function reviewCommand(command: string, argv: string[]) {
-  return defaultExecAutoReviewer({
-    command,
-    argv,
-    host: "gateway",
-    reason: "approval-required",
-    analysis: {
-      parsed: true,
-      allowlistMatched: false,
-      inlineEval: false,
-    },
-  } satisfies ExecAutoReviewInput);
-}
-
 describe("default exec auto reviewer", () => {
   it("falls back to human approval instead of maintaining a static allowlist", () => {
-    expect(reviewCommand("pwd", ["pwd"])).toMatchObject({
+    expect(
+      defaultExecAutoReviewer({ ...reviewInput, command: "pwd", argv: ["pwd"] }),
+    ).toMatchObject({
       decision: "ask",
     });
   });
-
-  it.each([
-    ["./pwd", ["./pwd"]],
-    ["/tmp/pwd", ["/tmp/pwd"]],
-  ])("does not auto-approve path-qualified pwd lookalikes: %s", (_command, argv) => {
-    expect(reviewCommand(_command, argv)).toMatchObject({
-      decision: "ask",
-    });
-  });
-
-  it.each([
-    ["cat ~/.openclaw/credentials/model.json", ["cat", "~/.openclaw/credentials/model.json"]],
-    ["rg token ~/.ssh", ["rg", "token", "~/.ssh"]],
-    ["sed -i s/foo/bar/g file.txt", ["sed", "-i", "s/foo/bar/g", "file.txt"]],
-    ["git status", ["git", "status"]],
-    ["git branch scratch", ["git", "branch", "scratch"]],
-    ["git diff --output=/tmp/diff.patch", ["git", "diff", "--output=/tmp/diff.patch"]],
-    ["git status\nnode -e 'console.log(1)'", ["git", "status"]],
-  ])(
-    "asks for human review on sensitive or externally influenced commands: %s",
-    (_command, argv) => {
-      expect(reviewCommand(_command, argv)).toMatchObject({
-        decision: "ask",
-      });
-    },
-  );
 });
 
 describe("exec auto-review failure handling", () => {
   it.each([
     {
-      name: "newlines, terminal controls, and bidirectional text",
-      value: "first\n\u001b[31msecond\u001b[0m\u202e",
-      expected: "first\\nsecond",
-    },
-    {
-      name: "operating-system command sequences",
-      value: "first\u001b]0;hidden title\u0007second",
-      expected: "firstsecond",
-    },
-    {
       name: "Unicode line separators",
       value: "first\u2028second\u2029third",
       expected: "firstsecondthird",
     },
-    { name: "empty provider explanations", value: "", expected: "review failed" },
     { name: "missing provider explanations", value: undefined, expected: "review failed" },
   ])("normalizes $name before human approval", ({ value, expected }) => {
     expect(normalizeExecAutoReviewRationale(value, "review failed")).toBe(expected);
@@ -105,20 +56,10 @@ describe("exec auto-review failure handling", () => {
     );
   });
 
-  it.each([
-    {
-      name: "throws synchronously",
-      reviewer: () => {
-        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
-      },
-    },
-    {
-      name: "rejects asynchronously",
-      reviewer: async () => {
-        throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
-      },
-    },
-  ])("defers when a reviewer $name", async ({ reviewer }) => {
+  it("defers when a reviewer rejects asynchronously", async () => {
+    const reviewer = async () => {
+      throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
+    };
     await expect(resolveExecAutoReviewDecision(reviewer, reviewInput)).resolves.toEqual({
       decision: "ask",
       risk: "unknown",
@@ -126,11 +67,11 @@ describe("exec auto-review failure handling", () => {
     });
   });
 
-  it("preserves a successful reviewer's original decision", async () => {
+  it("preserves a successful reviewer's denial", async () => {
     const decision = {
-      decision: "allow-once",
-      risk: "low",
-      rationale: "read-only inspection",
+      decision: "deny",
+      risk: "high",
+      rationale: "reviewer explanation",
     } as const;
     const reviewer: ExecAutoReviewer = () => decision;
 

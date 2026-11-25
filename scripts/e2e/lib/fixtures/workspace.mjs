@@ -18,7 +18,6 @@ function writeOpenWebUiWorkspace() {
     path.join(workspace, "IDENTITY.md"),
     "# Identity\n\n- Name: OpenClaw\n- Purpose: Open WebUI Docker compatibility smoke test assistant.\n",
   );
-  fs.rmSync(path.join(workspace, ".openclaw", "workspace-state.json"), { force: true });
   fs.rmSync(path.join(workspace, "openclaw-workspace-state.json"), { force: true });
   fs.rmSync(path.join(workspace, "BOOTSTRAP.md"), { force: true });
 }
@@ -35,14 +34,18 @@ function assertAgentsDeleteResult([outputPath, agentsPath]) {
       )}`,
     );
   }
+  const outputText = fs.readFileSync(resolvedOutputPath, "utf8");
   let parsed;
   try {
-    parsed = readJson(resolvedOutputPath);
-  } catch (error) {
-    console.error("agents delete --json did not emit valid JSON:");
-    console.error(readTextFileTail(resolvedOutputPath, ERROR_DETAIL_TAIL_BYTES).trim());
-    const message = error instanceof Error ? error.message.split("\n").at(0) : String(error);
-    throw new Error(`agents delete --json parse failed: ${message}`, { cause: error });
+    parsed = JSON.parse(outputText);
+  } catch {
+    // Parser messages and causes can echo input outside the approved diagnostic tail.
+    throw new Error(
+      `agents delete --json did not emit valid JSON: ${resolvedOutputPath}\nstdout tail=${readTextFileTail(
+        resolvedOutputPath,
+        ERROR_DETAIL_TAIL_BYTES,
+      ).trim()}`,
+    );
   }
   /** @type {Array<[unknown, unknown, string]>} */
   const comparisons = [

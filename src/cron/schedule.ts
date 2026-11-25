@@ -1,9 +1,9 @@
 /** Computes at/every/cron schedule timestamps with bounded Croner caching. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron, CronDate } from "croner";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { resolveCronTimezone } from "./expression.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -12,14 +12,6 @@ const CRON_EVAL_CACHE_MAX = 512;
 const DAY_MS = 86_400_000;
 const cronEvalCache = new Map<string, Cron>();
 const cronTimezoneFormatters = new WeakMap<Cron, Intl.DateTimeFormat>();
-
-function resolveCronTimezone(tz?: string) {
-  const trimmed = normalizeOptionalString(tz) ?? "";
-  if (trimmed) {
-    return trimmed;
-  }
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
 
 function resolveCachedCron(expr: string, timezone: string): Cron {
   const key = `${timezone}\u0000${expr}`;
@@ -93,7 +85,7 @@ function resolveCronWallTimeMs(instantMs: number, timezone: string): number {
 function resolveFirstCronOccurrenceMs(instantMs: number, timezone: string): number | undefined {
   const wallTime = new Date(resolveCronWallTimeMs(instantMs, timezone)).toISOString().slice(0, -1);
   const resolved = parseOffsetlessIsoDateTimeInTimeZone(wallTime, timezone);
-  return resolved === null ? undefined : Date.parse(resolved);
+  return resolved.ok ? Date.parse(resolved.iso) : undefined;
 }
 
 function matchesCronOccurrence(cron: Cron, instant: Date): boolean {
@@ -244,7 +236,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return asDateTimestampMs(anchor + steps * everyMs);
   }
 
-  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
+  if (schedule.kind === "on-exit" || schedule.kind === "stream" || schedule.kind === "event") {
     // Event-driven trigger: never time-due. The gateway watcher calls
     // enqueueRun when the watched command exits or a stream batch closes.
     return undefined;
@@ -347,33 +339,4 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return normalizedPreviousMs !== undefined && normalizedPreviousMs < nowMs
     ? normalizedPreviousMs
     : undefined;
-}
-
-/** Clears the Croner expression cache for deterministic tests. */
-function clearCronScheduleCacheForTest(): void {
-  cronEvalCache.clear();
-}
-
-/** Returns the Croner expression cache size for tests. */
-function getCronScheduleCacheSizeForTest(): number {
-  return cronEvalCache.size;
-}
-
-/** Returns the Croner expression cache capacity for tests. */
-function getCronScheduleCacheMaxForTest(): number {
-  return CRON_EVAL_CACHE_MAX;
-}
-
-/** Returns whether an expression/timezone pair is present in the Croner cache for tests. */
-function hasCronInCacheForTest(expr: string, tz: string): boolean {
-  return cronEvalCache.has(`${tz}\u0000${expr}`);
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cronScheduleTestApi")] = {
-    clearCronScheduleCacheForTest,
-    getCronScheduleCacheSizeForTest,
-    getCronScheduleCacheMaxForTest,
-    hasCronInCacheForTest,
-  };
 }

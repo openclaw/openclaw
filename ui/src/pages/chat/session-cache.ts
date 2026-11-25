@@ -1,4 +1,5 @@
-// Control UI chat module implements session cache behavior.
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
+
 export const MAX_CACHED_CHAT_SESSIONS = 20;
 
 export function getSessionCacheValue<T>(map: Map<string, T>, sessionKey: string): T | undefined {
@@ -15,13 +16,7 @@ export function getSessionCacheValue<T>(map: Map<string, T>, sessionKey: string)
 export function setSessionCacheValue<T>(map: Map<string, T>, sessionKey: string, value: T): void {
   map.delete(sessionKey);
   map.set(sessionKey, value);
-  while (map.size > MAX_CACHED_CHAT_SESSIONS) {
-    const oldest = map.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    map.delete(oldest);
-  }
+  pruneMapToMaxSize(map, MAX_CACHED_CHAT_SESSIONS);
 }
 
 export function getOrCreateSessionCacheValue<T>(

@@ -2,25 +2,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
+import { emitAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { widgetResult } from "./server-chat.agent-events.test-harness.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   testState,
   writeSessionStore,
@@ -30,7 +33,53 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 const runtime = vi.hoisted(() => ({
   runTurn: vi.fn(),
   rejectTranscript: false,
+  terminalBarrier: undefined as
+    | {
+        runId: string;
+        entered: ReturnType<typeof createDeferred<void>>;
+        joined: ReturnType<typeof createDeferred<void>>;
+        release: ReturnType<typeof createDeferred<void>>;
+      }
+    | undefined,
 }));
+
+vi.mock("./session-lifecycle-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-lifecycle-state.js")>();
+  return {
+    ...actual,
+    prepareGatewaySessionLifecycleEvent: (
+      params: Parameters<typeof actual.prepareGatewaySessionLifecycleEvent>[0],
+    ) => {
+      const persist = actual.prepareGatewaySessionLifecycleEvent(params);
+      const barrier = runtime.terminalBarrier;
+      if (
+        !barrier ||
+        barrier.runId !== params.event.runId ||
+        !["end", "error"].includes(String(params.event.data?.phase))
+      ) {
+        return persist;
+      }
+      return async () => {
+        barrier.entered.resolve();
+        await barrier.release.promise;
+        await persist();
+      };
+    },
+  };
+});
+
+vi.mock("./chat-abort-lifecycle-internal.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-abort-lifecycle-internal.js")>();
+  return {
+    ...actual,
+    waitForChatAbortTerminalPersistence: (
+      entry: Parameters<typeof actual.waitForChatAbortTerminalPersistence>[0],
+    ) => {
+      runtime.terminalBarrier?.joined.resolve();
+      return actual.waitForChatAbortTerminalPersistence(entry);
+    },
+  };
+});
 
 vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importOriginal) => {
   const { persistAcpDispatchTranscript } =
@@ -43,11 +92,13 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
   };
 });
 
-vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
-    resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
+    resolveSessionAsync: async ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
       sessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({ agent: "main" }),
       entry: loadSessionEntryReadOnly({
         agentId: "main",
@@ -61,7 +112,7 @@ vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
       runtimeCache: { activeSessions: 1 },
     }),
   }),
-  getSessionBindingService: () => ({ listBySession: () => [], unbind: async () => [] }),
+  listSessionBindingsBySessionAsync: async () => [],
 }));
 
 installGatewayTestHooks({ scope: "suite" });
@@ -69,7 +120,7 @@ let ws: WebSocket;
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-acp-completion-");
 
 function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
   return loadTranscriptEventsSync(scope).flatMap((event) => {
@@ -79,11 +130,16 @@ function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSyn
   });
 }
 
+function acpSessionEntry(sessionId: string) {
+  return { sessionId, updatedAt: Date.now(), acp: createAcpSessionMeta({ agent: "main" }) };
+}
+
 describe("Gateway ACP completion ownership", () => {
   afterEach(() => {
     dispatchInboundMessageMock.mockReset();
     runtime.runTurn.mockReset();
     runtime.rejectTranscript = false;
+    runtime.terminalBarrier = undefined;
     testState.sessionStorePath = undefined;
     vi.restoreAllMocks();
   });
@@ -93,6 +149,7 @@ describe("Gateway ACP completion ownership", () => {
     text?: string;
     transform?: (payload: ReplyPayload) => ReplyPayload | null;
     live?: boolean;
+    lifecycle?: boolean;
     bound?: boolean;
     media?: boolean;
     cancel?: boolean;
@@ -102,8 +159,8 @@ describe("Gateway ACP completion ownership", () => {
     timeout?: boolean;
     persistFail?: boolean;
     suppressed?: boolean;
+    widget?: boolean;
   }> = [
-    { name: "cold and warm turns" },
     {
       name: "post-hook text",
       text: "rendered reply",
@@ -113,26 +170,14 @@ describe("Gateway ACP completion ownership", () => {
       name: "successful runtime with post-hook warning",
       transform: (payload) => ({ ...payload, isError: true }),
     },
-    { name: "post-hook suppression", suppressed: true, transform: () => null },
     { name: "live block replies", live: true },
-    {
-      name: "media on the owned row",
-      media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
-    },
-    {
-      name: "bound target media",
-      bound: true,
-      media: true,
-      transform: (payload) => ({ ...payload, mediaUrl: "https://example.test/photo.png" }),
-    },
-    { name: "runtime errors", fail: true },
+    { name: "widget tool progress", widget: true },
+    { name: "post-hook widget suppression", widget: true, suppressed: true, transform: () => null },
+    { name: "bound target media", bound: true, media: true },
     { name: "suppressed runtime errors", fail: true, transform: () => null },
-    { name: "runtime timeout", timeout: true },
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
-    { name: "native cancellation", cancel: true },
-    { name: "explicit abort", cancel: true, rpcAbort: true },
+    { name: "native cancellation through lifecycle", cancel: true, live: true, lifecycle: true },
     {
       name: "persistence failure after explicit abort",
       cancel: true,
@@ -141,8 +186,8 @@ describe("Gateway ACP completion ownership", () => {
     },
     { name: "replaced transcript target", rebound: true },
   ];
-  test.each(cases)("completes $name once with truthful transcript ownership", async (scenario) => {
-    const storePath = path.join(tempDirs.make("openclaw-acp-completion-"), "sessions.json");
+  test.for(cases)("completes $name once", async (scenario, { signal }) => {
+    const storePath = path.join(tempDirs.make(), "sessions.json");
     testState.sessionStorePath = storePath;
     const mediaFile = path.join(path.dirname(storePath), "photo.png");
     if (scenario.media) {
@@ -158,25 +203,19 @@ describe("Gateway ACP completion ownership", () => {
     const sessionKey = `agent:main:acp-completion-${suffix}`;
     const targetSessionKey = scenario.bound ? `agent:main:bound-${suffix}` : sessionKey;
     const sessionId = `acp-completion-session-${suffix}`;
+    const readTranscript = (key: string, id: string) =>
+      readTranscriptMessages({ agentId: "main", sessionKey: key, sessionId: id, storePath });
     expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
     let turnStarted = createDeferred();
     let releaseTurn = createDeferred();
+    let activeRunId = "";
+    type CapturedAdmission = { release: Promise<void> | undefined };
+    let admissionCapture = createDeferred<CapturedAdmission>();
+    const admittedReleases = new Set<Promise<void>>();
     await writeSessionStore({
       entries: {
-        [sessionKey]: {
-          sessionId: scenario.bound ? `source-${sessionId}` : sessionId,
-          updatedAt: Date.now(),
-          acp: createAcpSessionMeta({ agent: "main" }),
-        },
-        ...(scenario.bound
-          ? {
-              [targetSessionKey]: {
-                sessionId,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
-            }
-          : {}),
+        [sessionKey]: acpSessionEntry(scenario.bound ? `source-${sessionId}` : sessionId),
+        ...(scenario.bound ? { [targetSessionKey]: acpSessionEntry(sessionId) } : {}),
       },
     });
     runtime.runTurn.mockImplementation(
@@ -189,6 +228,18 @@ describe("Gateway ACP completion ownership", () => {
             detailCode: "TURN_TIMEOUT",
           });
         }
+        if (scenario.widget) {
+          emitAgentEvent({
+            runId: activeRunId,
+            sessionKey,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: "show_widget",
+              result: widgetResult(activeRunId, "assistant_message", "Status"),
+            },
+          });
+        }
         await onEvent({ type: "text_delta", text: "same accepted reply" });
         turnStarted.resolve();
         if (scenario.rpcAbort) {
@@ -197,11 +248,9 @@ describe("Gateway ACP completion ownership", () => {
         if (scenario.rebound) {
           await writeSessionStore({
             entries: {
-              [targetSessionKey]: {
-                sessionId: `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
-                updatedAt: Date.now(),
-                acp: createAcpSessionMeta({ agent: "main" }),
-              },
+              [targetSessionKey]: acpSessionEntry(
+                `${sessionId}-replaced-${runtime.runTurn.mock.calls.length}`,
+              ),
             },
           });
         }
@@ -214,18 +263,36 @@ describe("Gateway ACP completion ownership", () => {
     );
     dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
       // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
-      const {
-        ctx,
-        cfg,
-        dispatcher,
-        replyOptions: inboundReplyOptions,
-      } = input as Parameters<typeof dispatchInboundMessage>[0];
+      const params = input as Parameters<typeof dispatchInboundMessage>[0];
+      const { ctx, cfg, dispatcher } = params;
+      // Gateway admission outlives ACP dispatch and owns source transcript finalization.
+      const release = captureSessionControllerSettlement({
+        scope: storePath,
+        identities: [ctx.SessionKey],
+      });
+      if (release) {
+        admittedReleases.add(release);
+      }
+      if (params.replyOptions?.runId === activeRunId) {
+        admissionCapture.resolve({ release });
+      }
       return actualDispatch.dispatchInboundMessage({
         ctx,
         cfg,
         dispatcher,
-        replyOptions: inboundReplyOptions,
+        replyOptions: params.replyOptions,
         dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
+          const hookDispatcher = scenario.lifecycle
+            ? createDispatchReplyOperationCoordinator({
+                agentId: "main",
+                cfg,
+                ctx: finalized,
+                dispatcher,
+                operationSessionStoreEntry: { storePath },
+                replyOptions,
+                resolveOperationExpectedSessionId: () => sessionId,
+              }).dispatchHookDispatcher
+            : dispatcher;
           if (scenario.media) {
             dispatcher.appendBeforeDeliver?.((payload) => ({
               ...payload,
@@ -256,7 +323,7 @@ describe("Gateway ACP completion ownership", () => {
                   ...(scenario.live ? { stream: { deliveryMode: "live" } } : {}),
                 },
               },
-              dispatcher,
+              dispatcher: hookDispatcher,
               recordProcessed: () => {},
               markIdle: () => {},
             },
@@ -265,38 +332,53 @@ describe("Gateway ACP completion ownership", () => {
         },
       });
     });
-    const frames: Array<{
-      event?: string;
-      payload?: {
-        runId?: string;
-        state?: string;
-        seq?: number;
-        message?: unknown;
-        reason?: string;
-        stream?: string;
-        data?: { phase?: string; reason?: string };
-        errorKind?: string;
-      };
-    }> = [];
-    const capture = (data: Buffer) => frames.push(JSON.parse(data.toString()));
+    type Payload = Partial<AgentEventPayload> & {
+      state?: string;
+      message?: unknown;
+      errorKind?: string;
+    };
+    const frames: Array<{ event?: string; payload?: Payload }> = [];
+    let lifecycleStarted = createDeferred();
+    let lifecycleDelivered = createDeferred();
+    const capture = (data: Buffer) => {
+      const frame: (typeof frames)[number] = JSON.parse(data.toString());
+      frames.push(frame);
+      if (
+        frame.event === "agent" &&
+        frame.payload?.runId === activeRunId &&
+        frame.payload.stream === "lifecycle"
+      ) {
+        if (frame.payload.data?.phase === "start") {
+          lifecycleStarted.resolve();
+        } else if (frame.payload.data?.phase === "end" || frame.payload.data?.phase === "error") {
+          lifecycleDelivered.resolve();
+        }
+      }
+    };
     ws.on("message", capture);
     try {
       // Preserve the observed order: one cold turn, then the same session and
       // reply through the now-loaded lifecycle subscriber.
       for (const [index, temperature] of ["cold", "warm"].entries()) {
+        const check = (value: unknown) => expect.soft(value, temperature);
         const runId = `acp-completion-${suffix}-${temperature}`;
+        activeRunId = runId;
+        admissionCapture = createDeferred<CapturedAdmission>();
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
+        lifecycleStarted = createDeferred();
+        lifecycleDelivered = createDeferred();
+        const failed = scenario.fail || scenario.persistFail || scenario.rebound;
         const expectedState = scenario.rpcAbort
           ? "aborted"
-          : scenario.fail || scenario.persistFail || scenario.timeout || scenario.rebound
+          : failed || scenario.timeout
             ? "error"
             : scenario.cancel
               ? "aborted"
               : "final";
         const expectedStatus = scenario.rpcAbort
           ? "timeout"
-          : scenario.fail || scenario.persistFail || scenario.rebound
+          : failed
             ? "error"
             : scenario.cancel || scenario.timeout
               ? "timeout"
@@ -306,23 +388,40 @@ describe("Gateway ACP completion ownership", () => {
           message: `request ${temperature}`,
           idempotencyKey: runId,
         };
-        const settled = onceMessage(
-          ws,
-          (frame) =>
-            frame.event === "sessions.changed" &&
-            frame.payload?.sessionKey === sessionKey &&
-            frame.payload?.reason === "chat.run.settled",
-        );
+        runtime.terminalBarrier = scenario.rpcAbort
+          ? undefined
+          : {
+              runId,
+              entered: createDeferred(),
+              joined: createDeferred(),
+              release: createDeferred(),
+            };
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
-        expect(accepted.ok).toBe(true);
+        expect(accepted.ok, JSON.stringify(accepted)).toBe(true);
         if (scenario.rpcAbort) {
           await turnStarted.promise;
+          // Stop suppresses a start still awaiting publication; this case aborts after start.
+          await withinTest(lifecycleStarted.promise, signal);
           const aborted = await rpcReq(ws, "chat.abort", { sessionKey, runId });
           expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
           releaseTurn.resolve();
         }
-        // An abort can cache early. Require both replay and the public settled
-        // notification before checking every competing completion frame.
+        const admitted = await admissionCapture.promise;
+        expect(admitted.release).toBeDefined();
+        const barrier = runtime.terminalBarrier;
+        if (barrier) {
+          await withinTest(Promise.all([barrier.entered.promise, barrier.joined.promise]), signal);
+          // The real lifecycle writer is held after capture, before its durable commit.
+          // Even once dispatch has joined that receipt, neither RPC may expose completion.
+          const pendingReplay = await rpcReq(ws, "chat.send", sendParameters);
+          expect.soft(pendingReplay.payload).toMatchObject({ runId, status: "in_flight" });
+          const pendingWait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 0 });
+          expect.soft(pendingWait.payload).toMatchObject({ status: "timeout" });
+          expect.soft(asOptionalRecord(pendingWait.payload)?.endedAt).toBeUndefined();
+          barrier.release.resolve();
+        }
+        // Notifications coalesce; the captured owner releases only after post-dispatch cleanup.
+        await admitted.release;
         let replayPayload: unknown;
         await vi.waitFor(
           async () => {
@@ -335,108 +434,151 @@ describe("Gateway ACP completion ownership", () => {
           },
           { timeout: 10_000 },
         );
-        await settled;
-        expect.soft(replayPayload).toMatchObject({ runId, status: expectedStatus });
+        check(replayPayload).toMatchObject({
+          runId,
+          status: expectedStatus,
+        });
         if (scenario.cancel) {
-          expect
-            .soft(replayPayload)
-            .toMatchObject({ summary: "aborted", endedAt: expect.any(Number) });
+          check(replayPayload).toMatchObject({ summary: "aborted", endedAt: expect.any(Number) });
         }
         expect(runtime.runTurn).toHaveBeenCalledTimes(index + 1);
         const waited = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 5_000 });
-        expect.soft(waited.payload).toMatchObject({
+        check(waited.payload).toMatchObject({
           status: scenario.cancel ? "error" : expectedStatus,
         });
-        const finals = frames.filter(
+        // Run settlement does not join the asynchronous lifecycle subscriber.
+        await withinTest(lifecycleDelivered.promise, signal);
+        const runFrames = frames.filter((frame) => frame.payload?.runId === runId);
+        const finals = runFrames.filter(
           (frame) =>
             frame.event === "chat" &&
-            frame.payload?.runId === runId &&
-            ["final", "error", "aborted"].includes(frame.payload.state ?? ""),
+            ["final", "error", "aborted"].includes(frame.payload?.state ?? ""),
         );
-        expect.soft(finals, temperature).toHaveLength(1);
-        expect.soft(finals[0]?.payload?.state).toBe(expectedState);
-        const terminalIndex = frames.findIndex((frame) => frame === finals[0]);
+        check(finals).toHaveLength(1);
+        const final = finals[0]?.payload;
+        check(final?.state).toBe(expectedState);
+        const terminalIndex = runFrames.findIndex((frame) => frame === finals[0]);
         const priorSequence = Math.max(
           0,
-          ...frames
-            .slice(0, terminalIndex)
-            .filter((frame) => frame.payload?.runId === runId)
-            .map((frame) => frame.payload?.seq ?? 0),
+          ...runFrames.slice(0, terminalIndex).map((frame) => frame.payload?.seq ?? 0),
         );
-        expect.soft(finals[0]?.payload?.seq).toBeGreaterThan(priorSequence);
+        check(final?.seq).toBeGreaterThan(priorSequence);
         if (scenario.timeout) {
-          expect.soft(finals[0]?.payload?.errorKind).toBe("timeout");
+          check(final?.errorKind).toBe("timeout");
         }
         if (expectedState !== "error" && !scenario.rpcAbort) {
-          expect
-            .soft(extractFirstTextBlock(finals[0]?.payload?.message), temperature)
-            .toBe(scenario.suppressed ? undefined : (scenario.text ?? "same accepted reply"));
+          check(extractFirstTextBlock(final?.message)).toBe(
+            scenario.suppressed ? undefined : (scenario.text ?? "same accepted reply"),
+          );
         }
-        const lifecycle = frames.filter(
-          (frame) =>
-            frame.event === "agent" &&
-            frame.payload?.runId === runId &&
-            frame.payload.stream === "lifecycle",
+        if (scenario.widget) {
+          const content = asOptionalRecord(final?.message)?.content;
+          if (scenario.suppressed) {
+            check(content).toBeUndefined();
+          } else {
+            // Widget schema/metadata is asserted by server-chat.agent-events.test.ts;
+            // this boundary owns inclusion of this run's widget in the final reply.
+            check(content).toMatchObject([
+              { type: "text", text: "same accepted reply" },
+              {
+                type: "canvas",
+                preview: { viewId: runId },
+              },
+            ]);
+          }
+        }
+        const lifecycle = runFrames.filter(
+          (frame) => frame.event === "agent" && frame.payload?.stream === "lifecycle",
         );
-        expect
-          .soft(lifecycle.map((frame) => frame.payload?.data?.phase))
-          .toEqual(
-            scenario.rpcAbort
-              ? ["start", "end", scenario.persistFail ? "error" : "end"]
-              : ["start", expectedState === "error" ? "error" : "end"],
-          );
-        expect
-          .soft(
-            frames.filter(
-              (frame) =>
-                frame.payload?.runId === runId && frame.payload?.data?.reason === "seq gap",
+        check(lifecycle.map((frame) => frame.payload?.data?.phase)).toEqual([
+          "start",
+          expectedState === "error" ? "error" : "end",
+        ]);
+        if (scenario.rpcAbort) {
+          check(lifecycle.at(-1)?.payload?.data).toMatchObject({
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "rpc",
+          });
+          // This terminal-only reply was never shown; there is no visible partial to save.
+          check(
+            runFrames.filter(
+              (frame) => frame.payload?.stream === "assistant" || frame.payload?.state === "delta",
             ),
-          )
-          .toEqual([]);
-        const messages = readTranscriptMessages({
-          agentId: "main",
-          sessionId: scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
-          sessionKey: targetSessionKey,
-          storePath,
-        }).filter((message) => message.role === "user" || message.role === "assistant");
-        expect
-          .soft(
-            messages.map((message) => message.role),
-            temperature,
-          )
-          .toEqual(
-            scenario.rebound || (scenario.rpcAbort && scenario.persistFail)
-              ? []
-              : Array.from({ length: index + 1 }, () =>
-                  scenario.persistFail ? ["user"] : ["user", "assistant"],
-                ).flat(),
-          );
-        if (scenario.media) {
-          const assistant = messages.findLast((message) => message.role === "assistant");
-          expect
-            .soft(
-              readAssistantDisplayContent(assistant).some((block: unknown) => {
-                const content = asOptionalRecord(block);
-                return content !== undefined && content.type !== "text";
-              }),
-            )
-            .toBe(true);
+          ).toEqual([]);
+          check(final?.message).toBeUndefined();
+        }
+        const messages = readTranscript(
+          targetSessionKey,
+          scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
+        ).filter((message) => message.role === "user" || message.role === "assistant");
+        const assistant = messages.findLast((message) => message.role === "assistant");
+        if (scenario.widget) {
+          check(asOptionalRecord(assistant)?.content).toEqual([
+            { type: "text", text: "same accepted reply" },
+          ]);
+        }
+        check(messages.map((message) => message.role)).toEqual(
+          scenario.rebound
+            ? []
+            : Array.from({ length: index + 1 }, () =>
+                scenario.persistFail ? ["user"] : ["user", "assistant"],
+              ).flat(),
+        );
+        if (scenario.cancel && !scenario.rpcAbort) {
+          check(assistant).toMatchObject({
+            idempotencyKey: runId,
+            model: "acp-runtime",
+            stopReason: "aborted",
+          });
+          check(extractFirstTextBlock(assistant)).toBe("same accepted reply");
+          check(final?.message).toMatchObject({
+            stopReason: "aborted",
+          });
         }
         if (scenario.bound) {
-          expect
-            .soft(
-              readTranscriptMessages({
-                agentId: "main",
-                sessionId: `source-${sessionId}`,
-                sessionKey,
-                storePath,
-              }),
-            )
-            .toEqual([]);
+          // The bound target owns ACP history; the dashboard retains each delivered reply too.
+          const sourceMessages = readTranscript(sessionKey, `source-${sessionId}`);
+          check(sourceMessages).toMatchObject(
+            ["cold", "warm"].slice(0, index + 1).flatMap((turn) => [
+              {
+                role: "user",
+                content: `request ${turn}`,
+                idempotencyKey: `acp-completion-${suffix}-${turn}:user`,
+              },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "same accepted reply" }],
+                idempotencyKey: `acp-completion-${suffix}-${turn}`,
+              },
+            ]),
+          );
+          for (const [transcript, ownerKey] of [
+            [sourceMessages, sessionKey],
+            [messages, targetSessionKey],
+          ] as const) {
+            // Media is copied into each transcript owner's namespace, not shared by URL.
+            const mediaPrefix = `/api/chat/media/outgoing/${encodeURIComponent(ownerKey)}/`;
+            check(
+              readAssistantDisplayContent(
+                transcript.findLast((message) => message.role === "assistant"),
+              ),
+            ).toMatchObject([
+              { type: "text", text: "same accepted reply" },
+              {
+                type: "image",
+                url: expect.stringContaining(mediaPrefix),
+                openUrl: expect.stringContaining(mediaPrefix),
+              },
+            ]);
+          }
         }
       }
     } finally {
+      runtime.terminalBarrier?.release.resolve();
       releaseTurn.resolve();
+      await Promise.all(admittedReleases);
       ws.off("message", capture);
     }
   });

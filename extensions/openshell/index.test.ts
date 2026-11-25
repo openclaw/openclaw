@@ -1,36 +1,29 @@
 import type {
   OpenClawPluginApi,
-  OpenClawPluginService,
   PluginRuntimeLifecycleRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
+import * as runtime from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
-  createEmptyPluginRegistry,
-  createPluginRecord,
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  getSandboxBackendFactory,
-  getSandboxBackendManager,
-  getSandboxBackendWorkdirResolver,
-  type CreateSandboxBackendParams,
-} from "openclaw/plugin-sdk/sandbox";
-import { afterEach, describe, expect, it } from "vitest";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sandbox from "openclaw/plugin-sdk/sandbox";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import plugin from "./index.js";
 import { createOpenShellBackendSandboxConfig } from "./src/openshell.test-support.js";
+import { createWorkerFixture } from "./src/worker.test-support.js";
 
 function readBackend() {
   return {
-    factory: getSandboxBackendFactory("openshell"),
-    manager: getSandboxBackendManager("openshell"),
-    resolveWorkdir: getSandboxBackendWorkdirResolver("openshell"),
+    factory: sandbox.getSandboxBackendFactory("openshell"),
+    manager: sandbox.getSandboxBackendManager("openshell"),
+    resolveWorkdir: sandbox.getSandboxBackendWorkdirResolver("openshell"),
   };
 }
 
-const workdirParams: CreateSandboxBackendParams = {
+const workdirParams: sandbox.CreateSandboxBackendParams = {
   sessionKey: "agent:openshell-lifecycle:main",
   scopeKey: "agent:openshell-lifecycle:main",
   workspaceDir: "/tmp/openclaw-openshell-lifecycle/workspace",
@@ -38,148 +31,119 @@ const workdirParams: CreateSandboxBackendParams = {
   cfg: createOpenShellBackendSandboxConfig(),
 };
 
-describe("OpenShell plugin registration lifecycle", () => {
-  const stops: Array<() => Promise<void>> = [];
+const registries: Array<ReturnType<typeof runtime.createEmptyPluginRegistry>> = [];
 
-  afterEach(async () => {
-    for (const stop of stops.splice(0).toReversed()) {
-      await stop();
-    }
-  });
+function registerInRegistry(pluginConfig: OpenClawPluginApi["pluginConfig"]) {
+  const { registry } = createPluginRegistryFixture();
+  const record = runtime.createPluginRecord({ id: "openshell", origin: "bundled" });
+  registry.registry.plugins.push(record);
+  registries.push(registry.registry);
+  plugin.register(registry.createApi(record, { config: {}, pluginConfig }));
+  return registry.registry;
+}
 
-  function registerGeneration(remoteWorkspaceDir: string) {
-    const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
-    const api = createTestPluginApi({
-      id: "openshell",
-      pluginConfig: { remoteWorkspaceDir },
-      registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
+afterEach(async () => {
+  clearRuntimeConfigSnapshot();
+  for (const registry of registries.splice(0).toReversed()) {
+    await expect(runtime.disposePluginRegistryInstances(registry)).resolves.toMatchObject({
+      failures: [],
     });
-    plugin.register(api);
-    const cleanup = async (
-      context: Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0],
-    ) => {
-      for (const lifecycle of lifecycles.toReversed()) {
-        await lifecycle.cleanup?.(context);
-      }
-    };
-    const stop = () => cleanup({ reason: "disable" });
-    stops.push(stop);
-    return { backend: readBackend(), cleanup, stop };
   }
+});
 
-  it.each(["disable", "restart"] as const)(
-    "restores eager backend hooks on global %s",
-    async (reason) => {
-      const original = readBackend();
-      for (const remoteWorkspaceDir of ["/sandbox/first", "/sandbox/second", "/agent/third"]) {
-        const generation = registerGeneration(remoteWorkspaceDir);
-        expect(generation.backend.factory).toEqual(expect.any(Function));
-        expect(generation.backend.manager).toEqual({
-          describeRuntime: expect.any(Function),
-          removeRuntime: expect.any(Function),
-        });
-        expect(generation.backend.resolveWorkdir?.(workdirParams)).toBe(remoteWorkspaceDir);
+function registerGeneration(remoteWorkspaceDir: string) {
+  const registry = registerInRegistry({ remoteWorkspaceDir });
+  const cleanup: NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]> = async (context) => {
+    for (const { lifecycle } of registry.runtimeLifecycles.toReversed()) {
+      await lifecycle.cleanup?.(context);
+    }
+  };
+  return { backend: readBackend(), cleanup };
+}
 
-        await generation.cleanup({ reason });
-        expect(readBackend()).toEqual(original);
-        await generation.stop();
-        expect(readBackend()).toEqual(original);
-      }
-    },
+it.each(["disable", "restart", "reset"] as const)("scopes %s cleanup", async (reason) => {
+  const original = readBackend();
+  for (const remoteWorkspaceDir of ["/sandbox/first", "/sandbox/second", "/agent/third"]) {
+    const generation = registerGeneration(remoteWorkspaceDir);
+    expect(generation.backend.factory).toEqual(expect.any(Function));
+    expect(generation.backend.manager).not.toBeNull();
+    expect(generation.backend.resolveWorkdir?.(workdirParams)).toBe(remoteWorkspaceDir);
+    for (const scope of [
+      { sessionKey: "agent:other:main" },
+      { runId: "other-run" },
+      { sessionKey: "" },
+      { runId: "" },
+    ]) {
+      await generation.cleanup({ reason, ...scope });
+      expect(readBackend()).toEqual(generation.backend);
+    }
+    await generation.cleanup({ reason });
+    expect(readBackend()).toEqual(reason === "reset" ? generation.backend : original);
+    await generation.cleanup({ reason: "disable" });
+    expect(readBackend()).toEqual(original);
+  }
+});
+
+it("routes only the bound agent using the current File Transfer binding", async () => {
+  const registry = registerInRegistry({
+    worker: createWorkerFixture({ agentId: "main", remoteRoot: "/agent/canonical" }),
+  });
+  const hooks = runtime.createHookRunner(registry, { catchErrors: false });
+  const prompt = (agentId = "main") =>
+    hooks.runBeforePromptBuild({ prompt: "hello", messages: [] }, { agentId });
+  setRuntimeConfigSnapshot({});
+  expect(await prompt()).toBeUndefined();
+  for (const nodeId of ["first-node", "replacement-node"]) {
+    const config = {
+      policyVersion: 2,
+      workspaces: { main: { nodeId, remoteRoot: "/agent/canonical" } },
+    };
+    setRuntimeConfigSnapshot({
+      plugins: { entries: { "file-transfer": { enabled: true, config } } },
+    });
+    expect(await prompt("other")).toBeUndefined();
+    const context = (await prompt())?.appendSystemContext;
+    for (const part of [nodeId, "/agent/canonical", "file_fetch", "file_write"]) {
+      expect(context).toContain(part);
+    }
+  }
+  setRuntimeConfigSnapshot({});
+  expect(await prompt()).toBeUndefined();
+});
+
+it("does not register runtime hooks or services in discovery mode", () => {
+  const original = readBackend();
+  const registerService = vi.fn();
+  const registerRuntimeLifecycle = vi.fn();
+  plugin.register(
+    createTestPluginApi({
+      registrationMode: "discovery",
+      pluginConfig: { remoteWorkspaceDir: "/outside-managed-roots" },
+      registerService,
+      registerRuntimeLifecycle,
+    }),
   );
+  expect(registerService).not.toHaveBeenCalled();
+  expect(registerRuntimeLifecycle).not.toHaveBeenCalled();
+  expect(readBackend()).toEqual(original);
+});
 
-  it.each(["disable", "restart", "reset", "delete"] as const)(
-    "preserves global backend hooks during scoped %s cleanup",
-    async (reason) => {
-      const generation = registerGeneration("/sandbox/scoped");
-      for (const scope of [
-        { sessionKey: "agent:other:main" },
-        { runId: "other-run" },
-        { sessionKey: "" },
-        { runId: "" },
-      ]) {
-        await generation.cleanup({ reason, ...scope });
-        expect(readBackend()).toEqual(generation.backend);
-      }
-      if (reason === "reset" || reason === "delete") {
-        await generation.cleanup({ reason });
-        expect(readBackend()).toEqual(generation.backend);
-      }
-    },
-  );
-
-  it.each(["older-first", "newer-first"] as const)(
-    "preserves the live backend when plugin generations stop %s",
-    async (order) => {
-      const original = readBackend();
-      const older = registerGeneration("/sandbox/older");
-      const newer = registerGeneration("/sandbox/newer");
-      expect(readBackend()).toEqual(newer.backend);
-
-      const first = order === "older-first" ? older : newer;
-      const last = order === "older-first" ? newer : older;
-      await first.stop();
-      expect(readBackend()).toEqual(last.backend);
-      await last.stop();
-      expect(readBackend()).toEqual(original);
-      await first.stop();
-      expect(readBackend()).toEqual(original);
-    },
-  );
-
-  it.each([
-    "discovery",
-    "tool-discovery",
-    "setup-only",
-    "setup-runtime",
-    "cli-metadata",
-  ] satisfies OpenClawPluginApi["registrationMode"][])(
-    "does not register runtime hooks or services in %s mode",
-    (registrationMode) => {
-      const original = readBackend();
-      const services: OpenClawPluginService[] = [];
-      const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
-      plugin.register(
-        createTestPluginApi({
-          registrationMode,
-          pluginConfig: { remoteWorkspaceDir: "/outside-managed-roots" },
-          registerService: (service) => services.push(service),
-          registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
-        }),
-      );
-      expect(services).toEqual([]);
-      expect(lifecycles).toEqual([]);
-      expect(readBackend()).toEqual(original);
-    },
-  );
-
-  it("retires a registered backend even when no plugin services ever start", async () => {
-    const originalBackend = readBackend();
-    const originalRegistry = getActivePluginRegistry();
-    const { registry } = createPluginRegistryFixture();
-    const record = createPluginRecord({ id: "openshell" });
-    registry.registry.plugins.push(record);
-    plugin.register(
-      registry.createApi(record, {
-        config: {},
-        pluginConfig: { remoteWorkspaceDir: "/sandbox/unstarted" },
-      }),
-    );
-    try {
-      expect(readBackend().factory).toEqual(expect.any(Function));
-      expect(readBackend().resolveWorkdir?.(workdirParams)).toBe("/sandbox/unstarted");
-      setActivePluginRegistry(registry.registry);
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect.poll(readBackend).toEqual(originalBackend);
-    } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
-      if (originalRegistry) {
-        setActivePluginRegistry(originalRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
-      }
+it("retires a registered backend even when no plugin services ever start", async () => {
+  const originalBackend = readBackend();
+  const originalRegistry = runtime.getActivePluginRegistry();
+  onTestFinished(() => {
+    if (originalRegistry) {
+      runtime.setActivePluginRegistry(originalRegistry);
+    } else {
+      runtime.resetPluginRuntimeStateForTest();
     }
   });
+  const registry = registerInRegistry({ remoteWorkspaceDir: "/sandbox/unstarted" });
+  expect(readBackend().resolveWorkdir?.(workdirParams)).toBe("/sandbox/unstarted");
+  runtime.setActivePluginRegistry(registry);
+  runtime.setActivePluginRegistry(runtime.createEmptyPluginRegistry());
+  await expect(runtime.waitForPluginRegistryRetirement(registry)).resolves.toMatchObject({
+    failures: [],
+  });
+  expect(readBackend()).toEqual(originalBackend);
 });

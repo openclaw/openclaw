@@ -18,12 +18,20 @@ export const BEAM_SESSION_SHARE_ROUTE = {
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
+export const BEAM_MAX_GUEST_SESSIONS = 20;
+export const BEAM_MAX_WRITE_RECEIPTS = 10_000;
+export const BEAM_MAX_GUEST_RECEIPTS = 400;
 export const BEAM_MAX_ITEMS = 200;
-export const BEAM_MAX_ITEM_CHARS = 6_000;
+const BEAM_MAX_ITEM_CHARS = 6_000;
 
 export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
   text: string;
+};
+
+export type BeamSourceModel = {
+  provider: string;
+  model: string;
 };
 
 export type BeamUpload = {
@@ -35,15 +43,41 @@ export type BeamUpload = {
   completed: boolean;
   truncated?: boolean;
   hookEvent?: string;
+  sourceModel?: BeamSourceModel;
+  /** Explicit source release; this generation can never accept another source snapshot. */
+  handoffId?: string;
   items: BeamTranscriptItem[];
 };
 
-export type BeamStoredSession = BeamUpload & {
-  /** Verified publisher of this snapshot; never accepted from the upload body. */
+export type BeamStoredSession = Omit<BeamUpload, "items"> & {
+  items: Array<BeamTranscriptItem & { speaker?: string }>;
+  portable?: true;
+  /** Receiver incarnation; a release retry must never recreate an expired publication. */
+  publicationId?: string;
+  /** Exact v2 JSON bytes (UTF-8) and packet-local authorship. Never retain these bytes with the binding. */
+  packetText?: string;
+  /** Changes on accepted writes, including v1 updates with the same source timestamp. */
+  revision?: string;
+  /** Receiver-owned handoff survives uploads, independently of provider runtime IDs. */
+  continuation?: {
+    id: string;
+    sessionKey: string;
+    agentId: string;
+    creating?: string;
+    ready?: true;
+  };
+  /** An accepted guarded release outlives the transcript and all later v1 retries. */
+  releaseReceipt?: { requestId: string; revision: string; digest: string };
+  /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
+  publisherProfileId?: string;
+  /** Verified uploader of this accepted snapshot; never accepted from the upload body. */
   uploaderProfileId?: string;
   createdAt: number;
   receivedAt: number;
 };
+
+/** Durable ownership metadata, independent of the seven-day transcript retention. */
+export type BeamHandoff = Omit<BeamStoredSession, "items" | "packetText">;
 
 const TOP_LEVEL_KEYS = new Set([
   "version",
@@ -54,10 +88,12 @@ const TOP_LEVEL_KEYS = new Set([
   "completed",
   "truncated",
   "hookEvent",
+  "sourceModel",
+  "handoffId",
   "items",
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
-const ITEM_TYPES = new Set<BeamTranscriptItem["type"]>(["userMessage", "agentMessage", "other"]);
+const SOURCE_MODEL_KEYS = new Set(["provider", "model"]);
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -112,6 +148,13 @@ export function parseBeamUpload(
   if (typeof value.completed !== "boolean") {
     return { ok: false, error: "completed must be a boolean" };
   }
+  const handoffId = value.handoffId;
+  if (
+    handoffId !== undefined &&
+    (typeof handoffId !== "string" || !/^[a-f0-9]{32}$/.test(handoffId))
+  ) {
+    return { ok: false, error: "handoffId must be a 32-character lowercase hex generation" };
+  }
   if (value.truncated !== undefined && typeof value.truncated !== "boolean") {
     return { ok: false, error: "truncated must be a boolean" };
   }
@@ -119,6 +162,18 @@ export function parseBeamUpload(
     value.hookEvent === undefined ? undefined : readBoundedString(value.hookEvent, 64);
   if (value.hookEvent !== undefined && !hookEvent) {
     return { ok: false, error: "hookEvent must be a short string" };
+  }
+  let sourceModel: BeamSourceModel | undefined;
+  if (value.sourceModel !== undefined) {
+    if (!isRecord(value.sourceModel) || !hasOnlyKeys(value.sourceModel, SOURCE_MODEL_KEYS)) {
+      return { ok: false, error: "sourceModel must be a closed object" };
+    }
+    const provider = readBoundedString(value.sourceModel.provider, 64);
+    const model = readBoundedString(value.sourceModel.model, 256);
+    if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !model || !/^\S+$/u.test(model)) {
+      return { ok: false, error: "sourceModel must contain a provider and model" };
+    }
+    sourceModel = { provider: provider.toLowerCase(), model };
   }
   if (
     !Array.isArray(value.items) ||
@@ -130,22 +185,23 @@ export function parseBeamUpload(
   const items: BeamTranscriptItem[] = [];
   for (const rawItem of value.items) {
     if (!isRecord(rawItem) || !hasOnlyKeys(rawItem, ITEM_KEYS)) {
-      return { ok: false, error: "each transcript item must be a closed object" };
+      return { ok: false, error: "each chat history item must be a closed object" };
     }
     if (
-      typeof rawItem.type !== "string" ||
-      !ITEM_TYPES.has(rawItem.type as BeamTranscriptItem["type"])
+      rawItem.type !== "userMessage" &&
+      rawItem.type !== "agentMessage" &&
+      rawItem.type !== "other"
     ) {
-      return { ok: false, error: "transcript item type is invalid" };
+      return { ok: false, error: "chat history item type is invalid" };
     }
     const text = readBoundedString(rawItem.text, BEAM_MAX_ITEM_CHARS);
     if (!text) {
       return {
         ok: false,
-        error: `transcript item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
+        error: `chat history item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
       };
     }
-    items.push({ type: rawItem.type as BeamTranscriptItem["type"], text });
+    items.push({ type: rawItem.type, text });
   }
 
   return {
@@ -159,6 +215,8 @@ export function parseBeamUpload(
       completed: value.completed,
       ...(value.truncated === true ? { truncated: true } : {}),
       ...(hookEvent ? { hookEvent } : {}),
+      ...(sourceModel ? { sourceModel } : {}),
+      ...(handoffId ? { handoffId } : {}),
       items,
     },
   };

@@ -1,26 +1,21 @@
-// Covers fatal error hook registration and output collection.
-import { beforeEach, describe, expect, it } from "vitest";
-import {
-  registerFatalErrorHook,
-  resetFatalErrorHooksForTest,
-  runFatalErrorHooks,
-} from "./fatal-error-hooks.js";
+// Covers the fatal diagnostic callback and output collection.
+import { afterEach, describe, expect, it } from "vitest";
+import { runFatalErrorHooks, setFatalErrorHook } from "./fatal-error-hooks.js";
+
+afterEach(() => setFatalErrorHook(undefined));
 
 describe("fatal error hooks", () => {
-  beforeEach(() => {
-    resetFatalErrorHooksForTest();
-  });
-
-  it("collects non-empty hook messages", () => {
-    registerFatalErrorHook(() => "first");
-    registerFatalErrorHook(() => "  ");
-    registerFatalErrorHook(() => "second");
-
-    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual(["first", "second"]);
+  it("collects the installed callback's non-empty message", () => {
+    setFatalErrorHook(() => "diagnostic");
+    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual(["diagnostic"]);
+    setFatalErrorHook(() => "  ");
+    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
+    setFatalErrorHook(undefined);
+    expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
   });
 
   it("does not expose hook failure message or stack text", () => {
-    registerFatalErrorHook(() => {
+    setFatalErrorHook(() => {
       throw new Error("raw secret from hook");
     });
 

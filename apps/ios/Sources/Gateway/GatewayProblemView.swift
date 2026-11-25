@@ -47,6 +47,8 @@ extension GatewayConnectionProblem {
 }
 
 struct GatewayProblemBanner: View {
+    @Environment(\.openURL) private var openURL
+
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
     var onPrimaryAction: (() -> Void)?
@@ -62,8 +64,18 @@ struct GatewayProblemBanner: View {
             detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
             primaryActionTitle: self.primaryActionTitle.map(OpenClawTextValue.verbatim),
             onPrimaryAction: self.onPrimaryAction,
-            secondaryActionTitle: "Details",
-            onSecondaryAction: self.onShowDetails)
+            secondaryActionTitle: self.problem.docsURL == GatewayConnectionIssue.tailscaleSetupURL
+                ? "Set up Tailscale" : "Details",
+            onSecondaryAction: self.secondaryAction)
+    }
+
+    private var secondaryAction: (() -> Void)? {
+        if self.problem.docsURL == GatewayConnectionIssue.tailscaleSetupURL {
+            return {
+                self.openURL(GatewayConnectionIssue.tailscaleSetupURL)
+            }
+        }
+        return self.onShowDetails
     }
 
     private var iconName: String {

@@ -4,24 +4,28 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import type { NodeHostStats } from "./node-host-stats.js";
 
 export type NodeWorkerBundleStatus =
   | { status: "installed"; version: string }
   | { status: "missing" };
 
-/** Node record returned by gateway node-list endpoints. */
-export type NodeListNode = {
+type NodeIdentityMetadata = {
   nodeId: string;
   displayName?: string;
   platform?: string;
   version?: string;
   coreVersion?: string;
   uiVersion?: string;
+  remoteIp?: string;
+};
+
+/** Node record returned by gateway node-list endpoints. */
+export type NodeListNode = NodeIdentityMetadata & {
   clientId?: string;
   clientMode?: string;
   /** This node host runs from the Gateway's own canonical node-host installation. */
   gatewayLocal?: boolean;
-  remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
   pathEnv?: string;
@@ -30,7 +34,9 @@ export type NodeListNode = {
   computerUse?: ComputerUseCapabilityDescriptor;
   /** Node has explicitly enabled session hosting; live slots own current capacity. */
   sessionHost?: boolean;
+  workerHost?: { deviceFolders?: true };
   workerSlots?: WorkerSlotSummary;
+  hostStats?: NodeHostStats;
   workerBundle?: NodeWorkerBundleStatus;
   issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];
@@ -54,29 +60,15 @@ export type NodeListNode = {
 };
 
 /** Pending pairing/access request shown to operators. */
-export type PendingRequest = {
+export type PendingRequest = NodeIdentityMetadata & {
   requestId: string;
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
   ts: number;
   commands?: string[];
   requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
 /** Persisted paired node entry with permission metadata. */
-export type PairedNode = {
-  nodeId: string;
-  displayName?: string;
-  platform?: string;
-  version?: string;
-  coreVersion?: string;
-  uiVersion?: string;
-  remoteIp?: string;
+export type PairedNode = NodeIdentityMetadata & {
   permissions?: Record<string, boolean>;
   createdAtMs?: number;
   approvedAtMs?: number;

@@ -1,3 +1,4 @@
+import { MIMEType } from "node:util";
 import { detectMime, isZipContainerMime, mimeTypeFromFilePath, normalizeMimeType } from "./mime.js";
 
 export type AttachmentClass =
@@ -8,11 +9,11 @@ export type AttachmentClass =
   | "video"
   | "archive"
   | "binary";
-type AttachmentCharset = "utf-16le" | "utf-16be";
+type AttachmentCharset = "utf-16le" | "utf-16be" | "windows-1252";
 export type AttachmentClassification = {
   mime: string | undefined;
   class: AttachmentClass;
-  charset?: AttachmentCharset;
+  charset?: string;
 };
 
 const TEXT_APPLICATION_MIME = /^application\/(?:json|javascript|xml|yaml|x-yaml)$/;
@@ -94,7 +95,15 @@ function textRatios(text: string, includeWordish: boolean): [printable: number, 
   return total === 0 ? [0, 0] : [printable / total, wordish / total];
 }
 
-function looksLikeText(buffer: Buffer): boolean {
+function isCleanText(buffer: Buffer, charset: AttachmentCharset): boolean {
+  try {
+    return textRatios(new TextDecoder(charset, { fatal: true }).decode(buffer), false)[0] === 1;
+  } catch {
+    return false;
+  }
+}
+
+function sniffTextCharset(buffer: Buffer): "utf-8" | "windows-1252" | undefined {
   const sample = buffer.subarray(0, 4096);
   // Finish the last sampled UTF-8 sequence without starting a new one outside the window.
   // Its lead is within the final four bytes; completion needs at most three more.
@@ -105,10 +114,10 @@ function looksLikeText(buffer: Buffer): boolean {
   const end = sample.length + Math.max(0, leadIndex + width - tail.length);
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, end));
-    return textRatios(text, false)[0] > 0.85;
+    return textRatios(text, false)[0] > 0.85 ? "utf-8" : undefined;
   } catch {
     const [printable, wordish] = textRatios(new TextDecoder("windows-1252").decode(sample), true);
-    return printable > 0.95 && wordish > 0.3;
+    return printable > 0.95 && wordish > 0.3 ? "windows-1252" : undefined;
   }
 }
 
@@ -126,6 +135,22 @@ export async function classifyAttachmentBytes(params: {
     filePath: params.name ?? undefined,
   });
   const detectedClass = attachmentClassFromMime(mime);
+  const mimeHints = [params.declaredMime, ...(params.additionalMimeHints ?? [])];
+  let declaredCharset: string | undefined;
+  for (const hint of mimeHints) {
+    if (!hint) {
+      continue;
+    }
+    try {
+      const charset = new MIMEType(hint).params.get("charset");
+      if (charset !== null) {
+        declaredCharset = charset;
+        break;
+      }
+    } catch {
+      // Invalid metadata still goes through byte classification and MIME allowlists.
+    }
+  }
   const hasUtf16Bom =
     params.buffer.length >= 2 &&
     (params.buffer.readUInt16LE(0) === 0xfeff || params.buffer.readUInt16LE(0) === 0xfffe);
@@ -134,21 +159,44 @@ export async function classifyAttachmentBytes(params: {
     mime?.startsWith("application/vnd.") ||
     (detectedClass !== "binary" && !hasUtf16Bom)
   ) {
-    const charset = detectedClass === "text" ? resolveUtf16Charset(params.buffer) : undefined;
+    let charset =
+      detectedClass === "text"
+        ? (resolveUtf16Charset(params.buffer) ?? declaredCharset)
+        : undefined;
+    if (
+      detectedClass === "text" &&
+      !charset &&
+      !mimeHints.some((hint) => /;\s*charset\s*=/i.test(hint ?? "")) &&
+      sniffTextCharset(params.buffer) === "windows-1252"
+    ) {
+      // A text filename identifies the MIME, not its encoding. Preserve the same
+      // byte-inferred decoder as unnamed text without overriding declared charsets.
+      charset = "windows-1252";
+    }
     // Text resolved by extension can still be BOM-less UTF-16; dropping the
     // detected charset here would decode it downstream as UTF-8 mojibake.
     return charset ? { mime, class: detectedClass, charset } : { mime, class: detectedClass };
+  }
+  // SQLite, ELF, and PE still have NUL pages. Text recovery below is for
+  // bytes with no magic type, including a malformed declared MIME such as "plain".
+  const magicMime = await detectMime({ buffer: params.buffer });
+  if (magicMime && magicMime === mime && attachmentClassFromMime(magicMime) === "binary") {
+    return { mime: magicMime, class: "binary" };
   }
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
   }
-  const charset = resolveUtf16Charset(params.buffer);
-  if (!charset && !looksLikeText(params.buffer)) {
+  const bomCharset = hasUtf16Bom ? resolveUtf16Charset(params.buffer) : undefined;
+  if (detectedClass === "text" && bomCharset && isCleanText(params.buffer, bomCharset)) {
+    return { mime, class: "text", charset: bomCharset };
+  }
+  const charset = resolveUtf16Charset(params.buffer) ?? sniffTextCharset(params.buffer);
+  if (!charset) {
     return { mime, class: "binary" };
   }
   const extensionMime = mimeTypeFromFilePath(params.name);
-  const firstLine = new TextDecoder(charset ?? "utf-8")
+  const firstLine = new TextDecoder(charset)
     .decode(params.buffer.subarray(0, Math.min(params.buffer.length, 8192)))
     .split(/\r?\n/, 1)[0];
   const textMime =
@@ -158,5 +206,12 @@ export async function classifyAttachmentBytes(params: {
       : firstLine?.includes("\t")
         ? "text/tab-separated-values"
         : "text/plain");
-  return { mime: textMime, class: "text", ...(charset ? { charset } : {}) };
+  // Carry the decoder that recognized the bytes; default UTF-8 needs no override.
+  const textCharset =
+    charset === "utf-16le" || charset === "utf-16be" ? charset : (declaredCharset ?? charset);
+  return {
+    mime: textMime,
+    class: "text",
+    ...(textCharset !== "utf-8" ? { charset: textCharset } : {}),
+  };
 }

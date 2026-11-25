@@ -1,87 +1,68 @@
-import { describe, expect, it, vi } from "vitest";
-import type { CronJob } from "../../api/types.ts";
+import { expect, it, vi } from "vitest";
+import { createInitialCronState, startCronEdit } from "../../lib/cron/index.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
-import { createCronViewJob, renderCronView } from "./view.test-support.ts";
+import { inputValue, text } from "./cron-assertions.test-support.ts";
+import { createCronViewJob, getElement, renderCronView } from "./view.test-support.ts";
 
-const payloadCases = [
-  { kind: "systemEvent", payload: { kind: "systemEvent", text: "check status" } },
-  { kind: "agentTurn", payload: { kind: "agentTurn", message: "Summarize updates" } },
-  { kind: "command", payload: { kind: "command", argv: ["echo", "ready"] } },
-  { kind: "script", payload: { kind: "script", script: "return 'ready'" } },
-  { kind: "heartbeat", payload: { kind: "heartbeat" } },
-] satisfies Array<{ kind: CronJob["payload"]["kind"]; payload: CronJob["payload"] }>;
+it.each([
+  { displayName: "Morning health report", expected: "Morning health report", enabled: true },
+  { displayName: undefined, expected: "cron:ops:weekday-health", enabled: false },
+])(
+  "uses saved label $expected (enabled=$enabled) without replacing action or editor identity",
+  async ({ displayName, expected, enabled }) => {
+    const onRun = vi.fn();
+    const job = createCronViewJob("display-name-job", {
+      name: "cron:ops:weekday-health",
+      configRevision: "fixture-config-revision",
+      enabled,
+      ...(displayName === undefined ? {} : { displayName }),
+    });
+    const state = createInitialCronState();
+    startCronEdit(state, job);
+    expect(state.cronEditingJob).toEqual(job);
+    expect(state.cronForm.name).toBe("cron:ops:weekday-health");
+    const props = {
+      editingJob: state.cronEditingJob,
+      form: { ...state.cronForm, name: "Unsaved stable name" },
+      onRun,
+    };
+    const editor = await renderCronView(props);
+    expect(text(editor, ".cron-detail-title")).toBe(expected);
+    expect(inputValue(editor, "#cron-name")).toBe("Unsaved stable name");
+    const detail = await renderCronView({ ...props, detailTab: "history" });
+    expect(text(detail, ".cron-detail-title")).toBe(expected);
+    getElement(detail, '[data-test-id="cron-run-now"]', HTMLButtonElement).click();
+    expect(onRun).toHaveBeenCalledExactlyOnceWith(job);
 
-describe("cron view saved descriptions", () => {
-  it.each(payloadCases)(
-    "shows the saved description inline for $kind tasks without changing row selection",
-    ({ kind, payload }) => {
-      const onSelectJob = vi.fn();
-      const job = createCronViewJob(`described-${kind}`, {
-        description: "  Summarize overnight deployment activity  ",
-        payload,
-      });
-      const container = renderCronView({ jobs: [job], onSelectJob });
-      const description = container.querySelector<HTMLSpanElement>(
-        `[data-test-id="cron-row-description-${job.id}"]`,
-      );
+    expect(job.name).toBe("cron:ops:weekday-health");
+    expect(job.displayName).toBe(displayName);
+  },
+);
 
-      expect(description).toBeInstanceOf(HTMLSpanElement);
-      expect(description?.textContent?.trim()).toBe("Summarize overnight deployment activity");
-      expect(description?.title).toBe("Description: Summarize overnight deployment activity");
-      description?.click();
-      expect(onSelectJob).toHaveBeenCalledWith(job);
-    },
-  );
-
-  it.each([undefined, "", "  \n\t  "])(
-    "omits the inline description when the saved description is %j",
-    (description) => {
-      const job = createCronViewJob("without-description", { description });
-      const container = renderCronView({ jobs: [job] });
-
-      expect(container.querySelector(".cron-table__description")).toBeNull();
-    },
-  );
-
-  it("renders saved descriptions as escaped text", () => {
-    const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
-    const job = createCronViewJob("escaped-description", { description });
-    const container = renderCronView({ jobs: [job] });
-
-    expect(container.querySelector(".cron-table__description")?.textContent).toContain(description);
-    expect(container.querySelector(".cron-table__name img")).toBeNull();
-    expect(container.querySelector(".cron-table__name script")).toBeNull();
+it("uses the saved description for the detail instead of unsaved edits", async () => {
+  const job = createCronViewJob("described-job", {
+    description: "  Summarize overnight deployment activity  ",
   });
-
-  it.each(payloadCases)(
-    "shows the saved $kind task description instead of unsaved form edits",
-    ({ kind, payload }) => {
-      const job = createCronViewJob(`saved-${kind}`, {
-        description: "  Saved description for the selected task  ",
-        payload,
-      });
-      const container = renderCronView({
-        jobs: [],
-        editingJob: job,
-        form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },
-      });
-      const description = container.querySelector('[data-test-id="cron-detail-description"]');
-
-      expect(description).toBeInstanceOf(HTMLDivElement);
-      expect(description?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        "Description: Saved description for the selected task",
-      );
-      expect(description?.textContent).not.toContain("Unsaved description edit");
-    },
+  const detail = await renderCronView({
+    editingJob: job,
+    detailTab: "history",
+    form: { ...DEFAULT_CRON_FORM, description: "Unsaved description edit" },
+  });
+  const saved = getElement(detail, '[data-test-id="cron-detail-description"]', HTMLDivElement);
+  expect(saved.textContent?.replace(/\s+/g, " ").trim()).toBe(
+    "Summarize overnight deployment activity",
   );
+  expect(saved.textContent).not.toContain("Unsaved description edit");
+});
 
-  it.each([undefined, "", "  \n\t  "])(
-    "omits the detail description when the saved description is %j",
-    (description) => {
-      const job = createCronViewJob("without-description", { description });
-      const container = renderCronView({ jobs: [], editingJob: job });
+it("renders saved descriptions as escaped text", async () => {
+  const description = '<img src="x" onerror="alert(1)"> & <script>alert(1)</script>';
+  const job = createCronViewJob("escaped-description", { description, displayName: description });
+  const container = await renderCronView({ editingJob: job, detailTab: "history" });
 
-      expect(container.querySelector('[data-test-id="cron-detail-description"]')).toBeNull();
-    },
-  );
+  expect(text(container, ".cron-detail-title")).toBe(description);
+  expect(text(container, '[data-test-id="cron-detail-description"]')).toContain(description);
+  expect(
+    container.querySelectorAll(".cron-detail-header img, .cron-detail-header script"),
+  ).toHaveLength(0);
 });

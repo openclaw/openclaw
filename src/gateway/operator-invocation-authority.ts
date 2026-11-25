@@ -1,0 +1,117 @@
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
+import type { OperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.types.js";
+
+function hasOperatorToolSource(authority: OperatorToolGatewayAuthority | undefined): boolean {
+  return Boolean(
+    authority?.operatorRunAuthority ||
+    authority?.operatorRoleActor?.kind === "operator" ||
+    (!authority?.operatorRoleActor && authority?.authenticatedUserProfile),
+  );
+}
+
+/** Known operator sources cannot turn missing Gateway routing into standalone host access. */
+export function hasOperatorToolGatewayAuthority(): boolean {
+  const admitted = getGatewayToolCallerIdentity()?.operatorAuthority;
+  const direct = readOperatorToolGatewayAuthority();
+  direct?.signal.throwIfAborted();
+  direct?.assertCurrent?.();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const scopedOperator = Boolean(
+    scope?.client?.authenticatedUserProfile ||
+    scope?.client?.internal?.operatorRoleActor?.kind === "operator",
+  );
+  if (scopedOperator) {
+    scope?.signal?.throwIfAborted();
+  }
+  return Boolean(admitted || hasOperatorToolSource(direct) || scopedOperator);
+}
+
+/** Read the host-issued operator grant; the Gateway dispatcher validates it at admission. */
+export function readOperatorToolRunAuthority(): AdmittedRunOperatorAuthority | undefined {
+  return (
+    getGatewayToolCallerIdentity()?.operatorAuthority ??
+    readOperatorToolGatewayAuthority()?.operatorRunAuthority ??
+    getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+  );
+}
+
+/** Acquire the ambient requester; consumers own retention through their distinct work lifetimes. */
+export async function captureAmbientGatewayOperatorAuthority(params: {
+  missingBindingError: () => Error;
+  retainInherited?: true;
+}): Promise<{
+  authority?: AdmittedRunOperatorAuthority;
+  assertInvocationCurrent?: () => void;
+  release?: () => void;
+}> {
+  const ambientScope = getPluginRuntimeGatewayRequestScope();
+  const scope = ambientScope ? { ...ambientScope } : undefined;
+  const inheritedOperator = readOperatorToolRunAuthority();
+  const context = scope?.context ?? scope?.resolveGatewayContext?.();
+  const direct = readOperatorToolGatewayAuthority();
+  const assertCallerCurrent = composePreparedOnlySessionSource(getGatewayToolCallerIdentity());
+  // Admitted once here; later calls keep only Stop and the caller's session fences.
+  const assertInvocationCurrent =
+    inheritedOperator || !scope?.client || !context
+      ? composeSessionSourceAssertion(
+          [assertCallerCurrent, direct?.assertCurrent],
+          (assertSources) => {
+            assertSources();
+            direct?.signal.throwIfAborted();
+            scope?.signal?.throwIfAborted();
+          },
+        )
+      : assertCallerCurrent;
+  if (inheritedOperator) {
+    if (params.retainInherited) {
+      assertAdmittedRunOperatorAuthority(inheritedOperator);
+    }
+    return {
+      authority: inheritedOperator,
+      assertInvocationCurrent,
+      release: params.retainInherited ? inheritedOperator.retain?.() : undefined,
+    };
+  }
+  if (
+    (!scope?.client || !context) &&
+    (resolveGatewayOperatorRoleActor(scope?.client)?.kind === "operator" ||
+      hasOperatorToolSource(direct))
+  ) {
+    throw params.missingBindingError();
+  }
+  const capturedOperator =
+    scope?.client && context
+      ? await prepareGatewayOperatorRunAuthority({
+          client: scope.client,
+          context,
+          hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
+          invocationAuthority: {
+            assertCurrent: () => scope.signal?.throwIfAborted(),
+            signal: scope.signal,
+          },
+        })
+      : undefined;
+  try {
+    assertInvocationCurrent?.();
+    scope?.signal?.throwIfAborted();
+    if (scope?.resolveGatewayContext && scope.resolveGatewayContext() !== context) {
+      throw new Error("Gateway request context changed. Start a new request.");
+    }
+    return { ...capturedOperator, assertInvocationCurrent };
+  } catch (error) {
+    capturedOperator?.release();
+    throw error;
+  }
+}

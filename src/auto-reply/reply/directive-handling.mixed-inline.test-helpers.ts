@@ -1,19 +1,26 @@
 import { vi } from "vitest";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { parseInlineSessionDirectives, type InlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { createMockTypingController } from "./reply.test-helpers.js";
 
 export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "session-1", updatedAt: 1, ...overrides };
 }
 
-export async function applyMixedDirectives(params: {
+type DirectiveParams = Parameters<typeof applyInlineDirectiveOverrides>[0];
+type ModelState = DirectiveParams["modelState"];
+
+type MixedDirectiveParams = {
   body: string;
+  abortSignal?: DirectiveParams["abortSignal"];
+  resolveThinkingCatalog?: ModelState["resolveThinkingCatalog"];
   cfg?: OpenClawConfig;
+  ctx?: DirectiveParams["ctx"];
+  agentDir?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   storePath?: string;
@@ -24,13 +31,16 @@ export async function applyMixedDirectives(params: {
   defaultModel?: string;
   allowedModels?: ModelCatalogEntry[];
   modelAliases?: string[];
-  aliasIndex?: ModelAliasIndex;
+  aliasIndex?: DirectiveParams["aliasIndex"];
   senderIsOwner?: boolean;
   gatewayClientScopes?: string[];
-  directives?: InlineDirectives;
-}) {
-  const cfg =
-    params.cfg ?? ({ commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig);
+  operatorAuthority?: ModelState["operatorAuthority"];
+  directives?: DirectiveParams["directives"];
+  resolveDefaultThinkingLevel?: ModelState["resolveDefaultThinkingLevel"];
+};
+
+export function createInlineDirectiveParams(params: MixedDirectiveParams) {
+  const cfg: OpenClawConfig = params.cfg ?? { commands: { text: true }, agents: { defaults: {} } };
   const provider = params.provider ?? "anthropic";
   const model = params.model ?? "claude-opus-4-6";
   const channel = params.channel ?? "telegram";
@@ -39,12 +49,9 @@ export async function applyMixedDirectives(params: {
   const sessionStore = { [sessionKey]: sessionEntry };
   const directives =
     params.directives ??
-    parseInlineSessionDirectives(params.body, {
-      modelAliases: params.modelAliases,
-    });
+    parseInlineSessionDirectives(params.body, { modelAliases: params.modelAliases });
   const allowedModels = params.allowedModels ?? [];
-  const aliasIndex = params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() };
-  const modelState: Parameters<typeof applyInlineDirectiveOverrides>[0]["modelState"] = {
+  const modelState: ModelState = {
     provider,
     model,
     requestedRouteResolution: "resolved",
@@ -55,28 +62,20 @@ export async function applyMixedDirectives(params: {
       defaultModel: params.defaultModel ?? model,
       agentId: "main",
     }),
+    operatorAuthority: params.operatorAuthority,
     allowedModelKeys: new Set(allowedModels.map((entry) => `${entry.provider}/${entry.id}`)),
     allowedModelCatalog: allowedModels,
-    policyAliasIndex: aliasIndex,
     resetModelOverride: false,
-    resolveThinkingCatalog: async () => allowedModels,
-    resolveDefaultThinkingLevel: async () => "off",
+    resolveThinkingCatalog: params.resolveThinkingCatalog ?? (async () => allowedModels),
+    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
-    needsModelCatalog: false,
   };
-  const typing = {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
+  const typing = { ...createMockTypingController(), cleanup: vi.fn() };
 
-  const result = await applyInlineDirectiveOverrides({
+  return {
+    abortSignal: params.abortSignal,
     ctx: {
+      ...params.ctx,
       Body: params.body,
       Provider: channel,
       Surface: channel,
@@ -84,7 +83,7 @@ export async function applyMixedDirectives(params: {
     },
     cfg,
     agentId: "main",
-    agentDir: "/tmp/agent",
+    agentDir: params.agentDir ?? "/tmp/agent",
     workspaceDir: "/tmp/workspace",
     agentCfg: cfg.agents?.defaults ?? {},
     sessionEntry,
@@ -104,13 +103,12 @@ export async function applyMixedDirectives(params: {
       commandBodyNormalized: params.body,
     },
     directives,
-    messageProviderKey: channel,
     elevatedEnabled: true,
     elevatedAllowed: true,
     elevatedFailures: [],
     defaultProvider: params.defaultProvider ?? provider,
     defaultModel: params.defaultModel ?? model,
-    aliasIndex,
+    aliasIndex: params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() },
     provider,
     model,
     modelState,
@@ -121,7 +119,16 @@ export async function applyMixedDirectives(params: {
     contextTokens: 8192,
     effectiveModelDirective: directives.rawModelDirective,
     typing,
-  });
+  } satisfies DirectiveParams;
+}
 
-  return { result, sessionEntry, sessionStore, typing };
+export async function applyMixedDirectives(params: MixedDirectiveParams) {
+  const input = createInlineDirectiveParams(params);
+  const result = await applyInlineDirectiveOverrides(input);
+  return {
+    result,
+    sessionEntry: input.sessionEntry,
+    sessionStore: input.sessionStore,
+    typing: input.typing,
+  };
 }

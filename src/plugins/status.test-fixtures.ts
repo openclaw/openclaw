@@ -3,25 +3,44 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginCompatibilityNotice } from "./status.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import type { PluginHookName } from "./types.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 export { createPluginRecord };
+
+export function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram"],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, enabledConfig };
+}
+
+export function createAutoEnabledStatusConfig(
+  entries: Record<string, unknown>,
+  rawConfigOverrides?: Record<string, unknown>,
+) {
+  const rawConfig = { plugins: {}, ...rawConfigOverrides };
+  const autoEnabledConfig = {
+    ...rawConfig,
+    plugins: {
+      entries,
+    },
+  };
+  return { rawConfig, autoEnabledConfig };
+}
 
 export function createInstalledPluginIndexSnapshot(
   plugins: Array<Record<string, unknown>>,
 ): Record<string, unknown> {
-  return {
-    version: 1,
-    warning: "test",
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords: {},
-    plugins,
-    diagnostics: [],
-  };
+  const { version, ...index } = createIndexFixture({ generatedAtMs: 0 });
+  return { version, warning: "test", ...index, plugins };
 }
 
 export const HOOK_ONLY_MESSAGE =
@@ -30,7 +49,9 @@ export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
   "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
-  params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
+  params: Pick<PluginCompatibilityNotice, "pluginId"> & {
+    code: "hook-only" | "removed-session-transcript-file-api";
+  },
 ): PluginCompatibilityNotice {
   switch (params.code) {
     case "hook-only":
@@ -60,19 +81,6 @@ export function createBundledPluginRecord(id: string): PluginRecord {
     rootDir: `/bundled/${id}`,
     origin: "bundled",
   });
-}
-
-export function createTypedHook(params: {
-  pluginId: string;
-  hookName: PluginHookName;
-  source?: string;
-}): PluginRegistry["typedHooks"][number] {
-  return {
-    pluginId: params.pluginId,
-    hookName: params.hookName,
-    handler: () => undefined,
-    source: params.source ?? `/tmp/${params.pluginId}/index.ts`,
-  };
 }
 
 export function createCustomHook(params: {

@@ -25,6 +25,7 @@ describe("sessions.resolve presentation contract", () => {
     agentId: "main",
     displayName: "Deploy monitor",
     boardFace: "dashboard",
+    boardPresentation: "expanded",
   } as const;
 
   it("preserves owner-backed public exports, types, and protocol registrations", () => {
@@ -59,7 +60,29 @@ describe("sessions.resolve presentation contract", () => {
     ).toBe(true);
   });
 
+  it("accepts a closed named reference selector", () => {
+    for (const reference of [
+      { key: candidate.key },
+      { key: candidate.key, slug: "deploy-monitor" },
+    ]) {
+      expect(Value.Check(SessionsResolveParamsSchema, { reference, agentId: "main" })).toBe(true);
+    }
+    for (const reference of [
+      {},
+      { key: "" },
+      { key: candidate.key, slug: "" },
+      { key: candidate.key, extra: true },
+    ]) {
+      expect(Value.Check(SessionsResolveParamsSchema, { reference })).toBe(false);
+    }
+  });
+
   it("rejects invalid faces, unexpected facts, and more than ten candidates", () => {
+    for (const boardPresentation of ["fullscreen", null, true]) {
+      expect(Value.Check(SessionsResolveCandidateSchema, { ...candidate, boardPresentation })).toBe(
+        false,
+      );
+    }
     expect(Value.Check(SessionsResolveCandidateSchema, { ...candidate, boardFace: "grid" })).toBe(
       false,
     );

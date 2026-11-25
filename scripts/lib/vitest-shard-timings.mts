@@ -1,7 +1,7 @@
 // Persists per-shard Vitest timing samples for later scheduling.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveShardTimingKey, type VitestShardTimingSpec } from "./vitest-shard-metadata.mts";
 
 const TIMINGS_FILE_ENV_KEY = "OPENCLAW_TEST_PROJECTS_TIMINGS_PATH";
@@ -23,7 +23,8 @@ export function createShardTimingSample(spec: VitestShardTimingSpec, durationMs:
     return null;
   }
 
-  const includePatternCount = Array.isArray(spec.includePatterns) ? spec.includePatterns.length : 0;
+  const targets = spec.timingIncludePatterns ?? spec.timingTargets ?? spec.includePatterns;
+  const includePatternCount = Array.isArray(targets) ? targets.length : 0;
   return {
     baseConfig: spec.config,
     config: resolveShardTimingKey(spec),

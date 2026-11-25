@@ -1,4 +1,28 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
+
+export function sessionWorkspaceFileKey(
+  sessionKey: string,
+  root: string | undefined,
+  workspacePath: string,
+): string {
+  return JSON.stringify(["file", sessionKey, root ?? "", workspacePath]);
+}
+
+export function isSessionWorkspaceFileSelected(
+  activeId: string | null,
+  sessionKey: string,
+  root: string | undefined,
+  path: string,
+  workspacePath?: string,
+): boolean {
+  // Requests and Show in Files can select a row before its canonical read completes.
+  return (
+    activeId === `file:${path}` ||
+    activeId === sessionWorkspaceFileKey(sessionKey, root, workspacePath ?? path)
+  );
+}
 
 function pathBasename(value: string): string {
   const trimmed = value.replace(/[\\/]+$/, "");
@@ -14,6 +38,15 @@ export function resolveSessionWorkspace(params: {
   if (!row) {
     return { root: null, label: null };
   }
+  if (row.deviceFolder) {
+    return { root: row.deviceFolder.path, label: pathBasename(row.deviceFolder.path) };
+  }
+  if (row.repositoryWorkspaceId) {
+    return {
+      root: row.execNode ? row.execCwd?.trim() || null : null,
+      label: row.repository ? pathBasename(row.repository.url).replace(/\.git$/u, "") : null,
+    };
+  }
   // Exec-node paths belong to that node. Mirror loadSessionFileRoot precedence;
   // an unresolved worktree must never borrow the agent's different checkout.
   const root = row.execNode
@@ -28,5 +61,14 @@ export function resolveSessionWorkspace(params: {
     : root
       ? pathBasename(root)
       : null;
+  const agentId = parseAgentSessionKey(row.key)?.agentId ?? row.agentId;
+  // Default agent folders are storage identities, not user-chosen project names.
+  if (
+    agentId &&
+    root === params.agentWorkspace?.trim() &&
+    (label === `workspace-${agentId}` || label === agentId)
+  ) {
+    return { root, label: t("sessionHovercard.workspaceLabel") };
+  }
   return { root, label };
 }

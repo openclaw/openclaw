@@ -1,8 +1,39 @@
 import fs from "node:fs";
 import path from "node:path";
-import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
+import { threadId } from "node:worker_threads";
+import { expect } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
+import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
+import { catalogAgentFacts } from "./prepared-model-catalog-worker.shared.test-support.js";
+import * as catalogRuntime from "./prepared-model-catalog.js";
+import {
+  getPreparedModelRuntimeAuthLabels,
+  getPreparedModelRuntimeAuthStore,
+} from "./prepared-model-runtime-auth.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import type {
+  PreparedModelRuntimeOwner,
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeSnapshot,
+} from "./prepared-model-runtime.types.js";
+import {
+  seedFixturePluginModelCatalog,
+  writeCatalogFailureControl,
+  writeSyntheticAuthDiscoveryFixture,
+} from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
 export const PROVIDER_ID = "worker-catalog-fixture";
+const CATALOG_ALIAS_ID = `${PROVIDER_ID}-alias`;
 export const HARNESS_ID = "worker-catalog-fixture-harness";
 export const DISCOVERED_HARNESS_ID = `${PROVIDER_ID}-discovered-harness`;
 export const MISSING_AUTH_HARNESS_ID = `${PROVIDER_ID}-missing-auth-harness`;
@@ -11,7 +42,7 @@ export const SHARED_AUTH_PROVIDER_ID = `${PROVIDER_ID}-shared-auth`;
 export const PLUGIN_ID = "worker-catalog-fixture";
 export const PROFILE_ID = `${SHARED_AUTH_PROVIDER_ID}:named`;
 export const MATERIALIZED_SECRET = "materialized-worker-secret-not-real";
-export const UNRELATED_SECRET = "unrelated-worker-secret-not-real";
+const UNRELATED_SECRET = "unrelated-worker-secret-not-real";
 export const REF_ONLY_API_PROVIDER_ID = `${PROVIDER_ID}-ref-api`;
 export const REF_ONLY_API_ENV = "OPENCLAW_WORKER_REF_ONLY_API_KEY";
 export const REF_ONLY_TOKEN_PROVIDER_ID = `${PROVIDER_ID}-ref-token`;
@@ -20,74 +51,170 @@ export const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 export const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
 export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
+export const UNRELATED_PLUGIN_ID = "worker-catalog-unrelated";
+export const UNRELATED_PLUGIN_WORKER_MARKER_ENV = "OPENCLAW_WORKER_UNRELATED_PLUGIN_MARKER";
 
-export function createJwtWithExp(exp: number, marker?: string): string {
-  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
-    "base64url",
-  );
-  return `header.${payload}.signature`;
+export function catalogEntry(
+  id: string,
+  fields: Partial<ModelCatalogEntry> & { available?: boolean } = {},
+) {
+  return expect.objectContaining({ provider: PROVIDER_ID, id, ...fields });
 }
 
-export function writeCodexAuth(codexHome: string, marker: string): void {
-  const authPath = path.join(codexHome, "auth.json");
-  fs.writeFileSync(
-    authPath,
-    JSON.stringify({
-      auth_mode: "chatgpt",
-      tokens: {
-        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
-        refresh_token: `refresh-${marker}-not-real`,
+export function writeFixtureFiles(root: string, files: Record<string, unknown>) {
+  for (const [name, value] of Object.entries(files)) {
+    fs.writeFileSync(
+      path.join(root, name),
+      typeof value === "string" ? value : JSON.stringify(value),
+      "utf8",
+    );
+  }
+}
+
+export function pendingCatalogWork(hold: string, retire: () => void = () => {}) {
+  const requests: Promise<unknown>[] = [];
+  return {
+    track<T>(request: Promise<T>) {
+      void request.catch(() => {});
+      requests.push(request);
+      return request;
+    },
+    async [Symbol.asyncDispose]() {
+      retire();
+      fs.rmSync(hold, { force: true });
+      await Promise.allSettled(requests);
+    },
+  };
+}
+
+export function catalogInput(
+  fixture: Pick<PreparedModelRuntimeInput, "agentDir" | "workspaceDir" | "config"> & {
+    env: NodeJS.ProcessEnv;
+  },
+  overrides: Omit<Partial<PreparedModelRuntimeInput>, "env"> = {},
+) {
+  const { agentDir, workspaceDir, config, env } = fixture;
+  return {
+    agentId: "main",
+    agentDir,
+    inheritedAuthDir: agentDir,
+    workspaceDir,
+    config,
+    env,
+    ...overrides,
+  };
+}
+
+export function startCatalogBuild(
+  input: PreparedModelRuntimeInput,
+  retirement: AbortController,
+  inventoryOwner?: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance">,
+) {
+  const isCurrent = () => !retirement.signal.aborted;
+  return startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+        ...(inventoryOwner ? { inventoryOwner } : {}),
+        isGenerationCurrent: isCurrent,
+        retirementSignal: retirement.signal,
+        isBuildCurrent: isCurrent,
       },
-    }),
-    "utf8",
+    ],
+    new Map(),
+    30_000,
+    "static",
   );
-  const future = new Date(Date.now() + 2_000);
-  fs.utimesSync(authPath, future, future);
+}
+
+export function makeCatalogAgentFacts(
+  input: PreparedModelRuntimeInput & { env: NodeJS.ProcessEnv },
+  overrides: Partial<Omit<PreparedModelRuntimeAgentFacts, "input" | "env">> = {},
+): PreparedModelRuntimeAgentFacts {
+  return catalogAgentFacts(input, input.env, { providerIds: [PROVIDER_ID], ...overrides });
+}
+
+export function writeUnrelatedFixturePlugin(
+  root: string,
+  kind?: "memory" | "context-engine",
+): string {
+  const pluginDir = path.join(root, "unrelated-plugin");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  writeFixtureFiles(pluginDir, {
+    "index.cjs": `const fs = require("node:fs");
+const { isMainThread } = require("node:worker_threads");
+if (!isMainThread) {
+  fs.writeFileSync(process.env.${UNRELATED_PLUGIN_WORKER_MARKER_ENV}, "loaded", "utf8");
+}
+module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
+`,
+    "openclaw.plugin.json": {
+      id: UNRELATED_PLUGIN_ID,
+      ...(kind ? { kind } : {}),
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    },
+  });
+  return pluginFile;
 }
 
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
+  receiptBroadcastName?: string;
   pluginVersion?: string;
   builtPluginVersion?: string;
+  nativeCatalog?: boolean;
+  asyncSyntheticAuth?: boolean;
+  syntheticAuthAvailable?: boolean;
+  catalogControl?: boolean;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
   let pluginFile = path.join(pluginDir, "index.cjs");
   const syntheticAuthProbePath = path.join(params.root, "synthetic-auth-probes.txt");
+  const catalogControlSource = params.catalogControl
+    ? writeCatalogFailureControl(params.root, PROVIDER_ID, CATALOG_ALIAS_ID)
+    : "";
+  const route = { api: "openai-completions", baseUrl: "https://worker-catalog.invalid/v1" };
+  const catalogRoute = JSON.stringify(params.nativeCatalog ? { nativeRuntime: HARNESS_ID } : route);
   writeSyntheticAuthDiscoveryFixture({
     root: params.root,
     pluginDir,
     harnessId: HARNESS_ID,
     unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
     pluginVersion: params.pluginVersion ?? "v1",
+    asyncSyntheticAuth: params.asyncSyntheticAuth,
+    syntheticAuthAvailable: params.syntheticAuthAvailable,
   });
   fs.writeFileSync(
     pluginFile,
     `const fs = require("node:fs");
+const model = (id, name, fields = {}) => ({ id, name, ...fields });
+const route = ${JSON.stringify(route)};
+if (require("node:worker_threads").threadId !== ${threadId}) {
+  fs.appendFileSync(${JSON.stringify(path.join(params.root, "runtime-artifact-paths.txt"))}, __filename + "\\n");
+}
 module.exports = {
   id: ${JSON.stringify(PLUGIN_ID)},
   register(api) {
+    let nativeCatalogObserved = false;
     api.registerAgentHarness({
       id: ${JSON.stringify(HARNESS_ID)},
       label: "Worker catalog fixture harness",
+      authBootstrap: "harness",
       supports: () => ({ supported: true }),
       runAttempt: async () => ({ ok: false, error: "unused" }),
-      loadModelCatalog: async () => [{
-        provider: ${JSON.stringify(PROVIDER_ID)},
-        id: "account-scoped-model",
-        name: "Account scoped model",
-        api: "openai-completions",
-        baseUrl: "https://worker-catalog.invalid/v1",
-      }, {
-        provider: ${JSON.stringify(DISCOVERED_HARNESS_ID)},
-        id: "discovered-native-model",
-        name: "Discovered native model",
-      }, {
-        provider: ${JSON.stringify(MISSING_AUTH_HARNESS_ID)},
-        id: "missing-auth-native-model",
-        name: "Missing auth native model",
-      }],
+      loadModelCatalog: async () => {
+        nativeCatalogObserved = true;
+        return [
+          model("account-scoped-model", "Account scoped model", { provider: ${JSON.stringify(PROVIDER_ID)}, ...${catalogRoute} }),
+          model("discovered-native-model", "Discovered native model", { provider: ${JSON.stringify(DISCOVERED_HARNESS_ID)} }),
+          model("missing-auth-native-model", "Missing auth native model", { provider: ${JSON.stringify(MISSING_AUTH_HARNESS_ID)} }),
+        ];
+      },
+      ${params.nativeCatalog ? 'readModelCatalogReadiness: () => nativeCatalogObserved ? { accountType: "chatgpt" } : undefined,' : ""}
     });
     for (const [id, authenticated] of [
       [${JSON.stringify(DISCOVERED_HARNESS_ID)}, true],
@@ -97,7 +224,8 @@ module.exports = {
         id,
         label: id,
         auth: [],
-        resolveSyntheticAuth() {
+        ${params.asyncSyntheticAuth ? "async prepareSyntheticAuth" : "resolveSyntheticAuth"}() {
+          ${params.asyncSyntheticAuth ? `if (require("node:worker_threads").threadId !== ${threadId}) throw Error("native auth probe entered worker");` : ""}
           fs.appendFileSync(${JSON.stringify(syntheticAuthProbePath)}, id + "\\n");
           return authenticated
             ? { apiKey: "discovered-native-login-not-real", source: "fixture native login", mode: "oauth" }
@@ -107,13 +235,17 @@ module.exports = {
     }
     api.registerProvider({
       id: ${JSON.stringify(PROVIDER_ID)},
+      ${params.catalogControl ? `aliases: [${JSON.stringify(CATALOG_ALIAS_ID)}],` : ""}
       label: "Worker catalog fixture",
       auth: [],
+      resolveDynamicModel(context) {
+        if (context.modelId !== "configured-dynamic-model") return undefined;
+        const template = context.modelRegistry.find(context.provider, "sqlite-model");
+        return template && { ...template, id: context.modelId, name: "Configured dynamic model" };
+      },
       resolveExternalAuthProfiles() {
         const credentialPath = process.env[${JSON.stringify(EXTERNAL_AUTH_PATH_ENV)}];
-        if (!credentialPath || !fs.existsSync(credentialPath)) {
-          return [];
-        }
+        if (!credentialPath || !fs.existsSync(credentialPath)) return [];
         const credentialMarker = fs.readFileSync(credentialPath, "utf8").trim();
         return [{
           profileId: ${JSON.stringify(EXTERNAL_AUTH_PROFILE_ID)},
@@ -128,37 +260,34 @@ module.exports = {
       },
       catalog: {
         run(context) {
+          ${catalogControlSource}
           const refOnlyApi = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_API_PROVIDER_ID)}).apiKey;
           const refOnlyToken = context.resolveProviderApiKey(${JSON.stringify(REF_ONLY_TOKEN_PROVIDER_ID)}).apiKey;
           const durableAuth = context.resolveProviderApiKey(${JSON.stringify(DURABLE_AUTH_PROVIDER_ID)}).apiKey;
           const hasRefOnlyApi = refOnlyApi === ${JSON.stringify(REF_ONLY_API_ENV)} || refOnlyApi === process.env[${JSON.stringify(REF_ONLY_API_ENV)}];
           const hasRefOnlyToken = refOnlyToken === ${JSON.stringify(REF_ONLY_TOKEN_ENV)} || refOnlyToken === process.env[${JSON.stringify(REF_ONLY_TOKEN_ENV)}];
           return { provider: {
-            baseUrl: "https://worker-catalog.invalid/v1",
-            api: "openai-completions",
+            ...route,
             models: [
-              { id: "sqlite-model", name: "SQLite model" },
-              {
-                id: ${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)},
-                name: "Plugin generation proof",
-              },
-              {
-                id: \`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`,
-                name: "Ref-only worker proof",
-              },
+              ${params.catalogControl ? "...legacyModels," : ""}
+              model("sqlite-model", "SQLite model"),
+              model(${JSON.stringify(`plugin-generation-${params.pluginVersion ?? "v1"}`)}, "Plugin generation proof"),
+              model(\`ref-proof-api-\${hasRefOnlyApi}-token-\${hasRefOnlyToken}\`, "Ref-only worker proof"),
               ...(durableAuth === ${JSON.stringify(DURABLE_AUTH_KEY)}
-                ? [{ id: "post-startup-auth-model", name: "Post-startup auth model" }]
+                ? [model("post-startup-auth-model", "Post-startup auth model")]
                 : []),
             ],
           } };
         },
       },
       async augmentModelCatalog(context) {
+        ${params.receiptBroadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(params.receiptBroadcastName) + "\nexport { sendReceipt };"))});` : ""}
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
           ? fs.readFileSync(marker, "utf8").split("start\\n").length
           : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
+        ${params.receiptBroadcastName ? 'sendReceipt(marker, "start");' : ""}
         const barrier = marker + ".hold";
         if (fs.existsSync(barrier)) {
           await new Promise((resolve) => {
@@ -177,11 +306,10 @@ module.exports = {
         const hasShared = context.resolveProviderApiKey(${JSON.stringify(SHARED_AUTH_PROVIDER_ID)}).apiKey === ${JSON.stringify(MATERIALIZED_SECRET)};
         const hasUnrelated = context.resolveProviderApiKey("unrelated-provider").apiKey === ${JSON.stringify(UNRELATED_SECRET)};
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "done\\n");
-        return [{
-          provider: ${JSON.stringify(PROVIDER_ID)},
-          id: \`proof-refresh-\${invocation}-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`,
-          name: "Worker boundary proof",
-        }];
+        return [
+          ${params.catalogControl ? `model("configured-row", "Configured-only model", { provider: ${JSON.stringify(PROVIDER_ID)}, ...route, status: "available", statusReason: "refresh-" + invocation }),` : ""}
+          model(\`proof-refresh-\${invocation}-sqlite-\${hasSqlite}-shared-\${hasShared}-unrelated-\${hasUnrelated}\`, "Worker boundary proof", { provider: ${JSON.stringify(PROVIDER_ID)} }),
+        ];
       },
     });
   },
@@ -191,50 +319,169 @@ module.exports = {
   );
   if (params.builtPluginVersion) {
     const sourceFile = path.join(pluginDir, "index.cts");
-    fs.renameSync(pluginFile, sourceFile);
-    fs.renameSync(
-      path.join(pluginDir, "provider-discovery.cjs"),
-      path.join(pluginDir, "provider-discovery.cts"),
-    );
-    const builtFile = writeFixturePlugin({
+    const entrypoints = ["index", "provider-discovery"];
+    for (const entry of entrypoints) {
+      fs.renameSync(path.join(pluginDir, `${entry}.cjs`), path.join(pluginDir, `${entry}.cts`));
+    }
+    writeFixturePlugin({
       root: params.root,
       spinMs: params.spinMs,
+      receiptBroadcastName: params.receiptBroadcastName,
       pluginVersion: params.builtPluginVersion,
+      asyncSyntheticAuth: params.asyncSyntheticAuth,
+      syntheticAuthAvailable: params.syntheticAuthAvailable,
+      catalogControl: params.catalogControl,
     });
     const distDir = path.join(pluginDir, "dist");
     fs.mkdirSync(distDir);
-    fs.renameSync(builtFile, path.join(distDir, "index.cjs"));
-    fs.renameSync(
-      path.join(pluginDir, "provider-discovery.cjs"),
-      path.join(distDir, "provider-discovery.cjs"),
-    );
+    for (const entry of entrypoints) {
+      fs.renameSync(path.join(pluginDir, `${entry}.cjs`), path.join(distDir, `${entry}.cjs`));
+    }
     pluginFile = sourceFile;
   }
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  const harnessIds = [
+    HARNESS_ID,
+    DISCOVERED_HARNESS_ID,
+    MISSING_AUTH_HARNESS_ID,
+    UNRELATED_SYNTHETIC_AUTH_ID,
+  ];
+  writeFixtureFiles(pluginDir, {
+    "openclaw.plugin.json": {
       id: PLUGIN_ID,
-      providers: [PROVIDER_ID, DISCOVERED_HARNESS_ID, MISSING_AUTH_HARNESS_ID],
-      cliBackends: [
-        HARNESS_ID,
+      providers: [
+        PROVIDER_ID,
         DISCOVERED_HARNESS_ID,
         MISSING_AUTH_HARNESS_ID,
-        UNRELATED_SYNTHETIC_AUTH_ID,
+        ...(params.catalogControl ? [CATALOG_ALIAS_ID] : []),
       ],
-      syntheticAuthRefs: [
-        HARNESS_ID,
-        DISCOVERED_HARNESS_ID,
-        MISSING_AUTH_HARNESS_ID,
-        UNRELATED_SYNTHETIC_AUTH_ID,
-      ],
+      cliBackends: harnessIds,
+      syntheticAuthRefs: harnessIds,
       providerCatalogEntry: params.builtPluginVersion
         ? "./provider-discovery.cts"
         : "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
-      modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
-    }),
-    "utf8",
-  );
+      modelCatalog: {
+        discovery: { [PROVIDER_ID]: "runtime" },
+        runtimeAugment: true,
+        ...(params.catalogControl
+          ? { aliases: { [CATALOG_ALIAS_ID]: { provider: PROVIDER_ID } } }
+          : {}),
+      },
+    },
+  });
   return pluginFile;
+}
+
+export async function createCatalogFixture(
+  makeTempDir: (prefix: string) => string,
+  spinMs: number,
+  envOverride: NodeJS.ProcessEnv = {},
+  options?: Omit<
+    Parameters<typeof writeFixturePlugin>[0],
+    "root" | "spinMs" | "pluginVersion" | "syntheticAuthAvailable"
+  > & {
+    hydrateExternalCliProviderIds?: readonly string[];
+    codexNativeOwner?: boolean;
+    codexNativeHomeScope?: "agent" | "user";
+  },
+) {
+  const root = makeTempDir("openclaw-model-catalog-worker-");
+  const stateDir = path.join(root, "state");
+  const agentDir = path.join(stateDir, "agents", "main", "agent");
+  const workspaceDir = path.join(root, "workspace");
+  const marker = path.join(root, "worker-marker.txt");
+  const externalAuthPath = path.join(root, "external-auth.txt");
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const pluginFile = writeFixturePlugin({ root, spinMs, ...options });
+  fs.writeFileSync(externalAuthPath, "A", "utf8");
+  const env = {
+    ...process.env,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: options?.codexNativeOwner ? undefined : "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_WORKER_CATALOG_MARKER: marker,
+    [EXTERNAL_AUTH_PATH_ENV]: externalAuthPath,
+    ...envOverride,
+    [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
+    [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
+  };
+  await prepareSharedAuthStoreOwnership(env);
+  const models: Record<string, AgentModelEntryConfig> = {
+    [`${PROVIDER_ID}/sqlite-model`]: { agentRuntime: { id: HARNESS_ID } },
+  };
+  if (options?.nativeCatalog) {
+    for (const [id, runtime] of [
+      ["account-scoped-model", HARNESS_ID],
+      ["configured-dynamic-model", "openclaw"],
+      ["unresolved-configured-model", "openclaw"],
+    ] as const) {
+      models[`${PROVIDER_ID}/${id}`] = { agentRuntime: { id: runtime } };
+    }
+  }
+  const entries: Record<string, PluginEntryConfig> = { [PLUGIN_ID]: { enabled: true } };
+  if (options?.codexNativeOwner) {
+    models["openai/gpt-5.4"] = { agentRuntime: { id: "codex" } };
+    entries.openai = { enabled: true };
+    entries.codex = {
+      enabled: true,
+      config: {
+        discovery: { enabled: false },
+        ...(options.codexNativeHomeScope
+          ? { appServer: { homeScope: options.codexNativeHomeScope } }
+          : {}),
+      },
+    };
+  }
+  const config = {
+    agents: { defaults: { model: `${PROVIDER_ID}/sqlite-model`, models } },
+    plugins: { allow: Object.keys(entries), load: { paths: [pluginFile] }, entries },
+  } satisfies OpenClawConfig;
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
+  const profiles: AuthProfileStore["profiles"] = {
+    [PROFILE_ID]: {
+      type: "token",
+      provider: SHARED_AUTH_PROVIDER_ID,
+      token: MATERIALIZED_SECRET,
+      tokenRef: { source: "env", provider: "default", id: "SHARED_SECRET_REF" },
+    },
+  };
+  if (!options?.nativeCatalog) {
+    profiles["unrelated-provider:default"] = {
+      type: "api_key",
+      provider: "unrelated-provider",
+      key: UNRELATED_SECRET,
+      keyRef: { source: "env", provider: "default", id: "UNRELATED_SECRET_REF" },
+    };
+  }
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: { version: 1, profiles, order: { [SHARED_AUTH_PROVIDER_ID]: [PROFILE_ID] } },
+    },
+  ]);
+  const hydratedAuthStore = options?.hydrateExternalCliProviderIds
+    ? ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+        config,
+        externalCliProviderIds: options.hydrateExternalCliProviderIds,
+        readOnly: true,
+        syncExternalCli: false,
+      })
+    : undefined;
+  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
+}
+
+export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provider: string) {
+  const owner = catalogRuntime.materializePreparedModelCatalogOwner(snapshot);
+  return expect(
+    formatModelCatalogAuthLabel(
+      getPreparedModelRuntimeAuthLabels(owner).get(provider)?.all ?? "missing",
+      {
+        cfg: owner.config,
+        store: getPreparedModelRuntimeAuthStore(owner)!,
+        metadataSnapshot: owner.metadataSnapshot,
+      },
+    ),
+  );
 }

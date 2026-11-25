@@ -1,5 +1,8 @@
 {
   "id": "clickclack",
+  "categories": ["channels"],
+  "name": "ClickClack",
+  "description": "OpenClaw ClickClack channel plugin.",
   "doctorContract": {
     "configRepair": true
   },
@@ -24,5 +27,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a ClickClack workspace connection for this agent.",
+    "Help me plan a ClickClack discussion and choose who can access it."
+  ]
 }

@@ -45,12 +45,12 @@ Designed to be called from workflow engines (for example, Lobster via
         "enabled": true,
         "llm": {
           "allowModelOverride": true,
-          "allowedCompletionModels": ["openai/gpt-5.6-sol"],
+          "allowedCompletionModels": ["openai/gpt-6-astra"],
           "allowAuthProfileOverride": true
         },
         "config": {
           "defaultProvider": "openai",
-          "defaultModel": "gpt-5.6-sol",
+          "defaultModel": "gpt-6-astra",
           "defaultAuthProfileId": "main",
           "maxTokens": 800,
           "timeoutMs": 30000
@@ -86,6 +86,13 @@ Doctor grants the shipped selection permissions and moves legacy
 
 Returns `details.json` containing the parsed JSON (and validates against
 `schema` when provided).
+
+When the selected isolated runtime supports native structured output, the same
+schema also constrains generation. Codex retries with a prompt-level constraint
+when it explicitly rejects the schema dialect; local validation remains the
+final result check. OpenClaw forwards the schema by reference when its JSON
+encoding fits within 1 KiB; other schemas are not forwarded natively. Callers
+must not mutate the schema after handoff.
 
 ## Notes
 

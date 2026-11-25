@@ -1,0 +1,448 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
+import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as agentJob from "../agent-turn/agent-job.js";
+import { listenProvider, writeToolCallResponse } from "../gateway-provider-fixture.test-support.js";
+import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
+
+// Optional maintenance owns unrelated roots while this manual-RPC fixture stays open.
+vi.mock("../server-idle-task.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-idle-task.js")>()),
+  scheduleGatewayIdleTask: () => ({ stop: vi.fn() }),
+}));
+
+type ResponseInput = {
+  type?: string;
+  role?: string;
+  call_id?: string;
+  output?: string;
+  content?: string | Array<{ type: string; text?: string }>;
+};
+type SpawnReceipt = { status: string; runId: string; childSessionKey: string };
+type WaitResult = Awaited<ReturnType<typeof agentJob.waitForAgentJob>>;
+const publicationTools = ["github_identity_status", "github_publish"];
+
+function replyText(response: ServerResponse, text: string) {
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: randomUUID(),
+    responseId: randomUUID(),
+  });
+}
+
+it.for(["reset", "complete"] as const)(
+  "preserves real chat yield metadata and the held descendant's %s outcome",
+  { timeout: 90_000 },
+  async (outcome, { signal }) => {
+    const token = "visible-yield-reset-test";
+    const state = await createOpenClawTestState({
+      label: "visible-yield-reset",
+      applyEnv: false,
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: token,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      },
+    });
+    const { configPath, workspaceDir: workspace } = state;
+    const pluginsDir = state.path("bundled-plugins");
+    state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginsDir;
+    const fixtureAbort = new AbortController();
+    const rootMarker = `fixture://reset/${randomUUID()}`;
+    const requesterMarker = `fixture://reset/${randomUUID()}`;
+    const childMarker = `fixture://reset/${randomUUID()}`;
+    const sessionKey = `agent:main:reset-${randomUUID()}`;
+    const rootCallId = "call_root";
+    const childCallId = "call_child";
+    const resetId = randomUUID();
+    const rootFinished = createDeferred();
+    const nestedOpen = createDeferred();
+    const nestedClosed = createDeferred<{ writableEnded: boolean; fixtureStopping: boolean }>();
+    const requesterWaitAttached = createDeferred();
+    const requesterYielded = createDeferred();
+    const requesterFinished = createDeferred();
+    const resumedCatalog = createDeferred<string[]>();
+    const publicationCatalogs: string[][] = [];
+    let childResponse: ServerResponse | undefined;
+    const requesterWaitFinished = createDeferred<WaitResult>();
+    const resetAcknowledged = createDeferred<{ state?: string }>();
+    const attachedChatRuns = new Set<string>();
+    const handlers = new Set<Promise<void>>();
+    const fixtureErrors: string[] = [];
+    let requester: SpawnReceipt | undefined;
+    let child: SpawnReceipt | undefined;
+    let requesterStep = 0;
+    let rootStep = 0;
+    let childRequests = 0;
+    let yieldDispatched = false;
+    let unexpectedInference = 0;
+    let stopping = false;
+    let stopRecordingPublished: (() => void) | undefined;
+    let providerServer: ReturnType<typeof createServer> | undefined;
+    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    const originalWait = agentJob.waitForAgentJob;
+    const waiterSpy = vi.spyOn(agentJob, "waitForAgentJob").mockImplementation((params) => {
+      const pending = originalWait(params);
+      if (params.source === "chat") {
+        attachedChatRuns.add(params.runId);
+        if (params.runId === requester?.runId) {
+          requesterWaitAttached.resolve();
+        }
+      }
+      void pending.then(
+        (result) => {
+          if (params.source === "chat" && params.runId === requester?.runId) {
+            requesterWaitFinished.resolve(result);
+          }
+        },
+        () => {},
+      );
+      return pending;
+    });
+    const originalInterrupt = sessionAdmission.interruptSessionControllerEffects;
+    vi.spyOn(sessionAdmission, "interruptSessionControllerEffects").mockImplementation((params) => {
+      const pending = originalInterrupt(params);
+      void pending.then(
+        () => {},
+        () => {},
+      );
+      return pending;
+    });
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.stream === "lifecycle" &&
+        event.runId === requester?.runId &&
+        event.data.yielded === true
+      ) {
+        requesterYielded.resolve();
+      }
+    });
+
+    function parseSpawnReceipt(input: ResponseInput[], callId: string): SpawnReceipt {
+      const outputs = input.filter(
+        (item) => item.type === "function_call_output" && item.call_id === callId,
+      );
+      expect(outputs, "one actual spawn receipt").toHaveLength(1);
+      const output = expectDefined(outputs[0], "one actual spawn receipt");
+      expect(output.output).toBeTypeOf("string");
+      const result: SpawnReceipt = JSON.parse(expectDefined(output.output, "spawn receipt output"));
+      expect(result).toMatchObject({
+        status: "accepted",
+        runId: expect.any(String),
+        childSessionKey: expect.any(String),
+      });
+      return result;
+    }
+    function tool(
+      response: ServerResponse,
+      callId: string,
+      name: string,
+      args: Record<string, unknown>,
+      tools: Array<{ name: string }>,
+    ) {
+      expect(
+        tools.map((entry) => entry.name),
+        `available ${name}`,
+      ).toContain(name);
+      const item = {
+        type: "function_call",
+        id: `fc_${callId.slice(5)}`,
+        call_id: callId,
+        name,
+        arguments: JSON.stringify(args),
+        status: "completed",
+      };
+      writeToolCallResponse(response, item, randomUUID(), 64, 32);
+    }
+    const spawnOptions = { visible: true, context: "isolated" };
+    const waitForFixture = (label: string, pending: Promise<void>) =>
+      waitForGatewayDispatch(label, pending, 30_000, fixtureAbort.signal);
+
+    try {
+      await fs.mkdir(pluginsDir, { recursive: true });
+      state.applyEnv();
+      providerServer = createServer((request, response) => {
+        const handler = (async () => {
+          const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
+            await readRequestText(request),
+          );
+          expect(request.url).toBe("/v1/responses");
+          const userTexts = body.input
+            .filter((item) => item.role === "user")
+            .map((item) =>
+              typeof item.content === "string"
+                ? item.content
+                : (item.content?.map((part) => part.text).join("\n") ?? ""),
+            );
+          // Completion messages quote child tasks; route by the admitted assignment.
+          const assignment = userTexts.findLast((text) => text.includes("[Subagent Task]"));
+          const task = assignment?.split("[Subagent Task]").at(-1);
+          const marked = task
+            ? [requesterMarker, childMarker].filter((marker) => task.includes(marker))
+            : [rootMarker].filter((marker) => userTexts.some((text) => text.includes(marker)));
+          expect(marked, "one fixture marker in the admitted task").toHaveLength(1);
+          const marker = marked![0];
+          if (stopping) {
+            throw new Error("provider called during fixture shutdown");
+          }
+          if (marker === requesterMarker && yieldDispatched) {
+            if (outcome === "complete") {
+              resumedCatalog.resolve(body.tools.map((entry) => entry.name));
+              replyText(response, "Review complete.");
+              return;
+            }
+            unexpectedInference++;
+            response.writeHead(400, { "content-type": "application/json" }).end(
+              JSON.stringify({
+                error: { message: "Fixture refuses requester inference after yield." },
+              }),
+            );
+            return;
+          }
+          if (marker === rootMarker || marker === requesterMarker) {
+            const isRoot = marker === rootMarker;
+            if (outcome === "complete") {
+              publicationCatalogs.push(body.tools.map((entry) => entry.name));
+            }
+            const step = isRoot ? ++rootStep : ++requesterStep;
+            if (step === 1) {
+              tool(
+                response,
+                isRoot ? rootCallId : childCallId,
+                "sessions_spawn",
+                {
+                  task: isRoot ? requesterMarker : childMarker,
+                  label: isRoot ? "Yielded requester" : "Held child",
+                  ...spawnOptions,
+                  expectsCompletionMessage: !isRoot,
+                },
+                body.tools,
+              );
+              return;
+            }
+            expect(step).toBe(2);
+            if (isRoot) {
+              requester = parseSpawnReceipt(body.input, rootCallId);
+              if (attachedChatRuns.has(requester.runId)) {
+                requesterWaitAttached.resolve();
+              }
+              replyText(response, "Requester started.");
+              return;
+            }
+            child = parseSpawnReceipt(body.input, childCallId);
+            if (requester && !attachedChatRuns.has(requester.runId)) {
+              void gateway?.client
+                .request("agent.wait", { runId: requester.runId, timeoutMs: 30_000 })
+                .catch(() => undefined);
+            }
+            await waitForFixture("nested provider open", nestedOpen.promise);
+            await waitForFixture("requester chat waiter attached", requesterWaitAttached.promise);
+            yieldDispatched = true;
+            tool(
+              response,
+              "call_yield",
+              "sessions_yield",
+              { message: "Wait for the nested child." },
+              body.tools,
+            );
+            return;
+          }
+          expect(marker).toBe(childMarker);
+          expect(++childRequests, "held nested request must not replay").toBe(1);
+          childResponse = response;
+          response.once("close", () => {
+            nestedClosed.resolve({
+              writableEnded: response.writableEnded,
+              fixtureStopping: stopping,
+            });
+          });
+          if (outcome === "reset") {
+            response.writeHead(200, { "content-type": "text/event-stream" });
+            response.write(
+              `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
+            );
+          }
+          nestedOpen.resolve();
+        })().catch((error: unknown) => {
+          if (!stopping) {
+            fixtureErrors.push(String(error));
+          }
+          if (!response.headersSent) {
+            response.writeHead(400, { "content-type": "application/json" });
+          }
+          response.end(JSON.stringify({ error: { message: "Fixture contract failed." } }));
+        });
+        handlers.add(handler);
+        void handler.finally(() => handlers.delete(handler));
+      });
+      const provider = buildMockOpenAiResponsesProvider(await listenProvider(providerServer));
+      gateway = await startGatewayWithClient({
+        configPath,
+        token,
+        cfg: {
+          agents: {
+            defaults: {
+              workspace,
+              skipBootstrap: true,
+              model: { primary: provider.modelRef },
+              models: {
+                [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
+              },
+              subagents: { maxSpawnDepth: 2, maxConcurrent: 4 },
+            },
+            entries: { main: {} },
+          },
+          tools: {
+            profile: "full",
+            codeMode: false,
+            // The scripted lifecycle proof also asserts direct publication tools after resume.
+            toolSearch: false,
+            allow: [
+              "sessions_spawn",
+              "sessions_yield",
+              ...(outcome === "complete" ? publicationTools : []),
+            ],
+          },
+          models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+          gateway: { auth: { mode: "token", token } },
+        },
+        onEvent: (event) => {
+          if (event.event !== "chat") {
+            return;
+          }
+          const payload = event.payload as {
+            runId?: string;
+            sessionKey?: string;
+            state?: string;
+            yielded?: boolean;
+            message?: Record<string, unknown>;
+          };
+          // Yield and queued admission also emit finals; wait for the resumed reply.
+          if (
+            requester &&
+            payload.sessionKey === requester.childSessionKey &&
+            payload.state === "final" &&
+            payload.yielded !== true &&
+            payload.message !== undefined
+          ) {
+            requesterFinished.resolve();
+          }
+          if (payload.sessionKey !== sessionKey) {
+            return;
+          }
+          if (
+            payload.runId === resetId &&
+            (payload.state === "final" || payload.state === "error")
+          ) {
+            resetAcknowledged.resolve(payload);
+          } else if (payload.state === "final") {
+            rootFinished.resolve();
+          }
+        },
+      });
+      const started = await gateway.client.request<{ status: string }>("chat.send", {
+        sessionKey,
+        message: rootMarker,
+        deliver: false,
+        idempotencyKey: randomUUID(),
+      });
+      expect(started.status).toBe("started");
+      // Bind waits to the test signal so a stall still reaches the Gateway cleanup below.
+      await withinTest(rootFinished.promise, signal);
+      await withinTest(requesterYielded.promise, signal);
+      const waitResult = await withinTest(requesterWaitFinished.promise, signal);
+      expect
+        .soft(waitResult, "chat waiter must retain actual yield metadata")
+        .toMatchObject({ status: "ok", yielded: true });
+      if (outcome === "complete") {
+        replyText(expectDefined(childResponse, "held reviewer response"), "Reviewer finished.");
+        publicationCatalogs.push(await withinTest(resumedCatalog.promise, signal));
+        expect(publicationCatalogs.length).toBeGreaterThanOrEqual(3);
+        for (const catalog of publicationCatalogs) {
+          expect(catalog).toEqual(expect.arrayContaining(publicationTools));
+        }
+        await withinTest(requesterFinished.promise, signal);
+        const history = await gateway.client.request("chat.history", {
+          sessionKey: expectDefined(requester, "requester session").childSessionKey,
+          agentId: "main",
+          limit: 20,
+        });
+        expect(JSON.stringify(history)).toContain("Review complete.");
+        expect(fixtureErrors).toEqual([]);
+        return;
+      }
+      // A confirmed kill retires its row, so retain the last published terminal facts.
+      const lastPublished = new Map<string, SubagentRunRecord>();
+      const recordPublished = () => {
+        for (const receipt of [requester, child]) {
+          const run = receipt ? subagentRuns.get(receipt.runId) : undefined;
+          if (run) {
+            lastPublished.set(run.runId, structuredClone(run));
+          }
+        }
+      };
+      recordPublished();
+      stopRecordingPublished = subscribeSubagentRunChanges("projection", recordPublished);
+      await gateway.client.request(
+        "chat.send",
+        { sessionKey, message: "/new", deliver: false, idempotencyKey: resetId },
+        { timeoutMs: 30_000 },
+      );
+      const reset = await withinTest(resetAcknowledged.promise, signal);
+      expect(reset.state).toBe("final");
+      const closed = await withinTest(nestedClosed.promise, signal);
+      await withinTest(settleSubagentRegistryPersistenceWork(), signal);
+      // The reported continuation arrived 127 ms after acknowledgement on 2026-09-10.
+      // This window observes absence after synchronization with real cancellation.
+      await delay(1_000);
+      expect(fixtureErrors, "provider fixture failures").toEqual([]);
+      expect(unexpectedInference, "requester must not reach inference after reset").toBe(0);
+      expect(closed).toEqual({ writableEnded: false, fixtureStopping: false });
+      for (const receipt of [requester, child]) {
+        expect(receipt).toBeDefined();
+        const run = receipt ? lastPublished.get(receipt.runId) : undefined;
+        expect(run?.execution).toMatchObject({ status: "terminal" });
+        expect(run?.endedReason).toBe("subagent-killed");
+      }
+    } finally {
+      stopRecordingPublished?.();
+      stopping = true;
+      fixtureAbort.abort();
+      providerServer?.closeAllConnections();
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client).catch(() => undefined);
+        await gateway.server.close().catch(() => undefined);
+      }
+      if (providerServer?.listening) {
+        const server = providerServer;
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
+      }
+      await Promise.allSettled(handlers);
+      unsubscribe();
+      waiterSpy.mockRestore();
+      await state.cleanup();
+    }
+  },
+);

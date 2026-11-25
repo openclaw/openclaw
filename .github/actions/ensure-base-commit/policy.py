@@ -2,15 +2,48 @@ import os
 import re
 import subprocess
 
-from ci_git_owner import FetchTimeout, GitFailure, run_git
+from ci_git_owner import FetchTimeout, GitFailure, git_output, run_git
+
+
+local_git_environment = {"GIT_NO_LAZY_FETCH": "1"}
 
 
 def quiet_git(*arguments):
     try:
-        run_git(os.getcwd(), *arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        run_git(os.getcwd(), *arguments, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=local_git_environment)
         return True
     except GitFailure:
         return False
+
+
+def fetch_attempts(base, ref):
+    yield from [
+        (
+            ["--no-tags", "--depth=1", "origin", base],
+            "Base commit missing; fetching exact SHA before branch history.",
+            f"::warning title=ensure-base-commit exact fetch failed::Failed to fetch exact base SHA {base}",
+            "exact fetch",
+        ),
+        *[(
+            ["--no-tags", f"--deepen={depth}", "origin", "--", ref],
+            f"Base commit missing; deepening {ref} by {depth}.",
+            f"::warning title=ensure-base-commit fetch failed::Failed to deepen {ref} by {depth} while looking for {base}",
+            "deepening",
+        ) for depth in (25, 100, 300, 1000)],
+    ]
+    # Earlier deepening may have completed the checkout. Read its current state
+    # only when the final attempt is needed; plain fetch preserves shallow cuts.
+    shallow = git_output(os.getcwd(), "rev-parse", "--is-shallow-repository",
+                         env=local_git_environment).strip()
+    if shallow not in ("true", "false"):
+        raise RuntimeError("Git returned an invalid shallow-repository state")
+    yield (
+        ["--no-tags", *(["--unshallow"] if shallow == "true" else []), "origin", "--", ref],
+        f"Base commit still missing; fetching ref {ref}.",
+        f"::warning title=ensure-base-commit fetch failed::Failed to fetch ref {ref} while looking for {base}",
+        "full ref fetch",
+    )
 
 
 def ensure_base():
@@ -29,30 +62,10 @@ def ensure_base():
         print(f"Base commit already present: {base}")
         return 0
 
-    attempts = [
-        (
-            ["--no-tags", "--depth=1", "origin", base],
-            "Base commit missing; fetching exact SHA before branch history.",
-            f"::warning title=ensure-base-commit exact fetch failed::Failed to fetch exact base SHA {base}",
-            "exact fetch",
-        ),
-        *[(
-            ["--no-tags", f"--deepen={depth}", "origin", "--", ref],
-            f"Base commit missing; deepening {ref} by {depth}.",
-            f"::warning title=ensure-base-commit fetch failed::Failed to deepen {ref} by {depth} while looking for {base}",
-            "deepening",
-        ) for depth in (25, 100, 300)],
-        (
-            ["--no-tags", "origin", "--", ref],
-            f"Base commit still missing; fetching ref {ref}.",
-            f"::warning title=ensure-base-commit fetch failed::Failed to fetch ref {ref} while looking for {base}",
-            "full ref fetch",
-        ),
-    ]
-    for arguments, message, warning, resolution in attempts:
+    for arguments, message, warning, resolution in fetch_attempts(base, ref):
         print(message, flush=True)
         try:
-            run_git(os.getcwd(), "-c", "protocol.version=2", "fetch", *arguments,
+            run_git(os.getcwd(), "-c", "protocol.version=2", "fetch", "--filter=blob:none", *arguments,
                     timeout=30, reclaim_locks=True)
         except (GitFailure, FetchTimeout):
             # A failed fetch can still supply the base. Lifecycle failures and

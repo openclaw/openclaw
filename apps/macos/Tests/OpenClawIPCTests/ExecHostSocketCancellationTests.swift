@@ -1,27 +1,30 @@
 import CryptoKit
 import Darwin
-import Dispatch
 import Foundation
 import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
+@MainActor
 struct ExecHostSocketCancellationTests {
     enum Cancellation: CaseIterable {
         case disconnect
         case serverStop
     }
 
+    private enum ResponseReadError: Error {
+        case eofBeforeNewline
+    }
+
     @Test
     func `normal request half-close still receives native execution result`() async throws {
-        try await self.withServer { server, root, fixture in
+        try await self.withServer(usePolicyOwner: true) { server, root, fixture in
             let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
-            let response = try await Task.detached {
-                try self.readResponse(client)
-            }.value
+            try await fixture.waitForResponse()
+            let response = try await self.readResponse(client)
             #expect(response.ok)
             #expect(response.payload?.stdout == "half-close-ok")
             #expect(response.payload?.success == true)
@@ -112,63 +115,73 @@ struct ExecHostSocketCancellationTests {
 
     @Test
     func `cancelled native executor never starts a command`() async throws {
-        let root = try ExecApprovalsSocketTestSupport.makeRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try self.seed(root)
-        let sentinel = root.appendingPathComponent("unexpected")
-        let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
-        let response = await Task.detached {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return await ExecApprovalsStore.withStateDirectory(root) {
-                await ExecHostExecutor.handle(request)
-            }
-        }.value
-        #expect(!response.ok)
-        #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+        try await TestIsolation.withIsolatedState {
+            let root = try ExecApprovalsSocketTestSupport.makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let sentinel = root.appendingPathComponent("unexpected")
+            let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
+            let response = await Task.detached {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return await ExecApprovalsStore.withStateDirectory(root) {
+                    await ExecHostExecutor.handle(request)
+                }
+            }.value
+            #expect(!response.ok)
+            #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+        }
     }
 
     private func withServer(
         admissionDelay: Duration = .zero,
+        usePolicyOwner: Bool = false,
         _ body: (ExecApprovalsSocketServer, URL, CancellationFixture) async throws -> Void) async throws
     {
-        let root = try ExecApprovalsSocketTestSupport.makeRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try self.seed(root)
-        let fixture = try CancellationFixture(root: root)
-        let server = ExecApprovalsSocketServer(
-            socketPath: root.appendingPathComponent("exec.sock").path,
-            token: "test-token",
-            onPrompt: { _ in .deny },
-            onExec: { request in
-                if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
-                let response = await ExecApprovalsStore.withStateDirectory(root) {
-                    await ExecHostExecutor.handle(request)
-                }
-                fixture.record(response)
-                return response
-            },
-            onUnexpectedStop: { _ in })
-        do {
-            try #require(await server.start())
-            fixture.client = try self.connect(root)
-            try await body(server, root, fixture)
-        } catch {
-            print("native fixture failure: \(fixture.diagnostics)")
+        try await TestIsolation.withIsolatedState {
+            let root = try ExecApprovalsSocketTestSupport.makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            if usePolicyOwner {
+                try await self.seed(root)
+            }
+            let fixture = try CancellationFixture(root: root)
+            let server = ExecApprovalsSocketServer(
+                socketPath: root.appendingPathComponent("exec.sock").path,
+                token: "test-token",
+                onPrompt: { _ in .deny },
+                onExec: { request in
+                    if admissionDelay > .zero { try? await Task.sleep(for: admissionDelay) }
+                    let response = if usePolicyOwner {
+                        await ExecApprovalsStore.withStateDirectory(root) {
+                            await ExecHostExecutor.handle(request)
+                        }
+                    } else {
+                        await ExecApprovalsSocketTestSupport.runApprovedCommand(request)
+                    }
+                    fixture.record(response)
+                    return response
+                },
+                onUnexpectedStop: { _ in })
+            do {
+                try #require(await server.start())
+                fixture.client = try self.connect(root)
+                try await body(server, root, fixture)
+            } catch {
+                print("native fixture failure: \(fixture.diagnostics)")
+                await fixture.cleanUp(server: server)
+                throw error
+            }
             await fixture.cleanUp(server: server)
-            throw error
         }
-        await fixture.cleanUp(server: server)
     }
 
-    private func seed(_ root: URL) throws {
-        try ExecApprovalsSQLiteStore.write(
+    private func seed(_ root: URL) async throws {
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
             ExecApprovalsFile(version: 1, defaults: nil, agents: [:]),
-            stateDirectoryURL: root)
+            in: root)
     }
 
     private func connect(_ root: URL) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw POSIXError(.EIO) }
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let socketPath = root.appendingPathComponent("exec.sock").path
@@ -185,11 +198,16 @@ struct ExecHostSocketCancellationTests {
             }
         }
         guard result == 0 else {
+            let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             close(fd)
-            throw POSIXError(.ECONNREFUSED)
+            throw error
         }
         var timeout = timeval(tv_sec: CancellationFixture.socketTimeoutSeconds, tv_usec: 0)
-        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            close(fd)
+            throw error
+        }
         return fd
     }
 
@@ -211,15 +229,18 @@ struct ExecHostSocketCancellationTests {
         try FileHandle(fileDescriptor: client, closeOnDealloc: false).write(contentsOf: bytes)
     }
 
-    private func readResponse(_ fd: Int32) throws -> ExecHostResponse {
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while !data.contains(0x0A) {
-            let count = recv(fd, &buffer, buffer.count, 0)
-            guard count > 0 else { throw POSIXError(.EIO) }
-            data.append(contentsOf: buffer.prefix(count))
+    private func readResponse(_ fd: Int32) async throws -> ExecHostResponse {
+        try await ExecApprovalsSocketTestSupport.withBlockingSocketIO {
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while !data.contains(0x0A) {
+                let count = recv(fd, &buffer, buffer.count, 0)
+                guard count >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+                guard count > 0 else { throw ResponseReadError.eofBeforeNewline }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+            return try JSONDecoder().decode(ExecHostResponse.self, from: data)
         }
-        return try JSONDecoder().decode(ExecHostResponse.self, from: data)
     }
 
     private func waitUntil(_ condition: () -> Bool) async -> Bool {
@@ -316,10 +337,13 @@ private final class CancellationFixture: @unchecked Sendable {
 
     func wait(
         for gate: AsyncTestGate,
-        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+        watchdog: Duration? = nil) async throws
     {
-        // Reuse the socket watchdog; this is not a startup SLA across MainActor policy work.
-        // Both race losers join on cancellation.
+        guard let watchdog else {
+            try await gate.wait("native command readiness or terminal response")
+            return
+        }
+        // The explicit watchdog test still exercises cleanup before readiness.
         let signalled = try await withThrowingTaskGroup(of: Bool.self) { group in
             group.addTask {
                 await gate.wait()
@@ -337,7 +361,7 @@ private final class CancellationFixture: @unchecked Sendable {
     }
 
     func waitForStart(
-        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+        watchdog: Duration? = nil) async throws
         -> (parent: pid_t, child: pid_t)
     {
         try await self.wait(for: self.startup, watchdog: watchdog)
@@ -345,6 +369,11 @@ private final class CancellationFixture: @unchecked Sendable {
             throw StartupFailure.terminal(self.diagnostics)
         }
         return (parent, child)
+    }
+
+    func waitForResponse() async throws {
+        try await self.startup.wait("native execution response")
+        try #require(self.response != nil)
     }
 
     /// Ready is published only after both PID writes and opening the child's release gate.

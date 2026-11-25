@@ -20,6 +20,36 @@ struct ShellExecutorTimeoutTests {
     /// This is a fixture budget, not the timeout behavior under test.
     private static let fixtureTimeout: TimeInterval = 1.0
 
+    @Test(arguments: [false, true])
+    func `parallel instant exits preserve their exit status`(streaming: Bool) async {
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<32 {
+                group.addTask {
+                    let exitCode = index.isMultiple(of: 2) ? 0 : 7
+                    let command = ["/bin/sh", "-c", "exit \(exitCode)"]
+                    // Process startup under concurrent load is not a latency assertion.
+                    let result = if streaming {
+                        await ShellExecutor.runStreamingDetailed(
+                            command: command,
+                            cwd: nil,
+                            env: nil,
+                            timeout: 30,
+                            onStandardOutputLine: { _ in })
+                    } else {
+                        await ShellExecutor.runDetailed(
+                            command: command,
+                            cwd: nil,
+                            env: nil,
+                            timeout: 30)
+                    }
+                    #expect(!result.timedOut)
+                    #expect(result.exitCode == exitCode)
+                    #expect(result.success == (exitCode == 0))
+                }
+            }
+        }
+    }
+
     @Test func `streaming captures both streams while delivering stdout lines`() async {
         let recorder = ShellLineRecorder()
         let result = await ShellExecutor.runStreamingDetailed(

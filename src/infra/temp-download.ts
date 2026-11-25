@@ -1,14 +1,16 @@
-// Creates private temporary workspaces for downloads.
-import "./fs-safe-defaults.js";
-import crypto from "node:crypto";
 import path from "node:path";
+import {
+  buildRandomTempFilePath as buildRandomTempFilePathBase,
+  sanitizeTempFileName,
+} from "@openclaw/fs-safe/advanced";
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { tempWorkspace, type TempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
 
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+export { sanitizeTempFileName };
 
 // Download targets expose both a default path and a name-safe file builder so
 // callers can keep all transient files inside the same workspace.
@@ -24,27 +26,6 @@ function resolveTempRoot(tmpDir?: string): string {
   return tmpDir ?? resolvePreferredOpenClawTmpDir();
 }
 
-function sanitizeTempPrefix(prefix: string): string {
-  const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-  return normalized || "tmp";
-}
-
-function sanitizeTempExtension(extension?: string): string {
-  if (!extension) {
-    return "";
-  }
-  const normalized = extension.startsWith(".") ? extension : `.${extension}`;
-  const suffix = normalized.match(/[a-zA-Z0-9._-]+$/)?.[0] ?? "";
-  const token = suffix.replace(/^[._-]+/, "");
-  return token ? `.${token}` : "";
-}
-
-export function sanitizeTempFileName(fileName: string): string {
-  const base = path.basename(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
-  const normalized = base.replace(/^-+|-+$/g, "");
-  return normalized || "download.bin";
-}
-
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
 export function buildRandomTempFilePath(params: {
   prefix: string;
@@ -53,33 +34,13 @@ export function buildRandomTempFilePath(params: {
   now?: number;
   uuid?: string;
 }): string {
-  const nowCandidate = params.now;
-  const now =
-    typeof nowCandidate === "number" && Number.isFinite(nowCandidate)
-      ? Math.trunc(nowCandidate)
-      : Date.now();
-  const uuid = params.uuid?.trim() || crypto.randomUUID();
-  return path.join(
-    resolveTempRoot(params.tmpDir),
-    `${sanitizeTempPrefix(params.prefix)}-${now}-${uuid}${sanitizeTempExtension(params.extension)}`,
-  );
-}
-
-function buildTempDownloadTarget(
-  workspace: TempWorkspace,
-  fileName: string | undefined,
-): TempDownloadTarget {
-  const file = (nextName?: string) =>
-    workspace.path(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
-  return {
-    dir: workspace.dir,
-    path: file(),
-    file,
-    cleanup: async () => {
-      await workspace.cleanup();
-    },
-    [Symbol.asyncDispose]: workspace[Symbol.asyncDispose].bind(workspace),
-  };
+  const rootDir = resolveTempRoot(params.tmpDir);
+  const filePath = buildRandomTempFilePathBase({
+    ...params,
+    rootDir,
+    uuid: params.uuid?.trim() || undefined,
+  });
+  return path.join(rootDir, path.basename(filePath));
 }
 
 export async function createTempDownloadTarget(params: {
@@ -89,9 +50,11 @@ export async function createTempDownloadTarget(params: {
 }): Promise<TempDownloadTarget> {
   const workspace = await tempWorkspace({
     rootDir: resolveTempRoot(params.tmpDir),
-    prefix: sanitizeTempPrefix(params.prefix),
+    prefix: params.prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "tmp",
   });
-  const target = buildTempDownloadTarget(workspace, params.fileName);
+  const fileName = params.fileName;
+  const file = (nextName?: string) =>
+    workspace.path(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
   const cleanup = async () => {
     try {
       await workspace.cleanup();
@@ -100,7 +63,9 @@ export async function createTempDownloadTarget(params: {
     }
   };
   return {
-    ...target,
+    dir: workspace.dir,
+    path: file(),
+    file,
     cleanup,
     [Symbol.asyncDispose]: cleanup,
   };

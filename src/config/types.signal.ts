@@ -1,19 +1,22 @@
-// Defines Signal channel configuration types.
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalReactionLevel = ReactionLevel;
 export type SignalTransportConfig =
   | {
       kind: "managed-native";
       /** Optional signal-cli config directory path (passed as --config). */
       configPath?: string;
+      /** Opt-in absolute POSIX UNIX socket path; excludes HTTP options. */
+      socketPath?: string;
       /** Native daemon connection URL when it differs from the managed bind endpoint. */
       url?: string;
       /** HTTP host for the managed signal-cli daemon (default 127.0.0.1). */
@@ -38,12 +41,12 @@ export type SignalTransportConfig =
       url: string;
     };
 
-export type SignalGroupConfig = {
-  requireMention?: boolean;
+export type SignalGroupConfig = Pick<
+  CommonChannelGroupConfig,
+  "requireMention" | "tools" | "toolsBySender"
+> & {
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
-  tools?: GroupToolPolicyConfig;
-  toolsBySender?: GroupToolPolicyBySenderConfig;
 };
 
 export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> &
@@ -70,9 +73,4 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     };
   };
 
-export type SignalConfig = {
-  /** Optional per-account Signal configuration (multi-account). */
-  accounts?: Record<string, SignalAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & SignalAccountConfig;
+export type SignalConfig = MultiAccountChannelConfig<SignalAccountConfig>;

@@ -1,4 +1,3 @@
-// QA Lab Matrix scenarios share room keys and execution contracts with the live adapter.
 import {
   findMatrixQaProvisionedRoom,
   type MatrixQaProvisionedTopology,
@@ -9,7 +8,6 @@ export type MatrixQaE2eeScenarioId = `matrix-e2ee-${string}`;
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
 export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
-export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
 export const MATRIX_QA_E2EE_VERIFICATION_DM_ROOM_KEY = "e2ee-verification-dm";
 export const MATRIX_QA_HOMESERVER_ROOM_KEY = "homeserver";
@@ -25,7 +23,7 @@ export function buildMatrixQaE2eeScenarioRoomKey(scenarioId: MatrixQaE2eeScenari
 }
 
 export function resolveMatrixQaScenarioRoomId(
-  context: Pick<{ roomId: string; topology: MatrixQaProvisionedTopology }, "roomId" | "topology">,
+  context: { roomId: string; topology: MatrixQaProvisionedTopology },
   roomKey?: string,
 ) {
   return roomKey ? findMatrixQaProvisionedRoom(context.topology, roomKey).roomId : context.roomId;

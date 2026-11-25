@@ -1,7 +1,9 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   ComputerUseCapabilityDescriptor,
   ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
+import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
 
 export const COMPUTER_ACT_COMMAND = "computer.act";
 export const SCREEN_SNAPSHOT_COMMAND = "screen.snapshot";
@@ -13,7 +15,7 @@ export const MAX_WAIT_SECONDS = 100;
 export const MAX_HOLD_SECONDS = 10;
 export const MODEL_OBSERVATION_MAX_ELEMENTS = 200;
 
-export type ComputerToolAction = ComputerUseV2ActionName;
+export type ComputerToolAction = ComputerUseV2ActionName | "take_control";
 
 const COMPUTER_OBSERVATION_ACTIONS = new Set<string>([
   "screenshot",
@@ -58,7 +60,24 @@ export type ComputerToolTransport = {
   }) => Promise<unknown>;
 };
 
-export type ComputerTarget = { nodeId: string; screenIndex: number };
+export type ComputerHost =
+  | { host: "gateway" }
+  | { host: "node"; nodeId: string; environmentId?: string };
+
+export type ComputerTarget = ComputerHost & { screenIndex: number };
+
+export function computerHostKey(target: ComputerHost): string {
+  return target.host === "gateway" ? "gateway" : `node:${target.nodeId}`;
+}
+
+export function computerTargetDetails(target: ComputerHost) {
+  return target.host === "gateway"
+    ? { target: "gateway" as const }
+    : {
+        node: target.nodeId,
+        ...(target.environmentId ? { environmentId: target.environmentId } : {}),
+      };
+}
 
 export type ComputerFrame = {
   target: ComputerTarget;
@@ -71,14 +90,15 @@ export type ScreenshotCapture = {
   base64: string;
   displayFrameId: string;
   mimeType: string;
-  width?: number;
-  height?: number;
 };
 
 export type ComputerObservationState = {
-  nodeId: string;
+  targetKey: string;
   providerGeneration: string;
   observationId: string;
+  imageCoordinates?:
+    | { kind: "unavailable" }
+    | { kind: "available"; scaleX: number; scaleY: number };
 };
 
 export type ComputerContextEpoch = {
@@ -88,6 +108,57 @@ export type ComputerContextEpoch = {
   /** Digest of the exact sanitized image the model received for that result. */
   frameImageIdentity?: string;
 };
+
+export function computerFrameImageIdentity(
+  content: AgentToolResult<unknown>["content"],
+): string | undefined {
+  const [image, duplicate] = content.filter((block) => block.type === "image");
+  if (!image || duplicate) {
+    return undefined;
+  }
+  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
+}
+
+function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
+  if (contextEpoch.frameToolCallId === undefined && contextEpoch.frameImageIdentity === undefined) {
+    return false;
+  }
+  contextEpoch.value += 1;
+  delete contextEpoch.frameToolCallId;
+  delete contextEpoch.frameImageIdentity;
+  return true;
+}
+
+/**
+ * Invalidate screenshot coordinates when the final model context no longer
+ * contains the image produced by the tracked computer tool result.
+ */
+export function invalidateComputerFrameIfMissing(params: {
+  contextEpoch: ComputerContextEpoch;
+  messages: AgentMessage[];
+  imagesBlocked?: boolean;
+}): boolean {
+  const frameToolCallId = params.contextEpoch.frameToolCallId;
+  if (frameToolCallId === undefined || params.imagesBlocked) {
+    return invalidateComputerFrame(params.contextEpoch);
+  }
+  const frameMessage = params.messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+      message?.role === "toolResult" &&
+      message.toolName === "computer" &&
+      message.toolCallId === frameToolCallId,
+  );
+  const frameImageIdentity = frameMessage
+    ? computerFrameImageIdentity(frameMessage.content)
+    : undefined;
+  if (
+    frameImageIdentity !== undefined &&
+    frameImageIdentity === params.contextEpoch.frameImageIdentity
+  ) {
+    return false;
+  }
+  return invalidateComputerFrame(params.contextEpoch);
+}
 
 export type ResolvedComputerTarget = {
   target: ComputerTarget;

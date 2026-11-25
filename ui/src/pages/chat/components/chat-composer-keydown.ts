@@ -1,40 +1,51 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
+import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.ts";
-import {
-  handleInlineSlashArgKeydown,
-  handleSlashMenuKeydown,
-  type SlashMenuHost,
-} from "./chat-composer-slash-menu.ts";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
+import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
+import type { SkillMenuHost } from "./chat-composer-skill-menu-state.ts";
+import type { SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
+import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 type ComposerKeyDownDeps = {
+  prediction?: { text: string | null; dismiss: () => void };
+  acceptPrediction?: () => void;
+  /** True when a plugin proposal replaced the draft. */
+  acceptProposal?: () => boolean;
   state: ChatComposerState;
   props: ChatComposerProps;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
-  requestUpdate: () => void;
+  mentionMenuHost: HumanMentionMenuHost;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
-  commitDraft: (draft: string) => void;
-  syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
+  submitDraft: (
+    draft: string,
+    event: KeyboardEvent,
+    followUpModeOverride?: ChatFollowUpMode,
+  ) => void;
+  queueSubmit: (draft: string) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
-  goalComposer: GoalComposerController;
+  goalComposer: GoalComposer;
 };
 
 export function createComposerKeyDownHandler({
+  prediction,
+  acceptPrediction,
+  acceptProposal,
   state,
   props,
   skillMenuHost,
   slashMenuHost,
-  requestUpdate,
+  mentionMenuHost,
   sendShortcut,
   canSubmitDraft,
-  commitDraft,
-  syncDraftAfterSend,
+  submitDraft,
+  queueSubmit,
   showAbortableUi,
   alternateFollowUpMode,
   goalComposer,
@@ -46,12 +57,30 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
+    if (keepMobileReturnNative(event)) {
+      return;
+    }
+    if (state.composerComposing || isComposingKeyboardEvent(event)) {
+      return;
+    }
+
+    if (state.emojiMenu.handleKeydown(event, props.paneId)) {
+      return;
+    }
+
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost)) {
       return;
     }
 
     if (goalComposer.active) {
-      if (event.key === "Escape") {
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        target.value.length === 0 &&
+        goalComposer.restoreCommand()
+      ) {
+        event.preventDefault();
+        state.slashMenu.update(target.value, slashMenuHost);
+      } else if (event.key === "Escape") {
         event.preventDefault();
         goalComposer.cancel();
       } else if (
@@ -61,34 +90,63 @@ export function createComposerKeyDownHandler({
         canSubmitDraft(target.value)
       ) {
         event.preventDefault();
-        commitDraft(target.value);
-        void goalComposer.submit(event);
+        submitDraft(target.value, event);
       }
-      return;
-    }
-
-    if (props.connected && handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate)) {
       return;
     }
 
     if (
       props.connected &&
-      handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut)
+      (state.skillMenu.handleKeydown(event, skillMenuHost) ||
+        state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
     ) {
       return;
     }
 
-    if (props.connected && handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate)) {
-      return;
+    if (state.tasks()?.card?.kind === "proposal") {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        acceptProposal?.()
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        state.tasks()?.dismiss();
+        return;
+      }
+    }
+
+    if (prediction?.text && !target.value) {
+      if (
+        event.key === "Tab" &&
+        !event.shiftKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        acceptPrediction?.();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        prediction.dismiss();
+        return;
+      }
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      commitDraft(target.value);
+      commitComposerDraft(props, target.value);
       const result = props.onHistoryKeydown({
         key: event.key,
         selectionStart: target.selectionStart,
         selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
         altKey: event.altKey,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
@@ -97,12 +155,10 @@ export function createComposerKeyDownHandler({
         keyCode: event.keyCode,
       });
       if (result.handled) {
+        state.editRevision += 1;
         if (result.preventDefault) {
           event.preventDefault();
         }
-        // History navigation updates the renderer-owned draft outside a
-        // reactive property; commit it before placing the caret in the DOM.
-        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -110,17 +166,8 @@ export function createComposerKeyDownHandler({
       }
     }
 
-    if (
-      event.key === "Escape" &&
-      !state.skillMenuOpen &&
-      !state.slashMenuOpen &&
-      !props.replyTarget &&
-      !state.dictation?.active &&
-      showAbortableUi &&
-      props.onAbort
-    ) {
+    if (event.key === "Escape" && stopRunFromEscape({ state, props, showAbortableUi })) {
       event.preventDefault();
-      props.onAbort();
       return;
     }
 
@@ -138,8 +185,12 @@ export function createComposerKeyDownHandler({
         // connected + composable gate), or offline Enter would swallow the key
         // and invoke a lifecycle that returns with no visible outcome.
         const queued =
-          showAbortableUi && props.connected && props.canSend && props.onQueueSteer
-            ? steerableQueuedMessage(props.queue)
+          showAbortableUi &&
+          props.connected &&
+          props.canSend &&
+          !props.submitDisabledReason &&
+          props.onQueueSteer
+            ? steerableQueuedMessage(props.displayQueue ?? props.queue)
             : undefined;
         if (queued) {
           event.preventDefault();
@@ -152,14 +203,57 @@ export function createComposerKeyDownHandler({
         return;
       }
       if (!canSubmitDraft(target.value)) {
+        if (props.submitPending) {
+          event.preventDefault();
+          queueSubmit(target.value);
+        }
         return;
       }
       event.preventDefault();
-      commitDraft(target.value);
       const followUpModeOverride =
         (event.metaKey || event.ctrlKey) && !event.altKey ? alternateFollowUpMode : undefined;
-      props.onSend(followUpModeOverride, event);
-      syncDraftAfterSend(target);
+      submitDraft(target.value, event, followUpModeOverride);
     }
   };
+}
+
+/** Escape stops the visible run after composer menus, dictation, and replies decline it. */
+export function stopRunFromEscape({
+  state,
+  props,
+  showAbortableUi,
+}: Pick<ComposerKeyDownDeps, "state" | "props" | "showAbortableUi">): boolean {
+  if (
+    state.skillMenu.state.skillMenuOpen ||
+    state.slashMenu.state.slashMenuOpen ||
+    state.mentionMenu.open ||
+    props.replyTarget ||
+    state.dictation?.active ||
+    !showAbortableUi ||
+    !props.onAbort
+  ) {
+    return false;
+  }
+  props.onAbort();
+  return true;
+}
+
+export function handleQueueEditKeydown(
+  event: KeyboardEvent,
+  edit: ChatComposerProps["queuedEdit"],
+): void {
+  if (keepMobileReturnNative(event)) {
+    return;
+  }
+  if (isComposingKeyboardEvent(event)) {
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    edit?.onCancel();
+  } else if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    edit?.onEditSubmit?.();
+  }
 }

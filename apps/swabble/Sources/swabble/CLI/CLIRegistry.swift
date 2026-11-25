@@ -1,71 +1,104 @@
 import Commander
 import Foundation
 
+@MainActor
+protocol CLICommand: ParsableCommand {
+    init(parsed: ParsedValues)
+}
+
+extension CLICommand {
+    init(parsed _: ParsedValues) {
+        self.init()
+    }
+}
+
 @available(macOS 26.0, *)
 @MainActor
 enum CLIRegistry {
-    static var descriptors: [CommandDescriptor] {
-        let serveDesc = descriptor(for: ServeCommand.self)
-        let transcribeDesc = descriptor(for: TranscribeCommand.self)
-        let testHookDesc = descriptor(for: TestHookCommand.self)
-        let micList = descriptor(for: MicList.self)
-        let micSet = descriptor(for: MicSet.self)
-        let micRoot = CommandDescriptor(
-            name: "mic",
-            abstract: "Microphone management",
-            discussion: nil,
-            signature: CommandSignature(),
-            subcommands: [micList, micSet])
-        let serviceRoot = CommandDescriptor(
-            name: "service",
-            abstract: "launchd helper",
-            discussion: nil,
-            signature: CommandSignature(),
-            subcommands: [
-                descriptor(for: ServiceInstall.self),
-                descriptor(for: ServiceUninstall.self),
-                descriptor(for: ServiceStatus.self),
-            ])
-        let doctorDesc = descriptor(for: DoctorCommand.self)
-        let setupDesc = descriptor(for: SetupCommand.self)
-        let healthDesc = descriptor(for: HealthCommand.self)
-        let tailLogDesc = descriptor(for: TailLogCommand.self)
-        let startDesc = descriptor(for: StartCommand.self)
-        let stopDesc = descriptor(for: StopCommand.self)
-        let restartDesc = descriptor(for: RestartCommand.self)
-        let statusDesc = descriptor(for: StatusCommand.self)
+    @MainActor
+    private enum Entry {
+        case command(any CLICommand.Type)
+        case group(String, String, [Entry])
 
-        let rootSignature = CommandSignature().withStandardRuntimeFlags()
-        let root = CommandDescriptor(
+        var name: String {
+            switch self {
+            case let .command(type): type.commandDescription.commandName ?? ""
+            case let .group(name, _, _): name
+            }
+        }
+
+        var descriptor: CommandDescriptor {
+            switch self {
+            case let .command(type):
+                CommandDescriptor(
+                    name: self.name,
+                    abstract: type.commandDescription.abstract,
+                    discussion: type.commandDescription.discussion,
+                    signature: CommandSignature.describe(type.init()).withStandardRuntimeFlags())
+            case let .group(name, abstract, children):
+                CommandDescriptor(
+                    name: name,
+                    abstract: abstract,
+                    discussion: nil,
+                    signature: CommandSignature(),
+                    subcommands: children.map(\.descriptor))
+            }
+        }
+    }
+
+    private static var entries: [Entry] {
+        [
+            .command(ServeCommand.self),
+            .command(TranscribeCommand.self),
+            .command(TestHookCommand.self),
+            .group("mic", "Microphone management", [.command(MicList.self), .command(MicSet.self)]),
+            .group("service", "launchd helper", [
+                .command(ServiceInstall.self),
+                .command(ServiceUninstall.self),
+                .command(ServiceStatus.self),
+            ]),
+            .command(DoctorCommand.self),
+            .command(SetupCommand.self),
+            .command(HealthCommand.self),
+            .command(TailLogCommand.self),
+            .command(StartCommand.self),
+            .command(StopCommand.self),
+            .command(RestartCommand.self),
+            .command(StatusCommand.self),
+        ]
+    }
+
+    static var descriptors: [CommandDescriptor] {
+        [CommandDescriptor(
             name: "swabble",
             abstract: "Speech hook daemon",
             discussion: "Local wake-word → SpeechTranscriber → hook",
-            signature: rootSignature,
-            subcommands: [
-                serveDesc,
-                transcribeDesc,
-                testHookDesc,
-                micRoot,
-                serviceRoot,
-                doctorDesc,
-                setupDesc,
-                healthDesc,
-                tailLogDesc,
-                startDesc,
-                stopDesc,
-                restartDesc,
-                statusDesc,
-            ])
-        return [root]
+            signature: CommandSignature().withStandardRuntimeFlags(),
+            subcommands: self.entries.map(\.descriptor))]
     }
 
-    private static func descriptor(for type: any ParsableCommand.Type) -> CommandDescriptor {
-        let sig = CommandSignature.describe(type.init()).withStandardRuntimeFlags()
-        return CommandDescriptor(
-            name: type.commandDescription.commandName ?? "",
-            abstract: type.commandDescription.abstract,
-            discussion: type.commandDescription.discussion,
-            signature: sig,
-            subcommands: [])
+    static func run(parsed: ParsedValues, path: [String]) async throws {
+        let type = try self.resolve(path.dropFirst(), entries: self.entries, parent: "swabble")
+        var command = type.init(parsed: parsed)
+        try await command.run()
+    }
+
+    private static func resolve(
+        _ path: ArraySlice<String>,
+        entries: [Entry],
+        parent: String) throws -> any CLICommand.Type
+    {
+        guard let name = path.first else {
+            throw CommanderProgramError.missingSubcommand(command: parent)
+        }
+        guard let entry = entries.first(where: { $0.name == name }) else {
+            throw CommanderProgramError.unknownSubcommand(command: parent, name: name)
+        }
+        switch entry {
+        case let .command(type):
+            return type
+        case let .group(name, _, children):
+            return try self.resolve(path.dropFirst(), entries: children, parent: name)
+        }
     }
 }

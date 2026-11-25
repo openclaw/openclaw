@@ -1,4 +1,5 @@
 import {
+  type BoardWidgetDataQuery,
   ErrorCodes,
   errorShape,
   type ErrorShape,
@@ -13,6 +14,10 @@ import {
   resolveGitHubActionsRequest,
 } from "../boards/github-actions-capability.js";
 import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import {
   capturePluginRegistryLifecycleEpoch,
   isPluginRegistryLifecycleEpochActive,
 } from "../plugins/registry-lifecycle.js";
@@ -24,16 +29,14 @@ import { isGatewaySubordinateWorkAdmissionClosed } from "../process/gateway-work
 import {
   BoardGatewayUnavailableError,
   type BoardViewTicketAuthorityInput,
+  verifyBoardViewTicket,
+  requireBoardViewTicketAuthority,
 } from "./board-view-ticket.js";
-import { resolveAuthorizedBoardWidgetView } from "./board-widget-view.js";
-import { agentsHandlers } from "./server-methods/agents.js";
-import { cronHandlers } from "./server-methods/cron.js";
-import { healthHandlers } from "./server-methods/health.js";
-import { sessionReadHandlers } from "./server-methods/sessions-read.js";
+import { withAuthorizedBoardWidgetView } from "./board-widget-view.js";
+import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
+import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { usageHandlers } from "./server-methods/usage.js";
-import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 
 type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
@@ -46,7 +49,22 @@ export type BoardRequestAuthority = {
 
 export type BoardCapabilityAuthority = BoardRequestAuthority & {
   boardSession: Required<BoardSessionTarget>;
+  query?: BoardWidgetDataQuery;
+  /** Validate the stored grant and start work together; assertActive only checks request liveness. */
+  useCurrent: <T>(start: () => T) => Promise<Awaited<T>>;
 };
+
+export function assertBoardCapabilityParamsSize(
+  params: Record<string, unknown>,
+  capability: "action" | "data binding",
+): void {
+  if (Buffer.byteLength(JSON.stringify(params), "utf8") > 8 * 1024) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${capability} params exceed 8192 UTF-8 bytes`,
+    );
+  }
+}
 
 export function boardDataBindingCapability(
   bindingId: string,
@@ -62,53 +80,69 @@ export function captureBoardCapabilityAuthority(
   store: BoardStore,
   ticket: string,
   invocation: GatewayHandlerInvocation,
-  capability: string,
+  capability: string | BoardWidgetDataQuery,
 ): BoardCapabilityAuthority {
   const authority = captureBoardRequestAuthority(invocation);
-  const resolveSession = () => {
+  const claims = verifyBoardViewTicket(ticket);
+  if (!claims) {
+    throw new BoardValidationError("invalid_operation", "board widget view ticket is invalid");
+  }
+  requireBoardViewTicketAuthority(claims, invocation.context);
+  const resolveSession = (target: BoardSessionTarget) => {
     authority.assertActive();
-    const view = resolveAuthorizedBoardWidgetView(store, ticket, {
-      gatewayContext: invocation.context,
-    });
     const cfg = invocation.context.getRuntimeConfig();
-    const selected = resolveRequestedSessionAgentId(cfg, view.sessionKey, view.agentId);
-    if (
-      !selected.ok ||
-      resolveSessionStoreKey({
-        cfg,
-        sessionKey: view.sessionKey,
-        storeAgentId: selected.agentId,
-      }) !== view.sessionKey
-    ) {
+    const selected = resolveRequestedSessionStoreTarget(cfg, target.sessionKey, target.agentId);
+    if (!selected.ok || selected.value.sessionKey !== target.sessionKey) {
       throw new BoardValidationError(
         "invalid_operation",
         "board widget session identity changed; reload the dashboard",
       );
     }
-    if (!boardWidgetHasGrantedTool(view.document.declared, view.document.grantState, capability)) {
-      throw new BoardValidationError(
-        "invalid_operation",
-        `board widget tool is not granted: ${capability}`,
-      );
-    }
-    return { sessionKey: view.sessionKey, agentId: selected.agentId };
+    return selected.value;
   };
-  const boardSession = resolveSession();
+  const boardSession = resolveSession(claims);
   return {
     ...authority,
     boardSession,
-    assertActive: () => {
-      const current = resolveSession();
-      if (
-        current.agentId !== boardSession.agentId ||
-        current.sessionKey !== boardSession.sessionKey
-      ) {
-        throw new BoardValidationError(
-          "invalid_operation",
-          "board widget session identity changed; reload the dashboard",
-        );
-      }
-    },
+    ...(typeof capability === "string" ? {} : { query: capability }),
+    useCurrent: async <T>(start: () => T): Promise<Awaited<T>> =>
+      await withAuthorizedBoardWidgetView(
+        store,
+        ticket,
+        (view) => {
+          const current = resolveSession(view);
+          if (
+            current.agentId !== boardSession.agentId ||
+            current.sessionKey !== boardSession.sessionKey
+          ) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              "board widget session identity changed; reload the dashboard",
+            );
+          }
+          const granted =
+            typeof capability === "string"
+              ? boardWidgetHasGrantedTool(
+                  view.document.declared,
+                  view.document.grantState,
+                  capability,
+                )
+              : view.document.grantState === "granted" &&
+                view.document.declared?.queries?.some(
+                  (query) => JSON.stringify(query) === JSON.stringify(capability),
+                );
+          if (!granted) {
+            throw new BoardValidationError(
+              "invalid_operation",
+              typeof capability === "string"
+                ? `board widget tool is not granted: ${capability}`
+                : `board widget query is not granted: ${capability.name}`,
+            );
+          }
+          return start();
+        },
+        { gatewayContext: invocation.context },
+      ),
   };
 }
 
@@ -126,30 +160,35 @@ export function captureBoardRequestAuthority(
   const pluginRegistryEpoch = pluginRegistry
     ? capturePluginRegistryLifecycleEpoch(pluginRegistry)
     : undefined;
-  const assertActive = () => {
-    try {
-      // Retained board work also belongs to the requesting caller and session authorization.
-      invocation.signal?.throwIfAborted();
-      invocation.sessionMutationCommitGuard?.();
-      invocation.sessionMutationAuthorization?.assertCurrent();
-      if (
-        isGatewaySubordinateWorkAdmissionClosed() ||
-        resolveGatewayContext() !== context ||
-        context.resolveGatewayContext !== resolveGatewayContext ||
-        (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
-        (pluginRegistry &&
-          (!pluginRegistryEpoch ||
-            !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
-      ) {
+  const assertActive = composeSessionSourceAssertion(
+    [
+      captureExternalSessionCommitGuard(invocation.sessionMutationCommitGuard),
+      captureExternalSessionCommitGuard(invocation.sessionMutationAuthorization?.assertCurrent),
+    ],
+    (assertSources) => {
+      try {
+        // Retained board work also belongs to the requesting caller and session authorization.
+        invocation.signal?.throwIfAborted();
+        assertSources();
+        if (
+          isGatewaySubordinateWorkAdmissionClosed() ||
+          resolveGatewayContext() !== context ||
+          context.resolveGatewayContext !== resolveGatewayContext ||
+          (methodRegistry && context.getGatewayMethodRegistry?.() !== methodRegistry) ||
+          (pluginRegistry &&
+            (!pluginRegistryEpoch ||
+              !isPluginRegistryLifecycleEpochActive(pluginRegistry, pluginRegistryEpoch)))
+        ) {
+          throw new BoardGatewayUnavailableError();
+        }
+      } catch (error) {
+        if (error instanceof BoardGatewayUnavailableError) {
+          throw error;
+        }
         throw new BoardGatewayUnavailableError();
       }
-    } catch (error) {
-      if (error instanceof BoardGatewayUnavailableError) {
-        throw error;
-      }
-      throw new BoardGatewayUnavailableError();
-    }
-  };
+    },
+  );
   assertActive();
   return {
     assertActive,
@@ -177,17 +216,6 @@ export function respondBoardError(
   respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
 }
 
-const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
-  "sessions.list": sessionReadHandlers["sessions.list"]!,
-  // Board reads are one-shot and cannot converge an incomplete marker.
-  "usage.status": (invocation) => usageHandlers["usage.status"]!({ ...invocation, client: null }),
-  "usage.cost": usageHandlers["usage.cost"]!,
-  "cron.list": cronHandlers["cron.list"]!,
-  "cron.status": cronHandlers["cron.status"]!,
-  "agents.list": agentsHandlers["agents.list"]!,
-  health: healthHandlers.health!,
-};
-
 function isBoardDataBindingId(value: string): value is BoardDataBindingId {
   return (CORE_BOARD_DATA_BINDING_IDS as readonly string[]).includes(value);
 }
@@ -197,41 +225,46 @@ async function invokeGatewayHandler(
   method: string,
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
-  authority: BoardRequestAuthority,
-): Promise<unknown> {
-  let didRespond = false;
-  let succeeded = false;
-  let payload: unknown;
-  let responseError: ErrorShape | undefined;
-  authority.assertActive();
-  await handler({
-    ...invocation,
-    req: { ...invocation.req, method, params },
-    params,
-    respond: (ok, value, error) => {
-      if (didRespond) {
-        return;
-      }
-      didRespond = true;
-      if (ok) {
-        succeeded = true;
-        payload = value;
-      } else {
-        responseError = error;
-      }
-    },
+  authority: BoardCapabilityAuthority,
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
+  let outcome:
+    | { kind: "reply"; ok: boolean; payload: unknown; error: ErrorShape | undefined }
+    | { kind: "thrown"; error: unknown }
+    | undefined;
+  await authority.useCurrent(async () => {
+    try {
+      await handler({
+        ...invocation,
+        req: { ...invocation.req, method, params },
+        params,
+        respond: (ok, payload, error) => {
+          outcome ??= { kind: "reply", ok, payload, error };
+        },
+      });
+    } catch (error) {
+      outcome = { kind: "thrown", error };
+    }
   });
-  authority.assertActive();
-  if (!didRespond) {
-    throw new BoardValidationError("invalid_operation", `${method} did not return a result`);
-  }
-  if (!succeeded) {
-    throw new BoardValidationError(
-      "invalid_operation",
-      responseError?.message || `${method} failed`,
-    );
-  }
-  return payload;
+  await authority.useCurrent(() => {
+    if (!outcome) {
+      publish(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `${method} did not return a result`),
+      );
+    } else if (outcome.kind === "thrown") {
+      respondBoardError(outcome.error, publish);
+    } else if (!outcome.ok) {
+      publish(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, outcome.error?.message || `${method} failed`),
+      );
+    } else {
+      publish(true, outcome.payload);
+    }
+  });
 }
 
 export async function readBoardDataBinding(
@@ -239,19 +272,22 @@ export async function readBoardDataBinding(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   if (bindingId === GITHUB_ACTIONS_BINDING_ID) {
     const { readBoardGitHubActions } = await import("./github-actions-read.js");
-    authority.assertActive();
-    return await readBoardGitHubActions(params, invocation.context, authority);
+    return await readBoardGitHubActions(params, invocation.context, authority, publish);
   }
   if (isBoardDataBindingId(bindingId)) {
+    const handler = await prepareGatewayRequestHandler(coreGatewayHandlers[bindingId]!);
     return await invokeGatewayHandler(
-      BOARD_DATA_HANDLERS[bindingId],
+      handler,
       bindingId,
       params,
-      invocation,
+      // Board reads are one-shot and cannot converge an incomplete marker.
+      bindingId === "usage.status" ? { ...invocation, client: null } : invocation,
       authority,
+      publish,
     );
   }
   const registration = authority.pluginRegistry?.dashboardDataBindings.get(bindingId);
@@ -267,6 +303,7 @@ export async function readBoardDataBinding(
     params,
     invocation,
     authority,
+    publish,
   );
 }
 
@@ -275,7 +312,8 @@ export async function runBoardActionVerb(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   const registration = authority.pluginRegistry?.dashboardActionVerbs.get(actionId);
   if (!registration) {
     throw new BoardValidationError(
@@ -302,6 +340,7 @@ export async function runBoardActionVerb(
     params,
     invocation,
     authority,
+    publish,
   );
 }
 
@@ -309,12 +348,14 @@ export async function triggerBoardCronJob(
   jobId: string,
   invocation: GatewayHandlerInvocation,
   authority: BoardCapabilityAuthority,
-): Promise<unknown> {
+  publish: GatewayHandlerInvocation["respond"],
+): Promise<void> {
   return await invokeGatewayHandler(
-    cronHandlers["cron.run"]!,
+    await prepareGatewayRequestHandler(coreGatewayHandlers["cron.run"]!),
     "cron.run",
     { id: jobId, mode: "force" },
     invocation,
     authority,
+    publish,
   );
 }

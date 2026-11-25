@@ -1,31 +1,17 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
-import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-selection-normalize.js";
+import { resolveConfiguredPrimaryProviderFallback } from "../../../agents/model-selection-shared.js";
 import { configuredModelRouteNeedsCodex } from "../../../config/codex-plugin-diagnostics.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
-import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { LEGACY_IMPLICIT_PRIMARY_MODEL_REF } from "../../../config/utility-model-separation-migration.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import type { MutableRecord } from "./codex-route-types.js";
-
-export function normalizeRuntimeString(value: unknown): string | undefined {
-  return normalizeOptionalAgentRuntimeId(value);
-}
-
-export function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
-  const record = asMutableRecord(value);
-  return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
-}
-
-export function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig | undefined {
-  return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
-}
 
 export type LegacyCodexModelIdentity = string;
 
@@ -105,7 +91,7 @@ export function isBlockedLegacyCodexModelPair(params: {
   );
 }
 
-function readLegacyCodexModelId(model: unknown): string | undefined {
+export function toOpenAIModelId(model: unknown): string | undefined {
   if (typeof model !== "string") {
     return undefined;
   }
@@ -119,7 +105,7 @@ function readLegacyCodexModelId(model: unknown): string | undefined {
 }
 
 export function isOpenAICodexModelRef(model: string | undefined): model is string {
-  return readLegacyCodexModelId(model) !== undefined;
+  return toOpenAIModelId(model) !== undefined;
 }
 
 export function isOpenAICodexAuthProfileRef(profile: unknown): boolean {
@@ -134,41 +120,17 @@ export function isProviderlessModelRef(model: unknown): model is string {
 }
 
 export function toCanonicalOpenAIModelRef(model: string): string | undefined {
-  const modelId = readLegacyCodexModelId(model);
+  const modelId = toOpenAIModelId(model);
   return modelId ? `openai/${modelId}` : undefined;
 }
 
-export function toOpenAIModelId(model: string): string | undefined {
-  return readLegacyCodexModelId(model);
-}
-
-export function resolveRuntime(params: {
-  agentRuntime?: AgentRuntimePolicyConfig;
-  defaultsRuntime?: AgentRuntimePolicyConfig;
-}): string | undefined {
-  return (
-    normalizeRuntimeString(params.agentRuntime?.id) ??
-    normalizeRuntimeString(params.defaultsRuntime?.id)
-  );
-}
-
 export function readModelConfigPrimaryRef(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value.trim() || undefined;
-  }
-  const record = asMutableRecord(value);
-  if (typeof record?.primary === "string") {
-    return record.primary.trim() || undefined;
-  }
-  return undefined;
+  const primary = typeof value === "string" ? value : asMutableRecord(value)?.primary;
+  return typeof primary === "string" ? primary.trim() || undefined : undefined;
 }
 
 export function readAgentPrimaryModelRef(agent: unknown, fallback?: string): string | undefined {
-  const record = asMutableRecord(agent);
-  if (!record) {
-    return fallback;
-  }
-  return readModelConfigPrimaryRef(record.model) ?? fallback;
+  return readModelConfigPrimaryRef(asMutableRecord(agent)?.model) ?? fallback;
 }
 
 export function modelRefUsesCodexRuntime(params: {
@@ -177,7 +139,7 @@ export function modelRefUsesCodexRuntime(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const effectiveModelRef = params.modelRef?.trim() || `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+  const effectiveModelRef = params.modelRef?.trim() || LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
   if (isOpenAICodexModelRef(effectiveModelRef)) {
     return true;
   }
@@ -199,7 +161,7 @@ export function resolveRuntimeModelRef(params: {
   agentId?: string;
 }): string {
   const effectiveModelRef =
-    normalizeProviderModelRefAuthProfile(params.modelRef) ?? `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+    normalizeProviderModelRefAuthProfile(params.modelRef) ?? LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
   const legacyCodexModel = toCanonicalOpenAIModelRef(effectiveModelRef);
   if (legacyCodexModel) {
     return legacyCodexModel;
@@ -214,7 +176,6 @@ export function resolveRuntimeModelRef(params: {
     resolveConfiguredBareModelRef({
       cfg: params.cfg,
       modelRef: effectiveModelRef,
-      agentId: params.agentId,
     }) ??
     normalizeDefaultProviderModelRef(
       effectiveModelRef,
@@ -285,12 +246,13 @@ function resolveDefaultProviderForAliasContext(params: {
         resolveConfiguredBareModelRef({
           cfg: params.cfg,
           modelRef: effectivePrimaryModelRef,
-          agentId: params.agentId,
         }) ?? "",
       );
     return normalizeProviderId(parsed?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
   }
-  const implicit = parseCodexRouteModelRef(resolveImplicitDefaultAgentModelRef(params.cfg));
+  const implicit = parseCodexRouteModelRef(
+    resolveImplicitDefaultAgentModelRef(params.cfg, params.agentId),
+  );
   return normalizeProviderId(implicit?.provider ?? DEFAULT_PROVIDER) || DEFAULT_PROVIDER;
 }
 
@@ -329,22 +291,18 @@ function resolveAliasFromModelsMap(
 function resolveConfiguredBareModelRef(params: {
   cfg: OpenClawConfig;
   modelRef: string;
-  agentId?: string;
 }): string | undefined {
   const modelId = params.modelRef.trim();
   if (!modelId || modelId.includes("/")) {
     return undefined;
   }
   const matches = new Set<string>();
-  const pushModelMapMatches = (models: MutableRecord | undefined) => {
-    for (const key of Object.keys(models ?? {})) {
-      const parsed = parseCodexRouteModelRef(key);
-      if (parsed?.modelId === modelId) {
-        matches.add(`${parsed.provider}/${parsed.modelId}`);
-      }
+  for (const key of Object.keys(asMutableRecord(params.cfg.agents?.defaults?.models) ?? {})) {
+    const parsed = parseCodexRouteModelRef(key);
+    if (parsed?.modelId === modelId) {
+      matches.add(`${parsed.provider}/${parsed.modelId}`);
     }
-  };
-  pushModelMapMatches(asMutableRecord(params.cfg.agents?.defaults?.models));
+  }
   for (const [provider, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
     for (const model of providerConfig?.models ?? []) {
       if (providerCatalogModelMatches(provider, model?.id, modelId)) {
@@ -392,39 +350,33 @@ function normalizeProviderModelRef(provider: string, modelId: string): string {
   return `${normalizedProvider}/${normalizedModelId}`;
 }
 
-export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig): string {
-  const fallbackProvider = resolveConfiguredProviderFallback({
+export function resolveImplicitDefaultAgentModelRef(cfg: OpenClawConfig, agentId?: string): string {
+  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
     cfg,
+    agentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
+  // Codex route repair migrates state written while the legacy implicit primary ran.
   return fallbackProvider
     ? normalizeProviderModelRef(fallbackProvider.provider, fallbackProvider.model)
-    : `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+    : LEGACY_IMPLICIT_PRIMARY_MODEL_REF;
 }
 
 export function agentUsesCodexRuntimeForCompaction(params: {
   cfg: OpenClawConfig;
   agent: unknown;
   agentId?: string;
-  currentRuntime?: string;
   inheritedModelRef?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
-  const runtime = concreteRuntimeId(normalizeString(params.currentRuntime));
-  if (runtime) {
-    return runtime === "codex";
-  }
   return modelRefUsesCodexRuntime({
     cfg: params.cfg,
     modelRef: readAgentPrimaryModelRef(params.agent, params.inheritedModelRef),
     agentId: params.agentId,
     env: params.env,
   });
-}
-
-function concreteRuntimeId(runtime: string | undefined): string | undefined {
-  return runtime && runtime !== "auto" && runtime !== "default" ? runtime : undefined;
 }
 
 export function parseCodexRouteModelRef(

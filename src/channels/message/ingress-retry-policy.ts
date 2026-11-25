@@ -3,17 +3,28 @@
  *
  * Channel-specific non-retryable classification stays out of core; pass it in.
  */
-import {
-  collectNestedErrorCandidates,
-  extractErrorCode,
-} from "@openclaw/normalization-core/error-coercion";
-import { SESSION_WORK_START_CHANGED_ERROR_CODE } from "../../config/sessions/work-start-error.js";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { InboundDedupePendingError } from "../../auto-reply/reply/inbound-dedupe-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
 export const DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_INGRESS_RETRY_BASE_MS = 1_000;
 export const DEFAULT_INGRESS_RETRY_MAX_MS = 3 * 60_000;
+const MAX_RECOVERY_RETRIES = 4_096;
+// Allow normal queue waits beyond the five-minute stall timeout, but never hide a stuck lane forever.
+const MAX_PENDING_CUSTODY_MS = 30 * 60_000;
+
+type IngressRecoveryRetry = {
+  recoveryFailures: number;
+  nextEligibleAt?: number;
+  pendingSince?: number;
+  pendingDelayMs?: number;
+};
+// Budgets reset on process restart because runtime owners re-publish on startup.
+const recoveryRetries = new WeakMap<object, Map<string, IngressRecoveryRetry>>();
 
 export type IngressRetryPolicyConfig = {
   maxAttempts?: number;
@@ -27,6 +38,7 @@ type IngressRetryEventFacts = {
   attempts?: number;
   lastAttemptAt?: number;
   lastError?: string;
+  retry?: IngressRecoveryRetry;
 };
 
 export type IngressNonRetryableFailure = {
@@ -45,27 +57,9 @@ type IngressFailureDisposition =
       kind: "release";
       attempt: number;
       message: string;
+      recordAttempt?: boolean;
+      retry?: IngressRecoveryRetry;
     };
-
-function isSessionStartConflictFailure(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some(
-    (candidate) => extractErrorCode(candidate) === SESSION_WORK_START_CHANGED_ERROR_CODE,
-  );
-}
-
-function resolveConfig(config?: IngressRetryPolicyConfig) {
-  return {
-    maxAttempts: config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-    deadLetterMinAgeMs: config?.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-    baseMs: config?.baseMs ?? DEFAULT_INGRESS_RETRY_BASE_MS,
-    maxMs: config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS,
-  };
-}
-
-/** Next attempt number after a failed dispatch (1-based for the attempt just finished). */
-function resolveIngressAttemptNumber(event: IngressRetryEventFacts): number {
-  return (event.attempts ?? 0) + 1;
-}
 
 /** Remaining backoff delay before a released event may be claimed again. */
 export function resolveIngressRetryDelayMs(
@@ -73,7 +67,12 @@ export function resolveIngressRetryDelayMs(
   config?: IngressRetryPolicyConfig,
   now = Date.now(),
 ): number {
-  const { baseMs, maxMs } = resolveConfig(config);
+  const retry = event.retry;
+  if (retry?.nextEligibleAt !== undefined) {
+    return Math.max(0, retry.nextEligibleAt - now);
+  }
+  const baseMs = config?.baseMs ?? DEFAULT_INGRESS_RETRY_BASE_MS;
+  const maxMs = config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS;
   const attempts = event.attempts ?? 0;
   if (!event.lastError || event.lastAttemptAt === undefined || attempts <= 0) {
     return 0;
@@ -95,7 +94,9 @@ export function shouldDeadLetterRetryableIngressEvent(
   config?: IngressRetryPolicyConfig,
   now = Date.now(),
 ): boolean {
-  const { maxAttempts, deadLetterMinAgeMs } = resolveConfig(config);
+  const maxAttempts = config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+  const deadLetterMinAgeMs =
+    config?.deadLetterMinAgeMs ?? DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS;
   return attempt >= maxAttempts && now - event.receivedAt >= deadLetterMinAgeMs;
 }
 
@@ -109,9 +110,32 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
-  const { maxAttempts } = resolveConfig(params.config);
-  const attempt = resolveIngressAttemptNumber(params.event);
+  const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
+  const errors = collectNestedErrorCandidates(params.err);
+  const previousRetry = params.event.retry;
+  const pendingSince = previousRetry?.pendingSince ?? now;
+  if (
+    now - pendingSince < MAX_PENDING_CUSTODY_MS &&
+    errors.some((error) => error instanceof InboundDedupePendingError)
+  ) {
+    const pendingDelayMs = Math.min(
+      (previousRetry?.pendingDelayMs ?? DEFAULT_INGRESS_RETRY_BASE_MS / 2) * 2,
+      params.config?.maxMs ?? DEFAULT_INGRESS_RETRY_MAX_MS,
+    );
+    return {
+      kind: "release",
+      attempt: params.event.attempts ?? 0,
+      message,
+      recordAttempt: false,
+      retry: {
+        recoveryFailures: previousRetry?.recoveryFailures ?? 0,
+        pendingSince,
+        pendingDelayMs,
+        nextEligibleAt: now + pendingDelayMs,
+      },
+    };
+  }
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
   if (nonRetryable) {
     return {
@@ -121,21 +145,65 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  if (attempt >= maxAttempts && isSessionStartConflictFailure(params.err)) {
+  const recovery = errors.find(
+    (error): error is PreparedModelRuntimeRecoveryError =>
+      error instanceof PreparedModelRuntimeRecoveryError,
+  );
+  if (recovery) {
+    const attempted = recovery.reason === "attempt-failed";
+    const recoveryFailures = (previousRetry?.recoveryFailures ?? 0) + (attempted ? 1 : 0);
+    if (attempted && recoveryFailures >= 2) {
+      return { kind: "fail", reason: "runtime-recovery-failed", message, attempt };
+    }
     return {
-      kind: "fail",
-      reason: "session-start-conflict-retry-limit",
+      kind: "release",
+      attempt: attempted ? attempt : (params.event.attempts ?? 0),
       message,
-      attempt,
+      recordAttempt: attempted,
+      retry: { recoveryFailures, nextEligibleAt: recovery.nextEligibleAt },
     };
   }
-  if (shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)) {
-    return {
-      kind: "fail",
-      reason: "retry-limit-exceeded",
-      message,
-      attempt,
-    };
-  }
-  return { kind: "release", attempt, message };
+  const reason = shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)
+    ? "retry-limit-exceeded"
+    : undefined;
+  return reason
+    ? { kind: "fail", reason, message, attempt }
+    : {
+        kind: "release",
+        attempt,
+        message,
+        ...(previousRetry ? { retry: { ...previousRetry, nextEligibleAt: undefined } } : {}),
+      };
+}
+
+/** Keep recovery facts with the live queue owner, outside durable error text. */
+export function createIngressRetryPolicy(owner: object) {
+  const retries = recoveryRetries.get(owner) ?? new Map<string, IngressRecoveryRetry>();
+  recoveryRetries.set(owner, retries);
+  type Event = IngressRetryEventFacts & { id: string };
+  return {
+    clear: (id: string) => retries.delete(id),
+    delay: (event: Event, config?: IngressRetryPolicyConfig, now = Date.now()) =>
+      resolveIngressRetryDelayMs({ ...event, retry: retries.get(event.id) }, config, now),
+    failure: (
+      params: Parameters<typeof resolveIngressFailureDisposition>[0] & { event: Event },
+    ) => {
+      const disposition = resolveIngressFailureDisposition({
+        ...params,
+        event: { ...params.event, retry: retries.get(params.event.id) },
+      });
+      if (disposition.kind === "fail") {
+        return disposition;
+      }
+      const { retry, ...release } = disposition;
+      if (retry) {
+        retries.delete(params.event.id);
+        retries.set(params.event.id, retry);
+        pruneMapToMaxSize(retries, MAX_RECOVERY_RETRIES);
+      } else {
+        retries.delete(params.event.id);
+      }
+      return release;
+    },
+  };
 }

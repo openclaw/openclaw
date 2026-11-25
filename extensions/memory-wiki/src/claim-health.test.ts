@@ -1,18 +1,18 @@
-// Memory Wiki tests cover claim health plugin behavior.
 import { describe, expect, it } from "vitest";
-import { assessClaimFreshness, buildPageContradictionClusters } from "./claim-health.js";
+import {
+  assessClaimFreshness,
+  assessPageFreshness,
+  buildPageContradictionClusters,
+} from "./claim-health.js";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
-function createPage(params: {
-  relativePath: string;
-  title: string;
-  contradictions: string[];
-}): WikiPageSummary {
+function createPage(title: string, contradictions: string[] = []): WikiPageSummary {
+  const relativePath = `entities/${title.toLowerCase()}.md`;
   return {
-    absolutePath: `/tmp/${params.relativePath}`,
-    relativePath: params.relativePath,
+    absolutePath: `/tmp/${relativePath}`,
+    relativePath,
     kind: "entity",
-    title: params.title,
+    title,
     hasFrontmatter: true,
     aliases: [],
     sourceIds: [],
@@ -21,138 +21,37 @@ function createPage(params: {
     bestUsedFor: [],
     notEnoughFor: [],
     claims: [],
-    contradictions: params.contradictions,
+    contradictions,
     questions: [],
     bridgeAgentIds: [],
   };
 }
 
-describe("buildPageContradictionClusters", () => {
-  it("clusters Unicode contradiction notes that differ only by punctuation", () => {
+describe("wiki claim health", () => {
+  it("groups punctuation and Unicode whitespace without dropping combining marks", () => {
     const clusters = buildPageContradictionClusters([
-      createPage({
-        relativePath: "entities/alpha.md",
-        title: "Alpha",
-        contradictions: ["模型冲突：版本 A"],
-      }),
-      createPage({
-        relativePath: "entities/beta.md",
-        title: "Beta",
-        contradictions: ["模型冲突 版本 A"],
-      }),
+      createPage("Alpha", ["किताब\u00a0\t---\nready"]),
+      createPage("Beta", ["किताब ready"]),
     ]);
-
     expect(clusters).toHaveLength(1);
-    expect(clusters[0]?.entries).toHaveLength(2);
+    expect(clusters[0]?.key).toBe("किताब ready");
+    expect(clusters[0]?.entries.map((entry) => entry.pageTitle)).toEqual(["Alpha", "Beta"]);
   });
 
   it("keeps combining-mark contradiction notes in separate clusters", () => {
     const clusters = buildPageContradictionClusters([
-      createPage({
-        relativePath: "entities/alpha.md",
-        title: "Alpha",
-        contradictions: ["किताब"],
-      }),
-      createPage({
-        relativePath: "entities/beta.md",
-        title: "Beta",
-        contradictions: ["कीताब"],
-      }),
+      createPage("Alpha", ["किताब"]),
+      createPage("Beta", ["कीताब"]),
     ]);
 
     expect(clusters).toHaveLength(2);
     expect(clusters.map((cluster) => cluster.key).toSorted()).toEqual(["किताब", "कीताब"]);
     expect(clusters.every((cluster) => cluster.entries)).toBe(true);
   });
-});
-
-describe("assessClaimFreshness", () => {
-  it("uses the latest claim evidence timestamp without relying on page freshness", () => {
-    const page = createPage({
-      relativePath: "entities/alpha.md",
-      title: "Alpha",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-01-01T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Alpha prefers current evidence.",
-      updatedAt: "2026-01-05T00:00:00.000Z",
-      evidence: [
-        { updatedAt: "2026-01-03T00:00:00.000Z" },
-        { updatedAt: "2026-01-20T00:00:00.000Z" },
-      ],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-01-25T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("fresh");
-    expect(freshness.lastTouchedAt).toBe("2026-01-20T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(5);
-  });
-
-  it("does not let a newer page timestamp make stale claim evidence fresh", () => {
-    const page = createPage({
-      relativePath: "entities/beta.md",
-      title: "Beta",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Beta still needs old evidence checked.",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      evidence: [{ updatedAt: "2026-01-05T00:00:00.000Z" }],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-04-20T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("stale");
-    expect(freshness.lastTouchedAt).toBe("2026-01-05T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(105);
-  });
-
-  it("falls back to page freshness when claim and evidence timestamps are absent", () => {
-    const page = createPage({
-      relativePath: "entities/gamma.md",
-      title: "Gamma",
-      contradictions: [],
-    });
-    page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Gamma was written through wiki_apply without per-claim timestamps.",
-      evidence: [{ kind: "session", sourceId: "session-1" }],
-    };
-
-    const freshness = assessClaimFreshness({
-      page,
-      claim,
-      now: new Date("2026-04-25T00:00:00.000Z"),
-    });
-
-    expect(freshness.level).toBe("fresh");
-    expect(freshness.lastTouchedAt).toBe("2026-04-20T00:00:00.000Z");
-    expect(freshness.daysSinceTouch).toBe(5);
-  });
-
   it("keeps malformed claim timestamps unknown instead of using page freshness", () => {
-    const page = createPage({
-      relativePath: "entities/delta.md",
-      title: "Delta",
-      contradictions: [],
-    });
+    const page = createPage("Delta");
     page.updatedAt = "2026-04-20T00:00:00.000Z";
-    const claim: WikiClaim = {
-      text: "Delta has malformed claim freshness metadata.",
-      updatedAt: "not-a-date",
-      evidence: [],
-    };
+    const claim: WikiClaim = { text: "Claim", updatedAt: "not-a-date", evidence: [] };
 
     const freshness = assessClaimFreshness({
       page,
@@ -160,8 +59,23 @@ describe("assessClaimFreshness", () => {
       now: new Date("2026-04-25T00:00:00.000Z"),
     });
 
-    expect(freshness.level).toBe("unknown");
+    expect(freshness).toMatchObject({ level: "unknown", reason: "missing updatedAt" });
     expect(freshness.lastTouchedAt).toBeUndefined();
-    expect(freshness.reason).toBe("missing updatedAt");
+  });
+  it("classifies a timestamp 89 days old as aging", () => {
+    const now = new Date("2026-06-01T00:00:00.000Z");
+    const timestamp = new Date(now.getTime() - 89 * 24 * 60 * 60 * 1000).toISOString();
+    const page = createPage("Alpha");
+    page.updatedAt = timestamp;
+    const claim: WikiClaim = { text: "Claim", updatedAt: timestamp, evidence: [] };
+    const expected = {
+      level: "aging",
+      reason: `last touched ${timestamp}`,
+      daysSinceTouch: 89,
+      lastTouchedAt: timestamp,
+    };
+
+    expect(assessPageFreshness(page, now)).toEqual(expected);
+    expect(assessClaimFreshness({ page, claim, now })).toEqual(expected);
   });
 });

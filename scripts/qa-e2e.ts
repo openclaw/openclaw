@@ -1,37 +1,11 @@
-// Qa E2E script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
-
-type QaE2eRuntime = Pick<
-  typeof import("../extensions/qa-lab/api.js"),
-  "isQaSelfCheckSuccessful" | "runQaE2eSelfCheck"
->;
-
-type QaE2eDeps = {
-  env?: NodeJS.ProcessEnv;
-  loadRuntime?: () => Promise<QaE2eRuntime>;
-  writeStdout?: (text: string) => void;
-};
 
 type QaE2eArgs = {
   help: boolean;
   outputPath?: string;
 };
 
-async function loadQaE2eRuntime(): Promise<QaE2eRuntime> {
-  return await import("../extensions/qa-lab/api.js");
-}
-
-export function enablePrivateQaScriptEnv(env: NodeJS.ProcessEnv = process.env) {
-  env.OPENCLAW_BUILD_PRIVATE_QA = "1";
-  env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
-  env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
-}
-
-export function resolveQaE2eOutputPath(argv: readonly string[] = process.argv.slice(2)) {
-  return parseQaE2eArgs(argv).outputPath;
-}
-
-export function usage(): string {
+function usage(): string {
   return `Usage: pnpm qa:e2e [--output <path>]
 
 Options:
@@ -40,7 +14,7 @@ Options:
 `;
 }
 
-export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
+function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
   const args = argv[0] === "--" ? argv.slice(1) : argv;
   let outputPath = "";
   let positionalMode = false;
@@ -94,34 +68,25 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
   return outputPath ? { help: false, outputPath } : { help: false };
 }
 
-export async function main(
-  argv: readonly string[] = process.argv.slice(2),
-  deps: QaE2eDeps = {},
-): Promise<number> {
-  const args = parseQaE2eArgs(argv);
+async function main(): Promise<number> {
+  const args = parseQaE2eArgs(process.argv.slice(2));
   if (args.help) {
-    (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(usage());
+    process.stdout.write(usage());
     return 0;
   }
-  enablePrivateQaScriptEnv(deps.env ?? process.env);
-  const { isQaSelfCheckSuccessful, runQaE2eSelfCheck } = await (
-    deps.loadRuntime ?? loadQaE2eRuntime
-  )();
+  process.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
+  process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "0";
+  const { isQaSelfCheckSuccessful, runQaE2eSelfCheck } =
+    await import("../extensions/qa-lab/api.js");
   const result = args.outputPath
     ? await runQaE2eSelfCheck({ outputPath: args.outputPath })
     : await runQaE2eSelfCheck();
-  (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(
-    `QA self-check report: ${result.outputPath}\n`,
-  );
+  process.stdout.write(`QA self-check report: ${result.outputPath}\n`);
   return isQaSelfCheckSuccessful(result) ? 0 : 1;
 }
 
-function isMainModule() {
-  const entry = process.argv[1];
-  return entry !== undefined && import.meta.url === pathToFileURL(entry).href;
-}
-
-if (isMainModule()) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     process.exitCode = await main();
   } catch (error) {

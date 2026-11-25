@@ -19,7 +19,11 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  /** The catalog tool a Tool Search dispatcher called; warnings name it instead of the dispatcher. */
+  dispatchedToolName?: string;
   executionStarted?: boolean;
+  /** The call named no tool this run has, so no later call can share its tool identity. */
+  unknownTool?: true;
   meta?: string;
   errorCode?: string;
   error?: string;
@@ -27,7 +31,9 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
-  terminalDiagnostic?: ProcessTerminalDiagnostic;
+  terminalDiagnostic?:
+    | ProcessTerminalDiagnostic
+    | { kind: "timeout"; timeoutMs: number; partialResults?: number };
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);
@@ -39,14 +45,8 @@ export function isExecLikeToolName(toolName: string): boolean {
 
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
-function hasUnsafeSummaryCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
+export function hasTerminalControlCharacter(value: string): boolean {
+  return /\p{Cc}/u.test(value);
 }
 
 /** Accepts only the compact single-line diagnostic produced below. */
@@ -55,7 +55,11 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
     return undefined;
   }
   const summary = value.trim();
-  if (!summary || summary.length > MAX_ABORT_SUMMARY_LENGTH || hasUnsafeSummaryCharacter(summary)) {
+  if (
+    !summary ||
+    summary.length > MAX_ABORT_SUMMARY_LENGTH ||
+    hasTerminalControlCharacter(summary)
+  ) {
     return undefined;
   }
   return summary;
@@ -63,7 +67,7 @@ export function readToolValidationErrorSummary(value: unknown): string | undefin
 
 /** Builds a static diagnostic from typed pre-execution validation provenance. */
 export function createToolValidationErrorSummary(toolName: string): string | undefined {
-  if (hasUnsafeSummaryCharacter(toolName)) {
+  if (hasTerminalControlCharacter(toolName)) {
     return undefined;
   }
   const normalizedToolName = toolName.replace(/\s+/g, " ").trim();

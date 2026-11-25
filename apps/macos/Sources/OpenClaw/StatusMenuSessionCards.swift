@@ -69,9 +69,10 @@ struct StatusSessionCard: View {
 @MainActor
 struct StatusApprovalCard: View {
     let request: ExecApprovalQueueItem
+    let approvalQueue: ExecApprovalQueueStore
 
     private var sessionLabel: String {
-        self.request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? String(localized: "Session approval")
     }
 
@@ -91,14 +92,14 @@ struct StatusApprovalCard: View {
                 Spacer(minLength: 4)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let seconds = max(0, Int(ceil(self.expirationDate.timeIntervalSince(context.date))))
-                    Text(String(localized: "\(seconds)s"))
+                    Text(String(format: String(localized: "%llds"), seconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 48, alignment: .trailing)
                 }
             }
 
-            Text(ExecApprovalCommandDisplaySanitizer.sanitize(self.request.request.command))
+            Text(self.request.preview)
                 .font(.caption.monospaced())
                 .lineLimit(3)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -134,7 +135,7 @@ struct StatusApprovalCard: View {
     private func resolve(_ decision: ExecApprovalDecision) {
         guard self.request.allowedDecisions.contains(decision) else { return }
         Task {
-            await ExecApprovalQueueStore.shared.resolve(request: self.request, decision: decision)
+            await self.approvalQueue.resolve(request: self.request, decision: decision)
         }
     }
 }

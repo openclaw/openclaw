@@ -24,6 +24,10 @@ Advantages:
     ```bash
     openclaw plugins install @openclaw/searxng-plugin
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Run a SearXNG instance">
     ```bash
@@ -62,6 +66,10 @@ Advantages:
   },
 }
 ```
+
+SearXNG uses `tools.web.search.maxResults` for the default result count and
+`tools.web.search.timeoutSeconds` for its request deadline. A search's `count`
+argument overrides the configured result count.
 
 Plugin-level settings for the SearXNG instance:
 
@@ -132,6 +140,10 @@ and `language` as per-call overrides.
 - **Category fallback** -- if a non-`general` category request succeeds but
   returns zero results, OpenClaw retries the same query once with `general`
   before returning an empty result set
+- **Unresponsive engines** -- when SearXNG returns zero results and reports
+  engines it could not get an answer from (suspended, rate-limited, timed out),
+  the search fails with an error naming them instead of returning an empty,
+  cached result set
 - **Result caching** -- identical queries (same query, count, categories,
   language, and base URL) are cached in-process for a short TTL
 - **Version requirement** -- the plugin declares `minHostVersion: >=2026.6.9`

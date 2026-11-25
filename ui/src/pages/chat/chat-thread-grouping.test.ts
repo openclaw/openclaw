@@ -1,120 +1,706 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
-import type { ChatItem } from "../../lib/chat/chat-types.ts";
+import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
+import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
+import {
+  groupsOf,
+  message,
+  messagesOf,
+  nativeMessage,
+  openAIMessage,
+  openAIModel,
+  pending,
+  queued,
+  signedText as signed,
+  text as textBlock,
+  toolResult,
+} from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import { buildItems, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
+import { resetChatThreadState } from "./chat-thread.ts";
+import { collapseCompletedTurnWork, coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
-function forwardedMessage(sessionKey: string, content = "Forwarded report") {
-  return {
-    role: "assistant",
-    content,
-    timestamp: 1,
-    senderLabel: "Forwarded from main",
-    senderSession: { sessionKey, agentId: "main" },
-  };
-}
-
+const sessionKey = "agent:main:dashboard:answers";
+const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
+const web: MessageClientSource = { id: "openclaw-control-ui", mode: "webchat" };
+const clients = [cli, web];
+const senderIdentity = { type: "profile", id: "same-person" };
+const origin = { sessionKey: "agent:main:main", agentId: "main", label: undefined };
 function cachedGroups(messages: unknown[]) {
-  return buildCachedChatItems({
-    paneId: "forwarded-attribution",
-    sessionKey: "agent:target:main",
-    messages,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-  }).filter((item) => item.kind === "group");
+  return groupsOf(buildItems({ messages }));
 }
+function groupHistory(messages: unknown[], showReasoning = false) {
+  return groupMessages(
+    messages.map((entry, index) => ({ kind: "message", key: `message:${index}`, message: entry })),
+    {},
+    undefined,
+    showReasoning,
+  );
+}
+function collapse(messages: unknown[]) {
+  return collapseCompletedTurnWork(cachedGroups(messages), { sessionKey, runWorking: false });
+}
+function projected(messages: unknown[]) {
+  return coalesceActivityRuns(collapse(messages));
+}
+function visible(items: ReturnType<typeof projected>) {
+  return messagesOf(groupsOf(items));
+}
+function work(
+  items: ReturnType<typeof projected>,
+  kind: "work-group" | "activity-run" = "work-group",
+) {
+  return messagesOf(
+    items.flatMap((item) =>
+      (item.kind === "work-group" || item.kind === "activity-run") && item.kind === kind
+        ? item.groups
+        : [],
+    ),
+  );
+}
+function tool(id: string, timestamp: number, extra: object = {}) {
+  return toolResult(id, "read", "Evidence", timestamp, extra);
+}
+function expectProvenance(messages: unknown[]) {
+  const groups = cachedGroups(messages);
+  expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
+  return groups;
+}
+function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
+  for (const history of [messages, structuredClone(messages)]) {
+    const items = projected(history);
+    expect({ shown: visible(items), folded: work(items) }).toEqual({
+      shown: shown.map((index) => messages[index]),
+      folded: folded.map((index) => messages[index]),
+    });
+    expect(items.filter((item) => item.kind === "work-group")).toHaveLength(folded.length ? 1 : 0);
+    if (folded.length) {
+      expect(items[1]?.kind).toBe("work-group");
+    }
+  }
+}
+beforeEach(() => resetChatThreadState());
 
-describe("forwarded source-session grouping", () => {
-  beforeEach(() => resetChatThreadState());
-
-  it("carries the first message's source session while grouping messages from that source", () => {
-    const messages = [
-      forwardedMessage("agent:main:main", "First report"),
-      forwardedMessage("agent:main:main", "Second report"),
-    ];
-    const items: ChatItem[] = messages.map((message, index) => ({
-      kind: "message",
-      key: `message:${index}`,
-      message,
-    }));
-
-    expect(groupMessages(items)).toMatchObject([
-      {
-        senderLabel: "Forwarded from main",
-        senderSession: { sessionKey: "agent:main:main", agentId: "main" },
-        messages: [{ message: messages[0] }, { message: messages[1] }],
-      },
-    ]);
+it("folds only recorded OpenAI work as consecutive turns and the selected model change", () => {
+  const claude = { provider: "clawrouter", model: "anthropic/claude-opus-5-5" };
+  const gpt = { provider: "clawrouter", model: "openai/gpt-5.5" };
+  const imported = { provider: "openai", model: "native-history" };
+  const claudeImported = { provider: "claude-cli", model: "native-history" };
+  const turns = [
+    { progress: claude, response: claude, fold: false },
+    { progress: gpt, response: { ...gpt, responseModel: "gpt-5.5" }, fold: true },
+    { progress: gpt, response: { ...gpt, responseModel: "gpt-5.5-2026-08-01" }, fold: true },
+    { progress: gpt, response: { ...gpt, responseModel: "other-2026-08-01" }, fold: false },
+    { progress: gpt, response: { ...gpt, responseModel: claude.model }, fold: false },
+    { progress: gpt, response: { ...gpt, responseModel: "unidentified-upstream" }, fold: false },
+    { progress: gpt, response: { ...claude, responseModel: gpt.model }, fold: true },
+    { progress: claude, response: openAIModel, fold: false },
+    { progress: imported, response: imported, fold: true },
+    { progress: claudeImported, response: claudeImported, fold: false },
+    { progress: {}, response: {}, fold: false },
+  ].map(({ progress, response, fold }, i) => {
+    const start = 1_000 * (i + 1);
+    const prompt = message("user", `Check file ${i}`, start);
+    const update = message("assistant", `Inspecting file ${i}`, start + 1, progress);
+    const read = tool(`read-${i}`, start + 2);
+    const answer = message("assistant", `Verified file ${i}`, start + 3, {
+      ...response,
+      api: "openai-responses",
+      phase: "final_answer",
+    });
+    const history = [prompt, update, read, answer];
+    return {
+      history,
+      visible: fold ? [prompt, answer] : [prompt, update, answer],
+      activity: fold ? [] : [read],
+      work: fold ? [update, read] : [],
+    };
   });
+  const groups = cachedGroups(turns.flatMap((turn) => turn.history));
+  for (const selected of [openAIModel, claude]) {
+    const session = { key: sessionKey, modelProvider: selected.provider, model: selected.model };
+    const items = coalesceActivityRuns(
+      collapseCompletedTurnWork(groups, { sessionKey, runWorking: false, session }),
+    );
+    expect(
+      items.flatMap((item) => (item.kind === "work-group" ? [messagesOf(item.groups)] : [])),
+    ).toEqual(turns.map((turn) => turn.work).filter((entries) => entries.length));
+    expect(visible(items)).toEqual(turns.flatMap((turn) => turn.visible));
+    expect(work(items, "activity-run")).toEqual(turns.flatMap((turn) => turn.activity));
+  }
+});
 
-  it("splits messages from different source sessions even when the agent labels match", () => {
-    const items: ChatItem[] = ["agent:main:main", "agent:main:dashboard:other"].map(
-      (sessionKey, index) => ({
-        kind: "message",
-        key: `message:${index}`,
-        message: forwardedMessage(sessionKey, `Report ${index}`),
+it("keeps provider speech separate from answer ownership and completed-work rollups", () => {
+  const answer = message("assistant", "The command exited with code 0.", 2);
+  const speech = message("assistant", "The command exited with code zero.", 3, {
+    __openclaw: { voiceTranscript: "provider-owned" },
+  });
+  const groups = cachedGroups([message("user", "Check the command.", 1), answer, speech]);
+  expect(groups.map((group) => group.messages.map((item) => item.message))).toEqual([
+    [expect.objectContaining({ role: "user" })],
+    [answer],
+    [speech],
+  ]);
+  expect(assistantGroupCanOwnActiveRunStatus(groups[1]!)).toBe(true);
+  expect(assistantGroupCanOwnActiveRunStatus(groups[2]!)).toBe(false);
+  expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toEqual(groups);
+});
+
+it("keeps each queued message in the same row through acceptance and persistence", () => {
+  const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map((text, index) =>
+    queued(`local-${index}`, text, index + 1, "waiting-reconnect", {
+      sendRunId: `send-${index}`,
+      sendAttempts: 1,
+    }),
+  );
+  const pendingInputs = queue.map((item, index) =>
+    pending(
+      `accepted-${index}`,
+      item.sendRunId,
+      nativeMessage("user", item.text, index + 1, { id: `pending:accepted-${index}` }),
+      index + 1,
+    ),
+  );
+  const persisted = queue.map((item, index) =>
+    nativeMessage("user", item.text, index + 1, {
+      id: `persisted-${index}`,
+      seq: index + 1,
+      idempotencyKey: `${item.sendRunId}:user`,
+      runId: `execution-${index}`,
+    }),
+  );
+  const render = (input: Pick<CachedChatItemsProps, "messages" | "pendingInputs">) =>
+    groupsOf(
+      buildItems({
+        paneId: "queued-input-continuity",
+        sessionKey: "agent:main:dashboard:queued-inputs",
+        queue,
+        ...input,
       }),
     );
+  const initial = render({ messages: [] });
+  const rowKeys = initial.map((group) => group.key);
+  const messageKeys = initial.map((group) => group.messages[0]?.key);
 
-    const groups = groupMessages(items);
-    expect(groups).toHaveLength(2);
-    expect(groups).toMatchObject([
-      { senderSession: { sessionKey: "agent:main:main" } },
-      { senderSession: { sessionKey: "agent:main:dashboard:other" } },
-    ]);
-  });
-
-  it("does not collapse identical reports from different source sessions before grouping", () => {
-    const groups = cachedGroups([
-      forwardedMessage("agent:main:main"),
-      forwardedMessage("agent:main:dashboard:other"),
-    ]);
-
-    expect(groups).toHaveLength(2);
-    expect(groups.every((group) => group.messages.length === 1)).toBe(true);
-    expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual([
-      undefined,
-      undefined,
-    ]);
-  });
-
-  it.each([
-    { senderSession: { sessionKey: "agent:main:main", agentId: "main" } },
-    { provenance: { kind: "inter_session", sourceTool: "sessions_send" } },
-  ])("clears stale human reply attribution at a forwarded boundary %o", (attribution) => {
-    const groups = cachedGroups([
-      { role: "user", content: "Alice's question", __openclaw: { senderId: "alice" } },
-      { role: "user", content: "Bob's question", __openclaw: { senderId: "bob" } },
-      { role: "assistant", content: "Answer for Bob" },
-      {
-        role: "assistant",
-        content: "Forwarded report",
+  expect(initial.map((group) => group.messages.length)).toEqual([1, 1]);
+  for (const input of [
+    { messages: [], pendingInputs: pendingInputs.slice(0, 1) },
+    { messages: [], pendingInputs },
+    { messages: persisted.slice(0, 1), pendingInputs: pendingInputs.slice(1) },
+    { messages: persisted, pendingInputs: [] },
+  ]) {
+    const groups = render(input);
+    expect(groups.map((group) => group.key)).toEqual(rowKeys);
+    expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+    expect(groups.map((group) => group.messages[0]?.key)).toEqual(messageKeys);
+  }
+});
+it.each([
+  {
+    name: "collected clients",
+    from: (content: string) =>
+      nativeMessage("user", content, 1, {
+        senderId: "same-person",
+        senderIdentity: { ...senderIdentity },
+        transport: { clients },
+      }),
+    attribution: (group: MessageGroup) => [group.sourceClients, group.sender?.identity],
+    expected: [clients, senderIdentity],
+  },
+  {
+    name: "forwarded session",
+    from: (content: string) =>
+      message("assistant", content, 1, {
         senderLabel: "Forwarded from main",
-        ...attribution,
-      },
-      { role: "assistant", content: "Response to the forwarded report" },
+        senderSession: { ...origin },
+      }),
+    attribution: (group: MessageGroup) => [group.senderSession, group.senderLabel],
+    expected: [origin, "Forwarded from main"],
+  },
+])("groups the same $name without losing provenance", ({ from, attribution, expected }) => {
+  const groups = expectProvenance([from("First report"), from("Second report")]);
+  expect(groups.map((group) => attribution(group))).toEqual([expected]);
+});
+it.each([
+  { type: "image", source: { type: "url", url: "https://example.com/result.png" } },
+  {
+    type: "attachment",
+    attachment: { kind: "document", url: "https://example.com/result.pdf", label: "Result" },
+  },
+  {
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      render: "url",
+      url: "https://example.com/result",
+    },
+  },
+])("keeps mixed reasoning and $type visible", (outcome) => {
+  const thinking = { type: "thinking", thinking: "Checking the evidence." };
+  const messages = [
+    message("user", "Check it.", 1000),
+    openAIMessage([thinking], 2000),
+    openAIMessage([thinking, outcome], 3000),
+  ];
+  const groups = groupHistory(messages, true);
+  expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toMatchObject([
+    { kind: "group", role: "user" },
+    { kind: "work-group", groups: [{ messages: [{ message: messages[1] }] }] },
+    { kind: "group", messages: [{ message: messages[2] }] },
+  ]);
+  const reasoning = groups[1];
+  expect(reasoning?.kind).toBe("group");
+  if (reasoning?.kind === "group") {
+    expect(assistantGroupCanOwnActiveRunStatus(reasoning)).toBe(false);
+  }
+});
+
+it("preserves malformed user content", () => {
+  for (const content of [[null], [null, { type: "text", text: "Still visible" }]]) {
+    const entry = { role: "user", content };
+    expect(groupMessages([{ kind: "message", key: "malformed", message: entry }])).toMatchObject([
+      { kind: "group", messages: [{ key: "malformed", message: entry }] },
     ]);
+  }
+});
 
-    expect(groups).toHaveLength(5);
-    expect(groups[2]?.replyToSender).toEqual({ id: "bob" });
-    expect(groups[3]?.replyToSender).toBeUndefined();
-    expect(groups[4]?.replyToSender).toBeUndefined();
+it("keeps media visible and folds commentary after replacement", () => {
+  const preview = openAIMessage([{ type: "image", url: "https://example.com/diagram.png" }], 2);
+  const messages = [
+    message("user", "Build a diagram", 1),
+    preview,
+    tool("render-diagram", 3),
+    openAIMessage("Done", 4),
+  ];
+  expectHistory(messages, [0, 1, 3], [2]);
+  const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
+  expectHistory(
+    messages.map((entry) => (entry === preview ? replacement : entry)),
+    [0, 3],
+    [1, 2],
+  );
+});
+it.each([true, false])(
+  "keeps work with its answer above a trailing steer (working=%s)",
+  (runWorking) => {
+    const runId = "target-run";
+    const prompt = nativeMessage("user", "Inspect the file", 1, {
+      idempotencyKey: `${runId}:user`,
+    });
+    const evidence = tool("read-file", 2, { runId });
+    const answer = openAIMessage("File inspected", 3, {
+      runId,
+      __openclaw: { recordTimestampMs: 322 },
+    });
+    const queuedMessage = nativeMessage("user", "Queued follow-up", 4, {
+      idempotencyKey: "queued-run:user",
+    });
+    const steer = nativeMessage("user", "Also check permissions", 5, {
+      idempotencyKey: "steer-run:user",
+      steerTargetRunId: runId,
+    });
+    const ordered = [prompt, evidence, answer, queuedMessage, steer];
+    const items = collapseCompletedTurnWork(groupHistory(ordered), {
+      sessionKey,
+      runWorking,
+      session: { key: sessionKey, lastRunId: runId, status: "done", runtimeMs: 321 },
+    });
+    expect(visible(items)).toEqual(runWorking ? ordered : [prompt, answer, queuedMessage, steer]);
+    expect(work(items)).toEqual(runWorking ? [] : [evidence]);
+    if (!runWorking) {
+      expect(items[1]).toMatchObject({ kind: "work-group", replyRunId: runId, durationMs: 321 });
+    }
+  },
+);
+
+it.each<[string, object, boolean, boolean?]>([
+  ["settled terminal", {}, true],
+  ["explicit commentary", { phase: "commentary" }, false],
+  ["interrupted text", { openclawAbort: { aborted: true } }, false],
+  ["legacy unphased reply", {}, false, true],
+])("preserves %s through history reload", (_name, extra, preserved, legacy) => {
+  const run = { runId: "completed-run" };
+  const messages = [
+    nativeMessage("user", "Inspect the file", 1, run),
+    tool("read-file", 2, { __openclaw: run }),
+    openAIMessage("File verified — café 雪 🦞", 3, {
+      stopReason: "stop",
+      ...extra,
+      __openclaw: {
+        ...run,
+        ...(!legacy ? { mirrorOrigin: "codex-app-server", runTerminal: true } : {}),
+      },
+    }),
+    message("assistant", "Gateway restart config-patch ok", 4, {
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+    }),
+  ];
+  expectHistory(messages, preserved ? [0, 2, 3] : [0, 3], preserved ? [1] : [1, 2]);
+});
+it.each<[string, boolean, number[], number[]]>([
+  ["final_answer", false, [0, 1, 2], []],
+  ["commentary", true, [0, 1], [2, 3]],
+])("preserves signed answer before %s through history reload", (phase, withTool, shown, folded) => {
+  const run = { __openclaw: { runId: "run" } };
+  const first = message("user", "Investigate", 1, run);
+  const answer = openAIMessage([signed("Substantive answer", "final_answer")], 2, run);
+  const evidence = withTool ? [tool("call", 3, run)] : [];
+  const later = openAIMessage([signed("Later update", phase)], 4, run);
+  expectHistory([first, answer, ...evidence, later], shown, folded);
+});
+
+it("keeps the earlier answer visible when a late exec completion starts the follow-up turn", () => {
+  const messages = [
+    message("user", "Review the change", 1),
+    openAIMessage("long final answer", 3),
+    openAIMessage("should I fix points 1-4?", 4, { __openclaw: { turnBoundary: true } }),
+  ];
+  expectHistory(messages, [0, 1, 2], []);
+});
+
+it("keeps independent-run trailing activity with its owner", () => {
+  const messages = [
+    message("user", "Watch the queue", 1),
+    openAIMessage("Checking", 2, { phase: "commentary", runId: "reply" }),
+    openAIMessage("Watching", 3, { phase: "final_answer", runId: "reply" }),
+    ...[1, 2].flatMap((index) => {
+      const runId = `wake-${index}`;
+      return [
+        openAIMessage(
+          [{ type: "toolCall", id: `call-${index}`, name: "read", arguments: {} }],
+          4 * index,
+          { runId },
+        ),
+        tool(`call-${index}`, 4 * index + 1, { runId }),
+      ];
+    }),
+  ];
+  for (const history of [messages, structuredClone(messages)]) {
+    const items = coalesceActivityRuns(
+      collapseCompletedTurnWork(groupHistory(history), { sessionKey, runWorking: false }),
+    );
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "work-group",
+      "group",
+      "activity-run",
+    ]);
+    expect(work(items)).toEqual([messages[1]]);
+    expect(items.find((item) => item.kind === "work-group")?.durationMs).toBeNull();
+    expect(work(items, "activity-run")).toEqual(messages.slice(3));
+  }
+});
+
+it("keeps thinking plus tool calls as activity and omits assistant rows with nothing to display", () => {
+  const groups = cachedGroups([
+    message("user", "Check the parent", 1_000),
+    message(
+      "assistant",
+      [
+        { type: "thinking", thinking: "Find the parent." },
+        { type: "toolCall", id: "list", name: "sessions_list", arguments: {} },
+      ],
+      2_000,
+    ),
+    message("assistant", [{ type: "thinking", thinking: "Nothing to say." }], 3_000),
+  ]);
+  expect(groups.map((item) => item.role)).toEqual(["user", "tool"]);
+});
+
+it("retains prepared tool outcomes without content blocks as activity", () => {
+  const outcome = message("assistant", [], 1_000, {
+    activity: [
+      {
+        itemId: "read",
+        kind: "tool",
+        phase: "end",
+        name: "read",
+        title: "Read",
+        status: "blocked",
+      },
+    ],
+  });
+  expect(buildItems({ messages: [outcome] })).toMatchObject([
+    { kind: "group", role: "tool", messages: [{ message: outcome }] },
+  ]);
+});
+
+// One completed turn folds its preamble, narration and tool work into a single
+// rollup above the answer; the transcript itself keeps every envelope intact.
+describe("completed-turn rollup", () => {
+  const run = { runId: "rollup-run" };
+  const ask = message("user", "Inspect the layout", 1, run);
+  const answer = openAIMessage("The layout is fixed.", 9, {
+    ...run,
+    phase: "final_answer",
+    stopReason: "stop",
+  });
+  const call = (id: string, timestamp: number, narration?: string, name = "read") =>
+    openAIMessage(
+      [
+        ...(narration ? [{ type: "text", text: narration }] : []),
+        { type: "toolCall", id, name, arguments: { path: `${id}.ts` } },
+      ],
+      timestamp,
+      run,
+    );
+  function expectOneRollup(messages: unknown[], ordered: string[] = []) {
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+      expect(visible(items)).toEqual([ask, answer]);
+      const folded = JSON.stringify(work(items));
+      const positions = ordered.map((text) => folded.indexOf(text));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+    }
+  }
+
+  it("keeps Markdown and plain narration in one ordered rollup", () => {
+    const markdown = openAIMessage(
+      [
+        { type: "text", text: "Checking `layout.ts`:" },
+        { type: "toolCall", id: "first", name: "read", arguments: {} },
+        { type: "text", text: "Found **two** issues:\n- spacing\n- radius" },
+        { type: "toolCall", id: "second", name: "read", arguments: {} },
+      ],
+      2,
+      run,
+    );
+    expectOneRollup(
+      [
+        ask,
+        markdown,
+        tool("first", 3, run),
+        tool("second", 4, run),
+        call("third", 5, "Now the stylesheet."),
+        tool("third", 6, run),
+        answer,
+      ],
+      ["Checking", "first", "Found **two**", "second", "Now the stylesheet.", "third"],
+    );
   });
 
-  it.each([
-    { sessionKey: "agent:main:dashboard:other", agentId: "main" },
-    { sessionKey: "agent:main:main", agentId: "updated" },
-  ])("refreshes cached attribution when the source changes to %o", (senderSession) => {
-    const message = forwardedMessage("agent:main:main");
-    const initial = cachedGroups([message]);
-    message.senderSession = senderSession;
-
-    const refreshed = cachedGroups([message]);
-
-    expect(refreshed[0]?.senderSession).toEqual(senderSession);
-    expect(refreshed[0]).not.toBe(initial[0]);
+  it("keeps tool-result images inside completed work without hiding the answer", () => {
+    const frame = { type: "image", mimeType: "image/png", artifactId: "frame", omitted: true };
+    const result = toolResult("frame", "view_image", [textBlock("Loaded"), frame, frame], 3, run);
+    const messages = [ask, call("frame", 2, undefined, "view_image"), result, answer];
+    for (const history of [messages, structuredClone(messages)]) {
+      const items = projected(history);
+      expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+        "user",
+        "work-group",
+        "assistant",
+      ]);
+      expect(JSON.stringify(work(items)).match(/"artifactId":"frame"/g)).toHaveLength(2);
+      expect(JSON.stringify(visible(items))).not.toContain("artifactId");
+      expect(visible(items)).toContainEqual(answer);
+    }
   });
+
+  it("does not hide image evidence when a run has no answer or a late tool fails", () => {
+    const image = { type: "image", artifactId: "inspection-image", omitted: true };
+    const inspected = toolResult("image", "view_image", [image], 3, run);
+    const failed = toolResult("failed-image", "view_image", [image], 10, { ...run, isError: true });
+    expectHistory([ask, inspected], [0, 1], []);
+    expectHistory([ask, inspected, answer, failed], [0, 2, 3], [1]);
+  });
+
+  it("does not adopt an independent background image as work for an earlier reply", () => {
+    const image = toolResult(
+      "background-image",
+      "view_image",
+      [{ type: "image", artifactId: "background-evidence", omitted: true }],
+      10,
+      { runId: "background-run" },
+    );
+    expectHistory([ask, answer, image], [0, 1, 2], []);
+  });
+
+  it("preserves assistant media emitted alongside a tool call", () => {
+    const preview = openAIMessage(
+      [
+        { type: "image", artifactId: "assistant-preview", omitted: true },
+        { type: "toolCall", id: "continue", name: "read", arguments: {} },
+      ],
+      2,
+      { ...run, stopReason: "toolUse" },
+    );
+    const result = tool("continue", 3, run);
+    const items = projected([ask, preview, result, answer]);
+    expect(visible(items)).toEqual([
+      ask,
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "image", artifactId: "assistant-preview", omitted: true }],
+      }),
+      answer,
+    ]);
+    expect(JSON.stringify(work(items))).toContain("continue");
+  });
+
+  it("keeps an image-only delivered answer outside its inspected work", () => {
+    const inspected = toolResult(
+      "image",
+      "view_image",
+      [{ type: "image", artifactId: "inspection-image", omitted: true }],
+      3,
+      run,
+    );
+    const delivered = openAIMessage(
+      [{ type: "image", artifactId: "delivered-image", omitted: true }],
+      4,
+      { ...run, phase: "final_answer", stopReason: "stop" },
+    );
+    expectHistory([ask, inspected, delivered], [0, 2], [1]);
+  });
+
+  it("moves work recorded after the answer above it", () => {
+    expectOneRollup(
+      [
+        ask,
+        call("before", 2),
+        tool("before", 3, run),
+        answer,
+        call("after", 10),
+        tool("after", 11, run),
+      ],
+      ["before.ts", "after.ts"],
+    );
+  });
+
+  it("leaves bubble-mode turns to the activity disclosure", () => {
+    const groups = cachedGroups([
+      ask,
+      call("bubble", 2, "Checking spacing."),
+      tool("bubble", 3, run),
+      answer,
+    ]);
+    expect(
+      collapseCompletedTurnWork(groups, { sessionKey, runWorking: false, bubbleMode: true }),
+    ).toEqual(groups);
+  });
+});
+
+it.each(["error", "aborted"])(
+  "keeps a terminal %s after the answer outside completed work",
+  (stopReason) => {
+    expectHistory(
+      [
+        message("user", "Check the files", 1),
+        tool("read-first", 2),
+        openAIMessage("The first file is correct.", 3),
+        openAIMessage([{ type: "toolCall", id: "read-last", name: "read", arguments: {} }], 4, {
+          stopReason,
+        }),
+      ],
+      [0, 2, 3],
+      [1],
+    );
+  },
+);
+
+it("keeps each run's reply visible when completions answer without new user input", () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const items = collapse([
+    message("user", "Start two subagents", 1_000),
+    openAIMessage("Spawning both.", 1_500, run("run-user")),
+    { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
+    openAIMessage("Both started.", 3_000, run("run-user")),
+    openAIMessage("Child A finished.", 4_000, run("announce:v1:child-a")),
+    { ...toolResult("lookup", "bash", "ok", 4_500), ...run("announce:v1:child-b") },
+    openAIMessage("Child B finished.", 5_000, run("announce:v1:child-b")),
+    openAIMessage("All children settled.", 6_000, run("announce:requester-settle:a,b")),
+  ]);
+  const text = (entries: unknown[]) =>
+    entries.map((entry) => (entry as { content?: unknown }).content);
+  expect(text(messagesOf(groupsOf(items)))).toEqual([
+    "Start two subagents",
+    "Both started.",
+    "Child A finished.",
+    "Child B finished.",
+    "All children settled.",
+  ]);
+  const rollup = items.find((item) => item.kind === "work-group");
+  expect(rollup?.kind === "work-group" ? text(messagesOf(rollup.groups)) : []).toEqual([
+    "Spawning both.",
+    "ok",
+    "ok",
+  ]);
+});
+
+it.each([
+  ["untagged CLI work of the first run", false, false, ["run-user", "announce:v1:child-a"]],
+  ["untagged CLI work across runs", false, true, undefined],
+  ["tagged work across runs", true, true, undefined],
+] as const)(
+  "frames completed work by its run when earlier runs keep replies: %s",
+  (_name, tagged, laterWork, frameRunIds) => {
+    // CLI runtimes import tool rows without a run id; only the persisted reply carries one.
+    const meta = (runId: string) =>
+      tagged ? { __openclaw: { runId } } : { __openclaw: { importedFrom: "claude-cli" } };
+    const items = coalesceAgentRunFrames(
+      coalesceActivityRuns(
+        collapse([
+          message("user", "Start two subagents", 1_000),
+          toolResult("spawn", "sessions_spawn", "accepted", 2_000, meta("run-user")),
+          openAIMessage("Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+          ...(laterWork
+            ? [toolResult("check", "sessions_list", "ok", 3_500, meta("announce:v1:child-a"))]
+            : []),
+          openAIMessage("Child A finished.", 4_000, {
+            __openclaw: { runId: "announce:v1:child-a" },
+          }),
+        ]),
+      ),
+    );
+    const frames = items.filter((item) => item.kind === "agent-run-frame");
+    if (frameRunIds) {
+      // The rollup stays in the frame of the run that did the work.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+      expect(frames.map((frame) => frame.runId)).toEqual(frameRunIds);
+      expect(frames[0]?.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+    } else {
+      // Work across runs has no single owner, with or without run ids.
+      expect(items.map((item) => item.kind)).toEqual([
+        "group",
+        "work-group",
+        "agent-run-frame",
+        "agent-run-frame",
+      ]);
+    }
+  },
+);
+
+it("times completed work only against the run that owns it", () => {
+  const messages = [
+    nativeMessage("user", "Start two subagents", 1_000, { idempotencyKey: "run-user:user" }),
+    toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
+      __openclaw: { importedFrom: "claude-cli" },
+    }),
+    openAIMessage("Both started.", 3_000, {
+      __openclaw: { runId: "run-user", recordTimestampMs: 8_000 },
+    }),
+    openAIMessage("Child A finished.", 4_000, {
+      __openclaw: { runId: "announce:v1:child-a" },
+    }),
+  ];
+  const durationFor = (lastRunId: string) =>
+    collapseCompletedTurnWork(cachedGroups(messages), {
+      sessionKey,
+      runWorking: false,
+      session: { key: sessionKey, lastRunId, status: "done", runtimeMs: 7_000 },
+    }).find((item) => item.kind === "work-group")?.durationMs;
+  // The rollup belongs to the user's run; a later completion run's runtime is not its time.
+  expect(durationFor("run-user")).toBe(7_000);
+  expect(durationFor("announce:v1:child-a")).toBe(7_000);
 });

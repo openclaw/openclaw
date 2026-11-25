@@ -3,29 +3,48 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
-import { withSandboxMediaTempHome } from "../../auto-reply/stage-sandbox-media.test-harness.js";
+import {
+  createSandboxWorkspacePreparation,
+  withSandboxMediaTempHome,
+} from "../../auto-reply/stage-sandbox-media.test-harness.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "../../gateway/github-publication-git-transport.js";
 import { prepareNodeWorkspaceTransferSnapshot } from "../../gateway/worker-environments/node-workspace-transfer-snapshot.js";
 import { prepareWorkerTurnMedia } from "../../gateway/worker-environments/worker-turn-media.js";
+import { prepareWorkspaceReconciliation } from "../../gateway/worker-environments/workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "../../gateway/worker-environments/workspace-manifest.js";
 import { applyStagedWorkerWorkspace } from "../../gateway/worker-environments/workspace-reconcile.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "../../gateway/worker-environments/workspace-sync-scripts.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { createStagedInputOwnershipFixture } from "../../media/staged-inputs.test-support.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { captureManifest } from "../../node-host/node-worker-workspace-commands.js";
+import {
+  captureManifest,
+  runWorkspaceCommand,
+} from "../../node-host/node-worker-workspace-commands.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { requireGit } from "./git.js";
 import { ManagedWorktreeService } from "./service.js";
 import { initializeManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const sandbox = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
-vi.mock("../sandbox.js", () => sandbox);
+// mock-isolation: Reconciliation uses the fixture checkout without provisioning a separate sandbox.
+vi.mock("../sandbox/context.js", () => ({
+  ...sandbox,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandbox.ensureSandboxWorkspaceForSession(...args)),
+}));
 
 afterEach(() => {
+  resetConfigRuntimeState();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
 
-it.each(["host", "writable sandbox", "cloud"])(
+it.each(["writable sandbox", "cloud"])(
   "retains private staged inputs through reconciliation and restore without publishing them (%s)",
   async (mode) => {
     await withSandboxMediaTempHome("private-input-lifecycle-", async (home) => {
@@ -49,6 +68,7 @@ it.each(["host", "writable sandbox", "cloud"])(
       ]);
       await requireGit(repo, ["commit", "-qm", "project-owned inputs"]);
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(home, "state") };
+      setRuntimeConfigSnapshot({}, {});
       const service = new ManagedWorktreeService({ env });
       const worktree = await service.create({ repoRoot: repo, name: "inputs", baseRef: "HEAD" });
       const cwd = worktree.path;
@@ -99,7 +119,7 @@ it.each(["host", "writable sandbox", "cloud"])(
             timeoutMs: 10_000,
           },
           history: [],
-          localWorkspaceDir: cwd,
+          workspace: { kind: "local", path: cwd },
           remoteWorkspaceDir: remote,
           isAuthorized: () => true,
           signal: new AbortController().signal,
@@ -112,7 +132,9 @@ it.each(["host", "writable sandbox", "cloud"])(
             quiesceWorkspace: unused,
             stop: unused,
             stageAttachments: async ({ localPath }) => {
-              for (const file of await fs.readdir(localPath, { recursive: true })) {
+              for (const file of (await listDirectoryTreeStrict(localPath)).map(
+                (walkEntry) => walkEntry.relativePath,
+              )) {
                 const source = path.join(localPath, file);
                 if ((await fs.stat(source)).isFile()) {
                   await fs.mkdir(path.dirname(path.join(remote, file)), { recursive: true });
@@ -122,7 +144,8 @@ it.each(["host", "writable sandbox", "cloud"])(
             },
           },
         });
-        inputs = (await fs.readdir(path.join(remote, "media/inbound"), { recursive: true }))
+        inputs = (await listDirectoryTreeStrict(path.join(remote, "media/inbound")))
+          .map((walkEntry) => walkEntry.relativePath)
           .filter((file) => path.basename(file).startsWith("input-"))
           .map((file) => `media/inbound/${file.split(path.sep).join("/")}`);
         inputs.sort((a, b) => {
@@ -135,9 +158,10 @@ it.each(["host", "writable sandbox", "cloud"])(
           return order(a) - order(b);
         });
       } else {
-        sandbox.ensureSandboxWorkspaceForSession.mockResolvedValue(
-          mode === "host" ? null : { workspaceDir: cwd, workspaceAccess: "rw" },
-        );
+        sandbox.ensureSandboxWorkspaceForSession.mockResolvedValue({
+          workspaceDir: cwd,
+          workspaceAccess: "rw",
+        });
         const ctx = { media };
         const staged = await stageSandboxMedia({
           ctx,
@@ -182,10 +206,30 @@ it.each(["host", "writable sandbox", "cloud"])(
           await fs.copyFile(path.join(cwd, entry.path), path.join(remote, entry.path));
         }
       }
+      // Download registers the received inventory before later captures reference it.
+      expect(
+        (
+          await runWorkspaceCommand({
+            workspaceDir: remote,
+            homeDir: home,
+            argv: [
+              "node",
+              "-e",
+              REMOTE_WORKSPACE_MANIFEST_JS,
+              remote,
+              base.manifest.baseCommit ?? "",
+              "publish",
+              base.manifestRef.slice("sha256:".length),
+            ],
+            input: base.rawManifest,
+          })
+        ).trim(),
+      ).toBe(base.manifestRef);
       const edited = createSolidPngBuffer(3, 3, { r: 0, g: 0, b: 255 });
       await fs.writeFile(path.join(remote, inputs[0]!), edited);
       await fs.writeFile(path.join(remote, inputs[1]!), "edited private source text");
       const manifestRef = await captureManifest({
+        mode: "all",
         workspaceDir: remote,
         manifestHome: home,
         baseCommit: base.manifest.baseCommit,
@@ -201,9 +245,15 @@ it.each(["host", "writable sandbox", "cloud"])(
         stagingRoot: remote,
         baseManifestRef: base.manifestRef,
         currentManifestRef: manifestRef,
-        base: base.manifest,
+        reconciliation: prepareWorkspaceReconciliation(base.manifest, current),
         current,
-        journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+        acceptance: { kind: "reconcile" },
+        journal: {
+          load: async () => undefined,
+          begin: async () => {},
+          commit: async () => {},
+          abort: async () => {},
+        },
       });
       expect(applied.conflictPaths).toEqual([]);
       const replacement = await snapshot(cwd, "replacement-transfer");

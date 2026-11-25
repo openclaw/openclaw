@@ -9,6 +9,11 @@ inputs:
     description: Go version to install and expose to Testbox; empty skips Go setup.
     required: false
 
+  android:
+    description: Prepare the pinned Android toolchain and native generation dependencies for focused Gradle proof.
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -47,16 +52,56 @@ runs:
         link_node_tool node
         link_node_tool npm
         link_node_tool npx
-        link_node_tool corepack
-        sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+        # SSH does not inherit GITHUB_ENV. Reuse the prepared toolchain and store
+        # for both pnpm and direct corepack commands, preserving caller overrides.
+        corepack_binary="$(readlink -f "$node_bin/corepack")"
+        corepack_shim="$(mktemp "$RUNNER_TEMP/openclaw-corepack.XXXXXX")"
+        {
+          printf '#!/usr/bin/env bash\n'
+          for name in COREPACK_HOME PNPM_CONFIG_STORE_DIR PNPM_CONFIG_CACHE_DIR; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              printf '[ -n "${%s:-}" ] || export %s=%q\n' "$name" "$name" "$value"
+            fi
+          done
+          printf 'exec %q "$@"\n' "$corepack_binary"
+        } > "$corepack_shim"
+        pnpm_shim="$(mktemp "$RUNNER_TEMP/openclaw-pnpm.XXXXXX")"
+        cat > "$pnpm_shim" <<'PNPM'
         #!/usr/bin/env bash
         exec /usr/local/bin/corepack pnpm "$@"
         PNPM
-        sudo chmod 0755 /usr/local/bin/pnpm
+        chmod 0755 "$corepack_shim" "$pnpm_shim"
+        # Selected-source installers can put NODE_BIN first. Replace both aliases
+        # without writing through Corepack's symlinks into its packaged files.
+        for target_bin in "$node_bin" /usr/local/bin; do
+          sudo ln -sf "$corepack_shim" "$target_bin/corepack"
+          sudo ln -sf "$pnpm_shim" "$target_bin/pnpm"
+        done
+
+    - name: Prepare Android proof prerequisites
+      if: inputs.android == 'true'
+      id: android
+      uses: ./.github/actions/setup-android-toolchain
+      with:
+        cache-mode: restore
+        install-native-deps: "true"
+
+    - name: Expose Android tools to Testbox commands
+      if: inputs.android == 'true'
+      shell: bash
+      env:
+        ANDROID_GRADLE_JAVA_HOME: ${{ steps.android.outputs.gradle-java-home }}
+      run: |
+        set -euo pipefail
+        # SSH commands do not inherit GITHUB_ENV or need a login shell.
+        sudo ln -sf "$ANDROID_GRADLE_JAVA_HOME/bin/java" /usr/local/bin/java
+        mkdir -p "$HOME/.gradle"
+        printf 'org.gradle.java.home=%s\n' "$ANDROID_GRADLE_JAVA_HOME" >> "$HOME/.gradle/gradle.properties"
 
     - name: Setup Go environment
       if: inputs.go-version != ''
-      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
       with:
         go-version: ${{ inputs.go-version }}
         cache: false
@@ -74,3 +119,44 @@ runs:
         for tool in go gofmt; do
           sudo ln -sf "$go_root/bin/$tool" "/usr/local/bin/$tool"
         done
+
+    - name: Isolate Testbox sync workspace
+      shell: bash
+      run: |
+        set -euo pipefail
+        state=/tmp/.testbox/working_directory
+        if [ ! -f "$state" ]; then
+          exit 0
+        fi
+
+        # The image's SSH debug profile must not override command-selected cwd.
+        sudo python3 -I -S "$GITHUB_ACTION_PATH/preserve-command-cwd.py" \
+          /etc/profile.d/blacksmith.sh
+
+        workspace="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+        sync_root="$(mktemp -d "$RUNNER_TEMP/openclaw-testbox-sync.XXXXXX")"
+        sync_root="$(cd "$sync_root" && pwd -P)"
+        case "$sync_root/" in
+          "$workspace/"*) echo "Testbox sync must stay outside the execution workspace" >&2; exit 1 ;;
+        esac
+        # Native preparation resets/cleans its checkout before rsync. Keep hydrated
+        # runtime at its original paths; only the verified source receiver updates it.
+        # Do not share Git objects: the receiver replaces execution-side Git metadata.
+        git clone --quiet --local --no-hardlinks "$workspace" "$sync_root"
+        git -C "$sync_root" remote set-url origin "$(git -C "$workspace" remote get-url origin)"
+        ln -s "$workspace" "$sync_root/.git/crabbox-artifact-root"
+        # Exercise the same SSH-context login startup as `bash -lc` payloads.
+        # Probe before advertising readiness; identical HEADs cannot detect cwd drift.
+        (
+          cd "$sync_root"
+          export SSH_CONNECTION="${SSH_CONNECTION:-127.0.0.1 1 127.0.0.1 22}"
+          bash -lc '
+            actual="$(pwd -P)"
+            if [ "$actual" != "$1" ]; then
+              printf "Testbox login shell changed checkout: expected %s, got %s\n" "$1" "$actual" >&2
+              exit 1
+            fi
+          ' -- "$sync_root"
+        )
+        # run-testbox publishes this documented handoff field in its ready registration.
+        printf '%s\n' "$sync_root" > "$state"

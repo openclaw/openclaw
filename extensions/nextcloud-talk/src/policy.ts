@@ -4,7 +4,6 @@ import {
   resolveScopeToolsPolicy,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
-// Nextcloud Talk plugin module implements policy behavior.
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
@@ -15,10 +14,15 @@ import { resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig, NextcloudTalkRoomConfig } from "./types.js";
 
 export function normalizeNextcloudTalkAllowEntry(raw: string): string {
-  return raw
+  const normalized = raw
     .trim()
     .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .trim()
     .toLowerCase();
+  // Keep typed actors (including users/*) intact; only bare IDs acquire the user kind.
+  return normalized && normalized !== "*" && !normalized.includes("/")
+    ? `users/${normalized}`
+    : normalized;
 }
 
 export function normalizeNextcloudTalkAllowlist(
@@ -58,9 +62,6 @@ export function resolveNextcloudTalkRoomMatch(params: {
 
   return {
     roomConfig,
-    wildcardConfig: match.wildcardEntry,
-    roomKey: match.matchKey ?? match.key,
-    matchSource: match.matchSource,
     allowed,
     allowlistConfigured,
   };

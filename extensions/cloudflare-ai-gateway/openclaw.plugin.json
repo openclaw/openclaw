@@ -1,6 +1,6 @@
 {
   "id": "cloudflare-ai-gateway",
-  "icon": "https://cdn.simpleicons.org/cloudflare",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
@@ -9,6 +9,9 @@
   "modelPricing": {
     "providers": {
       "cloudflare-ai-gateway": {
+        "modelsDev": {
+          "passthroughProviderModel": true
+        },
         "openRouter": {
           "passthroughProviderModel": true
         },

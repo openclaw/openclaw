@@ -15,6 +15,7 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { promoteDockerChannel } from "./docker-channel-promote.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
+import { releaseEvidenceProducerTuple } from "./lib/release-evidence-identity.mjs";
 import { resolveReleaseTagPackageIdentity } from "./lib/release-version.mjs";
 import {
   collectDockerAttestationErrors,
@@ -28,6 +29,7 @@ const SEAL_JOB_NAME = "Seal prepared Docker images";
 const WORKFLOW_PATH = ".github/workflows/docker-release-prepare.yml";
 const PRODUCER_WORKFLOWS = new Set([
   ".github/workflows/full-release-validation.yml",
+  ".github/workflows/full-release-artifacts.yml",
   ".github/workflows/openclaw-release-publish.yml",
   ".github/workflows/docker-image-refresh.yml",
   WORKFLOW_PATH,
@@ -36,6 +38,7 @@ const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^sha256:[a-f0-9]{64}$/u;
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/u;
 const INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json";
+const GITHUB_READ_RETRY_DELAYS_MS = [1_000, 3_000, 6_000];
 
 /**
  * Release commands use explicit argv/options and return UTF-8 stdout.
@@ -73,17 +76,40 @@ function run(command, args, options = {}) {
   });
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+export function readDockerGithubJson(
+  endpoint,
+  { runCommand = run, sleep = sleepSync, retryDelaysMs = GITHUB_READ_RETRY_DELAYS_MS } = {},
+) {
+  const args = [
+    "api",
+    endpoint,
+    "--method",
+    "GET",
+    "--jq",
+    endpoint.includes("/compare/") ? "{status}" : ".",
+  ];
+  for (let attempt = 0; ; attempt += 1) {
+    let output;
+    try {
+      output = runCommand("gh", args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/HTTP 5\d\d/iu.test(message) || attempt >= retryDelaysMs.length) {
+        throw error;
+      }
+      sleep(retryDelaysMs[attempt]);
+      continue;
+    }
+    return JSON.parse(output);
+  }
+}
+
 function ghJson(endpoint) {
-  return JSON.parse(
-    run("gh", [
-      "api",
-      endpoint,
-      "--method",
-      "GET",
-      "--jq",
-      endpoint.includes("/compare/") ? "{status}" : ".",
-    ]),
-  );
+  return readDockerGithubJson(endpoint);
 }
 
 export function dockerReleaseArtifactName(sourceSha, runAttempt) {
@@ -94,7 +120,16 @@ export function dockerReleaseArtifactName(sourceSha, runAttempt) {
   return `docker-release-${sourceSha}-${runAttempt}`;
 }
 
+function isDockerReleaseArtifactName(name, sourceSha) {
+  return (
+    typeof name === "string" &&
+    name.startsWith(`docker-release-${sourceSha}-`) &&
+    POSITIVE_INTEGER.test(name.slice(`docker-release-${sourceSha}-`.length))
+  );
+}
+
 export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, runId, runAttempt }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
   const prepared = manifest.publicationArtifacts?.docker;
   // Historical successful FRV manifests did not prepare publication images.
   // Their recovery route invokes the same preparation owner before publishing.
@@ -103,14 +138,18 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
   }
   requireValue(
     manifest.targetSha === sourceSha &&
-      String(manifest.runId) === String(runId) &&
-      String(manifest.runAttempt) === String(runAttempt),
+      String(evidenceProducer.runId) === String(runId) &&
+      String(evidenceProducer.runAttempt) === String(runAttempt),
     "Docker qualification does not match the selected full release run.",
   );
+  // FRV authorizes the release; its recorded producer owns the immutable bytes.
+  // Parent retries retain that producer's run and attempt.
   requireValue(
-    prepared?.preparedRunId === String(runId) &&
-      prepared.preparedRunAttempt === String(runAttempt) &&
-      prepared.preparedArtifactName === dockerReleaseArtifactName(sourceSha, runAttempt) &&
+    typeof prepared?.preparedRunId === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunId) &&
+      typeof prepared.preparedRunAttempt === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunAttempt) &&
+      isDockerReleaseArtifactName(prepared.preparedArtifactName, sourceSha) &&
       /^[a-f0-9]{64}$/u.test(prepared.preparedManifestSha256),
     "Full release Docker qualification tuple is incomplete or stale.",
   );
@@ -363,17 +402,69 @@ function artifactByName(repository, runId, name, readApi) {
   return artifacts[0];
 }
 
-export function sealDockerRelease({ metadataDirectory, context, checkRunId, readApi = ghJson }) {
-  const artifactName = dockerReleaseArtifactName(context.sourceSha, context.producer.runAttempt);
+function jobsForAttempt(repository, runId, runAttempt, readApi) {
+  const jobs = [];
+  for (let page = 1; ; page += 1) {
+    const result = readApi(
+      `repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`,
+    );
+    requireValue(
+      Array.isArray(result.jobs) && Number.isSafeInteger(result.total_count),
+      "Invalid Docker producer jobs response.",
+    );
+    jobs.push(...result.jobs);
+    if (page * 100 >= result.total_count) {
+      break;
+    }
+  }
+  return jobs;
+}
+
+export function sealDockerRelease({
+  metadataDirectory,
+  context,
+  artifactName = dockerReleaseArtifactName(context.sourceSha, context.producer.runAttempt),
+  checkRunId,
+  readApi = ghJson,
+}) {
+  requireValue(
+    isDockerReleaseArtifactName(artifactName, context.sourceSha),
+    "Invalid Docker preparation artifact name.",
+  );
   const architectures = ARCHITECTURES.map((architecture) => {
     const metadata = readJson(path.join(metadataDirectory, `${architecture}.json`));
-    for (const key of Object.keys(context)) {
+    for (const key of Object.keys(context).filter((contextKey) => contextKey !== "producer")) {
       requireValue(
         JSON.stringify(metadata[key]) === JSON.stringify(context[key]),
         `Docker ${architecture} metadata mismatch: ${key}`,
       );
     }
+    requireValue(
+      metadata.producer?.runId === context.producer.runId &&
+        POSITIVE_INTEGER.test(metadata.producer.runAttempt) &&
+        BigInt(metadata.producer.runAttempt) <= BigInt(context.producer.runAttempt) &&
+        metadata.producer.workflowRef === context.producer.workflowRef &&
+        metadata.producer.workflowSha === context.producer.workflowSha &&
+        metadata.producer.preparationWorkflowRef === context.producer.preparationWorkflowRef,
+      `Docker ${architecture} producer mismatch.`,
+    );
     requireValue(metadata.architecture === architecture, "Docker architecture metadata mismatch.");
+    const expectedJobName = `Prepare Docker images (${architecture})`;
+    const producerJobs = jobsForAttempt(
+      context.repository,
+      context.producer.runId,
+      metadata.producer.runAttempt,
+      readApi,
+    ).filter(
+      (job) =>
+        (job.name === expectedJobName || job.name.endsWith(` / ${expectedJobName}`)) &&
+        String(job.run_id) === context.producer.runId &&
+        String(job.run_attempt) === metadata.producer.runAttempt &&
+        job.status === "completed" &&
+        job.conclusion === "success" &&
+        job.head_sha === context.toolingSha,
+    );
+    requireValue(producerJobs.length === 1, `Cannot resolve the exact Docker ${architecture} job.`);
     const artifact = artifactByName(
       context.repository,
       context.producer.runId,
@@ -382,6 +473,11 @@ export function sealDockerRelease({ metadataDirectory, context, checkRunId, read
     );
     return {
       architecture,
+      producer: {
+        ...metadata.producer,
+        jobId: String(producerJobs[0].id),
+        jobName: producerJobs[0].name,
+      },
       artifact: {
         id: String(artifact.id),
         name: artifact.name,
@@ -395,26 +491,16 @@ export function sealDockerRelease({ metadataDirectory, context, checkRunId, read
     POSITIVE_INTEGER.test(String(checkRunId)),
     "Missing Docker seal check-run identity.",
   );
-  const jobs = [];
-  for (let page = 1; ; page += 1) {
-    const result = readApi(
-      `repos/${context.repository}/actions/runs/${context.producer.runId}/attempts/${context.producer.runAttempt}/jobs?per_page=100&page=${page}`,
-    );
-    requireValue(
-      Array.isArray(result.jobs) && Number.isSafeInteger(result.total_count),
-      "Invalid Docker producer jobs response.",
-    );
-    jobs.push(
-      ...result.jobs.filter(
-        (job) =>
-          job.check_run_url ===
-          `https://api.github.com/repos/${context.repository}/check-runs/${checkRunId}`,
-      ),
-    );
-    if (page * 100 >= result.total_count) {
-      break;
-    }
-  }
+  const jobs = jobsForAttempt(
+    context.repository,
+    context.producer.runId,
+    context.producer.runAttempt,
+    readApi,
+  ).filter(
+    (job) =>
+      job.check_run_url ===
+      `https://api.github.com/repos/${context.repository}/check-runs/${checkRunId}`,
+  );
   requireValue(
     jobs.length === 1 &&
       (jobs[0].name === SEAL_JOB_NAME || jobs[0].name.endsWith(` / ${SEAL_JOB_NAME}`)),
@@ -441,7 +527,7 @@ export function validateDockerReleaseManifest(manifest, expected) {
     sourceSha: expected.sourceSha,
     imageTagSuffix: expected.imageTagSuffix ?? "",
   });
-  const artifactName = dockerReleaseArtifactName(expected.sourceSha, expected.runAttempt);
+  const artifactName = expected.artifactName;
   requireValue(
     manifest.schemaVersion === 1 &&
       manifest.repository === expected.repository &&
@@ -450,7 +536,7 @@ export function validateDockerReleaseManifest(manifest, expected) {
       manifest.version === policy.version &&
       manifest.imageTagSuffix === (expected.imageTagSuffix ?? "") &&
       manifest.artifactName === artifactName &&
-      expected.artifactName === artifactName,
+      isDockerReleaseArtifactName(artifactName, expected.sourceSha),
     "Prepared Docker manifest does not match the release.",
   );
   requireValue(
@@ -479,8 +565,17 @@ export function validateDockerReleaseManifest(manifest, expected) {
   );
   for (const [index, architecture] of ARCHITECTURES.entries()) {
     const entry = manifest.architectures[index];
+    const expectedJobName = `Prepare Docker images (${architecture})`;
     requireValue(
       entry.architecture === architecture &&
+        (entry.producer === undefined ||
+          (entry.producer.runId === String(expected.runId) &&
+            POSITIVE_INTEGER.test(entry.producer.runAttempt) &&
+            BigInt(entry.producer.runAttempt) <= BigInt(expected.runAttempt) &&
+            entry.producer.workflowSha === manifest.toolingSha &&
+            POSITIVE_INTEGER.test(entry.producer.jobId) &&
+            (entry.producer.jobName === expectedJobName ||
+              entry.producer.jobName?.endsWith(` / ${expectedJobName}`)))) &&
         entry.artifact?.name === `${artifactName}-${architecture}` &&
         POSITIVE_INTEGER.test(entry.artifact.id) &&
         DIGEST.test(entry.artifact.digest),
@@ -508,12 +603,8 @@ export function validateDockerReleaseManifest(manifest, expected) {
   return manifest;
 }
 
-/** A reusable workflow can finish while its FRV parent remains active. Trust the
- * exact completed seal job, never infer successful preparation from parent state. */
-export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = ghJson }) {
+function verifyDockerProducerRun(runInfo, manifest, runAttempt) {
   const { repository, toolingSha, producer } = manifest;
-  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
-  const runInfo = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
   const workflowPath = String(runInfo.path).split("@", 1)[0];
   const prefix = `${repository}/${workflowPath}@`;
   requireValue(
@@ -533,22 +624,93 @@ export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = 
       fullRef === "refs/heads/main");
   requireValue(
     String(runInfo.id) === producer.runId &&
-      String(runInfo.run_attempt) === producer.runAttempt &&
+      String(runInfo.run_attempt) === runAttempt &&
       runInfo.head_sha === toolingSha &&
       runInfo.repository?.full_name === repository &&
       runInfo.head_repository?.full_name === repository &&
       trustedEvent,
     "Docker producer run/attempt/source mismatch.",
   );
+  return { workflowPath, fullRef };
+}
+
+/** Preparation belongs to its exact successful seal job. A publisher retry
+ * advances the parent attempt without rebuilding that immutable payload.
+ * @param {ReturnType<typeof validateDockerReleaseManifest>} manifest
+ * @param {{publisherSha: string, publisherRunId?: string, publisherRunAttempt?: string,
+ *   readApi?: typeof ghJson, fullReleaseManifest?: import("./validate-full-release-validation-evidence.mjs").FullReleaseValidationManifest,
+ *   evidenceClient?: ReturnType<typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient>,
+ *   publisherFullRef?: string}} options
+ */
+export async function verifyDockerReleaseProducer(
+  manifest,
+  {
+    publisherSha,
+    publisherRunId = "",
+    publisherRunAttempt = "",
+    readApi = ghJson,
+    fullReleaseManifest,
+    evidenceClient,
+    publisherFullRef = "refs/heads/main",
+  },
+) {
+  const { repository, toolingSha, producer } = manifest;
+  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
+  const currentRun = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
+  const currentAttempt = String(currentRun.run_attempt);
   requireValue(
-    (runInfo.status === "completed" && runInfo.conclusion === "success") ||
-      (runInfo.status === "in_progress" && runInfo.conclusion === null),
+    POSITIVE_INTEGER.test(currentAttempt) && BigInt(currentAttempt) >= BigInt(producer.runAttempt),
+    "Docker producer attempt is not available.",
+  );
+  const { workflowPath, fullRef } = verifyDockerProducerRun(currentRun, manifest, currentAttempt);
+  let authenticated;
+  if (fullReleaseManifest) {
+    const { authenticateCandidateOwnedArtifact } =
+      await import("./validate-full-release-validation-evidence.mjs");
+    authenticated = await authenticateCandidateOwnedArtifact({
+      manifest: fullReleaseManifest,
+      repository,
+      candidateSha: manifest.sourceSha,
+      qualificationSha: toolingSha,
+      publisherSha,
+      publisherFullRef,
+      client: evidenceClient,
+    });
+  }
+  requireValue(
+    (currentRun.status === "completed" &&
+      (currentRun.conclusion === "success" || authenticated?.fastTrack)) ||
+      (currentRun.status === "in_progress" && currentRun.conclusion === null),
     "Docker producer is neither active nor successfully completed.",
   );
+  let preparedRun = currentRun;
+  if (currentAttempt !== producer.runAttempt) {
+    preparedRun = readApi(
+      `repos/${repository}/actions/runs/${producer.runId}/attempts/${producer.runAttempt}`,
+    );
+    verifyDockerProducerRun(preparedRun, manifest, producer.runAttempt);
+    // Failed publication may reuse its own successful seal; unrelated publishers
+    // still require a successful producer parent, even when that run is retried.
+    const resumingOwnPublication =
+      producer.runId === publisherRunId &&
+      currentAttempt === publisherRunAttempt &&
+      currentRun.head_sha === publisherSha &&
+      currentRun.status === "in_progress" &&
+      preparedRun.status === "completed" &&
+      ["failure", "cancelled", "timed_out"].includes(preparedRun.conclusion);
+    requireValue(
+      (preparedRun.status === "completed" && preparedRun.conclusion === "success") ||
+        resumingOwnPublication ||
+        authenticated?.fastTrack,
+      "Historical Docker producer did not qualify for this publication.",
+    );
+  }
+  // Preparation linkage belongs to its recorded attempt; a publisher-only retry
+  // need not list that completed reusable workflow in its current attempt.
   requireValue(
     producer.preparationWorkflowRef === `${repository}/${WORKFLOW_PATH}@${fullRef}` &&
       (workflowPath === WORKFLOW_PATH ||
-        runInfo.referenced_workflows?.some(
+        preparedRun.referenced_workflows?.some(
           (workflow) =>
             workflow.path === `${repository}/${WORKFLOW_PATH}@${toolingSha}` &&
             workflow.sha === toolingSha &&
@@ -567,14 +729,52 @@ export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = 
       sealJob.head_sha === toolingSha,
     "Exact Docker preparation job has not completed successfully.",
   );
-  for (const target of new Set(["main", publisherSha])) {
-    const comparison = readApi(`repos/${repository}/compare/${toolingSha}...${target}`);
+  // Standalone refresh and focused-beta keep their workflow/ancestry contract. Candidate publication
+  // must carry the authenticated owner callback, never reconstruct it from JSON.
+  /** @type {() => void} */
+  let revalidateAuthority;
+  if (fullReleaseManifest) {
+    if (!authenticated) {
+      throw new Error("Missing authenticated candidate admission.");
+    }
+    revalidateAuthority = authenticated.revalidateAuthority;
+    const evidenceProducer = releaseEvidenceProducerTuple(fullReleaseManifest);
+    const selected = preparedDockerEvidenceFromFullRelease({
+      manifest: fullReleaseManifest,
+      sourceSha: manifest.sourceSha,
+      runId: evidenceProducer.runId,
+      runAttempt: evidenceProducer.runAttempt,
+    });
     requireValue(
-      comparison.status === "ahead" || comparison.status === "identical",
-      `Docker producer tooling is not on ${target} ancestry.`,
+      selected.preparedRunId === producer.runId &&
+        selected.preparedRunAttempt === producer.runAttempt &&
+        selected.preparedManifestSha256 === sha256(JSON.stringify(manifest, null, 2) + "\n"),
+      "Docker producer bytes differ from the authenticated frozen qualification.",
     );
+  } else {
+    revalidateAuthority = () => {};
+    for (const target of new Set(["main", publisherSha])) {
+      const comparison = readApi(`repos/${repository}/compare/${toolingSha}...${target}`);
+      requireValue(
+        comparison.status === "ahead" || comparison.status === "identical",
+        `Docker producer tooling is not on ${target} ancestry.`,
+      );
+    }
   }
   for (const entry of manifest.architectures) {
+    if (entry.producer) {
+      const architectureJob = readApi(`repos/${repository}/actions/jobs/${entry.producer.jobId}`);
+      requireValue(
+        String(architectureJob.id) === entry.producer.jobId &&
+          String(architectureJob.run_id) === producer.runId &&
+          String(architectureJob.run_attempt) === entry.producer.runAttempt &&
+          architectureJob.name === entry.producer.jobName &&
+          architectureJob.status === "completed" &&
+          architectureJob.conclusion === "success" &&
+          architectureJob.head_sha === toolingSha,
+        `Exact Docker ${entry.architecture} preparation job has not completed successfully.`,
+      );
+    }
     const artifact = artifactByName(repository, producer.runId, entry.artifact.name, readApi);
     requireValue(
       String(artifact.id) === entry.artifact.id &&
@@ -584,10 +784,10 @@ export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = 
       "Prepared Docker payload artifact changed.",
     );
   }
-  return manifest;
+  return { manifest, revalidateAuthority };
 }
 
-function loadPreparedManifest(values, env) {
+async function loadPreparedManifest(values, env) {
   const bytes = readFileSync(values.manifest);
   requireValue(
     /^[a-f0-9]{64}$/u.test(values["manifest-sha256"]) &&
@@ -604,7 +804,15 @@ function loadPreparedManifest(values, env) {
     runId: values["run-id"],
     runAttempt: values["run-attempt"],
   });
-  return verifyDockerReleaseProducer(manifest, { publisherSha: env.GITHUB_WORKFLOW_SHA });
+  return verifyDockerReleaseProducer(manifest, {
+    publisherSha: env.GITHUB_WORKFLOW_SHA,
+    publisherRunId: env.GITHUB_RUN_ID,
+    publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
+    publisherFullRef: env.GITHUB_REF,
+    fullReleaseManifest: values["full-release-manifest"]
+      ? readJson(values["full-release-manifest"])
+      : undefined,
+  });
 }
 
 function verifyFinalTag(manifest, readApi = ghJson) {
@@ -642,8 +850,16 @@ function resolveRemoteDigest(ref, execFileSyncImpl) {
   return metadata.digest;
 }
 
+/**
+ * @param {Awaited<ReturnType<typeof verifyDockerReleaseProducer>> & {
+ *   payloadDirectory: string, images: string[],
+ *   execFileSyncImpl?: typeof execReleaseCommand, verifyTag?: typeof verifyFinalTag,
+ *   promote?: typeof promoteDockerChannel
+ * }} options
+ */
 export async function publishDockerRelease({
   manifest,
+  revalidateAuthority,
   payloadDirectory,
   images,
   execFileSyncImpl = execReleaseCommand,
@@ -671,13 +887,15 @@ export async function publishDockerRelease({
     }
   }
   verifyTag(manifest);
-  const execute = (command, args) =>
-    execFileSyncImpl(command, args, {
+  const execute = (command, args) => {
+    revalidateAuthority();
+    return execFileSyncImpl(command, args, {
       encoding: "utf8",
       timeout: 1_200_000,
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 20 * 1024 * 1024,
     });
+  };
   const version = `${manifest.version}${manifest.imageTagSuffix}`;
   for (const image of prepared) {
     const suffix = image.variant === "default" ? "" : "-browser";
@@ -755,7 +973,7 @@ export async function publishDockerRelease({
         images,
         includeBrowser: manifest.includeBrowser,
       },
-      { execFileSyncImpl },
+      { execFileSyncImpl, revalidateAuthority },
     );
   }
   return sourceDigests.join("\n");
@@ -772,6 +990,7 @@ async function main() {
         "output",
         "manifest",
         "manifest-sha256",
+        "full-release-manifest",
         "artifact-name",
         "run-id",
         "run-attempt",
@@ -785,12 +1004,13 @@ async function main() {
     const manifest = sealDockerRelease({
       metadataDirectory: values.directory,
       context: releaseContext(env),
+      artifactName: env.PREPARED_ARTIFACT_NAME,
       checkRunId: env.SEAL_CHECK_RUN_ID,
     });
     writeJson(values.output, manifest);
     appendFileSync(env.GITHUB_OUTPUT, `manifest_sha256=${sha256(readFileSync(values.output))}\n`);
   } else if (command === "verify" || command === "publish") {
-    const manifest = loadPreparedManifest(values, env);
+    const { manifest, revalidateAuthority } = await loadPreparedManifest(values, env);
     if (command === "verify") {
       appendFileSync(
         env.GITHUB_OUTPUT,
@@ -801,6 +1021,7 @@ async function main() {
       const started = Date.now();
       const sourceDigests = await publishDockerRelease({
         manifest,
+        revalidateAuthority,
         payloadDirectory: values.directory,
         images: [`ghcr.io/${env.GITHUB_REPOSITORY.toLowerCase()}`, "docker.io/openclaw/openclaw"],
       });

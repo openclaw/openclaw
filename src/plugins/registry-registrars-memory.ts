@@ -1,32 +1,88 @@
+import { createLegacyBackendProviderRuntime } from "./memory-backend-legacy.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { hasKind } from "./slots.js";
 import type { OpenClawPluginApi } from "./types.js";
 
+/** Memory slot registrars: the owner, the dreaming sidecar, and passive backends. */
 export function createMemoryRegistrars(state: PluginRegistryState) {
   const { registry, reportRegistrationError, reportRegistrationWarning } = state;
-
-  const requireMemorySlot = (record: PluginRecord, surface: string): boolean => {
-    if (!hasKind(record.kind, "memory")) {
-      throw new Error(`only memory plugins can register a memory ${surface}`);
-    }
-    if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {
-      reportRegistrationWarning(
-        record,
-        `dual-kind plugin not selected for memory slot; skipping memory ${surface} registration`,
-      );
-      return false;
-    }
-    return true;
-  };
 
   const registerMemoryCapability = (
     record: PluginRecord,
     capability: Parameters<OpenClawPluginApi["registerMemoryCapability"]>[0],
   ) => {
-    if (requireMemorySlot(record, "capability")) {
-      registry.memoryCapabilities.push({ pluginId: record.id, capability });
+    if (!hasKind(record.kind, "memory")) {
+      throw new Error("only memory plugins can register a memory capability");
     }
+    if (record.memoryBackend === true) {
+      // A backend serves only the slot owner's provider runtime; it never joins slot resolution.
+      if (capability.providerRuntime) {
+        registry.memoryBackends.push({
+          pluginId: record.id,
+          pluginName: record.name,
+          providerRuntime: capability.providerRuntime,
+        });
+        return;
+      }
+      if (capability.runtime) {
+        // File-shaped runtimes reach the owner through the same adapter the slot uses for them.
+        registry.memoryBackends.push({
+          pluginId: record.id,
+          pluginName: record.name,
+          providerRuntime: createLegacyBackendProviderRuntime(record.id, capability.runtime),
+          adapter: "legacy",
+          instanceOwner: capability.runtime,
+        });
+        return;
+      }
+      reportRegistrationWarning(
+        record,
+        "memory backend registered no memory runtime; the memory slot owner cannot open it",
+      );
+      return;
+    }
+    if (Array.isArray(record.kind) && record.kind.length > 1 && !record.memorySlotSelected) {
+      reportRegistrationWarning(
+        record,
+        "dual-kind plugin not selected for memory slot; skipping memory capability registration",
+      );
+      return;
+    }
+    // Dreaming keeps an unselected sidecar active for consolidation. Strip its
+    // slot-owner fields so resolution cannot lend its runtime or recall grant.
+    const memorySlotSelected = record.memorySlotSelected === true;
+    const dropsSlotOwnerFacts =
+      !memorySlotSelected &&
+      (capability.runtime !== undefined ||
+        capability.providerRuntime !== undefined ||
+        capability.recallToolNames !== undefined ||
+        capability.deterministicRecallToolName !== undefined ||
+        capability.supportsPrivateTranscriptRecall !== undefined);
+    if (dropsSlotOwnerFacts) {
+      reportRegistrationWarning(
+        record,
+        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
+      );
+    }
+    const {
+      runtime: _droppedRuntime,
+      providerRuntime: _droppedProviderRuntime,
+      recallToolNames: _droppedRecallToolNames,
+      deterministicRecallToolName: _droppedRecallToolName,
+      supportsPrivateTranscriptRecall: _droppedPrivateRecall,
+      ...consolidationCapability
+    } = capability;
+    if (memorySlotSelected && capability.runtime) {
+      // oxlint-disable-next-line typescript/unbound-method -- Record factory identity; executable views bind the original receiver.
+      getPluginInstance(record)?.admitFactory(capability.runtime.getMemorySearchManager);
+    }
+    registry.memoryCapabilities.push({
+      pluginId: record.id,
+      capability: memorySlotSelected ? capability : consolidationCapability,
+      memorySlotSelected,
+    });
   };
 
   const registerMemoryPromptSupplement = (

@@ -1,0 +1,82 @@
+diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
+index a4ca427b95288e70c782ce303013cd644893dcec..b92117bb878ba7f42b75f12d5126880518482ee5 100644
+--- a/dist/ghostty-web.js
++++ b/dist/ghostty-web.js
+@@ -1900,6 +1900,9 @@ const L = class Y {
+    * Cleanup resources
+    */
+   dispose() {
++    document.removeEventListener("mousedown", this.boundDocumentMouseDownHandler);
++    this.boundDocumentMouseDownHandler = null;
++    this.mouseDownTarget = null;
+     this.selectionChangedEmitter.dispose(), this.stopAutoScroll(), this.boundMouseUpHandler && (document.removeEventListener("mouseup", this.boundMouseUpHandler), this.boundMouseUpHandler = null), this.boundDocumentMouseMoveHandler && (document.removeEventListener("mousemove", this.boundDocumentMouseMoveHandler), this.boundDocumentMouseMoveHandler = null), this.boundContextMenuHandler && (this.renderer.getCanvas().removeEventListener("contextmenu", this.boundContextMenuHandler), this.boundContextMenuHandler = null), this.boundClickHandler && (document.removeEventListener("click", this.boundClickHandler), this.boundClickHandler = null);
+   }
+   // ==========================================================================
+@@ -1940,9 +1943,9 @@ const L = class Y {
+           this.selectionEnd = { col: i.col, absoluteRow: w }, this.requestRender();
+         }
+       }
+-    }, document.addEventListener("mousemove", this.boundDocumentMouseMoveHandler), document.addEventListener("mousedown", (B) => {
++    }, document.addEventListener("mousemove", this.boundDocumentMouseMoveHandler), this.boundDocumentMouseDownHandler = (B) => {
+       this.mouseDownTarget = B.target;
+-    }), this.boundMouseUpHandler = (B) => {
++    }, document.addEventListener("mousedown", this.boundDocumentMouseDownHandler), this.boundMouseUpHandler = (B) => {
+       if (this.isSelecting) {
+         this.isSelecting = !1, this.stopAutoScroll();
+         const g = this.getSelection();
+@@ -2070,21 +2073,25 @@ const L = class Y {
+    * Copy text to clipboard
+    */
+   async copyToClipboard(A) {
++    let copied = false;
+     if (navigator.clipboard && navigator.clipboard.writeText)
+       try {
+         await navigator.clipboard.writeText(A);
+-        return;
++        copied = true;
+       } catch {
+       }
+-    const B = document.activeElement;
+-    try {
+-      const g = this.textarea;
+-      g.value = A, g.style.position = "fixed", g.style.left = "-9999px", g.style.top = "0", g.style.width = "1px", g.style.height = "1px", g.style.opacity = "0", g.focus(), g.select(), g.setSelectionRange(0, A.length);
+-      const E = document.execCommand("copy");
+-      B && B.focus(), E || console.error("❌ execCommand copy failed");
+-    } catch (g) {
+-      console.error("❌ Fallback copy failed:", g), B && B.focus();
++    if (!copied) {
++      const B = document.activeElement;
++      try {
++        const g = this.textarea;
++        g.value = A, g.style.position = "fixed", g.style.left = "-9999px", g.style.top = "0", g.style.width = "1px", g.style.height = "1px", g.style.opacity = "0", g.focus(), g.select(), g.setSelectionRange(0, A.length);
++        copied = document.execCommand("copy");
++        B && B.focus(), copied || console.error("❌ execCommand copy failed");
++      } catch (g) {
++        console.error("❌ Fallback copy failed:", g), B && B.focus();
++      }
+     }
++    if (copied) this.terminal.options.onCopy?.();
+   }
+   /**
+    * Request a render update (triggers selection overlay redraw)
+@@ -2206,6 +2213,7 @@ class IA {
+       allowTransparency: A.allowTransparency ?? !1,
+       convertEol: A.convertEol ?? !1,
+       disableStdin: A.disableStdin ?? !1,
++      onCopy: A.onCopy,
+       smoothScrollDuration: A.smoothScrollDuration ?? 100
+       // Default: 100ms smooth scroll
+     };
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 9a381e807fd75ed7ea1c98003974b37ced9bb828..229611a67a422cbf8278f819b014d381159a4a7a 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -891,6 +891,8 @@ export declare interface ITerminalOptions {
+     scrollback?: number;
+     fontSize?: number;
+     fontFamily?: string;
++    /** Called only after selection text was successfully written to the clipboard. */
++    onCopy?: () => void;
+     allowTransparency?: boolean;
+     convertEol?: boolean;
+     disableStdin?: boolean;

@@ -11,11 +11,14 @@ struct ExecHostValidatedRequest {
 enum ExecHostPolicyDecision {
     case deny(ExecHostError)
     case requiresPrompt
-    case allow(approvedByAsk: Bool)
+    case allow
 }
 
 enum ExecHostRequestEvaluator {
     static func validateRequest(_ request: ExecHostRequest) -> Result<ExecHostValidatedRequest, ExecHostError> {
+        func invalid(_ message: String) -> Result<ExecHostValidatedRequest, ExecHostError> {
+            .failure(ExecHostError(code: "INVALID_REQUEST", message: message, reason: "invalid"))
+        }
         let approvalSource: ExecApprovalRequestSource?
         switch request.approvalSource {
         case nil:
@@ -25,16 +28,10 @@ enum ExecHostRequestEvaluator {
         case "auto-review":
             approvalSource = .autoReview
         default:
-            return .failure(ExecHostError(
-                code: "INVALID_REQUEST",
-                message: "approvalSource invalid",
-                reason: "invalid"))
+            return invalid("approvalSource invalid")
         }
         if approvalSource != nil, request.approvalDecision != nil {
-            return .failure(ExecHostError(
-                code: "INVALID_REQUEST",
-                message: "approvalSource cannot be combined with explicit approval",
-                reason: "invalid"))
+            return invalid("approvalSource cannot be combined with explicit approval")
         }
         let carriesDelayedAuthority = approvalSource == .autoReview ||
             request.approvalDecision == .allowOnce ||
@@ -42,66 +39,34 @@ enum ExecHostRequestEvaluator {
         let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
         if carriesDelayedAuthority {
             guard let policySnapshot = request.policySnapshot else {
-                return .failure(ExecHostError(
-                    code: "INVALID_REQUEST",
-                    message: "delayed approval requires a prepared policy snapshot",
-                    reason: "invalid"))
+                return invalid("delayed approval requires a prepared policy snapshot")
             }
             delayedPolicySnapshot = ExecApprovalPolicySnapshot(portable: policySnapshot)
         } else {
             delayedPolicySnapshot = nil
         }
-        switch self.validateCommand(command: request.command, rawCommand: request.rawCommand) {
-        case let .success(validated):
-            return .success(ExecHostValidatedRequest(
-                command: validated.command,
-                displayCommand: validated.displayCommand,
-                evaluationRawCommand: validated.evaluationRawCommand,
-                approvalSource: approvalSource,
-                delayedPolicySnapshot: delayedPolicySnapshot))
-        case let .failure(error):
-            return .failure(error)
-        }
-    }
-
-    static func validateCommand(
-        command: [String],
-        rawCommand: String?) -> Result<ExecHostValidatedRequest, ExecHostError>
-    {
-        let executable = command.first ?? ""
+        let executable = request.command.first ?? ""
         let trimmedExecutable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedExecutable.isEmpty else {
-            return .failure(
-                ExecHostError(
-                    code: "INVALID_REQUEST",
-                    message: "command required",
-                    reason: "invalid"))
+            return invalid("command required")
         }
         guard executable == trimmedExecutable else {
-            return .failure(
-                ExecHostError(
-                    code: "INVALID_REQUEST",
-                    message: "executable has surrounding whitespace",
-                    reason: "invalid"))
+            return invalid("executable has surrounding whitespace")
         }
 
         let validatedCommand = ExecSystemRunCommandValidator.resolve(
-            command: command,
-            rawCommand: rawCommand)
+            command: request.command,
+            rawCommand: request.rawCommand)
         switch validatedCommand {
         case let .ok(resolved):
             return .success(ExecHostValidatedRequest(
-                command: command,
+                command: request.command,
                 displayCommand: resolved.displayCommand,
                 evaluationRawCommand: resolved.evaluationRawCommand,
-                approvalSource: nil,
-                delayedPolicySnapshot: nil))
+                approvalSource: approvalSource,
+                delayedPolicySnapshot: delayedPolicySnapshot))
         case let .invalid(message):
-            return .failure(
-                ExecHostError(
-                    code: "INVALID_REQUEST",
-                    message: message,
-                    reason: "invalid"))
+            return invalid(message)
         }
     }
 
@@ -110,29 +75,20 @@ enum ExecHostRequestEvaluator {
         approvalDecision: ExecApprovalDecision?,
         approvalSource: ExecApprovalRequestSource? = nil) -> ExecHostPolicyDecision
     {
+        func deny(_ message: String, reason: String) -> ExecHostPolicyDecision {
+            .deny(ExecHostError(code: "UNAVAILABLE", message: message, reason: reason))
+        }
         let security = self.effectiveSecurity(context: context, approvalSource: approvalSource)
         if security == .deny {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DISABLED: security=deny",
-                    reason: "security=deny"))
+            return deny("SYSTEM_RUN_DISABLED: security=deny", reason: "security=deny")
         }
 
         if approvalDecision == .deny {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: user denied",
-                    reason: "user-denied"))
+            return deny("SYSTEM_RUN_DENIED: user denied", reason: "user-denied")
         }
 
         if approvalSource == .autoReview, context.ask == .always {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always",
-                    reason: "ask=always"))
+            return deny("SYSTEM_RUN_DENIED: auto-review cannot bypass ask=always", reason: "ask=always")
         }
 
         let approvedByAsk = approvalDecision != nil || approvalSource == .autoReview
@@ -150,14 +106,10 @@ enum ExecHostRequestEvaluator {
            !context.skillAllow,
            !approvedByAsk
         {
-            return .deny(
-                ExecHostError(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: allowlist miss",
-                    reason: "allowlist-miss"))
+            return deny("SYSTEM_RUN_DENIED: allowlist miss", reason: "allowlist-miss")
         }
 
-        return .allow(approvedByAsk: approvedByAsk)
+        return .allow
     }
 
     static func effectiveSecurity(

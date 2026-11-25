@@ -997,7 +997,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: oauth-state-reuses-pkce-verifier
   - id: ghsa-6mqc-jqh6-x8fc.openclaw-canvas-auth-local-direct-bypass
-    message: Canvas/A2UI auth helper allows local-direct requests before bearer-or-capability auth.
+    message: Canvas auth helper allows local-direct requests before bearer-or-capability auth.
     severity: ERROR
     languages:
       - typescript
@@ -1561,34 +1561,118 @@ rules:
       - javascript
     message: Skill env overrides are copied into process.env without host-env safety sanitization.
     severity: ERROR
-    patterns:
-      - pattern-either:
+    mode: taint
+    pattern-sources:
+      - pattern: $CONFIG.skills.entries
+      - pattern: resolveSkillConfig(...)
+      - pattern: skillConfig.env
+      - pattern: skillConfig.apiKey
+      - pattern: $ENTRY.metadata.primaryEnv
+      - pattern: $ENTRY.metadata?.primaryEnv
+      - pattern: $SNAPSHOT.skills
+      - patterns:
+          - pattern: $PARAM.skillConfig
+      - patterns:
+          - pattern-inside: |
+              function $F(..., $ENTRY: SkillConfig, ...) { ... }
+          - pattern: $ENTRY
+    pattern-propagators:
+      - pattern: |
+          for (const [$KEY, $VALUE] of Object.entries($INPUT)) {
+            ...
+            $OUTPUT[$ANY] = $VALUE;
+            ...
+          }
+        from: $INPUT
+        to: $OUTPUT
+      - pattern: |
+          for (const [$KEY, $VALUE] of Object.entries($INPUT)) {
+            ...
+            $OUTPUT[$KEY] = $ANY;
+            ...
+          }
+        from: $INPUT
+        to: $OUTPUT
+      - pattern: $ENV[$KEY] = $VALUE
+        from: $KEY
+        to: $ENV
+      - pattern: $ENV[$KEY] = $VALUE
+        from: $VALUE
+        to: $ENV
+    pattern-sanitizers:
+      - pattern: sanitizeSkillEnvOverrides(...).allowed
+        exact: true
+      - patterns:
+          - pattern-inside: |
+              const $RESULT = sanitizeSkillEnvOverrides(...);
+              ...
+          - pattern-not-inside: |
+              const $RESULT = sanitizeSkillEnvOverrides(...);
+              ...
+              $RESULT.allowed = $OTHER;
+              ...
+          - pattern: $RESULT.allowed
+        exact: true
+    pattern-sinks:
+      - patterns:
           - pattern: |
               for (const [$KEY, $VALUE] of Object.entries($ENV)) {
                 ...
-                process.env[$KEY] = $VALUE;
+                process.env[$KEY] = $ANY;
                 ...
               }
+          - focus-metavariable: $ENV
+      - patterns:
           - pattern: |
               for (const [$KEY, $VALUE] of Object.entries($ENV)) {
                 ...
-                $UPDATES.push({ key: $KEY, ... });
-                ...
-                process.env[$KEY] = $VALUE;
+                process.env[$ANY] = $VALUE;
                 ...
               }
-      - pattern-not-inside: |
-          const $SANITIZED = sanitizeSkillEnvOverrides(...);
-          ...
-      - pattern-not-inside: |
-          const $SANITIZED = sanitizeEnvVars(...);
-          ...
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern: process.env[$KEY] = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: process.env[$KEY] = $VALUE
+          - focus-metavariable: $KEY
+      - patterns:
+          - pattern: process.env.$KEY = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern: Object.assign(process.env, ..., $ENV, ...)
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern: process.env = $ENV
+          - focus-metavariable: $ENV
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern-either:
+              - pattern: $HOST[$KEY] = $VALUE
+              - pattern: $HOST.$KEY = $VALUE
+          - focus-metavariable: $VALUE
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern: $HOST[$KEY] = $VALUE
+          - focus-metavariable: $KEY
+      - patterns:
+          - pattern-inside: |
+              const $HOST = process.env;
+              ...
+          - pattern: Object.assign($HOST, ..., $ENV, ...)
+          - focus-metavariable: $ENV
     metadata:
       ghsa: GHSA-82G8-464F-2MV7
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-82G8-464F-2MV7
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
+      advisory-id: GHSA-82G8-464F-2MV7
       source-rule-id: openclaw-skill-env-host-injection
+      source-file: security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.yml
   - id: ghsa-8689-gm9g-jgr6.plivo-v3-replay-key-uses-unsorted-url
     languages:
       - typescript
@@ -2366,7 +2450,7 @@ rules:
       - typescript
       - javascript
     severity: WARNING
-    message: SSH sandbox upload creates a tar stream from a local directory without a preceding symlink boundary validation helper, so tar may follow escaping symlinks before upload.
+    message: Remote sandbox tar uploads must await assertSafeUploadSymlinks on the uploaded directory before spawning tar, so escaping links are rejected before remote extraction.
     patterns:
       - pattern-inside: |
           async function $FUNC(...){
@@ -2377,13 +2461,13 @@ rules:
       - pattern: |
           $SSH = spawn($CMD, $ARGS, ...)
       - pattern-not-inside: |
-          async function $FUNC(...){
-            ...
-            await $CHECK($LOCAL);
-            ...
-            $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
-            ...
-          }
+          await assertSafeUploadSymlinks($LOCAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
+      - pattern-not-inside: |
+          await assertSafeUploadSymlinks($LOCAL, $SIGNAL);
+          ...
+          $TAR = spawn("tar", ["-C", $LOCAL, "-cf", "-", "."], ...)
     metadata:
       category: security
       confidence: medium
@@ -2391,7 +2475,9 @@ rules:
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-FV94-QVG8-XQPW
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
+      advisory-id: GHSA-FV94-QVG8-XQPW
       source-rule-id: ssh-sandbox-upload-missing-symlink-boundary-check
+      source-file: security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.yml
   - id: ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key
     message: Feishu/Lark webhook-mode configuration sets verificationToken without also configuring encryptKey.
     severity: ERROR
@@ -2789,18 +2875,20 @@ rules:
     message: Dangerous host env override pivot reaches host env sanitization boundary or policy.
     severity: ERROR
     languages:
-      - json
       - typescript
       - javascript
+      - json
     pattern-either:
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS)"'
+          - pattern-not-inside: resolveEnvironmentValue(...)
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)"'
+          - pattern-not-inside: resolveEnvironmentValue(...)
       - patterns:
           - pattern-either:
               - pattern: |
@@ -2816,6 +2904,8 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: openclaw-dangerous-host-env-override-pivots
+      advisory-id: GHSA-J425-WHC4-4JGC
+      source-file: security/opengrep/rules/ghsa-j425-whc4-4jgc/host-env-overrides.yml
   - id: ghsa-jf25-7968-h2h5.openclaw-nodes-screen-record-outpath-guard-missing
     message: The nodes tool (which contains screen_record) must be wrapped via applyNodesToolWorkspaceGuard, which adds outPath to the pathParamKeys. Without this, screen_record outPath bypasses the workspace boundary. See GHSA-JF25-7968-H2H5.
     severity: ERROR
@@ -3646,29 +3736,30 @@ rules:
     message: Image download helper uses raw fetch instead of a shared SSRF-guarded fetch path.
     patterns:
       - pattern-either:
-          - pattern: |
+          - pattern-inside: |
               async function $F(...){
                 ...
-                const $RESP = await fetch($URL, ...);
-                ...
               }
-          - pattern: |
+          - pattern-inside: |
               const $F = async (...) => {
                 ...
-                const $RESP = await fetch($URL, ...);
-                ...
               }
+      - pattern: const $RESP = await fetch($URL, ...);
       - metavariable-regex:
           metavariable: $F
           regex: .*(fetchImage|downloadImage|loadImage|download).*
-      - pattern-not-inside: |
-          const { response: $RESP, ...$REST } = await fetchWithSsrFGuard(...)
+      - metavariable-pattern:
+          metavariable: $URL
+          patterns:
+            - pattern-not-regex: \A`https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*/releases/download/\$\{encodeURIComponent\(\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)\}/\$\{encodeURIComponent\(\s*[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*\s*\)\}`\z
     metadata:
       ghsa: GHSA-QXGF-HMCJ-3XW3
       advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-QXGF-HMCJ-3XW3
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: raw-image-download-fetch-without-ssrf-guard
+      advisory-id: GHSA-QXGF-HMCJ-3XW3
+      source-file: security/opengrep/rules/ghsa-qxgf-hmcj-3xw3/image-download.yml
   - id: ghsa-r294-2894-92j3.exported-session-html-unsafe-marked-setup
     languages:
       - javascript

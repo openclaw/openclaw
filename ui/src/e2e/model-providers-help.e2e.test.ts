@@ -1,7 +1,7 @@
 // Control UI tests cover the Models settings help affordances against a mocked Gateway.
 import path from "node:path";
-import { chromium, type Browser, type Locator } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser } from "playwright";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -10,6 +10,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -36,17 +37,17 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
-function modelPickerValue(locator: Locator) {
-  return locator.evaluate((element) => String((element as HTMLElement & { value?: string }).value));
-}
-
 describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const { wsEndpoint } = inject("controlUiE2eChromium");
+    if (!wsEndpoint) {
+      throw new Error("Control UI E2E requires its shared Chromium server");
+    }
+    browser = await chromium.connect(wsEndpoint);
   });
 
   afterAll(async () => {
@@ -88,7 +89,6 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           },
           "models.authStatus": { ts: NOW, providers: [] },
           "usage.status": { updatedAt: NOW, providers: [] },
-          "sessions.usage": { aggregates: { byProvider: [] } },
         },
       });
 
@@ -96,6 +96,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await page.goto(`${server.baseUrl}settings/model-providers`);
         await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
         const defaults = page.locator(".model-providers__defaults");
+        await defaults.locator("[data-models-more-settings]").click();
         const utilityField = defaults
           .locator(".settings-row")
           .filter({ has: page.locator("#model-providers-utility-help") });
@@ -103,16 +104,18 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await utilityField.waitFor();
         expect(await utilityLabel.evaluate((node) => getComputedStyle(node).columnGap)).toBe("8px");
         await expect
-          .poll(() => modelPickerValue(utilityField.locator("wa-select")))
+          .poll(() => modelPickerValue(utilityField.locator("openclaw-select-picker")))
           .toBe("__openclaw_automatic_utility__");
+        await utilityField.locator(".picker-select__trigger").click();
         await expect
           .poll(() =>
             utilityField
-              .locator('wa-option[value="__openclaw_automatic_utility__"]')
+              .locator('[role="option"][data-value="__openclaw_automatic_utility__"]')
               .textContent()
               .then((value) => value?.trim()),
           )
           .toBe("Auto");
+        await page.keyboard.press("Escape");
 
         if (recordVisuals) {
           await page.screenshot({
@@ -133,10 +136,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           "0px",
         );
         const tooltip = helpButton.locator("..");
-        const tooltipPopup = tooltip.locator("wa-tooltip");
+        const tooltipPopup = tooltip.locator(".tooltip-surface[popover]");
         const tooltipBody = tooltip.locator(".tooltip-rich-content");
-        const tooltipIsOpen = () =>
-          tooltipPopup.evaluate((node) => Boolean(Reflect.get(node, "open")));
+        const tooltipIsOpen = () => tooltipPopup.evaluate((node) => node.matches(":popover-open"));
 
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await helpButton.hover();
@@ -161,7 +163,9 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
         await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
-        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
+        await expect
+          .poll(() => tooltip.textContent())
+          .toContain("provider’s recommended small model");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();
@@ -207,53 +211,42 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
 
         for (const help of [
           {
-            button: "About thinking defaults",
-            text: "closest option supported by the selected model",
+            button: "About effort defaults",
+            text: "other models use the closest supported level",
+            defaultText: "Default: use the model’s own effort setting.",
           },
           {
-            button: "About fast mode defaults",
-            text: "Auto starts in fast mode",
+            button: "About speed defaults",
+            text: "Auto: fast, then standard.",
+            defaultText:
+              "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.",
           },
         ]) {
-          const behaviorButton = defaults.getByRole("button", { name: help.button });
-          const behaviorTooltip = behaviorButton.locator("..");
-          await behaviorButton.hover();
-          await expect
-            .poll(() =>
-              behaviorTooltip
-                .locator("wa-tooltip")
-                .evaluate((node) => Boolean(Reflect.get(node, "open"))),
-            )
-            .toBe(true);
-          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
-          await page.locator(".page-title", { hasText: "Models" }).first().click();
-        }
-
-        for (const behavior of ["Thinking", "Fast Mode"]) {
           const behaviorRow = defaults
             .locator(".settings-row")
-            .filter({ has: page.locator(".settings-row__title", { hasText: behavior }) });
-          const group = behaviorRow.locator("wa-radio-group");
-          const defaultHelpButton = group
-            .locator('wa-radio[value=""]')
-            .locator(".model-providers__segment-info");
-          const defaultTooltip = defaultHelpButton.locator("..");
-          await defaultHelpButton.hover();
-          expect(await defaultHelpButton.evaluate((node) => getComputedStyle(node).color)).toBe(
+            .filter({ has: page.getByRole("button", { name: help.button, exact: true }) });
+          const behaviorButton = behaviorRow.getByRole("button", {
+            name: help.button,
+            exact: true,
+          });
+          const behaviorTooltip = behaviorButton.locator("..");
+          const group = behaviorRow.getByRole("radiogroup");
+          const behaviorTooltipIsOpen = () =>
+            behaviorTooltip
+              .locator(".tooltip-surface[popover]")
+              .evaluate((node) => node.matches(":popover-open"));
+          await behaviorButton.hover();
+          expect(await behaviorButton.evaluate((node) => getComputedStyle(node).color)).toBe(
             helpHoverColor,
           );
+          await expect.poll(behaviorTooltipIsOpen).toBe(true);
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
+          await behaviorButton.click();
+          await expect.poll(behaviorTooltipIsOpen).toBe(true);
           await expect
-            .poll(() =>
-              defaultTooltip
-                .locator("wa-tooltip")
-                .evaluate((node) => Boolean(Reflect.get(node, "open"))),
-            )
-            .toBe(true);
-          await defaultHelpButton.click();
-          await expect.poll(() => group.evaluate((node) => Reflect.get(node, "value"))).toBe("");
-          await expect
-            .poll(() => defaultTooltip.locator("wa-tooltip").textContent())
-            .toContain("selected model's");
+            .poll(() => group.locator('input[type="radio"]:checked').inputValue())
+            .toBe("");
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }
 

@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createActionGate,
@@ -26,15 +25,12 @@ export async function handleWhatsAppAction(
 
   if (action === "react") {
     const accountId = readStringParam(params, "accountId");
-    if (!whatsAppConfig) {
-      throw new Error("WhatsApp reactions are disabled.");
-    }
-    if (!isActionEnabled("reactions")) {
+    if (!whatsAppConfig || !isActionEnabled("reactions")) {
       throw new Error("WhatsApp reactions are disabled.");
     }
     const reactionLevelInfo = resolveWhatsAppReactionLevel({
       cfg,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
       throw new Error(
@@ -63,7 +59,7 @@ export async function handleWhatsAppAction(
     await whatsAppActionRuntime.sendReactionWhatsApp(resolved.to, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
-      participant: participant ?? undefined,
+      participant,
       accountId: resolved.accountId,
       cfg,
     });

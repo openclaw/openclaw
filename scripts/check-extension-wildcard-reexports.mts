@@ -17,14 +17,8 @@ const policy = {
 } satisfies ExtensionWildcardReexportPolicy;
 const scanner = createExtensionWildcardReexportScanner(policy);
 
-/**
- * Finds local wildcard re-export lines in a barrel source string.
- */
 export const findLocalWildcardReexports = scanner.findLines;
 
-/**
- * Runs the extension wildcard re-export guard.
- */
 export const main = scanner.main;
 
 await scanner.exitIfMain(import.meta.url);

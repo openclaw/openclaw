@@ -1,10 +1,14 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount } from "../../lib/format.ts";
-import type { RunOutputUsage } from "./tool-stream-contract.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
+
+registerChatMessageMetadataEnglish();
+
+registerChatComposerEnglish();
 
 type WorkingProgress = {
   key: string;
@@ -12,135 +16,142 @@ type WorkingProgress = {
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress;
-
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
-export function isContextCompactionActivity(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
+export function isContextCompactionMessage(message: unknown): boolean {
+  const record = asRecord(message);
+  return record?.role === "custom" && record.customType === CONTEXT_COMPACTION_CUSTOM_TYPE;
 }
 
-export function projectContextCompactionActivity(message: unknown): unknown {
-  const record = asRecord(message);
-  if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
-    return message;
-  }
-  const metadata = asRecord(record["__openclaw"]);
-  const details = asRecord(record.details);
-  const { idempotencyKey: _activityId, ...activity } = record;
+export function matchesCompactionOperation(message: unknown, status: CompactionStatus): boolean {
+  const marker = asRecord(asRecord(message)?.["__openclaw"]);
+  return Boolean(
+    status.runId &&
+    marker?.runId === status.runId &&
+    (!status.itemId || marker.itemId === status.itemId) &&
+    (marker.kind === "compaction" || isContextCompactionMessage(message)),
+  );
+}
+
+export function resolveLegacyCompactionMatch(
+  history: readonly unknown[],
+  status: CompactionStatus | null | undefined,
+) {
+  const candidates =
+    status?.runId && !status.itemId
+      ? history.filter((message) => matchesCompactionOperation(message, status))
+      : [];
   return {
-    ...activity,
-    role: "assistant",
-    content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
-    ...(typeof metadata?.runId === "string"
-      ? { runId: metadata.runId }
-      : typeof details?.runId === "string"
-        ? { runId: details.runId }
-        : {}),
-    __openclaw: {
-      ...metadata,
-      runtimeActivityKind: "context_compaction",
-    },
+    manualMarker: status?.manualOperation && candidates.length === 1 ? candidates[0] : undefined,
+    hasSameRunMarker: candidates.length > 0,
   };
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+// Retain presentation timing only within the transcript cache's session window.
+// Evicted sessions reconstruct timing from available activity and observe idle anew.
+const workingProgressBySession = new Map<string, WorkingProgress>();
+const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
 
-export function buildCompactionDividerItem(
+function compactionOperationKey(runId: unknown, itemId: unknown): string | undefined {
+  return typeof runId === "string" && runId && typeof itemId === "string" && itemId
+    ? `compaction:operation:${JSON.stringify([runId, itemId])}`
+    : undefined;
+}
+
+export function buildCompactionActivityItem(
   marker: Record<string, unknown>,
   timestamp: number,
   index: number,
-): Extract<ChatItem, { kind: "divider" }> {
-  const tokensBefore = marker.tokensBefore;
-  const tokensAfter = marker.tokensAfter;
-  const tokensSaved =
-    typeof tokensBefore === "number" &&
-    Number.isFinite(tokensBefore) &&
-    typeof tokensAfter === "number" &&
-    Number.isFinite(tokensAfter) &&
-    tokensBefore > tokensAfter
-      ? Math.floor(tokensBefore - tokensAfter)
-      : null;
+  phase: "active" | "complete" = "complete",
+): Extract<ChatItem, { kind: "compaction" }> {
   return {
-    kind: "divider",
+    kind: "compaction",
     key:
-      typeof marker.id === "string"
-        ? `divider:compaction:${marker.id}`
-        : `divider:compaction:${timestamp}:${index}`,
-    label: t("chat.compaction.label"),
-    icon: "foldVertical",
-    ...(tokensSaved === null
-      ? {}
-      : {
-          metric: t("chat.compaction.savedTokens", {
-            count: formatCompactTokenCount(tokensSaved),
-          }),
-        }),
-    description: t("chat.compaction.description"),
-    action: { kind: "session-checkpoints", label: t("chat.compaction.openCheckpoints") },
+      compactionOperationKey(marker.runId, marker.itemId) ??
+      (typeof marker.id === "string"
+        ? `compaction:${marker.id}`
+        : `compaction:${timestamp}:${index}`),
+    label: t(phase === "active" ? "chat.compaction.running" : "chat.compaction.completed"),
+    phase,
+    tokensBefore: typeof marker.tokensBefore === "number" ? marker.tokensBefore : undefined,
+    tokensAfter: typeof marker.tokensAfter === "number" ? marker.tokensAfter : undefined,
     timestamp,
+  };
+}
+
+export function buildLiveCompactionActivity(
+  status: CompactionStatus,
+): Extract<ChatItem, { kind: "compaction" }> {
+  return {
+    ...buildCompactionActivityItem(
+      {},
+      status.startedAt ?? status.completedAt ?? Date.now(),
+      0,
+      status.phase === "complete" ? "complete" : "active",
+    ),
+    key:
+      compactionOperationKey(status.runId, status.itemId) ??
+      `compaction:live:${status.runId}:manual`,
+    ...(status.completedAt != null && status.startedAt != null
+      ? { durationMs: status.completedAt - status.startedAt }
+      : {}),
   };
 }
 
@@ -163,7 +174,11 @@ export function buildResetDividerItem(
 }
 
 function queuedSendStarted(item: ChatQueueItem): boolean {
-  return typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
+  // Submitting offline records timing without attempting delivery.
+  return (
+    (item.sendAttempts ?? 0) > 0 ||
+    (item.sendState !== "waiting-reconnect" && typeof item.sendSubmittedAtMs === "number")
+  );
 }
 
 export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
@@ -171,7 +186,8 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     queuedSendStarted(item) &&
     !item.localCommandName &&
     (item.sendState === "failed" ||
-      item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
+      item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
 }
@@ -181,8 +197,8 @@ export function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
   return (
     queuedSendStarted(item) &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
-      item.sendState === "waiting-reconnect" ||
       isQueuedSendInlineState(item))
   );
 }
@@ -195,40 +211,59 @@ export function resolveWorkingProgress(
   streamSegments: Array<{ ts: number; runId?: string }>,
   toolMessages: unknown[],
 ): WorkingProgress {
+  const visibleSends = queue.filter(shouldRenderQueuedSendInThread);
+  const pendingSends = visibleSends.filter((item) => !isQueuedSendInlineState(item));
   const queuedProgress =
-    queue.find((item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item)) ??
-    queue.find(shouldRenderQueuedSendInThread);
+    pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
+    pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const segmentRunId = streamSegments
+  const idleObservedAt = runId
+    ? undefined
+    : getSessionCacheValue(idleObservedAtBySession, sessionKey);
+  const observedSinceIdle = (at: unknown) =>
+    idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
+  const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
+  const toolProgress = toolMessages
+    .map(asRecord)
+    .filter((message) => observedSinceIdle(message?.["__openclawToolStreamReceivedAt"]));
+  const segmentRunId = currentSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolRunId = toolMessages
-    .map((message) => (message as Record<string, unknown> | null)?.runId)
+  const toolRunId = toolProgress
+    .map((message) => message?.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  // Stream and tool facts describe work already observed in this row. Queue
-  // identity is only a pre-run fallback and must not claim an active tail.
-  const explicitRunId = runId ?? segmentRunId ?? toolRunId ?? queuedRunId;
+  // A submitted send owns the acknowledgment gap; delayed activity from an
+  // earlier run must not claim it. Future queued sends remain a fallback.
+  const submittedRunId =
+    queuedProgress?.sendState === "submitting" || queuedProgress?.sendState === "sending"
+      ? queuedRunId
+      : undefined;
+  const explicitRunId = runId ?? submittedRunId ?? segmentRunId ?? toolRunId ?? queuedRunId;
   const cached = workingProgressBySession.get(sessionKey);
   const compatibleCached =
     cached && (!explicitRunId || !cached.runId || cached.runId === explicitRunId) ? cached : null;
   const candidates = [
     compatibleCached?.startedAt,
     streamStartedAt,
-    ...queue
-      .filter(shouldRenderQueuedSendInThread)
+    // Recovery rows cannot identify work, but matching durable timing survives reconnects.
+    ...visibleSends
+      .filter((item) =>
+        explicitRunId
+          ? (item.sendRunId ?? item.pendingRunId) === explicitRunId
+          : item === queuedProgress,
+      )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments.map((segment) => segment.ts),
-    ...toolMessages.map((message) => {
-      const receivedAt = (message as Record<string, unknown> | null)?.[
-        "__openclawToolStreamReceivedAt"
-      ];
-      return typeof receivedAt === "number" ? receivedAt : null;
-    }),
+    ...currentSegments
+      .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
+      .map((segment) => segment.ts),
+    ...toolProgress
+      .filter((message) => !explicitRunId || message?.runId === explicitRunId)
+      .map((message) => message?.["__openclawToolStreamReceivedAt"]),
   ].filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const startedAt = candidates.length > 0 ? Math.min(...candidates) : Date.now();
   const key =
@@ -237,7 +272,7 @@ export function resolveWorkingProgress(
       sessionKey,
       explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
     ])}`;
-  workingProgressBySession.set(sessionKey, {
+  setSessionCacheValue(workingProgressBySession, sessionKey, {
     key,
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
@@ -247,73 +282,27 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
+  setSessionCacheValue(idleObservedAtBySession, sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {
   workingProgressBySession.clear();
+  idleObservedAtBySession.clear();
   anonymousWorkingProgressId = 0;
 }
 
-export type TurnRecap = { runtimeMs: number; outputTokens: number | null };
-
-// The pane owns one watched run. Session-wide usage is a different fact and
-// may still describe the previous response when the terminal row arrives.
-export type TurnRecapWatch = {
-  sessionKey: string;
-  agentId: string | null;
-  gatewayClient: GatewayBrowserClient | null;
-  runId: string;
-  recap: TurnRecap | null;
-};
-
-export function resolveTurnRecap(
-  host: { turnRecapWatch: TurnRecapWatch | null },
-  params: {
-    sessionKey: string;
-    agentId?: string | null;
-    gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
-    usageByRun?: ReadonlyMap<string, RunOutputUsage>;
-  },
-): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
-  let watch = host.turnRecapWatch;
-  if (
-    watch?.sessionKey !== sessionKey ||
-    watch.agentId !== agentId ||
-    watch.gatewayClient !== gatewayClient
-  ) {
-    watch = null;
-  }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage || usage.outputTokens === null) {
       return null;
     }
-    if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
-    }
+    total += usage.outputTokens;
   }
-  host.turnRecapWatch = watch;
-  if (!watch) {
-    return null;
-  }
-  const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
-  if (row?.lastRunId === watch.runId) {
-    const runtimeMs = row.runtimeMs;
-    if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
-    } else if (row.status && row.status !== "done") {
-      watch.recap = null;
-    }
-  }
-  // Usage can arrive after terminal presentation. Keep accepting facts for
-  // this exact run without borrowing another run's session-row counters.
-  if (watch.recap && watch.recap.outputTokens !== outputTokens) {
-    watch.recap = { ...watch.recap, outputTokens };
-  }
-  return indicator || !watch.recap ? null : { ...watch.recap, runId: watch.runId };
+  return runIds.length > 0 ? total : null;
 }

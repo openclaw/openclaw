@@ -1,0 +1,34 @@
+title: Matrix public message actions reach the homeserver
+scenario:
+  id: matrix-public-message-actions
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-actions
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 60000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Creates and mutates a fresh SUT-owned room through public message actions.
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: public-actions
+            kind: group
+            members:
+              - sut
+              - driver
+              - observer
+            name: Matrix QA Public Actions
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-message-actions.js
+  call: runPublicMessageActionsScenario
+  args:
+    - expr: "scenarioContext"

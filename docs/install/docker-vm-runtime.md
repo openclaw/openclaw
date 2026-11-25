@@ -44,9 +44,22 @@ export OPENCLAW_AUTH_PROFILE_SECRET_DIR="$HOME/.openclaw-auth-profile-secrets"
 ```
 
 Override those paths before setup if your VM uses a dedicated data disk. Keep
-all three directories in backups. The auth-profile secret directory contains
-the local encryption key for OAuth-backed auth profile token material, so it
-must persist but remain separate from `OPENCLAW_CONFIG_DIR`.
+all three directories in backups. Current OAuth token material is stored as
+plaintext in SQLite under `OPENCLAW_CONFIG_DIR`, including access, refresh, and
+ID-token values. Treat the config directory and its backups or copies as
+credentials.
+
+Use a persistent local disk for SQLite state, not an NFS, SMB, or CIFS mount.
+A Docker volume name alone does not guarantee local storage; check its backing
+driver. See [SQLite storage requirements](/install/docker/networking-and-storage#storage-and-persistence)
+for Doctor's network-storage warning and relocation guidance.
+
+The auth-profile secret directory contains only the local key used to recover
+legacy encrypted OAuth sidecar credentials. It must persist for that recovery
+path and remain separate from `OPENCLAW_CONFIG_DIR`, but it does not encrypt
+current SQLite rows or protect a state-only backup or copy.
+
+<a id="build-and-launch" />
 
 ## Run the maintained Docker setup
 
@@ -109,7 +122,7 @@ non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink
 
 <Note>
 The repository Dockerfile digest-pins its Node and Bun base images. Keep those
-reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+reviewed pins instead of changing them to floating `FROM node:24-trixie`
 references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
 for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>
@@ -160,7 +173,7 @@ truth. Long-lived state must survive restarts, rebuilds, and reboots.
 | Agent workspace      | `/home/node/.openclaw/workspace/`   | Workspace mount             | Code and agent artifacts                                                                   |
 | Channel credentials  | `/home/node/.openclaw/credentials/` | Config mount                | Channel credential material                                                                |
 | Model auth profiles  | `/home/node/.openclaw/`             | Config mount                | Shared `state/openclaw.sqlite`; agent-local `agents/<agentId>/agent/openclaw-agent.sqlite` |
-| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Encryption key material; keep separate from the config mount                               |
+| Auth-profile key     | `/home/node/.config/openclaw/`      | Secret-directory mount      | Legacy encrypted-sidecar recovery key; does not protect current SQLite rows                |
 | Skill state          | `/home/node/.openclaw/skills/`      | Config mount                | Skill-level state                                                                          |
 | External binaries    | `/usr/local/bin/`                   | Docker image                | Must be baked at build time                                                                |
 | Node and OS packages | Container filesystem                | Docker image                | Rebuilt with the image; do not install at runtime                                          |
@@ -191,20 +204,32 @@ to the same file in place does not cause this divergence.
 Fix: keep the directory mount from Compose. Edit `openclaw.json` on the host
 inside that directory.
 
+<a id="updates" />
+
 ## Update OpenClaw
 
 For a source-built image:
 
 ```bash
 git pull --ff-only
+docker compose stop openclaw-gateway
 OPENCLAW_SKIP_ONBOARDING=1 ./scripts/docker/setup.sh
 docker compose run --rm openclaw-cli doctor --json
 ```
+
+If you previously enabled the Docker sandbox with `setup.sh`, keep the generated
+`.env` and `docker-compose.sandbox.yml`. Leaving `OPENCLAW_SANDBOX` unset during
+an upgrade preserves the saved sandbox settings and Docker socket mount. Set
+`OPENCLAW_SANDBOX=0` only if you intend to disable sandboxing and remove that mount.
 
 For a pinned or prebuilt image, update `OPENCLAW_IMAGE` to the intended tag or
 digest before rerunning the setup script. Routine image upgrades run startup-safe
 migrations against the mounted state; see [Upgrading container images](/install/docker#upgrading-container-images)
 for recovery when a migration cannot complete automatically.
+
+Keep a single Gateway on this state volume and retain a pre-upgrade backup.
+The old container must be stopped before the replacement's entrypoint runs
+Doctor; the same rule applies to [orchestrated rollouts](/install/docker#upgrading-container-images).
 
 ## Related
 

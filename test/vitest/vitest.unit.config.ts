@@ -3,10 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import {
-  resolveVitestIsolation,
-  shouldPassWithNoTestsForCliIncludes,
-} from "./vitest.scoped-config.ts";
+import { shouldPassWithNoTestsForCliIncludes } from "./vitest.scoped-config.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
@@ -16,7 +13,7 @@ import {
 import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 import {
   isBundledPluginDependentUnitTestFile,
-  isUnitConfigTestFile,
+  filterUnitConfigTestFiles,
   unitTestAdditionalExcludePatterns,
   unitTestIncludePatterns,
 } from "./vitest.unit-paths.mjs";
@@ -69,8 +66,8 @@ export function resolveDefaultUnitCoverageIncludePatterns(
   const fastTestFiles = new Set(unitFastTestFiles);
   const sourceFiles = new Set<string>();
   for (const root of defaultUnitCoverageRoots) {
-    for (const testFile of collectTestFiles(resolveRepoRootPath(root))) {
-      if (!isUnitConfigTestFile(testFile) || fastTestFiles.has(testFile)) {
+    for (const testFile of filterUnitConfigTestFiles(collectTestFiles(resolveRepoRootPath(root)))) {
+      if (fastTestFiles.has(testFile)) {
         continue;
       }
       const sourceFile = resolveSiblingSourceFile(testFile);
@@ -106,7 +103,6 @@ export function createUnitVitestConfigWithOptions(
     passWithNoTests?: boolean;
   } = {},
 ) {
-  const isolate = resolveVitestIsolation(env);
   const argv = options.argv ?? process.argv;
   const envIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
@@ -143,8 +139,8 @@ export function createUnitVitestConfigWithOptions(
     test: {
       ...sharedTest,
       name: options.name ?? "unit",
-      isolate,
-      ...(isolate ? { runner: undefined } : { runner: nonIsolatedRunnerPath }),
+      isolate: false,
+      runner: nonIsolatedRunnerPath,
       setupFiles: [
         ...new Set(
           [...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"].map(

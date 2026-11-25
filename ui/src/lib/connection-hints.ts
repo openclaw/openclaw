@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
@@ -20,6 +19,7 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
   ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
   ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISSING,
@@ -56,24 +56,8 @@ export function readConnectionAuthReason(details: unknown): string | null {
   return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
 }
 
-type AuthHintKind = "required" | "failed" | "trusted-proxy";
-
-type PairingHint =
-  | {
-      kind: "pairing-required";
-      requestId: string | null;
-    }
-  | {
-      kind: "scope-upgrade-pending" | "role-upgrade-pending" | "metadata-upgrade-pending";
-      requestId: string | null;
-    };
-
-export function resolvePairingHint(
-  connected: boolean,
-  lastError: string | null,
-  lastErrorCode?: string | null,
-): PairingHint | null {
-  if (connected || !lastError) {
+export function resolvePairingHint(lastError: string | null, lastErrorCode?: string | null) {
+  if (!lastError) {
     return null;
   }
   const pairing = readConnectPairingRequiredMessage(lastError);
@@ -97,8 +81,6 @@ export function resolvePairingHint(
 }
 
 /**
- * Return the connection auth hint to show, if any.
- *
  * Keep fallback string matching narrow so generic "connect failed" close reasons
  * do not get misclassified as token/password problems.
  */
@@ -109,7 +91,7 @@ export function resolveAuthHintKind(params: {
   lastErrorAuthReason?: string | null;
   hasToken: boolean;
   hasPassword: boolean;
-}): AuthHintKind | null {
+}): "required" | "failed" | "trusted-proxy" | null {
   if (params.connected || !params.lastError) {
     return null;
   }
@@ -125,7 +107,16 @@ export function resolveAuthHintKind(params: {
     if (!AUTH_FAILURE_CODES.has(params.lastErrorCode)) {
       return null;
     }
-    return AUTH_REQUIRED_CODES.has(params.lastErrorCode) ? "required" : "failed";
+    // A remembered device token the Gateway no longer knows is not an operator-supplied
+    // secret; without a typed token or password the Gateway is asking for its token,
+    // not rejecting one (the client already dropped the stale device token).
+    const staleDeviceTokenOnly =
+      params.lastErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH &&
+      !params.hasToken &&
+      !params.hasPassword;
+    return staleDeviceTokenOnly || AUTH_REQUIRED_CODES.has(params.lastErrorCode)
+      ? "required"
+      : "failed";
   }
 
   const lower = normalizeLowercaseStringOrEmpty(params.lastError);
@@ -136,11 +127,10 @@ export function resolveAuthHintKind(params: {
 }
 
 export function shouldShowInsecureContextHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
+  if (!lastError) {
     return false;
   }
   if (lastErrorCode) {

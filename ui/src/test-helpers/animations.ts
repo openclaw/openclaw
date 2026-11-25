@@ -1,5 +1,5 @@
 // Evaluate on the animated element inside its shadow root; document/host
-// animation queries do not reach Web Awesome's nested popup or dialog.
+// animation queries do not reach nested shadow content.
 export function finishElementAnimations(element: Element): void {
   for (const animation of element.getAnimations({ subtree: true })) {
     // Finish layout transitions without waiting on headless renderer clocks,

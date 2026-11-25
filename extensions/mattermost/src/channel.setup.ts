@@ -1,5 +1,4 @@
-// Mattermost plugin module implements channel.setup behavior.
-import type { ChannelPlugin } from "./channel-api.js";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   describeMattermostAccount,
   mattermostConfigAdapter,
@@ -13,9 +12,7 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 
 export const mattermostSetupPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   id: "mattermost",
-  meta: {
-    ...mattermostMeta,
-  },
+  meta: mattermostMeta,
   capabilities: {
     chatTypes: ["direct", "channel", "group", "thread"],
     reactions: true,
@@ -25,6 +22,7 @@ export const mattermostSetupPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   },
   reload: {
     configPrefixes: ["channels.mattermost"],
+    noopPrefixes: ["messages.inbound"],
     /**
      * accounts.default is promoted; named resolution merges only channel-wide fields
      * plus the selected account. Runtime monitor, debounce, and ingress use accountId.

@@ -1,0 +1,199 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, expect, it, vi } from "vitest";
+import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { itemNotification } from "./protocol.test-helpers.js";
+import {
+  bindProductionHarnessHostCapabilitiesForTest,
+  createCodexRuntimePlanFixture,
+  createRuntimeDynamicTool,
+  createStartedThreadHarness,
+  fastWait,
+  runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
+  setupRunAttemptTestHooks,
+  tempDir,
+} from "./run-attempt-test-harness.js";
+import { activeRunRegistrationMocks } from "./run-attempt.steering.test-helpers.js";
+import {
+  createSteeringParams,
+  waitAndQueueActiveRunMessage,
+} from "./run-attempt.steering.test-support.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
+
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const { createSteeringRuntimeMock } = await import("./run-attempt.steering.test-helpers.js");
+  return createSteeringRuntimeMock(
+    await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>(),
+  );
+});
+
+setupRunAttemptTestHooks();
+
+beforeEach(() => {
+  // Keep both deadline clocks paused during cold asynchronous fixture setup.
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+});
+
+it.each([
+  { name: "gateway-backed then refresh", isSecret: false, stagedSource: false },
+  { name: "secret then refresh", isSecret: true, stagedSource: false },
+  { name: "staged secret then refresh", isSecret: true, stagedSource: true },
+])(
+  "routes $name user prompts without consuming internal steering",
+  async ({ isSecret, stagedSource }) => {
+    activeRunRegistrationMocks.questionWaiters.clear();
+    const turnStarted = createDeferred<void>();
+    const { request, notify, handleServerRequest } = createStartedThreadHarness(async (method) =>
+      method === "thread/unsubscribe" ? { status: "unsubscribed" } : undefined,
+    );
+
+    const params = createSteeringParams();
+    let pendingRefresh = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const reload = createRuntimeDynamicTool("reload_runtime");
+    reload.execute = async () => {
+      pendingRefresh = true;
+      return { content: [{ type: "text" as const, text: "generation changed" }], details: {} };
+    };
+    setCodexTestToolFactory(params, () => [reload]);
+    params.pluginRuntimeRefreshPending = () => pendingRefresh;
+    const target = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: path.join(tempDir, "question-refresh.sqlite"),
+    };
+    await attachSqliteSessionTarget(params, target.storePath, target.sessionId);
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const sourceRecorder = createRecorder({
+      input: { text: "2", idempotencyKey: `${params.runId}:question-answer` },
+      target: { ...target, sessionEntry: undefined },
+    });
+    params.onBlockReply = vi.fn();
+    const onRunProgress = vi.fn<NonNullable<typeof params.onRunProgress>>((event) => {
+      // Host progress fires after the active turn's input bridge is installed.
+      if (event.reason === "turn:start") {
+        turnStarted.resolve();
+      }
+    });
+    params.onRunProgress = onRunProgress;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const run = runCodexAppServerAttempt(params);
+    await turnStarted.promise;
+    const response = handleServerRequest({
+      id: "request-input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ask-1",
+        isBlocking: true,
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+
+    // Flush the delivery task without advancing the run deadline during cold async setup.
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), {
+      ...fastWait,
+      interval: 0,
+    });
+    await waitAndQueueActiveRunMessage(params.sessionId, "tool progress", { debounceMs: 0 });
+    await vi.waitFor(
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/steer"),
+      fastWait,
+    );
+    const sourceSteer = request.mock.calls.findLast(([method]) => method === "turn/steer");
+    const sourceMessageId = (sourceSteer?.[1] as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    assert(sourceMessageId, "source turn/steer clientUserMessageId missing");
+    await notify(
+      itemNotification("item/completed", {
+        id: "source-message",
+        type: "userMessage",
+        clientId: sourceMessageId,
+      }),
+    );
+    const answered = expect.objectContaining({
+      reason: "request:item/tool/requestUserInput:response",
+    });
+    expect(onRunProgress).not.toHaveBeenCalledWith(answered);
+    if (stagedSource) {
+      assert(
+        sourceRecorder.stageApproved && params.runId,
+        "Expected source recorder and run identity",
+      );
+      expect(
+        await sourceRecorder.stageApproved({ runId: params.runId, assertCurrent: () => {} }),
+      ).toBe(true);
+    }
+    const onQuestionAccepted = vi.fn();
+    await waitAndQueueActiveRunMessage(params.sessionId, "2", {
+      isInboundUserMessage: true,
+      onQueueAccepted: onQuestionAccepted,
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      userTurnTranscriptRecorder: sourceRecorder,
+    });
+    await expect(response).resolves.toEqual({ answers: { mode: { answers: ["Deep"] } } });
+    expect(onRunProgress).toHaveBeenCalledWith(answered);
+    expect(onQuestionAccepted).toHaveBeenCalledWith(true);
+    expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
+
+    // Native request_user_input is exclusive: finish its answer before the next tool call.
+    await handleServerRequest({
+      id: "reload-after-question",
+      method: "item/tool/call",
+      params: createDynamicToolCall("reload_runtime", {}, "reload-after-question"),
+    });
+    expect(pendingRefresh).toBe(true);
+    const result = await run;
+    closeHost();
+    expect(result.terminal.kind).toBe("ok");
+    expect(sourceRecorder.hasPersisted()).toBe(!isSecret || stagedSource);
+    const carried = result.pluginRuntimeRefreshMessages ?? [];
+    const questionCalls = carried.flatMap((message) =>
+      message.role === "assistant" && Array.isArray(message.content)
+        ? message.content.filter((item) => item.type === "toolCall" && item.id === "ask-1")
+        : [],
+    );
+    const questionResults = carried.filter(
+      (message) => message.role === "toolResult" && message.toolCallId === "ask-1",
+    );
+    if (isSecret) {
+      expect([questionCalls, questionResults]).toEqual([[], []]);
+      expect(JSON.stringify(carried)).not.toContain(`${params.runId}:question-answer`);
+    } else {
+      expect(questionCalls).toHaveLength(1);
+      expect(questionCalls[0]).toMatchObject({ name: "request_user_input" });
+      expect(questionCalls[0]).toHaveProperty("arguments.questions", [
+        expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
+      ]);
+      expect(questionResults).toMatchObject([{ toolName: "request_user_input", isError: false }]);
+      expect(JSON.stringify(questionResults)).toContain("Deep");
+      const context = await projectContextEngineAssemblyForCodex({
+        assembledMessages: carried,
+        prompt: "Continue with updated tools",
+        toolPayloadMode: "preserve",
+      });
+      expect(context.promptText).toContain("Pick a mode");
+      expect(context.promptText).toContain("Deep");
+    }
+  },
+);

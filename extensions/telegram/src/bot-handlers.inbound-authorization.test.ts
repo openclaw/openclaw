@@ -1,124 +1,166 @@
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import type { Message } from "grammy/types";
 import {
-  configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
-  createHostChannelInboundEventContextBuilder,
   readChannelContextAdmissionEvidence,
-  registerChannelIngressHostOwner,
+  withRegisteredChannelIngress,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it, vi } from "vitest";
-import { defaultTelegramBotDeps } from "./bot-deps.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { telegramPlugin } from "./channel.js";
+import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 
-describe("Telegram inbound admission authorization", () => {
-  it("binds a forum admission to the finalized parent and topic scope", async () => {
-    const chatId = -1001234567890;
-    const topicId = 99;
-    const participantId = "42";
-    const cfg = {
-      channels: {
-        telegram: {
-          groupPolicy: "allowlist",
-          groupAllowFrom: [participantId],
-          groups: {
-            [String(chatId)]: { allowFrom: [participantId], groupPolicy: "allowlist" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const params = {
-      accountId: "default",
-      ownerAgentId: "main",
-      bot: {} as RegisterTelegramHandlerParams["bot"],
-      cfg,
-      mediaMaxBytes: 1,
-      opts: { token: "test-token" },
-      runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
-      telegramCfg: cfg.channels?.telegram ?? {},
-      telegramDeps: {
-        ...defaultTelegramBotDeps,
-        getRuntimeConfig: () => cfg,
-        readChannelAllowFromStore: async () => [],
-      },
-      logger: getChildLogger({ module: "telegram/admission-test" }),
-      resolveGroupPolicy: () => ({ allowlistEnabled: true, allowed: true }),
-      resolveGroupActivation: () => undefined,
-      resolveGroupRequireMention: () => false,
-      resolveTelegramGroupConfig: () => ({
-        groupConfig: { allowFrom: [participantId], groupPolicy: "allowlist" as const },
-        topicConfig: undefined,
-      }),
-      shouldSkipUpdate: () => false,
-      processMessage: async () => ({ kind: "completed" as const }),
-    } satisfies RegisterTelegramHandlerParams;
-    const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({
-      msg: {
-        message_id: 7,
-        date: 1_700_000_000,
-        chat: { id: chatId, type: "supergroup", title: "Forum", is_forum: true },
-        from: { id: Number(participantId), is_bot: false, first_name: "Pat" },
-        message_thread_id: topicId,
-        text: "hello",
-      },
-      chatId,
-      isGroup: true,
-      isForum: true,
-      senderId: participantId,
-      senderUsername: "",
-      requireConfiguredGroup: false,
-      dmAccess: "silent",
-    });
-    expect(gate.allowed).toBe(true);
-    if (!gate.allowed) {
-      throw new Error("expected forum admission");
-    }
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  readChannelAllowFromStore: async () => [],
+}));
 
-    const clearCollection = configureChannelAdmissionEvidenceCollection(true);
-    const owner = { channelId: "telegram", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelIngressHostOwner(owner);
-    try {
-      const sessionKey = "agent:main:telegram:group:forum:topic:99";
-      const ingress = await gate.resolveChannelIngress({
-        agentId: "main",
-        sessionKey,
-        messageId: "7",
-        inboundEventKind: "user_request",
+// mock-isolation: keep the plugin-state topic-name cache out of the identity handoff fixture.
+vi.mock("./forum-topic-metadata.js", () => ({
+  resolveTelegramForumTopicMetadata: async () => ({}),
+}));
+
+const forumChatId = -1001234567890;
+const topicId = 99;
+const ownerId = "42";
+const forumConfig = { allowFrom: [ownerId], groupPolicy: "allowlist" as const };
+const telegram = {
+  dmPolicy: "open" as const,
+  allowFrom: ["*"],
+  groupPolicy: "allowlist" as const,
+  groupAllowFrom: [ownerId],
+  groups: { [String(forumChatId)]: forumConfig },
+  accounts: { default: { botToken: "default-token" }, ops: { botToken: "ops-token" } },
+};
+const cfg: OpenClawConfig = {
+  agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+  commands: { ownerAllowFrom: [`telegram:${ownerId}`] },
+  channels: { telegram },
+  messages: { groupChat: { mentionPatterns: [] } },
+};
+const resolveTelegramGroupConfig = (chatId: string | number) => ({
+  groupConfig: chatId === forumChatId ? forumConfig : undefined,
+  topicConfig: undefined,
+});
+beforeEach(() => setRuntimeConfigSnapshot(cfg));
+afterEach(clearRuntimeConfigSnapshot);
+afterEach(clearTelegramRuntimeForTest);
+
+const forumChat = { id: forumChatId, type: "supergroup", title: "Forum", is_forum: true } as const;
+const privateChat = { id: Number(ownerId), type: "private", first_name: "Pat" } as const;
+
+// The authorization gate and the context builder each describe the conversation.
+// The host binds the sender's identity only when both descriptions agree, so every
+// row runs both real producers instead of a hand-written context.
+it.each([
+  { name: "forum topic", accountId: "default", chat: forumChat, topic: topicId, messageIds: [7] },
+  {
+    name: "private topic",
+    accountId: "default",
+    chat: privateChat,
+    topic: topicId,
+    messageIds: [7],
+  },
+  { name: "unthreaded DM", accountId: "default", chat: privateChat, messageIds: [7] },
+  {
+    name: "private topic, second account",
+    accountId: "ops",
+    chat: privateChat,
+    topic: topicId,
+    messageIds: [7],
+  },
+  {
+    name: "private topic, buffered pair",
+    accountId: "default",
+    chat: privateChat,
+    topic: topicId,
+    messageIds: [7, 8],
+  },
+])("binds the configured owner for a $name message", ({ accountId, chat, topic, messageIds }) =>
+  withRegisteredChannelIngress(
+    { plugin: telegramPlugin, config: cfg, setRuntime: setTelegramRuntime },
+    async (runtime) => {
+      const isGroup = chat.type === "supergroup";
+      const authorization = createTelegramHandlerAuthorization({
+        accountId,
+        ownerAgentId: "main",
+        bot: {} as RegisterTelegramHandlerParams["bot"],
+        cfg,
+        mediaMaxBytes: 1,
+        opts: { token: "test-token" },
+        runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+        telegramCfg: telegram,
+        logger: getChildLogger({ module: "telegram/admission-test" }),
+        resolveGroupPolicy: () => ({ allowlistEnabled: true, allowed: true }),
+        resolveGroupActivation: () => undefined,
+        resolveGroupRequireMention: () => false,
+        resolveTelegramGroupConfig,
+        shouldSkipUpdate: () => false,
+        processMessage: async () => ({ kind: "completed" }),
       });
-      const buildContext = createHostChannelInboundEventContextBuilder(
-        buildChannelInboundEventContext,
-        owner,
+      const messages = messageIds.map(
+        (messageId): Message =>
+          ({
+            message_id: messageId,
+            date: 1_700_000_000,
+            chat,
+            from: { id: Number(ownerId), is_bot: false, first_name: "Pat" },
+            ...(topic === undefined ? {} : { message_thread_id: topic, is_topic_message: true }),
+            text: "hello",
+          }) as Message,
       );
-      const context = buildContext({
-        channel: "telegram",
-        accountId: "default",
-        messageId: "7",
-        from: `telegram:group:${String(chatId)}:topic:${String(topicId)}`,
-        sender: { id: participantId },
-        conversation: {
-          kind: "group",
-          id: String(chatId),
-          parentId: String(chatId),
-          threadId: String(topicId),
-        },
-        route: { agentId: "main", routeSessionKey: sessionKey },
-        reply: { to: `telegram:${String(chatId)}`, messageThreadId: topicId },
-        message: { rawBody: "hello", inboundEventKind: "user_request" },
-        channelIngress: ingress,
-      });
+      const channelIngressResolvers = [];
+      for (const msg of messages) {
+        const gate = await authorization.authorizeInboundMessage({
+          msg,
+          chatId: chat.id,
+          isGroup,
+          isForum: isGroup,
+          senderId: ownerId,
+          requireConfiguredGroup: false,
+          dmAccess: "silent",
+        });
+        if (!gate.allowed) {
+          throw new Error("expected message admission");
+        }
+        channelIngressResolvers.push(gate.resolveChannelIngress);
+      }
 
+      const built = await buildTelegramMessageContextForTest({
+        message: messages.at(-1) as unknown as Record<string, unknown>,
+        cfg,
+        accountId,
+        buildContext: runtime.channel.inbound.buildContext,
+        options: { channelIngressResolvers },
+        resolveTelegramGroupConfig,
+      });
+      if (!built) {
+        throw new Error("expected a message context");
+      }
+      const context = built.ctxPayload;
+
+      expect(context.MessageThreadId).toBe(topic);
       expect(
         consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
       ).toMatchObject({
         ingressState: "present",
         invoker: { state: "present", kind: "person" },
-        decisionCoverage: "enforced",
       });
-    } finally {
-      clearOwner();
-      clearCollection();
-    }
-  });
-});
+      const owner = await resolveCommandAuthorizationAsync({
+        cfg,
+        ctx: context,
+        commandAuthorized: false,
+      });
+      expect(owner.senderIsOwner).toBe(true);
+    },
+  ),
+);

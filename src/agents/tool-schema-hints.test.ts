@@ -1,273 +1,238 @@
-/** Tests bounded deterministic tool schema hints, including adversarial shapes. */
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 import { describe, expect, it } from "vitest";
-import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  compactToolInputHint as inputHint,
+  compactToolOutputHint as outputHint,
+  toolSchemaDeclaration as declaration,
+} from "./tool-schema-hints.js";
+
+function closedObject<T extends Parameters<typeof Type.Object>[0]>(properties: T) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+function fields(count: number, name: (index: number) => string, value: TSchema = Type.String()) {
+  return closedObject(
+    Object.fromEntries(Array.from({ length: count }, (_, i) => [name(i), value])),
+  );
+}
+const closedIdSchema = closedObject({ id: Type.String() });
 
 describe("tool schema hints", () => {
-  it("renders nested declared outputs as compact TypeScript shapes", () => {
-    const outputSchema = Type.Array(
-      Type.Object(
-        {
-          id: Type.String(),
-          metrics: Type.Object(
-            {
-              paid: Type.Boolean(),
-              tons: Type.Number(),
-            },
-            { additionalProperties: false },
-          ),
-          state: Type.Union([Type.Literal("ready"), Type.Literal("held")]),
-        },
-        { additionalProperties: false },
-      ),
-    );
-
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      'Array<{ id: string; metrics: { paid: boolean; tons: number }; state: "ready" | "held" }>',
-    );
+  it("renders frozen nested schemas without mutating their key order", () => {
+    const schema = Object.freeze({
+      type: "object",
+      properties: Object.freeze({
+        z: Object.freeze({ type: "string" }),
+        a: Object.freeze({
+          type: "object",
+          properties: Object.freeze({ b: Object.freeze({ type: "boolean" }) }),
+          additionalProperties: false,
+        }),
+      }),
+      required: Object.freeze(["z", "a"]),
+      additionalProperties: false,
+    });
+    expect(declaration(schema)).toBe("{ a: { b?: boolean }; z: string }");
+    expect(Object.keys(schema.properties)).toEqual(["z", "a"]);
+    expect(schema.required).toEqual(["z", "a"]);
   });
 
-  it("keeps deeply nested literal unions complete without increasing the depth budget", () => {
-    const outputSchema = Type.Object(
-      {
-        conversations: Type.Array(
-          Type.Object(
-            {
-              conversationRef: Type.String(),
-              kind: Type.Union([
-                Type.Literal("direct"),
-                Type.Literal("group"),
-                Type.Literal("channel"),
-              ]),
-            },
-            { additionalProperties: false },
-          ),
-        ),
-      },
-      { additionalProperties: false },
+  it("keeps unknown leaves and dictionaries honest in full declarations", () => {
+    const schema = closedObject({
+      value: Type.Unknown(),
+      rows: Type.Record(Type.String(), Type.Number()),
+      opaque: { $ref: "#/$defs/hidden" },
+    });
+    expect(declaration(schema)).toBe("{ opaque: unknown; rows: unknown; value: unknown }");
+    expect(declaration({ type: "object", additionalProperties: { type: "string" } })).toBe(
+      "{ [key: string]: string }",
     );
-
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      '{ conversations: Array<{ conversationRef: string; kind: "direct" | "group" | "channel" }> }',
-    );
+    expect(declaration(undefined)).toBe("unknown");
   });
 
-  it("renders up to eight literal union values", () => {
-    const values = [
-      "env",
-      "agent",
-      "defaults",
-      "model",
-      "provider",
-      "implicit",
-      "session",
-      "session-key",
-    ];
-    const eight = Type.Union(values.map((value) => Type.Literal(value)));
-    const nine = Type.Union([...values, "extra"].map((value) => Type.Literal(value)));
+  it.each([{ minimum: "1" }, { maximum: Number.POSITIVE_INFINITY }])(
+    "defers malformed numeric bounds instead of inventing constraints: %j",
+    (bounds) => {
+      expect(inputHint({ type: "number", ...bounds })).toBe("unknown");
+    },
+  );
 
-    expect(compactToolOutputHint(eight)).toBe(
-      '"env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session" | "session-key"',
+  it("charges complete numeric annotations to the existing input budget", () => {
+    const schema = fields(
+      12,
+      (i) => `field_${String(i).padStart(2, "0")}`,
+      Type.Integer({
+        minimum: 0,
+        maximum: 100,
+        exclusiveMinimum: 1,
+        exclusiveMaximum: 99,
+        description: "Description stays deferred.",
+      }),
     );
-    expect(compactToolOutputHint(nine)).toBeUndefined();
-  });
+    const input = inputHint(schema);
 
-  it("renders five structural union variants and rejects six", () => {
-    const variant = (index: number) =>
-      Type.Object(
-        { kind: Type.Literal(`variant-${index}`), value: Type.Number() },
-        { additionalProperties: false },
-      );
-    const five = Type.Union(Array.from({ length: 5 }, (_unused, index) => variant(index)));
-    const six = Type.Union(Array.from({ length: 6 }, (_unused, index) => variant(index)));
-
-    expect(compactToolOutputHint(five)).toBe(
-      '{ kind: "variant-0"; value: number } | { kind: "variant-1"; value: number } | { kind: "variant-2"; value: number } | { kind: "variant-3"; value: number } | { kind: "variant-4"; value: number }',
-    );
-    expect(compactToolOutputHint(six)).toBeUndefined();
+    expect(input).toContain("field_00: number /* integer, >= 0, <= 100, > 1, < 99 */");
+    // Every key is required, so overflow shortens types instead of dropping keys.
+    expect(input).toContain("field_11: number }");
+    expect(input).not.toContain("Description stays deferred.");
+    expect(input.length).toBeLessThanOrEqual(300);
+    expect(outputHint(schema)).toContain("field_11: number");
+    expect(outputHint(schema)).not.toContain("/*");
   });
 
   it("keeps input hints small while allowing larger exact output contracts", () => {
-    const schema = Type.Object(
-      Object.fromEntries(
-        Array.from({ length: 16 }, (_unused, index) => [
-          `field_${String(index).padStart(2, "0")}_with_long_name`,
+    const schema = fields(16, (i) => `field_${String(i).padStart(2, "0")}_with_long_name`);
+
+    // Required names alone overflow the input budget; a partial list would read as complete.
+    expect(inputHint(schema)).toBe("{ ... }");
+    expect(outputHint(schema)).toContain("field_15_with_long_name: string");
+  });
+
+  it.each([
+    { limit: 300, delta: 0 },
+    { limit: 300, delta: 1 },
+    { limit: 800, delta: 0 },
+    { limit: 800, delta: 1 },
+  ])("preserves the $limit UTF-16 boundary at offset $delta", ({ limit, delta }) => {
+    const literal = "x".repeat(limit - 24 + delta);
+    const schema = closedObject({ a: Type.String(), "z😀": Type.Literal(literal) });
+    const render = limit === 300 ? inputHint : outputHint;
+    const expected = `{ a: string; "z😀": "${literal}" }`;
+
+    expect(expected.length).toBe(limit + delta);
+    expect(render(schema)).toBe(
+      delta <= 0 ? expected : limit === 300 ? '{ a: string; "z😀": string }' : undefined,
+    );
+  });
+
+  it("renders only required keys, at every level, once an input hint overflows", () => {
+    const item = closedObject({
+      text: Type.String(),
+      kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
+      ...Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`optional_${i}`, Type.Optional(Type.String())]),
+      ),
+    });
+    const schema = closedObject({
+      requestId: Type.String(),
+      attribution: Type.String(),
+      items: Type.Array(item),
+      note: Type.Optional(Type.String()),
+    });
+    expect(inputHint(schema)).toBe(
+      '{ attribution: string; items: Array<{ kind: "fact" | "preference" | "decision"; text: string; ... }>; requestId: string; ... }',
+    );
+
+    // Union variants keep their required keys instead of collapsing to unknown.
+    const destination = closedObject({
+      destination: Type.Union([
+        closedObject({ id: Type.String(), revision: Type.Optional(Type.Integer()) }),
+        closedObject({ title: Type.String() }),
+      ]),
+      ...Object.fromEntries(
+        Array.from({ length: 12 }, (_, i) => [`optional_${i}`, Type.Optional(Type.String())]),
+      ),
+    });
+    expect(inputHint(destination)).toBe(
+      "{ destination: { id: string; ... } | { title: string }; ... }",
+    );
+
+    const long = Type.Optional(Type.Literal("x".repeat(280)));
+    const nullable = {
+      ...closedObject({ id: Type.String(), extra: Type.Optional(Type.String()) }),
+      nullable: true,
+    };
+    expect(inputHint(closedObject({ choice: nullable, note: long }))).toBe(
+      "{ choice: { id: string; ... } | null; ... }",
+    );
+    expect(
+      inputHint(
+        Type.Union([
+          closedObject({ id: Type.String(), extra: long }),
+          closedObject({ name: Type.String() }),
+        ]),
+      ),
+    ).toBe("{ id: string; ... } | { name: string }");
+  });
+
+  it("shortens required types that still overflow and keeps the result bounded", () => {
+    const item = closedObject({
+      text: Type.String(),
+      kind: Type.Union(["fact", "preference", "decision"].map((kind) => Type.Literal(kind))),
+      count: Type.Integer({ minimum: 0, maximum: 100 }),
+    });
+    const wide = closedObject(
+      Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`group_${i}`, Type.Array(item)])),
+    );
+    const input = inputHint(wide);
+    expect(input).toMatch(
+      /^\{ group_0: Array<\{ count: number \/\* integer.*; group_7: Array<\{ \.\.\. \}> \}$/u,
+    );
+    expect(input.length).toBeLessThanOrEqual(300);
+
+    // Short required types cost no more than their elided form.
+    const manyRequired = closedObject({
+      ...Object.fromEntries(
+        Array.from({ length: 15 }, (_, i) => [
+          `field_${String(i).padStart(3, "0")}`,
           Type.String(),
         ]),
       ),
-      { additionalProperties: false },
+      optional_extra: Type.Optional(Type.String()),
+    });
+    expect(inputHint(manyRequired)).toMatch(
+      /^\{ field_000: string; .*; field_014: string; \.\.\. \}$/u,
     );
 
-    const inputHint = compactToolInputHint(schema);
-    const outputHint = compactToolOutputHint(schema);
-
-    expect(inputHint).toBe("unknown");
-    expect(outputHint).toBeDefined();
-    expect(outputHint!.length).toBeGreaterThan(300);
-    expect(outputHint!.length).toBeLessThanOrEqual(600);
-  });
-
-  it("keeps contracts with explicitly opaque leaves complete", () => {
-    const outputSchema = Type.Object(
-      {
-        count: Type.Number(),
-        messages: Type.Array(Type.Unknown()),
-        payload: Type.Optional(Type.Unknown()),
-      },
-      { additionalProperties: false },
+    // An open object's trailing ellipsis counts against the budget.
+    const open = Type.Object(
+      { a: Type.String(), z: Type.Literal("x".repeat(276)) },
+      { additionalProperties: true },
     );
-
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      "{ count: number; messages: Array<unknown>; payload?: unknown }",
-    );
-  });
-
-  it("renders a bare top-type schema as unknown without demoting", () => {
-    expect(compactToolOutputHint(Type.Unknown())).toBe("unknown");
-    expect(compactToolOutputHint(Type.Any())).toBe("unknown");
-  });
-
-  it("still fails closed for constrained but untyped leaves", () => {
-    const outputSchema = Type.Object(
-      {
-        id: Type.String(),
-        blob: { minLength: 1 } as unknown as ReturnType<typeof Type.Unknown>,
-      },
-      { additionalProperties: false },
-    );
-
-    expect(compactToolOutputHint(outputSchema)).toBeUndefined();
+    expect(inputHint(open)).toBe("{ a: string; z: string; ... }");
   });
 
   it("includes null in AJV-style nullable output hints", () => {
-    expect(compactToolOutputHint({ type: "string", nullable: true })).toBe("string | null");
-    expect(
-      compactToolOutputHint({
-        type: "object",
-        nullable: true,
-        properties: { id: { type: "string" } },
-        required: ["id"],
-        additionalProperties: false,
-      }),
-    ).toBe("{ id: string } | null");
-    expect(compactToolOutputHint({ type: "string", nullable: true, enum: ["ready"] })).toBe(
-      '"ready"',
-    );
-    expect(compactToolOutputHint({ type: "string", nullable: "yes" })).toBeUndefined();
-  });
-
-  it("orders required and optional fields deterministically", () => {
-    const first = {
-      type: "object",
-      properties: {
-        optional: { type: "boolean" },
-        beta: { type: "number" },
-        alpha: { type: "string" },
-      },
-      required: ["beta", "alpha"],
-    };
-    const second = {
-      type: "object",
-      properties: {
-        alpha: { type: "string" },
-        beta: { type: "number" },
-        optional: { type: "boolean" },
-      },
-      required: ["alpha", "beta"],
-    };
-
-    expect(compactToolInputHint(first)).toBe("{ alpha: string; beta: number; optional?: boolean }");
-    expect(compactToolInputHint(second)).toBe(compactToolInputHint(first));
+    expect(outputHint({ type: "string", nullable: true })).toBe("string | null");
+    expect(outputHint({ ...closedIdSchema, nullable: true })).toBe("{ id: string } | null");
+    expect(outputHint({ type: "string", nullable: true, enum: ["ready"] })).toBe('"ready"');
+    expect(outputHint({ type: "string", nullable: "yes" })).toBeUndefined();
   });
 
   it("omits incomplete output hints instead of inviting field guesses", () => {
     const cyclic: Record<string, unknown> = { type: "object", properties: {} };
     (cyclic.properties as Record<string, unknown>).self = cyclic;
 
-    expect(compactToolOutputHint(cyclic)).toBeUndefined();
-    expect(compactToolOutputHint({ $ref: "#/$defs/result" })).toBeUndefined();
-    expect(compactToolOutputHint({ anyOf: [] })).toBeUndefined();
-    const closedBaseShape = {
-      type: "object",
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    };
-    expect(compactToolOutputHint({ ...closedBaseShape, oneOf: [] })).toBeUndefined();
-    expect(
-      compactToolOutputHint({
-        ...closedBaseShape,
+    for (const schema of [
+      cyclic,
+      { $ref: "#/$defs/result" },
+      { anyOf: [] },
+      Type.Union(Array.from({ length: 9 }, (_, index) => Type.Literal(index))),
+      Type.Union(
+        Array.from({ length: 6 }, (_, index) => closedObject({ kind: Type.Literal(index) })),
+      ),
+      { ...closedIdSchema, oneOf: [] },
+      {
+        ...closedIdSchema,
         anyOf: Array.from({ length: 5 }, (_unused, index) => ({ const: index })),
-      }),
-    ).toBeUndefined();
-    expect(
-      compactToolOutputHint({
-        ...closedBaseShape,
-        anyOf: [{ const: "a" }],
-        oneOf: [{ const: "b" }],
-      }),
-    ).toBeUndefined();
-    expect(compactToolOutputHint(Type.Object({ id: Type.String() }))).toBeUndefined();
-    expect(
-      compactToolOutputHint({
+      },
+      { ...closedIdSchema, anyOf: [{ const: "a" }], oneOf: [{ const: "b" }] },
+      Type.Object({ id: Type.String() }),
+      {
         type: "object",
         properties: {},
         patternProperties: { "^item_": { type: "number" } },
         additionalProperties: false,
-      }),
-    ).toBeUndefined();
-
-    const oversized = Type.Object(
-      Object.fromEntries(
-        Array.from({ length: 32 }, (_unused, index) => [`field_${index}`, Type.String()]),
-      ),
-      { additionalProperties: false },
-    );
-    expect(compactToolOutputHint(oversized)).toBeUndefined();
-    expect(compactToolInputHint(oversized)).toContain("...");
-
-    const hugeName = Type.Object(
-      { ["x".repeat(10_000)]: Type.String() },
-      { additionalProperties: false },
-    );
-    expect(compactToolOutputHint(hugeName)).toBeUndefined();
-    expect(compactToolInputHint(hugeName)).toBe("{ ... }");
-  });
-
-  it('keeps complete fields and literals containing the word "unknown"', () => {
-    const outputSchema = Type.Object(
-      {
-        state: Type.Union([Type.Literal("known"), Type.Literal("unknown")]),
-        unknownReason: Type.Optional(Type.String()),
       },
-      { additionalProperties: false },
-    );
+    ]) {
+      expect(outputHint(schema)).toBeUndefined();
+    }
 
-    expect(compactToolOutputHint(outputSchema)).toBe(
-      '{ state: "known" | "unknown"; unknownReason?: string }',
-    );
-  });
+    const oversized = fields(32, (i) => `field_${i}`);
+    expect(outputHint(oversized)).toBeUndefined();
+    expect(inputHint(oversized)).toContain("...");
 
-  it("bounds deterministic hints across a large adversarial catalog", () => {
-    const schemas = Array.from({ length: 1_000 }, (_, index) =>
-      Type.Array(
-        Type.Object(
-          Object.fromEntries(
-            Array.from({ length: 32 }, (_unused, propertyIndex) => [
-              `field_${index}_${propertyIndex}`,
-              Type.Optional(Type.String()),
-            ]),
-          ),
-          { additionalProperties: index % 2 === 0 },
-        ),
-      ),
-    );
-
-    const first = schemas.map(compactToolInputHint);
-    const second = schemas.map(compactToolInputHint);
-
-    expect(second).toEqual(first);
-    expect(first.every((hint) => hint.length <= 300)).toBe(true);
-    expect(schemas.every((schema) => compactToolOutputHint(schema) === undefined)).toBe(true);
+    const hugeName = closedObject({ ["x".repeat(10_000)]: Type.String() });
+    expect(outputHint(hugeName)).toBeUndefined();
+    expect(inputHint(hugeName)).toBe("{ ... }");
   });
 });

@@ -1,85 +1,26 @@
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import type { AssistantMessage, AssistantMessageEventStreamLike } from "../../../llm/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
-/**
- * Handles sessions-yield interruption, persistence, and artifact cleanup.
- */
+import { buildUsageWithNoCost } from "../../stream-message-shared.js";
 import { isRunnerAbortError } from "../abort.js";
-import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
+import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
-const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
-
-// Persist a hidden context reminder so the next turn knows why the runner stopped.
-function buildSessionsYieldContextMessage(message: string): string {
-  return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
-}
-
-export async function waitForSessionsYieldAbortSettle(params: {
-  settlePromise: Promise<void> | null;
-  runId: string;
-  sessionId: string;
-}): Promise<void> {
-  await waitForEmbeddedAbortSettle({
-    promise: params.settlePromise,
-    runId: params.runId,
-    sessionId: params.sessionId,
-    reason: "sessions_yield",
-  });
-}
 
 // Return a synthetic aborted response so agent runtime unwinds without a real provider call.
 export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
   id?: string;
-}): {
-  [Symbol.asyncIterator]: () => AsyncGenerator<never, void, unknown>;
-  result: () => Promise<{
-    role: "assistant";
-    content: Array<{ type: "text"; text: string }>;
-    stopReason: "aborted";
-    api: string;
-    provider: string;
-    model: string;
-    usage: {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      totalTokens: number;
-      cost: {
-        input: number;
-        output: number;
-        cacheRead: number;
-        cacheWrite: number;
-        total: number;
-      };
-    };
-    timestamp: number;
-  }>;
-} {
-  const message = {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text: "" }],
-    stopReason: "aborted" as const,
+}): AssistantMessageEventStreamLike {
+  const message: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "" }],
+    stopReason: "aborted",
     api: model.api ?? "",
     provider: model.provider ?? "",
     model: model.id ?? "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: buildUsageWithNoCost({}),
     timestamp: Date.now(),
   };
   return {
@@ -94,7 +35,6 @@ export function createYieldAbortedResponse(model: {
 // own yield checks in attempt.ts and attempt-stream.ts.
 export const SESSIONS_YIELD_ABORT_REASON = { code: "sessions_yield", turnHandoff: true } as const;
 
-/** True when a runner abort error was raised by the sessions_yield handoff. */
 export function isSessionsYieldAbortError(err: unknown): boolean {
   return isRunnerAbortError(err) && err instanceof Error && isSessionsYieldAbortReason(err.cause);
 }
@@ -122,68 +62,38 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
   });
 }
 
-// Append the caller-provided yield payload as a hidden session message once the run is idle.
-export async function persistSessionsYieldContextMessage(
-  activeSession: {
-    sendCustomMessage: (
-      message: {
-        customType: string;
-        content: string;
-        display: boolean;
-        details?: Record<string, unknown>;
-      },
-      options?: { triggerTurn?: boolean },
-    ) => Promise<void>;
-  },
-  message: string,
-) {
-  await activeSession.sendCustomMessage(
-    {
-      customType: SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE,
-      content: buildSessionsYieldContextMessage(message),
-      display: false,
-      details: { source: "sessions_yield", message },
-    },
-    { triggerTurn: false },
-  );
-}
-
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
 // After strip, the transcript must end with a non-assistant role so subagent
 // completion auto-announce can inject a continuation turn.
-export function stripSessionsYieldArtifacts(activeSession: {
+export async function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
-  sessionManager: Pick<SessionManager, "removeTrailingEntries">;
-}) {
+  sessionManager: Pick<SessionManager, "removeTrailingEntriesAsync">;
+}): Promise<boolean> {
   const strippedMessages = activeSession.messages.slice();
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
   // non-continuable suffix after sessions_yield.
-  while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1);
-    const removable =
-      last?.role === "assistant" ||
-      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
-    if (!removable) {
-      break;
-    }
-    strippedMessages.pop();
-  }
+  strippedMessages.length =
+    strippedMessages.findLastIndex(
+      (message) =>
+        message?.role !== "assistant" &&
+        !(
+          message?.role === "custom" && message.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+        ),
+    ) + 1;
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {
-    return;
+    return false;
   }
-
-  activeSession.agent.state.messages = strippedMessages;
 
   // The interrupt marker can settle independently in live and persisted state.
   // Only assistant removals need the live-suffix cap to prevent data loss.
   let remainingAssistantCount = removedMessages.filter(
     (message) => message.role === "assistant",
   ).length;
-  activeSession.sessionManager.removeTrailingEntries(
+  const removedEntries = await activeSession.sessionManager.removeTrailingEntriesAsync(
     (entry) => {
       if (
         entry.type === "custom_message" &&
@@ -202,11 +112,9 @@ export function stripSessionsYieldArtifacts(activeSession: {
       return true;
     },
     {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+      preserveTrailing: preserveTrailingTranscriptMetadata,
     },
   );
+  activeSession.agent.state.messages = strippedMessages;
+  return removedEntries > 0;
 }

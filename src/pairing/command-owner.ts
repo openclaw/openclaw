@@ -1,4 +1,3 @@
-// Shared first-owner bootstrap for DM pairing approval surfaces.
 import {
   formatCommandOwnerFromChannelSender,
   hasConfiguredCommandOwners,
@@ -26,13 +25,15 @@ export async function bootstrapCommandOwnerFromPairing(params: {
     return { ownerEntry, status: "already-configured" };
   }
 
-  const nextConfig = structuredClone(snapshot.sourceConfig);
-  nextConfig.commands = {
-    ...nextConfig.commands,
-    ownerAllowFrom: [ownerEntry],
+  const nextConfig = {
+    ...snapshot.sourceConfig,
+    commands: {
+      ...snapshot.sourceConfig.commands,
+      ownerAllowFrom: [ownerEntry],
+    },
   };
   await replaceConfigFile({
-    nextConfig,
+    sourceConfig: nextConfig,
     snapshot,
     writeOptions,
     afterWrite: { mode: "auto" },

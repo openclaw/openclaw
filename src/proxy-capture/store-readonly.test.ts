@@ -1,0 +1,155 @@
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { gzipSync } from "node:zlib";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createDebugProxyCaptureReader } from "./store-readonly.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function makeStateEnv(): NodeJS.ProcessEnv {
+  return { OPENCLAW_STATE_DIR: tempDirs.make("capture-reader-") };
+}
+
+function withDatabase<T>(databasePath: string, run: (db: DatabaseSync) => T, readOnly = false): T {
+  const db = new DatabaseSync(databasePath, { readOnly });
+  try {
+    return run(db);
+  } finally {
+    db.close();
+  }
+}
+
+function createCaptureDatabase(env: NodeJS.ProcessEnv, schemaVersion: number): string {
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  withDatabase(databasePath, (db) => {
+    db.exec(`
+      PRAGMA user_version = ${schemaVersion};
+      CREATE TABLE workspace_attestations (
+        workspace_key TEXT PRIMARY KEY, attested_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE capture_blobs (
+        blob_id TEXT NOT NULL PRIMARY KEY, content_type TEXT, encoding TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, data BLOB NOT NULL, created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TABLE capture_events (
+        id INTEGER NOT NULL PRIMARY KEY, session_id TEXT NOT NULL, ts INTEGER NOT NULL,
+        source_scope TEXT NOT NULL, source_process TEXT NOT NULL, protocol TEXT NOT NULL,
+        direction TEXT NOT NULL, kind TEXT NOT NULL, flow_id TEXT NOT NULL,
+        method TEXT, host TEXT, path TEXT, status INTEGER, close_code INTEGER, content_type TEXT,
+        headers_json TEXT, data_text TEXT, data_blob_id TEXT, data_sha256 TEXT, error_text TEXT, meta_json TEXT
+      ) STRICT;
+      INSERT INTO workspace_attestations VALUES ('workspace-1', 100, 200);
+    `);
+    db.prepare(
+      `INSERT INTO capture_blobs (
+         blob_id, content_type, encoding, size_bytes, sha256, data, created_at
+       ) VALUES ('blob-1', 'application/json', 'gzip', 11, 'fixture-sha', ?, 2)`,
+    ).run(gzipSync(Buffer.from('{"ok":true}')));
+    db.prepare(
+      `INSERT INTO capture_events (
+         id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
+         host, data_blob_id
+       ) VALUES (1, 'session-1', 3, 'openclaw', 'candidate', 'https', 'outbound', 'request',
+                 'flow-1', 'slack.com', 'blob-1')`,
+    ).run();
+  });
+  return databasePath;
+}
+
+function inspectDatabase(databasePath: string) {
+  return withDatabase(
+    databasePath,
+    (db) => ({
+      fingerprint: JSON.stringify(
+        db
+          .prepare(
+            `SELECT type, name, tbl_name AS tableName, sql
+             FROM sqlite_schema
+             WHERE name NOT LIKE 'sqlite_%'
+             ORDER BY type, name`,
+          )
+          .all(),
+      ),
+      userVersion: db.prepare("PRAGMA user_version").get(),
+      workspaceAttestations: db
+        .prepare("SELECT * FROM workspace_attestations ORDER BY workspace_key")
+        .all(),
+    }),
+    true,
+  );
+}
+
+describe("createDebugProxyCaptureReader", () => {
+  it.each([3, 4, 5, 6])(
+    "reads schema %s without changing its version, schema, or workspace attestations",
+    (schemaVersion) => {
+      const env = makeStateEnv();
+      const databasePath = createCaptureDatabase(env, schemaVersion);
+      const before = inspectDatabase(databasePath);
+      const reader = createDebugProxyCaptureReader({ env });
+
+      expect(reader.getSessionEvents("session-1")).toMatchObject([
+        { id: 1, sessionId: "session-1", flowId: "flow-1", host: "slack.com" },
+      ]);
+      expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
+      expect(inspectDatabase(databasePath)).toEqual(before);
+    },
+  );
+
+  it("leaves missing state absent and observes later database creation and WAL commits", () => {
+    const env = makeStateEnv();
+    const reader = createDebugProxyCaptureReader({ env });
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+
+    expect(reader.getSessionEvents("missing")).toEqual([]);
+    expect(reader.readBlob("missing")).toBeNull();
+    expect(fs.existsSync(databasePath)).toBe(false);
+    expect(fs.existsSync(path.dirname(databasePath))).toBe(false);
+    createCaptureDatabase(env, 3);
+    expect(reader.getSessionEvents("session-1")).toHaveLength(1);
+    expect(reader.readBlob("blob-1")).toBe('{"ok":true}');
+    withDatabase(databasePath, (writer) => {
+      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+
+      writer.exec(`INSERT INTO capture_events (
+             id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id
+           ) VALUES
+             (2, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-2'),
+             (3, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-3'),
+             (4, 'session-1', 6, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-4')`);
+
+      expect(reader.getSessionEvents("session-1", 2).map((event) => event.id)).toEqual([4, 3]);
+      expect(reader.getSessionEvents("session-1").map((event) => event.id)).toEqual([4, 3, 2, 1]);
+    });
+  });
+
+  it.each([
+    [
+      "newer schema",
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`,
+      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    ],
+    ["missing capture table", "PRAGMA user_version = 3;", /no such table: capture_events/u],
+  ] as const)("propagates %s errors", (_name, sql, error) => {
+    const env = makeStateEnv();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    withDatabase(databasePath, (db) => db.exec(sql));
+    expect(() => createDebugProxyCaptureReader({ env }).getSessionEvents("session-1")).toThrow(
+      error,
+    );
+  });
+
+  it("propagates database corruption", () => {
+    const env = makeStateEnv();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, "not a sqlite database");
+    expect(() => createDebugProxyCaptureReader({ env }).readBlob("blob-1")).toThrow();
+  });
+});

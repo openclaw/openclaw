@@ -3,15 +3,15 @@ import {
   buildNativeHookRelayCommandWithStateDatabase,
   resolveNativeHookRelayCommandTimeoutMs,
 } from "./native-hook-relay-command.js";
+import type {
+  NativeHookRelayRegistrationHandle,
+  RegisterNativeHookRelayParams,
+} from "./native-hook-relay-contexts.js";
 import {
   nativeHookRelayEventHasLocalWork,
   nativeHookRelayEventToolMatcher,
 } from "./native-hook-relay-events.js";
-import {
-  NATIVE_HOOK_RELAY_EVENTS,
-  type NativeHookRelayRegistrationHandle,
-  type RegisterNativeHookRelayParams,
-} from "./native-hook-relay-types.js";
+import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
 
 export type NativeHookRelayCommandPlan = Pick<
   NativeHookRelayRegistrationHandle,
@@ -22,11 +22,17 @@ export type NativeHookRelayCommandPlan = Pick<
 export function buildNativeHookRelayCommandPlan(
   params: Pick<
     RegisterNativeHookRelayParams,
-    "provider" | "agentId" | "sessionKey" | "config" | "preToolUseLoopDetection" | "command"
-  > & { relayId: string; generation: string },
+    "provider" | "agentId" | "sessionKey" | "config" | "requirePreToolUse" | "command"
+  > & {
+    relayId: string;
+    generation: string;
+    /** Canonical tool names requiring bundled execution custody. */
+    executionAdmissionToolNames?: readonly string[];
+    postToolUseToolNames?: readonly string[];
+  },
 ): NativeHookRelayCommandPlan {
   const stateDbPath = resolveOpenClawStateSqlitePath();
-  const policy = { ...params, preToolUseLoopDetection: params.preToolUseLoopDetection !== false };
+  const policy = params;
   const facts = new Map(
     NATIVE_HOOK_RELAY_EVENTS.map((event) => [
       event,
@@ -45,6 +51,7 @@ export function buildNativeHookRelayCommandPlan(
         relayId: params.relayId,
         generation: params.generation,
         stateDbPath,
+        remoteCredentialPath: options?.remoteCredentialPath,
         event,
         nice: params.command?.nice,
         timeoutMs: resolveNativeHookRelayCommandTimeoutMs(

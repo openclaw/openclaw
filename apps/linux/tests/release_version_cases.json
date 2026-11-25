@@ -1,0 +1,63 @@
+{
+  "ordered": [
+    { "current": "2026.9.3", "candidate": "2026.9.3-1", "ordering": 1 },
+    { "current": "2026.9.3-1", "candidate": "2026.9.3-2", "ordering": 1 },
+    { "current": "2026.9.3-2", "candidate": "2026.9.4", "ordering": 1 },
+    { "current": "2026.9.3-2", "candidate": "2026.9.3-2", "ordering": 0 },
+    { "current": "2026.9.3-2", "candidate": "2026.9.3", "ordering": -1 },
+    { "current": "2026.9.3", "candidate": "2026.9.3", "ordering": 0 },
+    { "current": "2026.9.3-alpha.2", "candidate": "2026.9.3-alpha.10", "ordering": 1 },
+    { "current": "2026.9.3-alpha.10", "candidate": "2026.9.3-beta.1", "ordering": 1 },
+    { "current": "2026.9.3-beta.2", "candidate": "2026.9.3-beta.10", "ordering": 1 },
+    { "current": "2026.9.3-beta.10", "candidate": "2026.9.3", "ordering": 1 },
+    { "current": "2026.9.3-beta.1", "candidate": "2026.9.3-beta.1", "ordering": 0 },
+    { "current": "2026.9.3-2", "candidate": "2026.9.3-10", "ordering": 1 },
+    { "current": "2026.9.3-10", "candidate": "2026.9.4-alpha.1", "ordering": 1 },
+    { "current": "2026.9.32", "candidate": "2026.9.33", "ordering": 1 },
+    { "current": "2026.9.33", "candidate": "2026.10.1", "ordering": 1 },
+    { "current": "2026.12.34", "candidate": "2027.1.1", "ordering": 1 },
+    {
+      "current": "9999.12.9007199254740990",
+      "candidate": "9999.12.9007199254740991",
+      "ordering": 1
+    },
+    {
+      "current": "2026.9.3-9007199254740990",
+      "candidate": "2026.9.3-9007199254740991",
+      "ordering": 1
+    },
+    {
+      "current": "2026.9.3-alpha.9007199254740990",
+      "candidate": "2026.9.3-alpha.9007199254740991",
+      "ordering": 1
+    },
+    {
+      "current": "2026.9.3-beta.9007199254740990",
+      "candidate": "2026.9.3-beta.9007199254740991",
+      "ordering": 1
+    }
+  ],
+  "unrecognized": [
+    "0.1.0",
+    "999.12.1",
+    "10000.1.1",
+    "2026.0.1",
+    "2026.13.1",
+    "2026.9.0",
+    "2026.9.9007199254740992",
+    "2026.9.3-0",
+    "2026.9.3-alpha.0",
+    "2026.9.3-beta.0",
+    "2026.9.3-9007199254740992",
+    "2026.9.3-alpha.9007199254740992",
+    "2026.9.3-beta.9007199254740992",
+    "2026.9.3-18446744073709551616",
+    "2026.9.3-rc.1",
+    "2026.9.3-dev",
+    "2026.9.3-Beta.1",
+    "2026.9.3-beta",
+    "2026.9.3-beta.1.extra",
+    "2026.9.3+build.2",
+    "2026.9.3-1+build.2"
+  ]
+}

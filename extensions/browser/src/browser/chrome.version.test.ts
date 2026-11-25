@@ -1,4 +1,3 @@
-// Browser tests cover chrome.version plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +13,7 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { readBrowserVersion } from "./chrome.executables.js";
+import { parseBrowserMajorVersion, readBrowserVersion } from "./chrome.executable-probe.js";
 
 function stubPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", {
@@ -30,6 +29,14 @@ describe("readBrowserVersion", () => {
     stubPlatform(originalPlatform);
     execFileSyncMock.mockReset();
     vi.restoreAllMocks();
+  });
+
+  it("parses odd dotted browser version tokens using the last match", () => {
+    expect(parseBrowserMajorVersion("Chromium 3.0/1.2.3")).toBe(1);
+  });
+
+  it("returns null when no dotted version token exists", () => {
+    expect(parseBrowserMajorVersion("no version here")).toBeNull();
   });
 
   it("reads macOS app bundle versions from Info.plist before spawning Chrome", () => {
@@ -89,18 +96,23 @@ describe("readBrowserVersion", () => {
   });
 
   describe("on Windows", () => {
-    function makeWindowsChromeDir(versionDirs: string[]): string {
+    function withWindowsChromeDir(versionDirs: string[], run: (appDir: string) => void): void {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chrome-win-"));
       const appDir = path.join(root, "Application");
-      fs.mkdirSync(appDir, { recursive: true });
-      for (const name of versionDirs) {
-        fs.mkdirSync(path.join(appDir, name));
+      stubPlatform("win32");
+      try {
+        fs.mkdirSync(appDir, { recursive: true });
+        for (const name of versionDirs) {
+          fs.mkdirSync(path.join(appDir, name));
+        }
+        fs.writeFileSync(path.join(appDir, "chrome.exe"), "");
+        run(appDir);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
       }
-      fs.writeFileSync(path.join(appDir, "chrome.exe"), "");
-      return appDir;
     }
 
-    it("reads PE product metadata without interpolating the executable path", () => {
+    it("reads PE product metadata with the executable path passed as environment data", () => {
       stubPlatform("win32");
       const exePath = "C:\\Users\\Example\\Browser's Path\\chrome.exe";
       execFileSyncMock.mockReturnValue("148.0.7778.179\r\n");
@@ -121,39 +133,31 @@ describe("readBrowserVersion", () => {
           "-NoProfile",
           "-NonInteractive",
           "-Command",
-          "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($args[0]).ProductVersion",
-          exePath,
+          "[System.Diagnostics.FileVersionInfo]::GetVersionInfo($env:OPENCLAW_BROWSER_EXECUTABLE_PATH).ProductVersion",
         ],
-        expect.objectContaining({ timeout: 4000 }),
+        expect.objectContaining({
+          timeout: 4000,
+          stdio: ["ignore", "pipe", "ignore"],
+          env: expect.objectContaining({ OPENCLAW_BROWSER_EXECUTABLE_PATH: exePath }),
+        }),
       );
     });
 
     it("falls back to one unambiguous version directory", () => {
-      stubPlatform("win32");
-      const appDir = makeWindowsChromeDir(["148.0.7778.179"]);
-      fs.writeFileSync(path.join(appDir, "149.0.0.0"), "not a directory");
       execFileSyncMock.mockImplementation(() => {
         throw new Error("PowerShell unavailable");
       });
-      try {
+      withWindowsChromeDir(["148.0.7778.179"], (appDir) => {
+        fs.writeFileSync(path.join(appDir, "149.0.0.0"), "not a directory");
         expect(readBrowserVersion(path.join(appDir, "chrome.exe"))).toBe("148.0.7778.179");
-      } finally {
-        fs.rmSync(path.dirname(appDir), { recursive: true, force: true });
-      }
+      });
     });
 
-    it.each([
-      { label: "no version directory", versionDirs: [] },
-      { label: "multiple version directories", versionDirs: ["147.0.0.0", "148.0.0.0"] },
-    ])("returns null with $label after metadata lookup fails", ({ versionDirs }) => {
-      stubPlatform("win32");
-      const appDir = makeWindowsChromeDir(versionDirs);
+    it("returns null with multiple version directories after metadata lookup fails", () => {
       execFileSyncMock.mockReturnValue("");
-      try {
+      withWindowsChromeDir(["147.0.0.0", "148.0.0.0"], (appDir) => {
         expect(readBrowserVersion(path.join(appDir, "chrome.exe"))).toBeNull();
-      } finally {
-        fs.rmSync(path.dirname(appDir), { recursive: true, force: true });
-      }
+      });
     });
   });
 });

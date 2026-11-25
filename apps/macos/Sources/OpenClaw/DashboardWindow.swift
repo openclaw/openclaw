@@ -5,45 +5,20 @@ import OSLog
 let dashboardWindowLogger = Logger(subsystem: "ai.openclaw", category: "DashboardWindow")
 
 enum DashboardWindowLayout {
+    // Compact AppKit chrome centers its traffic lights in a 40pt row.
+    static let toolbarStyle: NSWindow.ToolbarStyle = .unifiedCompact
+    static let titlebarHeight = 40
+    static let titlebarControlsGap: CGFloat = 8
     static let windowSize = NSSize(width: 1240, height: 860)
-    static let mainBrowserMinWidth: CGFloat = 601
-    static let linkBrowserMinWidth: CGFloat = 320
-    static let windowMinSize = NSSize(
-        width: DashboardWindowLayout.mainBrowserMinWidth + DashboardWindowLayout.linkBrowserMinWidth + 1,
-        height: 620)
-    static let linkBrowserPreferredFraction: CGFloat = 0.5
-    static let linkBrowserTabBarHeight: CGFloat = 30
-    static let linkBrowserToolbarHeight: CGFloat = 52
-    static let linkBrowserToolbarWithTabsHeight: CGFloat = 78
-    static let linkBrowserWidthDefaultsKey = "OpenClawDashboardLinkBrowserWidth"
+    static let windowMinSize = NSSize(width: 922, height: 620)
     static let windowFrameAutosaveName = "OpenClawDashboardWindow"
-
-    static func linkBrowserWidth(
-        splitWidth: CGFloat,
-        dividerThickness: CGFloat,
-        persistedWidth: CGFloat?) -> CGFloat
-    {
-        let availableWidth = max(0, splitWidth - dividerThickness)
-        let maximumWidth = max(0, availableWidth - self.mainBrowserMinWidth)
-        guard maximumWidth >= self.linkBrowserMinWidth else { return maximumWidth }
-        let preferredWidth = if let persistedWidth, persistedWidth.isFinite, persistedWidth > 0 {
-            persistedWidth
-        } else {
-            availableWidth * self.linkBrowserPreferredFraction
-        }
-        return min(max(preferredWidth, self.linkBrowserMinWidth), maximumWidth)
-    }
-
-    static func dividerMoved(from originalPosition: CGFloat?, to finalPosition: CGFloat?) -> Bool {
-        guard let originalPosition, let finalPosition else { return false }
-        return abs(finalPosition - originalPosition) >= 0.5
-    }
 }
 
 /// Raw values are window event names the Control UI handles. `newSession`
 /// reuses the shipped pre-web-chrome event; `commandPalette` gets a dedicated
 /// toggle event because the legacy `native-open-search` contract is open-only.
 enum DashboardNativeCommand: String {
+    case newBrowserTab = "openclaw:native-new-browser-tab"
     case newSession = "openclaw:native-new-session"
     case commandPalette = "openclaw:native-toggle-search"
 
@@ -51,7 +26,7 @@ enum DashboardNativeCommand: String {
     /// open-only legacy event when the primary event goes unhandled.
     var legacyFallbackEventName: String? {
         switch self {
-        case .newSession: nil
+        case .newBrowserTab, .newSession: nil
         case .commandPalette: "openclaw:native-open-search"
         }
     }
@@ -67,11 +42,6 @@ struct DashboardNativeNavigation: Equatable {
     let fallbackURL: URL
 }
 
-enum DashboardLinkTarget: String, Equatable {
-    case inline
-    case external
-}
-
 enum DashboardTargetlessNavigationAction: Equatable {
     case allow
     case openExternal
@@ -84,28 +54,63 @@ enum DashboardNewWindowAction: Equatable {
     case ignore
 }
 
-struct DashboardLinkRequest: Equatable {
-    let url: URL
-    let target: DashboardLinkTarget
-}
+enum DashboardWindowAuth: Equatable {
+    case unauthenticated
+    // Token/password track config changes for document replacement. Only the
+    // separate accepted legacyCredentials map may reach a released UI; current
+    // UI uses native signing and never browser fallback. nil means not ready.
+    case nativeDevice(gatewayUrl: String, token: String?, password: String?, legacyCredentials: [String: String]? = nil)
+    case browserIdentity(gatewayUrl: String)
 
-struct DashboardWindowAuth: Equatable {
-    var gatewayUrl: String?
-    var token: String?
-    var password: String?
+    /// Accepted startup credentials are socket-owned projections, not a new page owner.
+    func hasSameDocumentIdentity(as other: Self) -> Bool {
+        switch (self, other) {
+        case let (.nativeDevice(url, token, password, _), .nativeDevice(otherURL, otherToken, otherPassword, _)):
+            url == otherURL && token == otherToken && password == otherPassword
+        default:
+            self == other
+        }
+    }
+
+    var gatewayUrl: String? {
+        switch self {
+        case .unauthenticated: nil
+        case let .browserIdentity(gatewayUrl): gatewayUrl
+        case let .nativeDevice(gatewayUrl, _, _, _): gatewayUrl
+        }
+    }
+
+    var token: String? {
+        switch self {
+        case let .nativeDevice(_, token, _, _): token
+        case .unauthenticated, .browserIdentity: nil
+        }
+    }
+
+    var password: String? {
+        switch self {
+        case let .nativeDevice(_, _, password, _): password
+        case .unauthenticated, .browserIdentity: nil
+        }
+    }
+
+    var hasAcceptedNativeBinding: Bool {
+        if case let .nativeDevice(_, _, _, credentials) = self { return credentials != nil }
+        return false
+    }
+
+    var usesBrowserIdentity: Bool {
+        if case .browserIdentity = self { return true }
+        return false
+    }
+
+    var usesNativeDevice: Bool {
+        if case .nativeDevice = self { return true }
+        return false
+    }
 
     var hasCredential: Bool {
         self.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ||
             self.password?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
-}
-
-/// Dashboard URLs carry the auth token in the `#token=...` fragment; strip the
-/// fragment before logging so credentials never land in unified logs.
-func dashboardLogString(for url: URL) -> String {
-    guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-        return "<unparseable-url>"
-    }
-    components.fragment = nil
-    return components.url?.absoluteString ?? "<unparseable-url>"
 }

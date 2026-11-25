@@ -1,48 +1,25 @@
-// Bootstrap extra files hook injects configured extra files into startup context.
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { loadExtraBootstrapFilesWithDiagnostics } from "../../../agents/workspace.js";
+import { rememberBoundedKey } from "../../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
+import { loadDeclaredExtraBootstrapFiles } from "./declared-files.js";
 
-const HOOK_KEY = "bootstrap-extra-files";
 const log = createSubsystemLogger("bootstrap-extra-files");
+const MAX_WARNED_SKIPS = 256;
+const SKIPPED_FILES_WARNING =
+  "configured extra bootstrap files were not loaded. Use a supported bootstrap filename inside the workspace, or check file access: https://docs.openclaw.ai/automation/hooks/bundled-hooks#bootstrap-extra-files";
+const warnedSkips = new Set<string>();
 
-/** Resolve legacy and current config keys for extra bootstrap file patterns. */
-function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): string[] {
-  const fromPaths = normalizeTrimmedStringList(hookConfig.paths);
-  if (fromPaths.length > 0) {
-    return fromPaths;
-  }
-  const fromPatterns = normalizeTrimmedStringList(hookConfig.patterns);
-  if (fromPatterns.length > 0) {
-    return fromPatterns;
-  }
-  return normalizeTrimmedStringList(hookConfig.files);
-}
-
-/** Agent-bootstrap hook that appends configured extra files to the session bootstrap set. */
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;
   }
 
   const context = event.context;
-  const hookConfig = resolveHookConfig(context.cfg, HOOK_KEY);
-  if (!hookConfig || hookConfig.enabled === false) {
-    return;
-  }
-
-  const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
-  if (patterns.length === 0) {
-    return;
-  }
-
   try {
-    const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
-      context.workspaceDir,
-      patterns,
-    );
+    const { files: extras, diagnostics } = await loadDeclaredExtraBootstrapFiles({
+      config: context.cfg,
+      workspaceDir: context.workspaceDir,
+    });
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
         skipped: diagnostics.length,
@@ -50,6 +27,15 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
           counts[item.reason] = (counts[item.reason] ?? 0) + 1;
           return counts;
         }, {}),
+      });
+    }
+    // Missing files are normal; other skips mean a configured path never loads.
+    const dropped = diagnostics.filter((item) => item.reason !== "missing");
+    const warnKey = dropped.map((item) => `${item.reason}:${item.path}`).join("\n");
+    if (dropped.length > 0 && rememberBoundedKey(warnedSkips, warnKey, MAX_WARNED_SKIPS)) {
+      log.warn(SKIPPED_FILES_WARNING, {
+        skipped: dropped.length,
+        files: dropped.slice(0, 5),
       });
     }
     if (extras.length === 0) {

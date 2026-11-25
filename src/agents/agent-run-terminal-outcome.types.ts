@@ -1,29 +1,13 @@
-import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
+import type { AgentRunTerminalFacts } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 
-/** Wait status reported by agent run terminal wait paths. */
-export type AgentRunWaitStatus = "ok" | "error" | "timeout";
-
-/** Normalized terminal reason for an agent run. */
-export type AgentRunTerminalReason =
-  | "completed"
-  | "hard_timeout"
-  | "timed_out"
-  | "superseded"
-  | "cancelled"
-  | "aborted"
-  | "blocked"
-  | "abandoned"
-  | "failed";
-
-/** Normalized terminal outcome for an agent run. */
-export type AgentRunTerminalOutcome = {
-  reason: AgentRunTerminalReason;
-  status: AgentRunWaitStatus;
+export type AgentRunTerminalOutcome = AgentRunTerminalFacts & {
+  /** Exact active-only input delivery; the surrounding outcome completes input processing, not the target run. */
+  activeSteer?: {
+    runId: string;
+    status: "accepted" | "rejected" | "indeterminate";
+    reason?: string;
+  };
   error?: string;
-  stopReason?: string;
-  livenessState?: string;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
   startedAt?: number;
   endedAt?: number;
 };

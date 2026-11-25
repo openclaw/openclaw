@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { AGENT_FIELD_HELP } from "./schema.help.agents.js";
 import { AUTOMATION_FIELD_HELP } from "./schema.help.automation.js";
 import { CORE_FIELD_HELP } from "./schema.help.core.js";

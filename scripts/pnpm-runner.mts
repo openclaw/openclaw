@@ -6,7 +6,7 @@ import {
   buildCmdExeCommandLine,
   resolvePathEnvKey,
   resolveWindowsCmdExePath,
-} from "./lib/windows-cmd-helpers-runtime.mts";
+} from "./windows-cmd-helpers.mjs";
 
 export type PnpmRunnerParams = {
   comSpec?: string;
@@ -101,7 +101,7 @@ function findExecutableOnPath(
       : [""];
   const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
   for (const directory of envPath.split(pathDelimiter)) {
-    if (!directory) {
+    if (!directory && platform === "win32") {
       continue;
     }
     const resolvedDirectory = path.isAbsolute(directory) ? directory : path.resolve(cwd, directory);
@@ -129,9 +129,6 @@ function createWindowsRunner(command: string, args: string[], comSpec: string): 
 }
 
 function isNodeRunnablePnpmExecPath(value: string) {
-  if (!isPnpmExecPath(value)) {
-    return false;
-  }
   const extension = getPortableExtension(value);
   if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
     return isFile(value);
@@ -142,9 +139,6 @@ function isNodeRunnablePnpmExecPath(value: string) {
   return hasNodeShebang(value);
 }
 
-/**
- * Resolves the command/args needed to invoke pnpm on the current platform.
- */
 export function resolvePnpmRunner(params: PnpmRunnerParams = {}): PnpmRunner {
   const pnpmArgs = params.pnpmArgs ?? [];
   const nodeArgs = params.nodeArgs ?? [];
@@ -173,20 +167,8 @@ export function resolvePnpmRunner(params: PnpmRunnerParams = {}): PnpmRunner {
         shell: false,
       };
     }
-    if (platform === "win32" && npmExecExtension === ".exe") {
-      return {
-        command: npmExecPath,
-        args: pnpmArgs,
-        shell: false,
-      };
-    }
-    if (platform === "win32" && npmExecExtension === ".cmd") {
-      return {
-        command: comSpec,
-        args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmExecPath, pnpmArgs)],
-        shell: false,
-        windowsVerbatimArguments: true,
-      };
+    if (platform === "win32" && (npmExecExtension === ".exe" || npmExecExtension === ".cmd")) {
+      return createWindowsRunner(npmExecPath, pnpmArgs, comSpec);
     }
   }
 
@@ -215,11 +197,8 @@ export function resolvePnpmRunner(params: PnpmRunnerParams = {}): PnpmRunner {
   };
 }
 
-/**
- * Creates a spawn-ready pnpm invocation with standard options.
- */
 export function createPnpmRunnerSpawnSpec(params: PnpmRunnerParams = {}) {
-  const runner = resolvePnpmRunner({ ...params, env: params.env ?? process.env });
+  const runner = resolvePnpmRunner(params);
   return {
     command: runner.command,
     args: runner.args,
@@ -234,12 +213,7 @@ export function createPnpmRunnerSpawnSpec(params: PnpmRunnerParams = {}) {
   };
 }
 
-/**
- * Spawns a pnpm command using the portable runner resolution.
- */
-export function spawnPnpmRunner(): ChildProcess;
-export function spawnPnpmRunner(params: PnpmRunnerParams): ChildProcess;
-export function spawnPnpmRunner(params: PnpmRunnerParams = {}) {
+export function spawnPnpmRunner(params: PnpmRunnerParams = {}): ChildProcess {
   const spawnSpec = createPnpmRunnerSpawnSpec(params);
   return spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 }

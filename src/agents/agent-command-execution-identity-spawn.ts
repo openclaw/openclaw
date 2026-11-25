@@ -3,7 +3,7 @@ import type { AgentCommandOpts } from "./command/types.js";
 
 export type AgentCommandExecutionIdentitySpawnFacts = Pick<
   ExecutionIdentityAdmissionFacts,
-  "applicableGrants" | "assurance" | "ingress" | "invoker"
+  "applicableGrants" | "assurance" | "ingress" | "invoker" | "representedSubject"
 > & {
   spawnAdmission: string;
 };
@@ -22,8 +22,7 @@ export function withAgentCommandExecutionIdentitySpawnFacts<T extends AgentComma
   if (!facts) {
     return opts;
   }
-  const carried = { ...opts, [EXECUTION_IDENTITY_SPAWN_FACTS]: facts };
-  return carried;
+  return { ...opts, [EXECUTION_IDENTITY_SPAWN_FACTS]: facts };
 }
 
 export function readAgentCommandExecutionIdentitySpawnFacts(

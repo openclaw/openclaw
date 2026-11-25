@@ -1,13 +1,6 @@
-// Shared data shapes for model-list and model-status output.
-/** Configured model entry plus tags/aliases used by row builders. */
-export type ConfiguredEntry = {
-  key: string;
-  ref: { provider: string; model: string };
-  tags: Set<string>;
-  aliases: string[];
-};
+import type { AgentHarnessRuntimeAvailability } from "../../agents/harness/runtime-plugin.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 
-/** Render-ready model-list row. */
 export type ModelRow = {
   key: string;
   name: string;
@@ -17,10 +10,8 @@ export type ModelRow = {
   local: boolean | null;
   available: boolean | null;
   tags: string[];
-  missing: boolean;
 };
 
-/** Provider auth summary shown by `models status`. */
 export type ProviderAuthOverview = {
   provider: string;
   effective: {
@@ -37,4 +28,47 @@ export type ProviderAuthOverview = {
   env?: { value: string; source: string };
   modelsJson?: { value: string; source: string };
   syntheticAuth?: { value: string; source: string };
+};
+
+type StatusRuntimeAuthStatus = "usable" | "missing" | "indeterminate";
+
+type StatusRuntimeAuthRouteBase = {
+  provider: string;
+  runtime: string;
+  authProvider: string;
+  effective: ProviderAuthOverview["effective"];
+};
+
+export type StatusRuntimeAuthRoute =
+  | (StatusRuntimeAuthRouteBase & {
+      status: StatusRuntimeAuthStatus;
+    })
+  | (StatusRuntimeAuthRouteBase & {
+      status: "unavailable";
+      authStatus: StatusRuntimeAuthStatus;
+      runtimeStatus: "unavailable";
+      runtimeReason: Extract<AgentHarnessRuntimeAvailability, { status: "unavailable" }>["reason"];
+      runtimeDetail: string;
+      runtimePluginIds: string[];
+    });
+
+export type ModelsStatusOptions = {
+  json?: boolean;
+  plain?: boolean;
+  check?: boolean;
+  probe?: boolean;
+  probeProvider?: string;
+  probeProfile?: string | string[];
+  probeTimeout?: string;
+  probeConcurrency?: string;
+  probeMaxTokens?: string;
+  agent?: string;
+};
+
+export type StatusSyntheticAuth = {
+  value: string;
+  source: string;
+  credential?: string;
+  mode?: ProviderSyntheticAuthResult["mode"];
+  expiresAt?: number;
 };

@@ -7,8 +7,9 @@ read_when:
 title: "Media playback"
 ---
 
-OpenClaw chat clients play assistant audio and video attachments inline. The
-Gateway keeps those attachments behind session-scoped access, serves seekable
+OpenClaw chat clients play audio clips inline, including incoming recordings
+that do not carry a voice-note flag. Assistant video attachments also play inline.
+The Gateway keeps those attachments behind session-scoped access, serves seekable
 byte ranges, and can prepare a portable playback rendition for recognized
 formats that are not safe across every client.
 
@@ -16,6 +17,11 @@ This page covers playback in OpenClaw clients. Channel delivery, inbound media
 understanding, and live voice conversations use separate paths; see
 [Image and media support](/nodes/images),
 [Media understanding](/nodes/media-understanding), and [Talk mode](/nodes/talk).
+For oversized videos selected in the Control UI composer, see
+[pre-upload video preparation](/web/control-ui/chat#video-preparation-compatibility).
+Its browser codec requirements and qualification gaps are separate from the
+Gateway playback policy below; a playback rendition cannot fix a file that was
+refused before upload.
 
 ## Client support
 
@@ -26,15 +32,33 @@ understanding, and live voice conversations use separate paths; see
 | Android         | Media3 ExoPlayer                                    | The app streams video through the authenticated Gateway HTTP client, requests Android audio focus, and coordinates attachment playback with Talk/TTS. Cached transcript media rows remain visible offline, but playback needs a connection to obtain a fresh media ticket.              |
 | Linux companion | Control UI inside the companion WebView             | Codec availability comes from GStreamer. Released packages include or declare the expected codec plugins; see [Linux media codecs](/platforms/linux#media-codecs).                                                                                                                      |
 
+## Audio previews and loading
+
+Audio clips show playback controls in the conversation instead of requiring an
+**Open** action. Transcripts remain in the message, separate from the player.
+
+- The Control UI loads playback metadata for the preview. It fetches and decodes
+  a waveform only after playback starts, within the existing size and duration
+  limits. A waveform becoming ready does not interrupt current playback.
+- iOS and macOS show a preview before downloading audio. Press **Play** to load
+  the clip and start playback. Leaving the attachment stops playback.
+- Android loads audio on demand. Playback controls use touch-sized targets, and
+  long filenames truncate within the available space.
+
+These players handle recorded attachments. They do not listen to a clip while
+another person is still recording it. Continuous live listening uses
+[Talk mode](/nodes/talk); external chat apps control their own recording and
+playback interfaces.
+
 ## Portable formats
 
 The Gateway classifies these formats as the portable native set shared by the
 browser, Apple players, and Android Media3:
 
-| Kind  | Portable native input                                                                   | Recognized transcode input                                         | Playback target                                          |
-| ----- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------- |
-| Audio | MP3; AAC in M4A/MP4; PCM WAV                                                            | AAC, AIFF, AMR/AMR-WB, CAF, FLAC, Ogg/Opus/Vorbis, WebM audio, WMA | AAC in M4A (`audio/mp4`)                                 |
-| Video | H.264 MP4 with a portable profile and 4:2:0 pixel format; AAC or MP3 audio when present | AVI, FLV, Matroska/MKV, QuickTime/MOV, WebM, ASF, WMV              | H.264/AAC MP4 with 4:2:0 pixel format, at most 1920×1080 |
+| Kind  | Portable native input                                                                       | Recognized transcode input                                         | Playback target                                          |
+| ----- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------- |
+| Audio | MP3; AAC in M4A/MP4; PCM WAV                                                                | AAC, AIFF, AMR/AMR-WB, CAF, FLAC, Ogg/Opus/Vorbis, WebM audio, WMA | AAC in M4A (`audio/mp4`)                                 |
+| Video | H.264 MP4/M4V with a portable profile and 4:2:0 pixel format; AAC or MP3 audio when present | AVI, FLV, Matroska/MKV, QuickTime/MOV, WebM, ASF, WMV              | H.264/AAC MP4 with 4:2:0 pixel format, at most 1920×1080 |
 
 The Linux companion can also play formats supplied by its installed GStreamer
 plugins. Browser and operating-system updates may add native formats, but the
@@ -46,6 +70,10 @@ Both Gateway byte routes accept `?playback=1`: the managed attachment route
 under `/api/chat/media/outgoing/.../full` and the Control UI assistant-media
 route. Attachment metadata can report `playback: "native"` or
 `playback: "transcode"` so a client can choose the rendition deliberately.
+Apple clients and the Control UI also request the playback route for managed
+audio and video when this metadata is absent, so attachments published while the
+inspector was busy can recover on playback.
+Explicit native playback and image/document downloads keep their original-byte routes.
 
 Playback conversion is lazy:
 
@@ -67,13 +95,42 @@ or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
 `attachments.ttlHours`.
 
+Filesystem errors while scanning or evicting cached renditions are reported in
+Gateway logs. Missing cache entries are harmless; other errors do not count as
+successful cleanup. Check the media directory's permissions and storage health
+when cleanup fails.
+
 ## Managed attachments and access
+
+To attach a local file in an assistant reply, put `MEDIA:/absolute/path/movie.mp4`
+on its own line. The session's existing media access policy must allow the path.
+The Control UI stages allowed local audio and video with bounded streaming and
+plays them through the Gateway's authenticated, seekable media route. Use a
+portal for an app or development server; use `MEDIA:<path>` for files.
+
+Remote `MEDIA:` references must be public HTTPS URLs without credentials.
+Rejected references produce a visible attachment failure with instructions to
+use an allowed URL or local path; they do not appear as raw directive links.
+Inline prose and fenced code examples mentioning `MEDIA:` remain text.
 
 Agent-produced audio and video are stored as managed media artifacts. Images
 keep their separate managed-image artifact family. Native clients resolve the
 artifact through `artifacts.download`, which returns inline base64 bytes when
 the artifact is byte-backed or a short-lived, ticketed URL when it is
 Gateway-managed.
+
+Managed download tickets check current session access and the selected message's
+attachment reference in visible history. For indexed messages, issuing a ticket
+does not read the original file or validate unrelated transcript payloads. The
+HTTP request transfers the file separately.
+
+Managed media cleanup reads transcript history in bounded pages. If a single
+message exceeds the 8 MiB page limit, cleanup retains that session's media and
+logs a warning while continuing to clean other sessions. Incomplete history
+is never treated as proof that an attachment is unreferenced.
+
+Download filenames preserve Unicode characters and literal percent sequences
+such as `%20`.
 
 Native clients resolve ticketed media against the connected Gateway URL,
 preserving its reverse-proxy path prefix. A Gateway reached at
@@ -83,8 +140,16 @@ preserving its reverse-proxy path prefix. A Gateway reached at
 The ticketed byte routes support:
 
 - `Range` requests with HTTP `206 Partial Content` for seeking
-- `ETag` and `If-Range` for safe resume behavior
+- `ETag` and `If-Range` for safe resume of immutable managed originals
 - `HEAD` requests with the same content metadata and no response body
+
+For immutable originals, `If-None-Match` compares complete quoted tags using weak comparison. Commas and asterisks inside a quoted tag are literal; only a standalone `*` is a wildcard. A nonmatching tag leaves the normal full or ranged response intact.
+
+Local assistant files can change, and playback renditions can become available
+after a conversion retry. These responses revalidate without reusable validators:
+cached ETags or modification dates cannot suppress fresh bytes, and `If-Range`
+requests receive the full representation. Ordinary `Range` requests still support
+seeking. Managed playback responses remain private to the client cache.
 
 Do not copy a ticketed URL into durable configuration. Clients reacquire a
 ticket from the authenticated Gateway when needed.
@@ -94,18 +159,34 @@ ticket from the authenticated Gateway when needed.
 Chat attachments may include `sizeBytes`, `durationMs`, `width`, and `height`.
 OpenClaw also uses `ffprobe`, when available, to fill audio duration and video
 duration/dimensions for media facts and the Control UI `?meta=1` availability
-probe. Probing is best-effort: a missing or failed probe leaves fields absent
-instead of rejecting the attachment.
+check. Video dimensions account for non-square pixels and quarter-turn display
+rotation; image dimensions account for EXIF orientation. Checking is best-effort:
+a missing or failed check leaves fields absent instead of rejecting the attachment.
+The Gateway shares concurrent metadata inspections for the same local file and
+reuses successful results while that file is unchanged. Replacing or editing the
+file triggers a fresh inspection; failed checks remain retryable.
+Distinct files wait in a bounded inspection queue. If the queue is full, metadata
+reports temporary unavailability that you can retry, and playback remains
+preparing. Disconnected requests stop waiting, and queued checks with no remaining
+viewers release their queue slots immediately. Queued reads recheck current access
+before opening and checking the file. A busy inspector does not discard outgoing
+attachments; their optional playback metadata can remain absent. Outgoing reply
+creation uses immediate inspection admission and does not wait behind queued
+viewer requests.
 
-Gateway-managed assistant attachments use these per-file caps:
+Control UI managed assistant attachments use these per-file caps:
 
-| Kind  | Maximum size |
-| ----- | -----------: |
-| Image |       12 MiB |
-| Audio |       16 MiB |
-| Video |       16 MiB |
+| Kind        | Maximum size |
+| ----------- | -----------: |
+| Image       |       12 MiB |
+| Local audio |        4 GiB |
+| Local video |        4 GiB |
 
 These are playback/storage caps, not the separate media-understanding limits.
+The larger local-file limit does not change channel outbound limits, remote or
+data URL ingestion limits, or the limits of buffer-based remote workspace readers.
+It also does not raise the transcoding budget; large native MP4 files can play
+directly without conversion.
 For transcription and description limits, see
 [Image and media support](/nodes/images#limits-and-errors).
 

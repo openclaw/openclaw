@@ -5,19 +5,19 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse } from "@babel/parser";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
-import {
-  createChannelIngressQueue,
-  getChannelIngressKysely,
-} from "../../../../src/channels/message/ingress-queue.js";
+import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
 import type { ModelDefinitionConfig } from "../../../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
-import { withTestTimeout } from "../../../helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createNativeModelPickerCliFixture } from "./telegram-model-picker-native-cli-fixture.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -26,6 +26,7 @@ const BOT_TOKEN = "424242:telegram-model-picker-proof";
 const CHAT_ID = 2468;
 const MESSAGE_ID = 9001;
 const PREPARED_MODEL = "prepared-model";
+const DISCOVERED_MODEL = "discovered-model";
 const REPLACEMENT_MODEL = "replacement-model";
 const REPLACEMENT_PROVIDER = "qa-picker";
 const REPLACEMENT_MODEL_REF = `${REPLACEMENT_PROVIDER}/${REPLACEMENT_MODEL}`;
@@ -173,12 +174,15 @@ async function readTelegramIngressStatuses(stateDir: string, eventIds: string[])
   try {
     return executeSqliteQuerySync(
       database.db,
-      getChannelIngressKysely(database.db)
+      getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(database.db)
         .selectFrom("channel_ingress_events")
         .select([
           "account_id as accountId",
+          "attempts",
           "event_id as eventId",
           "lane_key as laneKey",
+          "last_attempt_at as lastAttemptAt",
+          "last_error as lastError",
           "queue_name as queueName",
           "status",
         ])
@@ -214,21 +218,40 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
+/** Finds a hashed chunk by the bindings it exports; bundler formatting is not a contract. */
 async function resolveBuiltModule(params: {
   distDir: string;
   prefix: string;
-  exportMarker: string;
+  exports: string[];
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
-    if (!name.startsWith(params.prefix) || !name.endsWith(".js")) {
+    if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
-    if ((await fs.readFile(filePath, "utf8")).includes(params.exportMarker)) {
+    const source = await fs.readFile(filePath, "utf8");
+    // Every exported name appears in the module text, so most chunks never need parsing.
+    if (!params.exports.every((binding) => source.includes(binding))) {
+      continue;
+    }
+    const exported = new Set(
+      parse(source, { sourceType: "module" }).program.body.flatMap((statement) =>
+        statement.type === "ExportNamedDeclaration"
+          ? statement.specifiers.map((specifier) =>
+              specifier.exported.type === "Identifier"
+                ? specifier.exported.name
+                : specifier.exported.value,
+            )
+          : [],
+      ),
+    );
+    if (params.exports.every((binding) => exported.has(binding))) {
       return pathToFileURL(filePath).href;
     }
   }
-  throw new Error(`Could not resolve built ${params.prefix} module`);
+  throw new Error(
+    `Could not resolve a built ${params.prefix} module exporting ${params.exports.join(", ")}`,
+  );
 }
 
 async function startControlledSourceGateway(params: {
@@ -236,20 +259,22 @@ async function startControlledSourceGateway(params: {
   replacementConfigPath: string;
   fixtureRoot: string;
   repoRoot: string;
+  signal: AbortSignal;
+  onTestFinished: (cleanup: () => Promise<void>) => void;
 }) {
   const bootstrapPath = path.join(params.fixtureRoot, "source-gateway-control.mjs");
   const port = await reservePort();
   const distDir = path.join(params.repoRoot, "dist");
   const [serverUrl, runtimeUrl] = await Promise.all([
-    resolveBuiltModule({
-      distDir,
-      prefix: "server-",
-      exportMarker: "resetPreparedModelCatalogForTest, startGatewayServer, truncateCloseReason",
-    }),
+    resolveBuiltModule({ distDir, prefix: "server-", exports: ["startGatewayServer"] }),
     resolveBuiltModule({
       distDir,
       prefix: "prepared-model-runtime-",
-      exportMarker: "export { PreparedModelRuntimeOwnerNotPublishedError",
+      exports: [
+        "markPreparedModelRuntimeSnapshotsStale",
+        "refreshPreparedModelRuntimeSnapshots",
+        "rejectPendingPreparedModelRuntimeReplacement",
+      ],
     }),
   ]);
   await fs.writeFile(
@@ -324,6 +349,9 @@ process.on("message", async (message) => {
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  // Retain exit before any control request or stop signal can settle the child.
+  const exited = once(child, "exit");
+  void exited.catch(() => {});
   let output = "";
   child.stdout?.on("data", (chunk) => {
     output += String(chunk);
@@ -333,6 +361,7 @@ process.on("message", async (message) => {
   });
   const pending = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
   let nextId = 1;
+  let isReady = false;
   const ready = new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
@@ -348,6 +377,7 @@ process.on("message", async (message) => {
       }
       const value = message as { type?: string; id?: number; error?: string };
       if (value.type === "ready") {
+        isReady = true;
         resolve();
         return;
       }
@@ -366,16 +396,6 @@ process.on("message", async (message) => {
       }
     });
   });
-  try {
-    await withTestTimeout(ready, SOURCE_GATEWAY_TIMEOUT_MS, "Source Gateway did not become ready");
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-      await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not stop");
-    }
-    throw new Error(`${String(error)}\n${output}`, { cause: error });
-  }
-
   const request = async (action: "mark" | "replace" | "close") => {
     const id = nextId++;
     await withTestTimeout(
@@ -393,18 +413,28 @@ process.on("message", async (message) => {
       `Source Gateway ${action} control timed out`,
     );
   };
-  return {
-    request,
-    output: () => output,
-    close: async () => {
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null) {
-        await request("close").catch(() => child.kill("SIGTERM"));
+        if (isReady) {
+          await request("close").catch(() => child.kill("SIGTERM"));
+        } else {
+          child.kill("SIGTERM");
+        }
       }
-      if (child.exitCode === null && child.signalCode === null) {
-        await withTestTimeout(once(child, "exit"), 10_000, "Source Gateway did not exit");
-      }
-    },
-  };
+      await exited;
+    })());
+  // Vitest can finish its timeout wrapper while startup's catch is still joining
+  // the child. Share that join before the surrounding fixture removes its root.
+  params.onTestFinished(close);
+  try {
+    await withinTest(ready, params.signal);
+  } catch (error) {
+    await close();
+    throw new Error(`${String(error)}\n${output}`, { cause: error });
+  }
+  return { request, output: () => output, close };
 }
 
 async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
@@ -417,20 +447,11 @@ async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
   }
 }
 
-test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", async () => {
+test("initializes unrestricted Telegram model browsing and reuses its prepared catalog", async () => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   let nextUpdateId = 2;
-  let pickerStage:
-    | "initial"
-    | "providers"
-    | "models"
-    | "repeated-providers"
-    | "repeated-providers-second"
-    | "done" = "initial";
-  let discoveryFrozen = false;
-  let discoveryRequests = 0;
-  let postWarmDiscoveryAttempts = 0;
+  let pickerStage: "initial" | "providers" | "models" | "back" | "done" = "initial";
 
   const queueCallback = (data: string) => {
     const callbackNumber = nextUpdateId - 1;
@@ -442,16 +463,10 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
 
     if (pathname === "/ollama/api/tags") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
-      succeed(res, {
+      writeJson(res, 200, {
         models: [
           {
-            name: PREPARED_MODEL,
+            name: DISCOVERED_MODEL,
             modified_at: "2026-08-16T00:00:00Z",
             digest: "prepared-model-digest",
             size: 1,
@@ -462,13 +477,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     }
 
     if (pathname === "/ollama/api/show") {
-      discoveryRequests += 1;
-      if (discoveryFrozen) {
-        postWarmDiscoveryAttempts += 1;
-        writeJson(res, 503, { ok: false, error: "provider discovery frozen after warmup" });
-        return;
-      }
-      succeed(res, {
+      writeJson(res, 200, {
         model_info: { "general.context_length": 8192 },
         capabilities: ["completion", "tools"],
       });
@@ -518,22 +527,13 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
     } else if (
       method === "editMessageText" &&
       pickerStage === "models" &&
-      hasCallback({ method, body }, `mdl_sel_ollama/${PREPARED_MODEL}`)
+      hasCallback({ method, body }, `mdl_sel_ollama/${DISCOVERED_MODEL}`)
     ) {
-      pickerStage = "repeated-providers";
+      pickerStage = "back";
       queueCallback("mdl_prov");
     } else if (
       method === "editMessageText" &&
-      pickerStage === "repeated-providers" &&
-      typeof body.text === "string" &&
-      body.text.includes("Select a provider:")
-    ) {
-      expect(hasCallback({ method, body }, "mdl_list_ollama_1")).toBe(true);
-      pickerStage = "repeated-providers-second";
-      queueCallback("mdl_prov");
-    } else if (
-      method === "editMessageText" &&
-      pickerStage === "repeated-providers-second" &&
+      pickerStage === "back" &&
       typeof body.text === "string" &&
       body.text.includes("Select a provider:")
     ) {
@@ -556,9 +556,9 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          await gatewayOwner.start({
+          const gateway = await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            mockAuthAgentIds: [],
             transportBaseUrl: apiRoot,
             transport: {
               requiredPluginIds: ["telegram"],
@@ -586,6 +586,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             primaryModel: `ollama/${PREPARED_MODEL}`,
             alternateModel: `ollama/${PREPARED_MODEL}`,
             runtimeEnvPatch: {
+              OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: undefined,
               OPENCLAW_SKIP_CHANNELS: undefined,
               OPENCLAW_SKIP_PROVIDERS: undefined,
               OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
@@ -598,7 +599,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
                 defaults: {
                   ...cfg.agents?.defaults,
                   model: `ollama/${PREPARED_MODEL}`,
-                  modelPolicy: { allow: ["ollama/*"] },
+                  modelPolicy: { allow: [] },
                   models: {
                     ...cfg.agents?.defaults?.models,
                     [`ollama/${PREPARED_MODEL}`]: {},
@@ -615,6 +616,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
               models: {
                 ...cfg.models,
                 mode: "merge",
+                catalogRefresh: { enabled: false },
                 providers: {
                   ...cfg.models?.providers,
                   ollama: {
@@ -627,18 +629,22 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
             }),
           });
 
-          const startupDiscoveryRequests = discoveryRequests;
-          expect(startupDiscoveryRequests).toBe(0);
           pendingUpdates.push(initialModelsUpdate());
 
           await expect
-            .poll(() => ({ stage: pickerStage, discoveryRequests }), {
+            .poll(() => pickerStage, {
               interval: 50,
               timeout: 30_000,
             })
-            .toEqual({ stage: "providers", discoveryRequests: 2 });
-          const warmDiscoveryRequests = discoveryRequests;
-          discoveryFrozen = true;
+            .toBe("providers");
+          // Startup publishes a static owner; one explicit refresh owns live discovery.
+          await expect(
+            gateway.call("models.list", { view: "default", refresh: true }),
+          ).resolves.toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({ provider: "ollama", id: DISCOVERED_MODEL }),
+            ]),
+          });
           queueCallback("mdl_prov");
 
           await expect
@@ -650,7 +656,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
               }),
               { interval: 50, timeout: 30_000 },
             )
-            .toMatchObject({ stage: "done", answers: 4 });
+            .toMatchObject({ stage: "done", answers: 3 });
 
           const sendMessage = telegramCalls.find((call) => call.method === "sendMessage");
           expect(sendMessage).toBeDefined();
@@ -659,20 +665,17 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
           const pickerEdits = telegramCalls.filter(
             (call) => call.method === "editMessageText" && inlineKeyboard(call).length > 0,
           );
-          expect(pickerEdits).toHaveLength(4);
+          expect(pickerEdits).toHaveLength(3);
           expect(hasCallback(pickerEdits[0]!, "mdl_list_ollama_1")).toBe(true);
           expect(hasCallback(pickerEdits[2]!, "mdl_list_ollama_1")).toBe(true);
           expect(
             pickerEdits[1] &&
-              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${PREPARED_MODEL}`),
+              keyboardCallbackData(pickerEdits[1]).includes(`mdl_sel_ollama/${DISCOVERED_MODEL}`),
           ).toBe(true);
-          expect(pickerEdits[3] && hasCallback(pickerEdits[3], "mdl_list_ollama_1")).toBe(true);
 
           expect(
             telegramCalls.filter((call) => call.method === "answerCallbackQuery"),
-          ).toHaveLength(4);
-          expect(discoveryRequests).toBe(warmDiscoveryRequests);
-          expect(postWarmDiscoveryAttempts).toBe(0);
+          ).toHaveLength(3);
         } finally {
           await settleCleanup(async () => await stopQaGatewayFixture(gatewayOwner));
         }
@@ -680,14 +683,239 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
   );
 }, 120_000);
 
-test("recovers a replaced model catalog and drains the following Telegram callback", async () => {
+test("lists native CLI-bound models through Telegram polling and provider callbacks", async () => {
+  const telegramCalls: TelegramCall[] = [];
+  const pendingUpdates: unknown[] = [];
+  const primaryRef = "anthropic/claude-haiku-4-5";
+  const boundRef = "anthropic/claude-sonnet-4-6";
+  let providerRequests = 0;
+  const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const telegramMatch = pathname.match(/^\/bot([^/]+)\/([^/]+)$/);
+    if (!telegramMatch) {
+      providerRequests += 1;
+      writeJson(res, 404, { ok: false, error: "native command must not call a model" });
+      return;
+    }
+    const [, token = "", method = ""] = telegramMatch;
+    if (token !== BOT_TOKEN) {
+      writeJson(res, 401, { ok: false, error: "unexpected bot token" });
+      return;
+    }
+    const body = await readJson(req);
+    if (method === "getMe") {
+      succeed(res, {
+        id: 424242,
+        is_bot: true,
+        first_name: "QA Picker",
+        username: "qa_picker_bot",
+      });
+      return;
+    }
+    if (method === "getUpdates") {
+      const update = pendingUpdates.shift();
+      succeed(res, update ? [update] : []);
+      return;
+    }
+    telegramCalls.push({ method, body });
+    if (method === "sendMessage") {
+      pendingUpdates.push(callbackUpdate(2, "native-provider-list", "mdl_list_anthropic_1"));
+    }
+    succeed(res);
+  };
+
+  await withTempDir("openclaw-telegram-native-model-picker-", async (fixtureRoot) => {
+    const { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs } =
+      await createNativeModelPickerCliFixture(fixtureRoot);
+    await withServer(
+      (req, res) => {
+        void handleRequest(req, res);
+      },
+      async (apiRoot) => {
+        const gatewayOwner = createQaGatewayChild();
+        try {
+          const gateway = await gatewayOwner.start({
+            repoRoot: path.resolve(import.meta.dirname, "../../../.."),
+            transportBaseUrl: apiRoot,
+            transport: {
+              requiredPluginIds: ["telegram"],
+              createGatewayConfig: () => ({
+                channels: {
+                  telegram: {
+                    enabled: true,
+                    botToken: BOT_TOKEN,
+                    apiRoot,
+                    dmPolicy: "open",
+                    allowFrom: ["*"],
+                    commands: { native: true },
+                  },
+                },
+              }),
+            },
+            enabledPluginIds: ["anthropic"],
+            mockAuthAgentIds: [],
+            controlUiEnabled: false,
+            primaryModel: primaryRef,
+            alternateModel: boundRef,
+            runtimeEnvPatch: {
+              PATH: `${fixtureRoot}${path.delimiter}${process.env.PATH ?? ""}`,
+              ANTHROPIC_API_KEY: undefined,
+              ANTHROPIC_AUTH_TOKEN: undefined,
+              CLAUDE_CODE_OAUTH_TOKEN: undefined,
+              CLAUDE_CONFIG_DIR: path.join(fixtureRoot, "claude-state"),
+              TELEGRAM_BOT_TOKEN: undefined,
+              OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: undefined,
+              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+            },
+            mutateConfig: (cfg) => ({
+              ...cfg,
+              auth: { profiles: {} },
+              agents: {
+                ...cfg.agents,
+                defaults: {
+                  ...cfg.agents?.defaults,
+                  model: primaryRef,
+                  modelPolicy: { allow: [] },
+                  models: {
+                    [primaryRef]: { agentRuntime: { id: "claude-cli" } },
+                    [boundRef]: { agentRuntime: { id: "claude-cli" } },
+                  },
+                },
+                entries: {
+                  ...cfg.agents?.entries,
+                  qa: { ...cfg.agents?.entries?.qa, model: primaryRef },
+                },
+              },
+              models: { providers: {} },
+            }),
+          });
+
+          // Observe startup auth without warming provider discovery before the channel command.
+          await expect
+            .poll(() => gateway.call("models.list", { preparedOnly: true }), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toMatchObject({
+              models: expect.arrayContaining([
+                expect.objectContaining({
+                  provider: "anthropic",
+                  id: "claude-sonnet-4-6",
+                  available: true,
+                }),
+              ]),
+            });
+          pendingUpdates.push(initialModelsUpdate());
+          await expect
+            .poll(() => telegramCalls.find((call) => call.method === "editMessageText"), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .toBeDefined();
+          const modelList = telegramCalls.find((call) => call.method === "editMessageText");
+          const providerMenu = telegramCalls.find((call) => call.method === "sendMessage");
+          expect(providerMenu).toBeDefined();
+          const providerButton = inlineKeyboard(providerMenu!)
+            .flat()
+            .find((button) => button.callback_data === "mdl_list_anthropic_1");
+          const gatewayModels = (await gateway.call("models.list", { view: "default" })) as {
+            models: Array<{
+              provider: string;
+              id: string;
+              available?: boolean;
+              unavailableReason?: string;
+            }>;
+          };
+          console.info(
+            "MODEL_INVENTORY_PROOF",
+            JSON.stringify({
+              scenario: "native-cli-models",
+              providerButtonText: providerButton?.text,
+              callbacks: keyboardCallbackData(modelList!),
+              models: gatewayModels.models.filter(
+                (entry) =>
+                  `${entry.provider}/${entry.id}` === primaryRef ||
+                  `${entry.provider}/${entry.id}` === boundRef,
+              ),
+              fixtureProviderRequests: providerRequests,
+            }),
+          );
+          // Published model rows can precede the asynchronous native initialization.
+          await expect
+            .poll(async () => (await fs.readFile(nativeRequestsPath, "utf8")).trim(), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .not.toBe("");
+          const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
+          expect(cliCalls.length).toBeGreaterThan(0);
+          expect(providerButton?.text).toBe("anthropic (2)");
+          expect(modelList?.body.text).toContain("Models (anthropic");
+          expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${boundRef}`);
+          expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${primaryRef}`);
+          expect(gatewayModels).toMatchObject({
+            models: expect.arrayContaining([
+              expect.objectContaining({
+                provider: "anthropic",
+                id: "claude-sonnet-4-6",
+                available: true,
+              }),
+            ]),
+          });
+          expect(cliCalls).toEqual(expect.arrayContaining([authArgs, discoveryArgs]));
+          expect(
+            cliCalls.every(
+              (args) =>
+                JSON.stringify(args) === JSON.stringify(authArgs) ||
+                JSON.stringify(args) === JSON.stringify(discoveryArgs),
+            ),
+          ).toBe(true);
+          const nativeRequests = (await fs.readFile(nativeRequestsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(nativeRequests.length).toBeGreaterThan(0);
+          for (const request of nativeRequests) {
+            expect(request).toMatchObject({
+              type: "control_request",
+              request: { subtype: "initialize" },
+            });
+          }
+          expect(providerRequests).toBe(0);
+        } finally {
+          await stopQaGatewayFixture(gatewayOwner);
+        }
+      },
+    );
+  });
+}, 120_000);
+
+test("recovers a replaced model catalog and drains the following Telegram callback", async ({
+  signal,
+  onTestFinished,
+}) => {
   const telegramCalls: TelegramCall[] = [];
   const pendingUpdates: unknown[] = [];
   const getUpdatesOffsets: Array<number | undefined> = [];
   let telegramPolls = 0;
+  let pendingGetUpdatesResponse: ServerResponse | undefined;
+
+  const flushPendingUpdates = () => {
+    if (!pendingGetUpdatesResponse || pendingUpdates.length === 0) {
+      return;
+    }
+    const response = pendingGetUpdatesResponse;
+    pendingGetUpdatesResponse = undefined;
+    succeed(response, pendingUpdates.splice(0));
+  };
 
   const queueCallback = (updateId: number, data: string) => {
     pendingUpdates.push(callbackUpdate(updateId, `replacement-callback-${updateId}`, data));
+    flushPendingUpdates();
   };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -715,7 +943,18 @@ test("recovers a replaced model catalog and drains the following Telegram callba
     if (method === "getUpdates") {
       telegramPolls += 1;
       getUpdatesOffsets.push(typeof body.offset === "number" ? body.offset : undefined);
-      succeed(res, pendingUpdates.splice(0));
+      if (pendingUpdates.length > 0) {
+        succeed(res, pendingUpdates.splice(0));
+      } else {
+        // Model Telegram's long poll so callbacks queued after an empty poll do not wait for
+        // grammY's idle backoff before reaching the durable ingress queue.
+        pendingGetUpdatesResponse = res;
+        res.once("close", () => {
+          if (pendingGetUpdatesResponse === res) {
+            pendingGetUpdatesResponse = undefined;
+          }
+        });
+      }
       return;
     }
     telegramCalls.push({ method, body });
@@ -746,6 +985,8 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           replacementConfigPath,
           fixtureRoot,
           repoRoot,
+          signal,
+          onTestFinished,
         });
         const queue = createChannelIngressQueue({
           channelId: "telegram",
@@ -766,27 +1007,23 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           await gateway.request("mark");
           queueCallback(10, `mdl_list_${REPLACEMENT_PROVIDER}_1`);
           queueCallback(11, "mdl_prov");
+          // A claimed callback waits for the pending publication instead of retrying stale data.
           await expect
-            .poll(async () => await readTelegramIngressStatuses(stateDir, eventIds), {
-              interval: 5,
-              timeout: 600,
+            .poll(async () => (await readTelegramIngressStatuses(stateDir, eventIds))[0], {
+              interval: 25,
+              timeout: 30_000,
             })
-            .toEqual([
-              {
+            .toEqual(
+              expect.objectContaining({
                 accountId: "picker",
                 eventId: eventIds[0],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
+                attempts: 0,
+                lastAttemptAt: null,
+                lastError: null,
                 status: "claimed",
-              },
-              {
-                accountId: "picker",
-                eventId: eventIds[1],
-                laneKey: `telegram:${CHAT_ID}`,
-                queueName: '["telegram","picker"]',
-                status: "pending",
-              },
-            ]);
+              }),
+            );
+          expect(telegramCalls.filter((call) => call.method === "editMessageText")).toHaveLength(0);
 
           await gateway.request("replace");
 
@@ -805,11 +1042,12 @@ test("recovers a replaced model catalog and drains the following Telegram callba
           expect(firstPickerEdit).toBeDefined();
           expect(hasCallback(firstPickerEdit!, `mdl_sel_${REPLACEMENT_MODEL_REF}`)).toBe(true);
           expect(
-            telegramCalls
-              .filter((call) => call.method === "answerCallbackQuery")
-              .map((call) => call.body.callback_query_id)
-              .toSorted((a, b) => String(a).localeCompare(String(b))),
-          ).toEqual(["replacement-callback-10", "replacement-callback-11"]);
+            new Set(
+              telegramCalls
+                .filter((call) => call.method === "answerCallbackQuery")
+                .map((call) => call.body.callback_query_id),
+            ),
+          ).toEqual(new Set(["replacement-callback-10", "replacement-callback-11"]));
           expect(getUpdatesOffsets).toContain(12);
 
           await expect
@@ -828,8 +1066,11 @@ test("recovers a replaced model catalog and drains the following Telegram callba
               pending: 0,
               statuses: eventIds.map((eventId) => ({
                 accountId: "picker",
+                attempts: 0,
                 eventId,
                 laneKey: `telegram:${CHAT_ID}`,
+                lastAttemptAt: null,
+                lastError: null,
                 queueName: '["telegram","picker"]',
                 status: "completed",
               })),

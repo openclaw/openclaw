@@ -1,20 +1,26 @@
 // Matrix tests cover threads plugin behavior.
 import { describe, expect, it } from "vitest";
+import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "../relations.js";
 import { resolveMatrixThreadRouting } from "./threads.js";
 
 describe("resolveMatrixThreadRouting", () => {
-  it("keeps sessions flat when threadReplies is off", () => {
-    expect(
-      resolveMatrixThreadRouting({
-        isDirectMessage: false,
-        threadReplies: "off",
-        messageId: "$reply1",
-        threadRootId: "$root",
-      }),
-    ).toEqual({
-      threadId: undefined,
-    });
-  });
+  it.each([undefined, true])(
+    "keeps thread placement independent from reply fallback %s",
+    (isFallingBack) => {
+      const content = {
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$root",
+          is_falling_back: isFallingBack,
+          "m.in_reply_to": { event_id: "$selected" },
+        },
+      };
+      expect(resolveMatrixThreadRootId(content)).toBe("$root");
+      expect(resolveMatrixReplyToEventId(content)).toBe(
+        isFallingBack === true ? undefined : "$selected",
+      );
+    },
+  );
 
   it("uses the inbound thread root when replies arrive inside an existing thread", () => {
     expect(
@@ -26,18 +32,6 @@ describe("resolveMatrixThreadRouting", () => {
       }),
     ).toEqual({
       threadId: "$root",
-    });
-  });
-
-  it("keeps top-level inbound messages flat when threadReplies is inbound", () => {
-    expect(
-      resolveMatrixThreadRouting({
-        isDirectMessage: false,
-        threadReplies: "inbound",
-        messageId: "$root",
-      }),
-    ).toEqual({
-      threadId: undefined,
     });
   });
 

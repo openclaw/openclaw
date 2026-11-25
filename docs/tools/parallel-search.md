@@ -1,8 +1,9 @@
 ---
-summary: "Parallel Search -- LLM-optimized dense excerpts from web sources"
+summary: "Parallel Search and web-grounded typed Decisions"
 read_when:
   - You want web search without an API key
   - You want Parallel's paid Search API
+  - You want web-grounded typed Decisions
   - You want dense excerpts ranked for LLM context efficiency
 title: "Parallel search"
 ---
@@ -17,7 +18,8 @@ built for AI agents:
 | Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning             |
 
 Set `tools.web.search.provider` to `parallel-free` or `parallel` to select
-one explicitly; neither is auto-detected.
+one explicitly. Paid Parallel can also be auto-detected from its API key;
+Parallel Search (Free) must be selected explicitly.
 
 <Note>
   Direct OpenAI Responses models (`api: "openai-responses"`, provider
@@ -32,8 +34,10 @@ one explicitly; neither is auto-detected.
 
 ```bash
 openclaw plugins install @openclaw/parallel-plugin
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## API key (paid provider)
 
@@ -129,7 +133,7 @@ improves subsequent results. Max 1000 chars on `parallel`; the free
 
 <ParamField path="client_model" type="string">
 Optional identifier of the model making the call (e.g. `claude-opus-4-7`,
-`gpt-5.6-sol`), max 100 chars. Lets Parallel tailor default settings for your
+`gpt-6-astra`), max 100 chars. Lets Parallel tailor default settings for your
 model's capabilities. Pass the exact active model slug; do not shorten to a
 family alias.
 </ParamField>
@@ -164,3 +168,32 @@ family alias.
 - [Web Search overview](/tools/web) -- all providers and auto-detection
 - [Exa search](/tools/exa-search) -- neural search with content extraction
 - [Perplexity Search](/tools/perplexity-search) -- structured results with domain filtering
+
+## Decisions
+
+The same plugin provides Parallel's native web-grounded Decisions API. Enable the
+plugin, set `PARALLEL_API_KEY` (or use `/login parallel`), and select
+`parallel/decisions-fast` for the `decision_evaluate` tool with
+`contractVersion: 2`. It is a **decision-only** route, not an agent chat model.
+The OpenRouter equivalent is `openrouter/parallel/decisions-fast`, using an
+OpenRouter credential.
+
+The direct route calls `POST https://api.parallel.ai/v1/decisions` with
+`mode: "fast"`; the local model ID is not sent as a native `model` parameter.
+It accepts text or JSON state and up to 100 related boolean, choice, or score
+questions. Boolean results preserve Parallel's estimated probability of truth;
+score results preserve its fractional, zero-based score and level probabilities.
+Refusals are explicit per-question provider errors, not false/zero answers.
+Citations are returned in result metadata for the whole request, not per answer.
+
+Parallel performs live web retrieval for these requests. Do not use this route for
+state you do not want sent to a web-grounding provider. Images, list state,
+sort/tags/box questions, and generation/reasoning controls are unsupported. The
+native API limits each state-plus-question input to 32,000 estimated tokens,
+rendered questions to 5,000 characters, choices to 2–255 options, and scores to
+2–10 levels. Native usage is billed per request, not per generated token; token
+counts are retained without inventing token prices.
+
+See the [Parallel Decisions reference](https://docs.parallel.ai/api-reference/decisions/decisions)
+and [pricing](https://docs.parallel.ai/getting-started/pricing) for current API
+limits and billing. Marketing trials and promotions are not configuration guarantees.

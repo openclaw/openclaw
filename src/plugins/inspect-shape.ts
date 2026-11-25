@@ -1,4 +1,3 @@
-// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
@@ -10,16 +9,12 @@ export type PluginInspectShape =
   | "hybrid-capability"
   | "non-capability";
 
-export type PluginCapabilityEntry = {
-  kind: PluginCapabilityKind;
-  ids: string[];
-};
-
-type PluginShapeSummary = {
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
+type PluginShapeParams = {
+  plugin: PluginRegistry["plugins"][number];
+  report: Pick<
+    PluginRegistry,
+    "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors" | "sessionCatalogs"
+  >;
 };
 
 function buildPluginCapabilityEntries(
@@ -27,8 +22,9 @@ function buildPluginCapabilityEntries(
   report: Pick<PluginRegistry, "sessionCatalogs">,
 ) {
   return [
-    { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
+    { kind: "cli-backend" as const, ids: plugin.cliBackendIds },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "decision" as const, ids: plugin.contracts?.decisionProviders ?? [] },
     { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
@@ -44,6 +40,7 @@ function buildPluginCapabilityEntries(
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "migration-provider" as const, ids: plugin.migrationProviderIds },
     { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    { kind: "storage-provider" as const, ids: plugin.contracts?.storageProviders ?? [] },
     {
       kind: "session-catalog" as const,
       ids: report.sessionCatalogs
@@ -63,70 +60,45 @@ function buildPluginCapabilityEntries(
   ].filter((entry) => entry.ids.length > 0);
 }
 
-function derivePluginInspectShape(params: {
-  capabilityCount: number;
-  typedHookCount: number;
-  customHookCount: number;
-  toolCount: number;
-  commandCount: number;
-  cliCount: number;
-  serviceCount: number;
-  gatewayMethodCount: number;
-  httpRouteCount: number;
-}): PluginInspectShape {
-  if (params.capabilityCount > 1) {
+function derivePluginInspectShape(
+  { plugin, report }: PluginShapeParams,
+  capabilityCount: number,
+): PluginInspectShape {
+  if (capabilityCount > 1) {
     return "hybrid-capability";
   }
-  if (params.capabilityCount === 1) {
+  if (capabilityCount === 1) {
     return "plain-capability";
   }
   const hasOnlyHooks =
-    params.typedHookCount + params.customHookCount > 0 &&
-    params.toolCount === 0 &&
-    params.commandCount === 0 &&
-    params.cliCount === 0 &&
-    params.serviceCount === 0 &&
-    params.gatewayMethodCount === 0 &&
-    params.httpRouteCount === 0;
+    plugin.commands.length === 0 &&
+    plugin.cliCommands.length === 0 &&
+    plugin.services.length === 0 &&
+    plugin.httpRoutes === 0 &&
+    (report.typedHooks.some((entry) => entry.pluginId === plugin.id) ||
+      report.hooks.some((entry) => entry.pluginId === plugin.id)) &&
+    !report.tools.some((entry) => entry.pluginId === plugin.id) &&
+    !report.gatewayMethodDescriptors.some(
+      (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
+    );
   if (hasOnlyHooks) {
     return "hook-only";
   }
   return "non-capability";
 }
 
-export function buildPluginShapeSummary(params: {
-  plugin: PluginRegistry["plugins"][number];
-  report: Pick<
-    PluginRegistry,
-    "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors" | "sessionCatalogs"
-  >;
-}): PluginShapeSummary {
+export function buildPluginShapeSummary(params: PluginShapeParams): {
+  shape: PluginInspectShape;
+  capabilityMode: "none" | "plain" | "hybrid";
+  capabilityCount: number;
+  capabilities: {
+    kind: PluginCapabilityKind;
+    ids: string[];
+  }[];
+} {
   const capabilities = buildPluginCapabilityEntries(params.plugin, params.report);
-  const typedHookCount = params.report.typedHooks.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
-  const customHookCount = params.report.hooks.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
-  const toolCount = params.report.tools.filter(
-    (entry) => entry.pluginId === params.plugin.id,
-  ).length;
-  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
-    (descriptor) =>
-      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
-  ).length;
   const capabilityCount = capabilities.length;
-  const shape = derivePluginInspectShape({
-    capabilityCount,
-    typedHookCount,
-    customHookCount,
-    toolCount,
-    commandCount: params.plugin.commands.length,
-    cliCount: params.plugin.cliCommands.length,
-    serviceCount: params.plugin.services.length,
-    gatewayMethodCount,
-    httpRouteCount: params.plugin.httpRoutes,
-  });
+  const shape = derivePluginInspectShape(params, capabilityCount);
 
   return {
     shape,

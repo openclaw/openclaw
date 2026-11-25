@@ -1,30 +1,14 @@
-/**
- * Public SDK subpath for transcript source provider types and registry lookup.
- */
 export type {
   TranscriptImportRequest,
-  TranscriptParticipant,
-  TranscriptSessionDescriptor,
-  TranscriptSourceKind,
-  TranscriptSourceLocator,
+  TranscriptOccupancyWatchRequest,
   TranscriptSourceAccessControl,
   TranscriptSourceProvider,
-  TranscriptSourceStatus,
   TranscriptStartRequest,
-  TranscriptToolAction,
-  TranscriptToolCaller,
-  TranscriptsStartResult,
-  TranscriptStopRequest,
-  TranscriptsStopResult,
-  TranscriptUtterance,
 } from "../transcripts/provider-types.js";
-export {
-  getTranscriptSourceProvider,
-  listTranscriptSourceProviders,
-  normalizeTranscriptSourceProviderId,
-} from "../transcripts/provider-registry.js";
+export type {
+  TranscriptParticipant,
+  TranscriptSourceKind,
+  TranscriptUtterance,
+} from "../transcripts/types.js";
+export { normalizeTranscriptSourceProviderId } from "../transcripts/provider-registry.js";
 export { resolveTranscriptsConfig } from "../transcripts/config.js";
-export {
-  createMeetingTranscriptSourceProvider,
-  type MeetingTranscriptSourceRuntime,
-} from "../meeting-bot/transcripts-bridge.js";

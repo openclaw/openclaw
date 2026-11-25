@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 
-BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:bookworm-slim}"
-TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:bookworm-slim}"
+BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:trixie-slim}"
+TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:trixie-slim}"
 PACKAGES="${PACKAGES:-curl wget jq coreutils grep python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
 INSTALL_NODE="${INSTALL_NODE:-1}"
 NODE_MAJOR="${NODE_MAJOR:-24}"

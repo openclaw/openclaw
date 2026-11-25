@@ -1,13 +1,11 @@
 // Vitest infra config wires the infra test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import { infraTestOwner } from "./vitest.test-shards.mjs";
 
 export function createInfraVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(["src/infra/**/*.test.ts"], {
-    dir: "src",
+  return createScopedVitestConfig(infraTestOwner.include, {
     env,
-    exclude: boundaryTestFiles,
-    fileParallelism: false,
+    exclude: infraTestOwner.exclude,
     isolate: true,
     name: "infra",
     passWithNoTests: true,

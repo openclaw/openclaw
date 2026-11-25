@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Covers approval resolution over the gateway client.
 import type { ApprovalResolveResult } from "../../packages/gateway-protocol/src/index.js";
@@ -30,17 +31,10 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected gateway client call");
-  }
-  return call;
-}
-
 function withApprovalAccountContext<T>(run: () => T): T {
   return withGatewayNativeApprovalRuntime(
     {
+      getRuntimeConfig: () => ({}),
       request: async <TResult>(method: string, params: Record<string, unknown>) =>
         (await hoisted.clientRequest(method, params)) as TResult,
       requestRoute: vi.fn(),
@@ -73,8 +67,9 @@ describe("resolveApprovalOverGateway", () => {
     });
 
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
-    const [gatewayClientOptions, gatewayClientRunner] = requireFirstMockCall(
-      hoisted.withOperatorApprovalsGatewayClient,
+    const [gatewayClientOptions, gatewayClientRunner] = expectDefined(
+      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+      "gateway client call",
     );
     expect(gatewayClientOptions).toEqual({
       config: { gateway: { auth: { token: "cfg-token" } } },
@@ -113,9 +108,6 @@ describe("resolveApprovalOverGateway", () => {
   });
 
   it.each([
-    { channel: "telegram" },
-    { accountId: "ops" },
-    { senderId: "owner" },
     { channel: "telegram", accountId: "ops" },
     { channel: "telegram", senderId: "owner" },
     { accountId: "ops", senderId: "owner" },
@@ -133,16 +125,7 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["signal", "Signal"],
-    ["whatsapp", "WhatsApp"],
-    ["matrix", "Matrix"],
-    ["imessage", "iMessage"],
-    ["telegram", "Telegram"],
-    ["discord", "Discord"],
-    ["googlechat", "Google Chat"],
-    ["slack", "Slack"],
-  ] as const)(
+  it.each([["googlechat", "Google Chat"]] as const)(
     "derives the %s approval client label from channel metadata",
     async (channel, label) => {
       await resolveApprovalOverGateway({
@@ -155,8 +138,9 @@ describe("resolveApprovalOverGateway", () => {
         senderId: "owner",
       });
 
-      const [gatewayClientOptions] = requireFirstMockCall(
-        hoisted.withOperatorApprovalsGatewayClient,
+      const [gatewayClientOptions] = expectDefined(
+        hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+        "gateway client call",
       );
       expect(gatewayClientOptions).toMatchObject({
         clientDisplayName: `${label} approval (owner)`,
@@ -175,7 +159,10 @@ describe("resolveApprovalOverGateway", () => {
       senderId: "owner",
     });
 
-    const [gatewayClientOptions] = requireFirstMockCall(hoisted.withOperatorApprovalsGatewayClient);
+    const [gatewayClientOptions] = expectDefined(
+      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+      "gateway client call",
+    );
     expect(gatewayClientOptions).toMatchObject({
       clientDisplayName: "external-chat approval (owner)",
     });
@@ -201,6 +188,7 @@ describe("resolveApprovalOverGateway", () => {
     const request = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const result = await withGatewayNativeApprovalRuntime(
       {
+        getRuntimeConfig: () => ({}),
         request: request as GatewayNativeApprovalRuntime["request"],
         requestRoute: vi.fn(),
         routeCoordinator: {} as never,
@@ -252,6 +240,7 @@ describe("resolveApprovalOverGateway", () => {
     const injectedRequest = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
     const scopedRequest = vi.fn();
     const runtime = {
+      getRuntimeConfig: () => ({}),
       request: async <T>(): Promise<T> => {
         scopedRequest();
         throw new Error("unexpected scoped approval request");

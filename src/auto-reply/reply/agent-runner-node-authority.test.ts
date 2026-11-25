@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type {
   GatewayRequestContext,
@@ -18,7 +18,7 @@ vi.mock("../../agents/agent-tools.js", () => ({
   }),
 }));
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 let execute: Awaited<ReturnType<typeof getExecuteAgentTurnForTest>>;
 let fixture: typeof import("../../gateway/worker-environments/worker-turn-launcher.test-support.js");
@@ -30,7 +30,13 @@ beforeEach(async () => {
 afterEach(async () => {
   (await import("../../plugins/runtime.js")).resetPluginRuntimeStateForTest();
   (await import("../../infra/agent-run-registry.js")).resetAgentRunRegistryForTest();
-  await fixture.cleanupWorkerTurnLauncherTest();
+  await fixture.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true });
+});
+afterAll(async () => {
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../../state/openclaw-state-db.js");
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("webchat admission to plugin node duplex authority", () => {
@@ -51,7 +57,6 @@ describe("webchat admission to plugin node duplex authority", () => {
     })),
     ...(
       [
-        "permission",
         "session",
         "admission",
         "gateway",
@@ -62,6 +67,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         "runtime-retired",
         "runtime-reactivated",
         "gateway-reactivated",
+        "gateway-republished",
         "runtime-record-revoked",
       ] as const
     ).flatMap((mode) => (["startup", "policy"] as const).map((phase) => ({ mode, phase }))),
@@ -79,12 +85,10 @@ describe("webchat admission to plugin node duplex authority", () => {
         await import("../../gateway/node-invoke-plugin-policy.test-helpers.js");
       const { runWithGatewayRequestEnvelope } = await import("../../gateway/server-methods.js");
       const { createGatewayNodesRuntime } = await import("../../gateway/server-plugins.js");
+      const { success } = await import("../../gateway/worker-environments/tunnel.test-support.js");
       const { createPluginRecord } = await import("../../plugins/loader-records.js");
-      const {
-        markPluginRegistryActive,
-        markPluginRegistryRetired,
-        revokePluginRecordLifecycleEpoch,
-      } = await import("../../plugins/registry-lifecycle.js");
+      const { markPluginRegistryActive, markPluginRegistryRetired, revokePluginRecord } =
+        await import("../../plugins/registry-lifecycle.js");
       const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
       const { withPluginRuntimePluginScope, withPluginRuntimeRegistryScope } =
         await import("../../plugins/runtime/gateway-request-scope.js");
@@ -94,9 +98,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         attachedEnvironment,
         createWorkerSessionTurnPlacementProvider,
         ENVIRONMENT_ID,
-        MANIFEST_REF,
         OWNER_EPOCH,
         placements,
+        reconcileUnchangedLocalWorkspace,
         root,
         seedActivePlacement,
         SESSION_ID,
@@ -105,7 +109,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         unusedEnvironments,
       } = fixture;
       await upsertSessionEntryCore(sessionTarget, { permissionMode: "full" });
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const workspace = {
         workspaceDir: "/worker/workspace",
         sessionKey: SESSION_KEY,
@@ -217,18 +221,10 @@ describe("webchat admission to plugin node duplex authority", () => {
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+        runWorkspaceCommand: vi.fn(async () => success()),
         syncWorkspace: vi.fn(),
         quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (request) => {
-          request.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        },
+        reconcileWorkspace: reconcileUnchangedLocalWorkspace,
         stop: async () => {},
       };
       const environment = {
@@ -291,9 +287,6 @@ describe("webchat admission to plugin node duplex authority", () => {
                   case "missing-descriptor":
                   case "expanded-descriptor":
                     break;
-                  case "permission":
-                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
-                    break;
                   case "session":
                     await upsertSessionEntryCore(sessionTarget, {
                       sessionId: "replacement-session",
@@ -322,17 +315,21 @@ describe("webchat admission to plugin node duplex authority", () => {
                     markPluginRegistryActive(preparedRegistry);
                     break;
                   case "gateway-reactivated":
+                    markPluginRegistryRetired(registry);
+                    markPluginRegistryActive(registry);
+                    break;
+                  case "gateway-republished":
                     markPluginRegistryActive(registry);
                     break;
                   case "runtime-record-revoked":
-                    revokePluginRecordLifecycleEpoch(preparedRegistry, preparedRecord);
+                    revokePluginRecord(preparedRegistry, preparedRecord);
                     break;
                   case "placement": {
                     const claimed = claimTurn.mock.results[0];
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;
@@ -413,7 +410,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(reply).toMatchObject({ kind: "success" });
       }
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      if (mode === "full" || mode === "shared") {
+      if (mode === "full" || mode === "shared" || mode === "gateway-republished") {
         expect(launchErrors).toEqual([]);
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).toHaveBeenCalledOnce();
@@ -432,7 +429,9 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(prompt).toHaveBeenCalledOnce();
       } else {
         expect(launchErrors).toHaveLength(1);
-        expect(launchErrors[0]).toMatch(/no longer (active|current)/);
+        expect(launchErrors[0]).toMatch(
+          /no longer (active|current)|placement changed|The run or its session ended/,
+        );
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       }

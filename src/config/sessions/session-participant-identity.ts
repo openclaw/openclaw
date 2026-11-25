@@ -1,9 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  SessionParticipantIdentitySchema,
-  type SessionParticipantIdentity,
-} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { isSessionParticipantIdentity } from "../../../packages/gateway-protocol/src/compiled/sender-identity.js";
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 
 export type { SessionParticipantIdentity };
 
@@ -38,7 +35,7 @@ export function readParticipantIdentity(namespace: string, id: string): SessionP
   const parsed: unknown = JSON.parse(namespace);
   if (isRecord(parsed)) {
     const identity = { ...parsed, id };
-    if (Value.Check(SessionParticipantIdentitySchema, identity)) {
+    if (isSessionParticipantIdentity(identity)) {
       return identity;
     }
   }

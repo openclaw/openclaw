@@ -1,29 +1,29 @@
-// Process supervisor types describe supervised runs, states, and termination reasons.
-export type RunState = "starting" | "running" | "exiting" | "exited";
+import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { ProcessExecutionIntent } from "../linux-exec-cgroup.js";
+import type { SpawnInitiation } from "../spawn-initiation.js";
+
+export type ReleasedProcess = { pid: number; command?: string };
+
+/** Custody ended without signalling: these processes outlived their command. */
+export type ProcessRelease = { status: "released"; survivors: ReleasedProcess[] };
+
+export type ProcessExtinctionResult = void | WindowsJobExtinction | ProcessRelease;
 
 export type TerminationReason =
   | "manual-cancel"
   | "overall-timeout"
   | "no-output-timeout"
+  | "memory-limit"
   | "spawn-error"
   | "signal"
   | "exit";
 
-export type RunRecord = {
-  runId: string;
-  sessionId: string;
-  backendId: string;
-  scopeKey?: string;
-  pid?: number;
-  processGroupId?: number;
-  startedAtMs: number;
-  lastOutputAtMs: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-  state: RunState;
-  terminationReason?: TerminationReason;
-  exitCode?: number | null;
-  exitSignal?: NodeJS.Signals | number | null;
+/** Producer-owned activity; a settled result does not establish descendant extinction. */
+export type ProcessRunActivity = {
+  /** Absolute deadline accepted when the supervisor armed the overall timeout. */
+  readonly deadlineAtMs?: number;
+  readonly resultSettled: boolean;
+  readonly lastOutputAtMs: number;
 };
 
 export type RunExit = {
@@ -39,20 +39,26 @@ export type RunExit = {
 };
 
 export type ManagedRun = {
+  readonly activity: ProcessRunActivity;
   runId: string;
   pid?: number;
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** The root result may settle before its independently owned descendants exit. */
-  waitForExtinction?: () => Promise<void>;
+  /** Join cleanup; unavailable Windows Job certification resolves with an uncertain outcome. */
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   cancel: (reason?: TerminationReason) => void;
+  /**
+   * The owner hands off descendants when the root exits normally. Callers must
+   * not cancel such a run after a normal exit; that would stop what was handed off.
+   */
+  releasesOnRootExit?: true;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
 };
 
 export type ManagedRunStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
+  write: (data: string | Buffer, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroy?: () => void;
   destroyed?: boolean;
@@ -66,22 +72,77 @@ export type SpawnSecretInput = {
   createData: () => Buffer;
 };
 
+export type ProcessAdapterConstruction = {
+  executionIntent?: ProcessExecutionIntent;
+  /** Stable session budget identity, independent of command cancellation ownership. */
+  executionScopeKey?: string;
+  assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
+  /** Synchronous launch admission; never recheck after the target command starts. */
+  beforeSpawn?: () => void;
+  abortSignal?: AbortSignal;
+  /** Publish resource cleanup before readiness or private-input delivery can fail. */
+  onSpawnCleanup?: (cleanup: Promise<ProcessExtinctionResult>) => void;
+};
+
+export type AwaitedStdoutConsumer = {
+  /** Subscribe once; EOF, decoder flush, and every accepted chunk settle before resolution. */
+  consumeStdout: (listener: (chunk: string) => void | Promise<void>) => Promise<void>;
+};
+
+export type ProcessCleanupResult = {
+  readonly reason: "forced-relay-exit";
+  readonly signalRequested: "SIGKILL";
+  readonly signalError?: Error;
+  readonly exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null };
+  readonly durationMs: number;
+  readonly escalationAfterMs: number;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
+  /** Retained tree root, including descendants adopted after the command exits. */
+  memoryRootPid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
+  /** Both output subscriptions observe bytes separately from decoded text. */
+  supportsRawOutput: boolean;
   onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
+  onExit?: (listener: (code: number | null, signal: WaitSignal) => void) => void;
+  onError?: (
+    listener: (error: Error, source: "process" | "stdin" | "stdout" | "stderr") => void,
+  ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
-  waitForExtinction?: () => Promise<void>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  /** Hand off a running root without signalling; undefined when cancellation already won. */
+  release?: () => Promise<ReleasedProcess[] | undefined>;
+  readonly cleanupResult?: ProcessCleanupResult;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
 
+/** Observe output before joining startup and private-input delivery. */
+export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
+  adapter: Adapter;
+  ready: Promise<void>;
+};
+
 type SpawnBaseInput = {
+  /** Admitted outer Sandbox limit, consumed only by the deployed worker. */
+  workerMemoryBoundary?: "sandbox";
+  executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
+  initiateSpawn?: SpawnInitiation;
+  /** The local subprocess transports execution owned outside its local process tree. */
+  cleanupOwnership?: "external";
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
+  assertCurrent?: () => void;
+  /** Prepare async launch authority after queued scope admission and before replacing a live run. */
+  prepareSpawn?: () => void | Promise<void>;
+  /** Revalidate launch policy at admission and immediately before each native launch attempt. */
+  beforeSpawn?: () => void;
   runId?: string;
-  sessionId: string;
-  backendId: string;
   scopeKey?: string;
   replaceExistingScope?: boolean;
   cwd?: string;
@@ -99,39 +160,84 @@ type SpawnBaseInput = {
   maxCapturedOutputChars?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** Revoke caller-owned capabilities when cancellation starts, before native termination. */
+  onCancel?: (reason: TerminationReason) => void;
 };
 
-type SpawnChildInput = SpawnBaseInput & {
-  mode: "child";
-  argv: string[];
-  /** Preserve a distinct invocation name while executing argv[0]. */
-  argv0?: string;
-  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
-  exactEnv?: true;
-  windowsVerbatimArguments?: boolean;
-  input?: string;
-  stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
-  secretInput?: SpawnSecretInput;
-  onStdoutRaw?: (chunk: Buffer) => void;
-  onStderrRaw?: (chunk: Buffer) => void;
-};
+export type SpawnInput =
+  | (SpawnBaseInput & {
+      mode: "child";
+      argv: string[];
+      /** Append invocation arguments after queued scope admission, immediately before child construction. */
+      resolveArgs?: () => string[];
+      /** Preserve a distinct invocation name while executing argv[0]. */
+      argv0?: string;
+      /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+      exactEnv?: true;
+      windowsVerbatimArguments?: boolean;
+      input?: string;
+      /** Prepare input authority at the adapter's stdin delivery boundary. */
+      prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
+      stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+      secretInput?: SpawnSecretInput;
+      /**
+       * Processes still running when the root exits normally keep running.
+       * A `required-all` scope owner keeps strict tree cleanup instead.
+       */
+      releaseOnRootExit?: true;
+      onStdoutRaw?: (chunk: Buffer) => void;
+      onStderrRaw?: (chunk: Buffer) => void;
+    })
+  | (SpawnBaseInput & {
+      mode: "pty";
+      argv: string[];
+    })
+  | (SpawnBaseInput & {
+      mode: "anchored-shell";
+      command: string;
+    });
 
-type SpawnPtyInput = SpawnBaseInput & {
-  mode: "pty";
-  argv: string[];
-};
-
-type SpawnAnchoredShellInput = SpawnBaseInput & {
-  mode: "anchored-shell";
-  command: string;
-};
-
-export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
+/**
+ * required-all includes external execution; owned-only leaves explicit backend
+ * lifetimes with that backend; transport-only makes no execution-tree claim.
+ */
+export type ProcessScopeCleanupPolicy = "required-all" | "owned-only" | "transport-only";
 
 export interface ProcessSupervisor {
+  /** Register before spawning; close caller admission before joining this exact cleanup owner. */
+  acquireScopeCleanup(
+    scopeKey: string,
+    options: { processTree: ProcessScopeCleanupPolicy },
+  ): () => Promise<void>;
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  waitForScope?: (scopeKey: string) => Promise<void>;
-  getRecord(runId: string): RunRecord | undefined;
+  /**
+   * Hand off a running command without signalling it. Resolves the processes
+   * left running, or undefined when the run cannot be handed off (cancel it instead).
+   */
+  release(runId: string): Promise<ReleasedProcess[] | undefined>;
 }
+
+export type OwnedRun = {
+  runId: string;
+  scopeKey?: string;
+  terminationReason?: TerminationReason;
+  cancel: (reason: TerminationReason) => void;
+  release?: () => Promise<ReleasedProcess[] | undefined>;
+  pending?: Promise<ManagedRun>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  cleanupOwners: ScopeCleanupOwner[];
+};
+
+export type ScopeCleanupOwner = {
+  processTree: ProcessScopeCleanupPolicy;
+  failure?: { error: unknown };
+};
+
+export type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};

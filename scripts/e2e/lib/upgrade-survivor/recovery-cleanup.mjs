@@ -6,13 +6,18 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
+import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
+import {
+  readJson as readRecoveryJson,
+  writeJson as writeRecoveryJson,
+} from "../fixtures/common.mjs";
 import {
   assertRecoveryApplied,
   assertRecoveryHistory,
   assertRecoveryInventory,
   assertRecoveryOriginals,
   assertRecoverySnapshot,
-  readRecoveryJson,
   readRecoveryMoves,
   recoveryEvent,
   recoveryFileIdentity,
@@ -21,7 +26,6 @@ import {
   recoveryVolumeSpec,
   recoveryWalIndexPaths,
   seedRecoveryFixture,
-  writeRecoveryJson,
   writeRecoveryTranscript,
 } from "./recovery-cleanup-fixture.mjs";
 
@@ -153,6 +157,10 @@ async function gateway(name, method, params) {
   ]);
 }
 
+function readChatHistory(name, { agentId, sessionKey }) {
+  return gateway(name, "chat.history", { agentId, sessionKey, limit: 20 });
+}
+
 async function readHistory(name, fixture) {
   const listing = await gateway(`${name}-list`, "sessions.list", {
     agentId: fixture.agentId,
@@ -162,11 +170,7 @@ async function readHistory(name, fixture) {
   assert.equal(listing.sessions.length, 1, "conversation not uniquely listed");
   assert.equal(listing.sessions[0].key, fixture.sessionKey);
   assert.equal(listing.sessions[0].sessionId, fixture.sessionId);
-  return await gateway(name, "chat.history", {
-    agentId: fixture.agentId,
-    sessionKey: fixture.sessionKey,
-    limit: 20,
-  });
+  return await readChatHistory(name, fixture);
 }
 
 async function inspect(name) {
@@ -248,11 +252,7 @@ async function proveHistory(stage, append) {
       message: newMessage,
     });
     assert(newInjected.ok && newInjected.messageId, "new conversation append failed");
-    const history = await gateway("new-history", "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory("new-history", fresh);
     const messages = [
       {
         id: newInjected.messageId,
@@ -264,11 +264,7 @@ async function proveHistory(stage, append) {
     saveEvidence({ histories: saved, newHistory: { ...fresh, messages } });
   } else {
     const fresh = evidence.newHistory;
-    const history = await gateway(`${stage}-new-history`, "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory(`${stage}-new-history`, fresh);
     assertRecoveryHistory(history, fresh.sessionId, fresh.messages);
     const hashes = [...saved, fresh].map((entry) => ({
       sessionKey: entry.sessionKey,
@@ -377,16 +373,8 @@ async function customRestore() {
   const customState = path.join(home, ".openclaw");
   const store = path.join(customState, "custom-sessions", "sessions.json");
   const transcript = path.join(path.dirname(store), "restore-original.jsonl");
-  const customConfig = path.join(customState, "openclaw.json");
   const agentDir = path.join(customState, "custom-agents", "main");
-  const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: customState,
-    OPENCLAW_CONFIG_PATH: customConfig,
-  };
+  const env = createBuildSmokeEnv(home, process.env);
   fs.mkdirSync(home, { recursive: true });
   await command(
     "restore-config",
@@ -395,8 +383,7 @@ async function customRestore() {
       "set",
       "agents",
       JSON.stringify({
-        defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main", default: true, agentDir, workspace: path.join(home, "workspace") }],
+        entries: { main: { agentDir, workspace: path.join(home, "workspace") } },
       }),
       "--strict-json",
     ],
@@ -418,17 +405,21 @@ async function customRestore() {
     source,
     identity: recoveryFileIdentity(source),
   }));
+  const importLegacy = (name) =>
+    command(
+      name,
+      ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
+      { env, measured: true },
+    );
+  const restoreLegacy = (name, failure = false) =>
+    command(
+      name,
+      ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
+      { env, failure },
+    );
   // Public Doctor owns both migrations. Restore never touches the primary Gateway histories.
-  await command(
-    "restore-import",
-    ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
-    { env, measured: true },
-  );
-  const restored = await command(
-    "restore-before",
-    ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
-    { env },
-  );
+  await importLegacy("restore-import");
+  const restored = await restoreLegacy("restore-before");
   const restoredFiles = restored.targets.flatMap((target) => target.restore?.restoredFiles ?? []);
   for (const original of originals) {
     assert(restoredFiles.includes(original.source), `restore omitted ${original.source}`);
@@ -445,11 +436,7 @@ async function customRestore() {
     ),
     "restored originals lost their consumed receipt",
   );
-  await command(
-    "restore-reimport",
-    ["doctor", "--session-sqlite", "import", "--session-sqlite-all-agents", "--json"],
-    { env, measured: true },
-  );
+  await importLegacy("restore-reimport");
   const customPreview = await command(
     "restore-preview",
     ["update", "cleanup", "--dry-run", "--json"],
@@ -483,11 +470,7 @@ async function customRestore() {
     true,
   );
   const beforeDisposedRestore = recoveryTreeSnapshot([customState]);
-  const disposed = await command(
-    "restore-disposed",
-    ["doctor", "--session-sqlite", "restore", "--session-sqlite-store", store, "--json"],
-    { env, failure: true },
-  );
+  const disposed = await restoreLegacy("restore-disposed", true);
   const conflicts = disposed.targets.flatMap((target) => target.restore?.conflicts ?? []);
   for (const original of originals) {
     assert(
@@ -514,18 +497,41 @@ async function customRestore() {
 async function packageEvidence() {
   const [baseline, candidate] = process.argv.slice(3);
   assert(baseline && candidate, "package evidence requires baseline and candidate");
-  const metadata = await command(
-    "baseline-package",
-    ["view", baseline, "version", "dist", "--json"],
-    { binary: "npm" },
+  const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION;
+  assert(version, "package evidence requires the installed baseline version");
+  // Resolve mutable tags once at installation; evidence must describe those same bytes.
+  const exactBaseline = `openclaw@${version}`;
+  const entries = resolveNpmJsonEntries(
+    await command("baseline-package", ["view", exactBaseline, "version", "dist", "--json"], {
+      binary: "npm",
+    }),
   );
-  assert.equal(metadata.version, "2026.7.1-2");
-  assert.equal(
-    metadata.dist.integrity,
-    "sha512-ycF3yPcbjN6bUPeaUx6Mh6vze1hQWoD3CT/wWcmD7a8xaHHHRUaAlaq+lFxMHf1ssEgODVAwjlzYqp2twkYZ7g==",
+  assert.equal(entries.length, 1);
+  const metadata = entries[0];
+  assert(metadata && typeof metadata === "object");
+  assert.equal(metadata.version, version);
+  assert(typeof metadata.dist.integrity === "string" && metadata.dist.integrity.length > 0);
+  // npm pack computes integrity from the fetched tarball even with --dry-run.
+  const packed = resolveNpmJsonEntries(
+    await command(
+      "baseline-package-pack",
+      ["pack", exactBaseline, "--ignore-scripts", "--dry-run", "--json"],
+      { binary: "npm" },
+    ),
   );
+  assert.equal(packed.length, 1);
+  const artifact = packed[0];
+  assert(artifact && typeof artifact === "object");
+  assert.equal(artifact.name, "openclaw");
+  assert.equal(artifact.version, version);
+  assert.equal(artifact.integrity, metadata.dist.integrity);
   saveEvidence({
     baseline: metadata,
+    baselineArtifact: {
+      name: artifact.name,
+      version: artifact.version,
+      integrity: artifact.integrity,
+    },
     candidate: recoveryFileIdentity(candidate),
     storage: [stateDir, process.env.TMPDIR].map((directory) => {
       const stat = fs.statfsSync(directory);
@@ -564,14 +570,20 @@ try {
           .includes("plugin lifecycle resource ceiling exceeded:"),
         "updater exceeded the existing resource ceiling",
       );
-      const originals = assertRecoveryOriginals(fixture, readRecoveryMoves(stateDir));
+      const moves = readRecoveryMoves(stateDir);
+      const originals = assertRecoveryOriginals(fixture, moves);
       const files = Object.keys(recoveryTreeSnapshot([stateDir]));
       const known = new Set(fixture.preDoctorPaths);
       assert(
         !files.some((file) => file.includes(".pre-doctor-") && !known.has(file)),
         "public migration created an extra raw pre-Doctor copy",
       );
-      const destinations = [...new Set(readRecoveryMoves(stateDir).map((move) => move.sqlitePath))];
+      // Shared-index receipts also name unused agents that have no transcript database.
+      const destinations = [
+        ...new Set(
+          moves.filter((move) => move.kind === "transcript").map((move) => move.sqlitePath),
+        ),
+      ];
       saveEvidence({
         originals,
         spec: fixture.spec,

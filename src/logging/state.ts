@@ -1,4 +1,3 @@
-// Process-local logging state shared by logger, console capture, and test reset helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const LOGGING_STATE_KEY = Symbol.for("openclaw.loggingState");
@@ -12,7 +11,6 @@ function createUnownedAppliedLoggingConfig():
 
 function createLoggingState() {
   return {
-    generation: 0,
     appliedConfig: createUnownedAppliedLoggingConfig(),
     cachedLogger: null as unknown,
     cachedSettings: null as unknown,
@@ -41,7 +39,4 @@ const globalStore = globalThis as Record<PropertyKey, unknown>;
 // state object so overrides and caches remain coherent across those copies.
 export const loggingState =
   (globalStore[LOGGING_STATE_KEY] as LoggingState | undefined) ?? createLoggingState();
-if (!Object.hasOwn(loggingState, "appliedConfig")) {
-  loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
-}
 globalStore[LOGGING_STATE_KEY] = loggingState;

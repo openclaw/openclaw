@@ -1,102 +1,20 @@
+import type { SpawnResult } from "../process/exec-result.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
-import type { UpdateRecovery } from "./update-recovery.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
-export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
-
-export type UpdateStepResult = {
-  name: string;
-  command: string;
-  cwd: string;
-  durationMs: number;
-  exitCode: number | null;
-  stdoutTail?: string | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: UpdateStepAdvisory;
-};
-
-export type UpdateRunResult = {
-  status: "ok" | "error" | "skipped";
-  mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
-  root?: string;
-  reason?: string;
-  before?: { sha?: string | null; version?: string | null };
-  after?: {
-    sha?: string | null;
-    version?: string | null;
-    buildId?: string | null;
-    upstreamRef?: string;
-  };
-  steps: UpdateStepResult[];
-  durationMs: number;
-  recovery?: UpdateRecovery;
-  postUpdate?: {
-    plugins?: {
-      status: "ok" | "warning" | "skipped" | "error";
-      reason?: string;
-      changed: boolean;
-      warnings?: Array<{
-        pluginId?: string;
-        reason: string;
-        message: string;
-        guidance: string[];
-      }>;
-      sync: {
-        changed: boolean;
-        switchedToBundled: string[];
-        switchedToNpm: string[];
-        warnings: string[];
-        errors: string[];
-      };
-      npm: {
-        changed: boolean;
-        outcomes: Array<{
-          pluginId: string;
-          status: "updated" | "unchanged" | "skipped" | "error";
-          message: string;
-          currentVersion?: string;
-          nextVersion?: string;
-          channelFallback?: {
-            requestedSpec: string;
-            usedSpec: string;
-            requestedLabel: string;
-            usedLabel: string;
-            reason: "unavailable" | "failed";
-            message: string;
-          };
-        }>;
-      };
-      integrityDrifts: Array<{
-        pluginId: string;
-        spec: string;
-        expectedIntegrity: string;
-        actualIntegrity: string;
-        resolvedSpec?: string;
-        resolvedVersion?: string;
-        action: "aborted";
-      }>;
-    };
-  };
-};
+export type { UpdateRunResult } from "./update-run-result.js";
 
 export type CommandRunner = (
   argv: string[],
   options: CommandOptions,
-) => Promise<{
-  stdout: string;
-  stderr: string;
-  code: number | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-}>;
+) => Promise<
+  Pick<SpawnResult, "stdout" | "stderr" | "code" | "outputLimitExceeded"> &
+    Partial<Pick<SpawnResult, "signal" | "killed" | "termination">>
+>;
 
 export type UpdateStepInfo = {
   name: string;
@@ -108,32 +26,39 @@ export type UpdateStepInfo = {
 type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onHeartbeat?: () => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
+};
+
+type GitUpdateTarget = {
+  sha?: string;
+  version?: string;
+  schemaVersions?: OpenClawSchemaVersions;
+  databaseEngines?: unknown;
+  postgresFamilies?: unknown;
+  metadataUnreadable?: string;
 };
 
 export type UpdateRunnerOptions = {
-  cwd?: string;
-  argv1?: string;
-  tag?: string;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
-  deferConfiguredPluginInstallRepair?: boolean;
-  allowGatewayServiceRepair?: boolean;
-  allowGatewayActivation?: boolean;
-  beforeGitMutation?: (target: {
-    schemaVersions?: OpenClawSchemaVersions;
-    metadataUnreadable?: string;
-  }) => Promise<{
-    allowGatewayServiceRepair?: boolean;
-    allowGatewayActivation?: boolean;
-  } | void>;
+  /** Read-only admission before executing a fetched candidate; never stops a service. */
+  inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
+  /** Accepted candidate checks join the update's step results. */
+  validateCandidate: (root: string) => Promise<readonly UpdateStepResult[] | void>;
+  beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
+  /** `--no-restart`: the next service start selects the release instead of this update. */
+  deferReleaseActivation?: boolean;
+  /** The service's Node, which must load a Git release before the link names it. */
+  releaseNode?: string;
+  /** Required work uses the caller's deadline; probes, cleanup, and optional replay keep finite defaults. */
   timeoutMs?: number;
-  runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
 };
 
 export type UpdateInstallSurface =
+  | { kind: "immutable"; mode: "unknown"; root: string; packageRoot: string }
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }
   | { kind: "global"; mode: GlobalInstallManager; root: string; packageRoot: string }
   | { kind: "package-root"; mode: "unknown"; root: string; packageRoot: string }
@@ -144,8 +69,10 @@ export type RunStepOptions = {
   name: string;
   argv: string[];
   cwd: string;
-  timeoutMs: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;

@@ -5,15 +5,12 @@ import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentUris
 import android.content.ContentValues
-import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.provider.CalendarContract
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -27,7 +24,7 @@ import java.util.TimeZone
 class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCalendarEvents_requiresPermission() {
-    val handler = CalendarHandler.forTesting(appContext(), FakeCalendarDataSource(canRead = false))
+    val handler = CalendarHandler(appContext(), FakeCalendarDataSource(canRead = false))
 
     val result = handler.handleCalendarEvents(null)
 
@@ -37,7 +34,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
 
   @Test
   fun handleCalendarAdd_rejectsEndBeforeStart() {
-    val handler = CalendarHandler.forTesting(appContext(), FakeCalendarDataSource(canRead = true, canWrite = true))
+    val handler = CalendarHandler(appContext(), FakeCalendarDataSource(canRead = true, canWrite = true))
 
     val result =
       handler.handleCalendarAdd(
@@ -61,7 +58,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
         calendarTitle = "Work",
       )
     val handler =
-      CalendarHandler.forTesting(
+      CalendarHandler(
         appContext(),
         FakeCalendarDataSource(canRead = true, events = listOf(event)),
       )
@@ -69,23 +66,18 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     val result = handler.handleCalendarEvents("""{"limit":1}""")
 
     assertTrue(result.ok)
-    val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
-    val events = payload.getValue("events").jsonArray
-    assertEquals(1, events.size)
     assertEquals(
-      "Sprint Planning",
-      events
-        .first()
-        .jsonObject
-        .getValue("title")
-        .jsonPrimitive.content,
+      Json.parseToJsonElement(
+        """{"events":[{"identifier":"101","title":"Sprint Planning","startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T11:00:00Z","isAllDay":false,"location":"Room 1","calendarTitle":"Work"}]}""",
+      ),
+      Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
     )
   }
 
   @Test
   fun handleCalendarAdd_omitsExplicitJsonNullFields() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -103,12 +95,20 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
     assertNull(request.calendarTitle)
     assertNull(request.calendarId)
     assertFalse(request.isAllDay)
+    val event =
+      Json
+        .parseToJsonElement(result.payloadJson ?: error("missing payload"))
+        .jsonObject
+        .getValue("event")
+        .jsonObject
+    assertFalse(event.containsKey("location"))
+    assertFalse(event.containsKey("calendarTitle"))
   }
 
   @Test
   fun handleCalendarAdd_rejectsExplicitJsonNullTitle() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -128,7 +128,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
         canWrite = true,
         addError = IllegalArgumentException("CALENDAR_NOT_FOUND: no default calendar"),
       )
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -201,7 +201,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCalendarAdd_normalizesAllDayEventForAndroidProvider() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -219,7 +219,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCalendarAdd_expandsSameDayAllDayRangeToOneDay() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -235,7 +235,7 @@ class CalendarHandlerTest : NodeHandlerRobolectricTest() {
   @Test
   fun handleCalendarAdd_preservesTimedInstantsAndDeviceTimezone() {
     val source = FakeCalendarDataSource(canRead = true, canWrite = true)
-    val handler = CalendarHandler.forTesting(appContext(), source)
+    val handler = CalendarHandler(appContext(), source)
 
     val result =
       handler.handleCalendarAdd(
@@ -368,19 +368,13 @@ private class FakeCalendarDataSource(
   var addedRequest: CalendarAddRequest? = null
     private set
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun hasWritePermission(context: Context): Boolean = canWrite
+  override fun hasWritePermission(): Boolean = canWrite
 
-  override fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord> = events
+  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> = events
 
-  override fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord {
+  override fun add(request: CalendarAddRequest): CalendarEventRecord {
     addError?.let { throw it }
     addedRequest = request
     return addResult

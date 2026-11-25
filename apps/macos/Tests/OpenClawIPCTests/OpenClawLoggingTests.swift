@@ -3,6 +3,30 @@ import Testing
 @testable import OpenClaw
 
 struct OpenClawLoggingTests {
+    @MainActor
+    @Test func `existing loggers follow changes to the app verbosity preference`() async {
+        await TestIsolation.withUserDefaultsValues([
+            appLogLevelKey: Logger.Level.info.rawValue,
+            debugFileLogEnabledKey: false,
+        ]) {
+            let logger = Logger(subsystem: "ai.openclaw", category: "logging-test")
+            var renderedMessages = 0
+            func message() -> Logger.Message {
+                renderedMessages += 1
+                return "synthetic debug message"
+            }
+
+            logger.debug(message())
+            #expect(renderedMessages == 0)
+            AppLogSettings.setLogLevel(.debug)
+            logger.debug(message())
+            #expect(renderedMessages == 1)
+            AppLogSettings.setLogLevel(.error)
+            logger.debug(message())
+            #expect(renderedMessages == 1)
+        }
+    }
+
     @Test(arguments: ["synthetic-private-payload", "first line\nsecond line", ""])
     func `private values are removed before sink delivery`(privateValue: String) {
         let publicValue = "synthetic-public-value"
@@ -34,13 +58,20 @@ struct OpenClawLoggingTests {
     @Test
     func `private values are not described`() {
         let value = DescribedValue()
-        let hidden: Logger.Message = "value=\(value, privacy: .private)"
+        var factoryCalls = 0
+        func makeValue() -> DescribedValue {
+            factoryCalls += 1
+            return value
+        }
+        let hidden: Logger.Message = "value=\(makeValue(), privacy: .private)"
         #expect(hidden.description == "value=<private>")
         #expect(value.descriptionReads == 0)
+        #expect(factoryCalls == 0)
 
-        let visible: Logger.Message = "value=\(value, privacy: .public)"
+        let visible: Logger.Message = "value=\(makeValue(), privacy: .public)"
         #expect(visible.description == "value=synthetic-description")
         #expect(value.descriptionReads == 1)
+        #expect(factoryCalls == 1)
     }
 }
 

@@ -1,4 +1,4 @@
-import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import type { CronDeliveryStatus, CronJob, CronRunStatus } from "../../cron/types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 
@@ -12,11 +12,12 @@ export function filterCronRunLogJobsByAgent(
   }
   const normalizedAgentId = normalizeAgentId(agentId);
   return jobs.filter(
-    (job) => resolveCronJobEffectiveAgentId(job, defaultAgentId) === normalizedAgentId,
+    (job) => tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === normalizedAgentId,
   );
 }
 
 export function cronRunLogPageFilters(params: {
+  view?: "full" | "summary";
   limit?: number;
   offset?: number;
   statuses?: CronRunStatus[];
@@ -28,6 +29,7 @@ export function cronRunLogPageFilters(params: {
   sortDir?: "asc" | "desc";
 }) {
   return {
+    view: params.view,
     limit: params.limit,
     offset: params.offset,
     statuses: params.statuses,

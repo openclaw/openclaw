@@ -1,4 +1,5 @@
 // Minimal Codex app-server fixture for the QA auth product proof.
+import { randomUUID } from "node:crypto";
 import {
   createFakeInitializeResponse,
   createFakeThreadStartResponse,
@@ -14,6 +15,23 @@ if (!appServerVersion) {
   throw new Error("missing OPENCLAW_QA_CODEX_APP_SERVER_VERSION");
 }
 
+// Account-listed models; route proofs list ids the static OpenAI route lists do not name.
+const listedModels = (process.env.OPENCLAW_QA_CODEX_AUTH_APP_SERVER_MODELS ?? "gpt-5.6-luna").split(
+  ",",
+);
+
+// The config-only fixture contract can run standalone without receipt observation.
+const receipts = process.argv[2] ? await import(process.argv[2]) : undefined;
+
+let turnCount = 0;
+const threadResponse = (params, threadId) =>
+  createFakeThreadStartResponse({
+    params,
+    threadId,
+    sessionId: "session-qa-codex-auth",
+    version: appServerVersion,
+  });
+
 runFakeCodexAppServer({
   requestLog,
   logMode: "messages",
@@ -26,7 +44,26 @@ runFakeCodexAppServer({
           userAgent: `openclaw/${appServerVersion} (test)`,
         }),
       ),
-    "account/login/start": ({ params, sendResult }) => sendResult({ type: params?.type }),
+    "account/login/start": ({ params, sendResult }) => {
+      receipts?.sendReceipt(requestLog, "account/login/start");
+      sendResult({ type: params?.type });
+    },
+    "model/list": ({ sendResult }) =>
+      sendResult({
+        data: listedModels.map((model, index) => ({
+          id: model,
+          model,
+          displayName: model,
+          description: "Synthetic auth product proof model",
+          hidden: false,
+          isDefault: index === 0,
+          defaultReasoningEffort: "low",
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+          multiAgentVersion: "v2",
+          inputModalities: ["text"],
+        })),
+        nextCursor: null,
+      }),
     "account/rateLimits/read": ({ sendResult }) =>
       sendResult({
         rateLimits: {
@@ -52,21 +89,16 @@ runFakeCodexAppServer({
         },
         requiresOpenaiAuth: true,
       }),
-    "thread/start": ({ params, sendResult }) =>
-      sendResult(
-        createFakeThreadStartResponse({
-          params,
-          threadId: "thread-qa-codex-auth",
-          sessionId: "session-qa-codex-auth",
-          version: appServerVersion,
-        }),
-      ),
+    "thread/start": ({ params, sendResult }) => sendResult(threadResponse(params, randomUUID())),
+    "thread/resume": ({ params, sendResult }) =>
+      sendResult(threadResponse(params, params.threadId)),
     "turn/start": ({ notify, params, sendResult }) => {
+      receipts?.sendReceipt(requestLog, "turn/start");
       const threadId = params?.threadId ?? "thread-qa-codex-auth";
-      const turnId = "turn-qa-codex-auth";
+      const turnId = `turn-qa-codex-auth-${++turnCount}`;
       const message = {
         type: "agentMessage",
-        id: "message-qa-codex-auth",
+        id: `message-${turnId}`,
         text: "QA_CODEX_AUTH_PRODUCT_PROOF_OK",
       };
       sendResult({

@@ -1,8 +1,8 @@
-// Resolves config and metadata before publishing prepared plugin runtime load facts.
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../config/io.plugin-metadata.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureEnvironmentKey } from "../../shared/environment-key.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
@@ -13,9 +13,8 @@ import {
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
-import { createPluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
+import { pluginRuntimeLoaderLogger, type PluginRuntimeLoadContext } from "./load-context.js";
 
-/** Options accepted while resolving plugin runtime load context. */
 type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -26,45 +25,37 @@ type PluginRuntimeLoadContextOptions = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   preferBuiltPluginArtifacts?: boolean;
+  expectedSourceDigests?: PluginRuntimeLoadContext["expectedSourceDigests"];
 };
 
-/** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
+  const environmentKey = captureEnvironmentKey(options?.env);
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir = resolvePluginControlPlaneWorkspace({
     config: rawConfig,
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const resolveMetadataSnapshot = (params: {
-    config: OpenClawConfig;
-    index?: PluginMetadataSnapshot["index"];
-  }): PluginMetadataSnapshot => {
-    if (options?.workspaceDir === undefined) {
-      return projectPluginMetadataSnapshot(
-        resolveConfigWidePluginMetadataSnapshot({ config: params.config, env }),
-        options?.onlyPluginIds,
-      );
-    }
-    const snapshot = resolvePluginMetadataSnapshot({
-      config: params.config,
-      env,
-      workspaceDir: rawWorkspaceDir,
-      allowWorkspaceScopedCurrent: true,
-      ...(params.index ? { index: params.index } : {}),
-      ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
-    });
-    return snapshot;
-  };
-  const initialMetadataSnapshot =
+  const metadataSnapshot =
     options?.metadataSnapshot ??
-    (options?.manifestRegistry === undefined
-      ? resolveMetadataSnapshot({ config: rawConfig })
-      : undefined);
-  const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
+    (options?.manifestRegistry !== undefined
+      ? undefined
+      : options?.workspaceDir === undefined
+        ? projectPluginMetadataSnapshot(
+            resolveConfigWidePluginMetadataSnapshot({ config: rawConfig, env }),
+            options?.onlyPluginIds,
+          )
+        : resolvePluginMetadataSnapshot({
+            config: rawConfig,
+            env,
+            workspaceDir: rawWorkspaceDir,
+            allowWorkspaceScopedCurrent: true,
+            ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+          }));
+  const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -73,7 +64,7 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     env,
     manifestRegistry,
-    discovery: initialMetadataSnapshot?.discovery,
+    discovery: metadataSnapshot?.discovery,
   });
   const config = autoEnabled.config;
   const workspaceDir = resolvePluginControlPlaneWorkspace({
@@ -81,8 +72,6 @@ export function resolvePluginRuntimeLoadContext(
     env,
     workspaceDir: options?.workspaceDir,
   }).workspaceDir;
-  const metadataSnapshot = initialMetadataSnapshot;
-  const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
@@ -93,10 +82,12 @@ export function resolvePluginRuntimeLoadContext(
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env,
-    logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
-    ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
+    environmentKey,
+    logger: options?.logger ?? pluginRuntimeLoaderLogger,
+    ...(manifestRegistry ? { manifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
-    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts === true,
+    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts,
+    expectedSourceDigests: options?.expectedSourceDigests,
   };
 }

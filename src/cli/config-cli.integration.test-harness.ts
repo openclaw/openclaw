@@ -4,27 +4,28 @@ import { Command } from "commander";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { registerConfigCli } from "./config-cli.js";
 
 // Config mutation owns these assertions; plugin discovery suites own registry breadth.
-// Keep the real schemas this suite exercises, but build their metadata only once.
+// Keep the real schemas this suite exercises and their owner-scoped metadata cache.
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
-  let snapshot: ReturnType<typeof actual.loadPluginMetadataSnapshot> | undefined;
+  const resolveSnapshot = (params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0]) => {
+    return actual.loadPluginMetadataSnapshot({
+      ...params,
+      pluginIds: ["codex", "discord", "openclaw-mem0"],
+      pluginIdScope: undefined,
+    });
+  };
   return {
     ...actual,
-    resolvePluginMetadataSnapshot: (
-      params: Parameters<typeof actual.resolvePluginMetadataSnapshot>[0],
-    ) => {
-      snapshot ??= actual.loadPluginMetadataSnapshot({
-        ...params,
-        pluginIds: ["codex", "discord", "openclaw-mem0"],
-        pluginIdScope: undefined,
-      });
-      return snapshot;
-    },
+    resolvePluginMetadataSnapshot: resolveSnapshot,
+    resolvePluginMetadataSnapshotAsync: async (
+      params: Parameters<typeof actual.resolvePluginMetadataSnapshotAsync>[0],
+    ) => resolveSnapshot(params),
   };
 });
 
@@ -58,6 +59,9 @@ export function useConfigCliIntegrationHarness() {
     vi.spyOn(defaultRuntime, "log").mockImplementation((...values: unknown[]) => {
       registeredRuntimeLogs.push(values.map(String).join(" "));
     });
+    vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value: string) => {
+      registeredRuntimeLogs.push(value);
+    });
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
       registeredRuntimeLogs.push(JSON.stringify(value, null, space));
     });
@@ -80,6 +84,9 @@ export function useConfigCliIntegrationHarness() {
   ): Promise<void> {
     const tempDir = tempDirs.make(prefix);
     const configPath = path.join(tempDir, "openclaw.json");
+    const tempRoot = vi
+      .spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir")
+      .mockReturnValue(tempDirs.make(`${prefix}coordinator-`));
     const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
     try {
       fs.writeFileSync(configPath, raw, "utf8");
@@ -89,6 +96,7 @@ export function useConfigCliIntegrationHarness() {
       clearRuntimeConfigSnapshot();
       await run({ configPath, tempDir });
     } finally {
+      tempRoot.mockRestore();
       envSnapshot.restore();
       clearConfigCache();
       clearRuntimeConfigSnapshot();

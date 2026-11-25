@@ -1,64 +1,19 @@
-/** Type contracts for plugin-contributed embedding providers. */
+/** Contracts for plugin-contributed embedding provider creation and registration. */
+import type { AcquireConfiguredProviderLocalService } from "../agents/provider-local-service-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretInput } from "../config/types.secrets.js";
-
-/** Input accepted by embedding providers, including multimodal inline-data parts. */
-export type EmbeddingInput =
-  | string
-  | {
-      text: string;
-      parts?: Array<
-        { type: "text"; text: string } | { type: "inline-data"; mimeType: string; data: string }
-      >;
-    };
-
-/** Per-call options passed to embedding provider calls. */
-export type EmbeddingProviderCallOptions = {
-  signal?: AbortSignal;
-  inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
-};
-
-/** Runtime metadata returned with a created embedding provider. */
-export type EmbeddingProviderRuntime = {
-  id: string;
-  cacheKeyData?: Record<string, unknown>;
-  /** Prior persisted model/cache identities that are equivalent to the current identity. */
-  indexIdentityAliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-  inlineQueryTimeoutMs?: number;
-  inlineBatchTimeoutMs?: number;
-};
-
-/** Provider-owned canonical identity and exact aliases for persisted indexes. */
-export type EmbeddingProviderIndexIdentity = {
-  model: string;
-  cacheKeyData: Record<string, unknown>;
-  aliases?: Array<{
-    model: string;
-    cacheKeyData: Record<string, unknown>;
-  }>;
-};
-
-/** Created embedding provider instance used by memory/search callers. */
-export type EmbeddingProvider = {
-  id: string;
-  model: string;
-  dimensions?: number;
-  maxInputTokens?: number;
-  embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
-  embedBatch: (
-    inputs: EmbeddingInput[],
-    options?: EmbeddingProviderCallOptions,
-  ) => Promise<number[][]>;
-  close?: () => Promise<void> | void;
-};
+import type {
+  EmbeddingProvider,
+  EmbeddingProviderIndexIdentity,
+  EmbeddingProviderRuntime,
+} from "./embedding-provider-runtime-types.js";
 
 /** Options passed to embedding provider adapters when creating providers. */
 export type EmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  /** Host-injected acquisition of the configured provider's local service. */
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   provider?: string;
   remote?: {
     baseUrl?: string;
@@ -86,6 +41,8 @@ export type EmbeddingProviderCreateResult = {
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
+  /** Alternate lookup ids; creation and index identity retain the canonical id. */
+  aliases?: readonly string[];
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;

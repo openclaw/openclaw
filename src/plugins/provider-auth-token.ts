@@ -1,4 +1,3 @@
-// Resolves provider auth tokens from plugin-owned auth configuration.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
@@ -8,9 +7,6 @@ const DEFAULT_TOKEN_PROFILE_NAME = "default";
 
 function normalizeTokenProfileName(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return DEFAULT_TOKEN_PROFILE_NAME;
-  }
   const slug = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")

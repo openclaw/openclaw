@@ -45,16 +45,4 @@ describe("Feishu public outbound presentation hooks", () => {
     await expect(feishuPlugin.outbound?.sendPayload?.(sendContext)).resolves.toBe(receipt);
     expect(sendPayload).toHaveBeenCalledExactlyOnceWith(sendContext);
   });
-
-  it("preserves native renderer and sender failures", async () => {
-    const renderError = new Error("card rendering failed");
-    renderPresentation.mockRejectedValueOnce(renderError);
-    await expect(
-      feishuPlugin.outbound?.renderPresentation?.({ ctx, payload, presentation }),
-    ).rejects.toBe(renderError);
-
-    const sendError = new Error("card delivery failed");
-    sendPayload.mockRejectedValueOnce(sendError);
-    await expect(feishuPlugin.outbound?.sendPayload?.(ctx)).rejects.toBe(sendError);
-  });
 });

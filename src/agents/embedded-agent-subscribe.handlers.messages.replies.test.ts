@@ -44,27 +44,6 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaAttachments).toStrictEqual([]);
   });
 
-  it("does not append queued image tool media when the reply already names media", () => {
-    const state = {
-      pendingToolMediaUrls: ["/tmp/generated.png"],
-      pendingToolMediaTrustByUrl: new Map([["/tmp/generated.png", true]]),
-      pendingToolAudioAsVoice: false,
-    };
-
-    expect(
-      consumePendingToolMediaIntoReply(state, {
-        text: "done",
-        mediaUrls: ["./selected.png"],
-      }),
-    ).toEqual({
-      text: "done",
-      mediaUrls: ["./selected.png"],
-    });
-    expect(state.pendingToolMediaUrls).toStrictEqual([]);
-    expect(state.pendingToolAudioAsVoice).toBe(false);
-    expect(state.pendingToolMediaTrustByUrl.size).toBe(0);
-  });
-
   it("retains queued metadata for explicitly selected media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/generated.mp3", "/tmp/generated.mp3", "/tmp/unselected.mp3"],

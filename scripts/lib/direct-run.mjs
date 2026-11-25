@@ -14,7 +14,7 @@ export function isDirectRunPath(directPath, modulePath, platform = process.platf
   if (!directPath || !modulePath) {
     return false;
   }
-  const pathImpl = platform === "win32" ? path.win32 : path;
+  const pathImpl = platform === "win32" ? path.win32 : path.posix;
   /** @type {(value: string) => string} */
   const normalize =
     platform === "win32"
@@ -33,7 +33,7 @@ export function isDirectRunPath(directPath, modulePath, platform = process.platf
 export function isDirectRunUrl(directPath, moduleUrl, platform = process.platform) {
   return isDirectRunPath(
     directPath,
-    fileURLToPath(moduleUrl, platform === "win32" ? { windows: true } : undefined),
+    fileURLToPath(moduleUrl, { windows: platform === "win32" }),
     platform,
   );
 }

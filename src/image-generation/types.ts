@@ -1,21 +1,9 @@
-/** Shared image-generation request, provider, capability, and result contracts. */
 import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-
-/** Non-empty binary image asset returned by an image-generation provider. */
-export type GeneratedImageAsset = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  revisedPrompt?: string;
-  metadata?: Record<string, unknown>;
-};
+import type { GeneratedImageAsset } from "./asset-types.js";
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
-export type ImageGenerationQuality = "low" | "medium" | "high" | "auto";
+export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
@@ -23,11 +11,9 @@ export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
-export type ImageGenerationOpenAIModeration = "low" | "auto";
-
 export type ImageGenerationOpenAIOptions = {
   background?: ImageGenerationOpenAIBackground;
-  moderation?: ImageGenerationOpenAIModeration;
+  moderation?: "low" | "auto";
   outputCompression?: number;
   user?: string;
 };
@@ -36,50 +22,9 @@ export type ImageGenerationProviderOptions = Record<string, unknown> & {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-type ImageGenerationIgnoredOverrideKey =
-  | "size"
-  | "aspectRatio"
-  | "resolution"
-  | "quality"
-  | "outputFormat"
-  | "background";
-
 export type ImageGenerationIgnoredOverride = {
-  key: ImageGenerationIgnoredOverrideKey;
+  key: "size" | "aspectRatio" | "resolution" | "quality" | "outputFormat" | "background";
   value: string;
-};
-
-export type ImageGenerationSourceImage = {
-  buffer: Buffer;
-  mimeType: string;
-  fileName?: string;
-  metadata?: Record<string, unknown>;
-};
-
-export type ImageGenerationProviderConfiguredContext = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-};
-
-/** Runtime request passed to an image-generation provider implementation. */
-export type ImageGenerationRequest = {
-  provider: string;
-  model: string;
-  prompt: string;
-  cfg: OpenClawConfig;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  timeoutMs?: number;
-  count?: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  quality?: ImageGenerationQuality;
-  outputFormat?: ImageGenerationOutputFormat;
-  background?: ImageGenerationBackground;
-  inputImages?: ImageGenerationSourceImage[];
-  providerOptions?: ImageGenerationProviderOptions;
-  ssrfPolicy?: SsrFPolicy;
 };
 
 export type ImageGenerationResult = {
@@ -95,28 +40,6 @@ type ImageGenerationModeCapabilities = {
   supportsResolution?: boolean;
 };
 
-type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
-  enabled: boolean;
-  maxInputImages?: number;
-  maxInputImagesByModel?: Readonly<Record<string, number>>;
-  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
-};
-
-type ImageGenerationGeometryCapabilities = {
-  sizes?: string[];
-  sizesByModel?: Record<string, string[]>;
-  aspectRatios?: string[];
-  aspectRatiosByModel?: Record<string, string[]>;
-  resolutions?: ImageGenerationResolution[];
-  resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
-};
-
-type ImageGenerationOutputCapabilities = {
-  qualities?: ImageGenerationQuality[];
-  formats?: ImageGenerationOutputFormat[];
-  backgrounds?: ImageGenerationBackground[];
-};
-
 export type ImageGenerationNormalization = {
   size?: MediaNormalizationEntry<string>;
   aspectRatio?: MediaNormalizationEntry<string>;
@@ -125,20 +48,26 @@ export type ImageGenerationNormalization = {
 
 export type ImageGenerationProviderCapabilities = {
   generate: ImageGenerationModeCapabilities;
-  edit: ImageGenerationEditCapabilities;
-  geometry?: ImageGenerationGeometryCapabilities;
-  output?: ImageGenerationOutputCapabilities;
-};
-
-export type ImageGenerationProvider = {
-  id: string;
-  aliases?: string[];
-  label?: string;
-  defaultModel?: string;
-  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
-  defaultTimeoutMs?: number;
-  models?: string[];
-  capabilities: ImageGenerationProviderCapabilities;
-  isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
-  generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
+  edit: ImageGenerationModeCapabilities & {
+    enabled: boolean;
+    maxInputImages?: number;
+    maxInputImagesByModel?: Readonly<Record<string, number>>;
+    maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
+  };
+  geometry?: {
+    sizes?: string[];
+    sizesByModel?: Record<string, string[]>;
+    aspectRatios?: string[];
+    aspectRatiosByModel?: Record<string, string[]>;
+    resolutions?: ImageGenerationResolution[];
+    resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
+  };
+  output?: {
+    qualities?: ImageGenerationQuality[];
+    qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
+    formats?: ImageGenerationOutputFormat[];
+    formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
+    backgrounds?: ImageGenerationBackground[];
+    backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
+  };
 };

@@ -4,12 +4,11 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.node.asObjectOrNull
-import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -246,18 +245,9 @@ internal data class CronEditorDraftState(
 
   fun observeJob(job: GatewayCronJobDetail): CronEditorDraftState {
     val incoming = job.toCronJobEdit()
-    if (incoming == edit) {
-      return CronEditorDraftState(
-        baseline = incoming,
-        edit = incoming,
-      )
-    }
-    if (incoming == baseline) {
-      return copy(hasIncomingConflict = false)
-    }
-    val canAdopt = !isDirty || saveSucceeded
-    if (!canAdopt) {
-      return copy(hasIncomingConflict = true)
+    if (incoming != edit) {
+      if (incoming == baseline) return copy(hasIncomingConflict = false)
+      if (isDirty && !saveSucceeded) return copy(hasIncomingConflict = true)
     }
     return CronEditorDraftState(
       baseline = incoming,
@@ -286,41 +276,25 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   // Preserve pending only when the restored runtime still owns this Save.
   val retainedSaveState =
     when (actionState) {
-      is GatewayCronActionState.Running -> {
-        actionState.id == jobId && actionState.action == GatewayCronAction.Save
-      }
-
-      is GatewayCronActionState.Notice -> {
-        actionState.id == jobId
-      }
-
-      GatewayCronActionState.Idle -> {
-        false
-      }
+      is GatewayCronActionState.Running -> actionState.id == jobId && actionState.action == GatewayCronAction.Save
+      is GatewayCronActionState.Notice -> actionState.id == jobId
+      GatewayCronActionState.Idle -> false
     }
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
 
-internal enum class GatewayCronRunSkipReason {
-  NotDue,
-  AlreadyRunning,
-  RestartRecoveryPending,
-  InvalidSpec,
-  Stopped,
+internal enum class GatewayCronRunSkipReason(
+  val messageText: NativeText,
+) {
+  NotDue(nativeText("Automation is not due yet.")),
+  AlreadyRunning(nativeText("Automation is already running.")),
+  RestartRecoveryPending(nativeText("Gateway restart recovery is still in progress.")),
+  InvalidSpec(nativeText("Automation has an invalid configuration.")),
+  Stopped(nativeText("Cron scheduler is stopped.")),
   ;
 
   val message: String
     get() = messageText.resolveNativeText()
-
-  val messageText: NativeText
-    get() =
-      when (this) {
-        NotDue -> nativeText("Automation is not due yet.")
-        AlreadyRunning -> nativeText("Automation is already running.")
-        RestartRecoveryPending -> nativeText("Gateway restart recovery is still in progress.")
-        InvalidSpec -> nativeText("Automation has an invalid configuration.")
-        Stopped -> nativeText("Cron scheduler is stopped.")
-      }
 }
 
 internal sealed interface GatewayCronRunOutcome {
@@ -483,15 +457,15 @@ internal fun parseGatewayCronRunOutcome(root: JsonObject?): GatewayCronRunOutcom
   val ok = value.optionalBoolean("ok") ?: return null
   if (!ok) return GatewayCronRunOutcome.Rejected
   if (value.optionalBoolean("ran") == true) {
-    return GatewayCronRunOutcome.Started(runId = value.string("runId"))
+    return GatewayCronRunOutcome.Started(runId = value.nonBlankString("runId"))
   }
   if (value.optionalBoolean("enqueued") == true) {
-    val runId = value.string("runId") ?: return null
+    val runId = value.nonBlankString("runId") ?: return null
     return GatewayCronRunOutcome.Started(runId = runId)
   }
   if (value.optionalBoolean("ran") != false) return null
   val reason =
-    when (value.string("reason")) {
+    when (value.nonBlankString("reason")) {
       "not-due" -> GatewayCronRunSkipReason.NotDue
       "already-running" -> GatewayCronRunSkipReason.AlreadyRunning
       "restart-recovery-pending" -> GatewayCronRunSkipReason.RestartRecoveryPending
@@ -504,21 +478,34 @@ internal fun parseGatewayCronRunOutcome(root: JsonObject?): GatewayCronRunOutcom
 
 internal fun parseGatewayCronRunHistory(entries: JsonArray?): List<GatewayCronRunSummary> =
   entries
-    ?.mapNotNull { item ->
-      val value = item.asObjectOrNull() ?: return@mapNotNull null
-      val ts = value.long("ts") ?: return@mapNotNull null
+    .mapObjects { value ->
+      val ts = value.long("ts") ?: return@mapObjects null
       GatewayCronRunSummary(
         ts = ts,
-        runId = value.string("runId"),
-        status = value.string("status"),
-        summary = value.string("summary"),
-        error = value.string("error"),
+        runId = value.nonBlankString("runId"),
+        status = value.nonBlankString("status"),
+        summary = value.nonBlankString("summary"),
+        error = value.nonBlankString("error"),
         durationMs = value.long("durationMs"),
-        deliveryStatus = value.string("deliveryStatus"),
-        sessionKey = value.string("sessionKey"),
-        model = value.string("model"),
+        deliveryStatus = value.nonBlankString("deliveryStatus"),
+        sessionKey = value.nonBlankString("sessionKey"),
+        model = value.nonBlankString("model"),
       )
-    }.orEmpty()
+    }
+
+private inline fun cronPatchIfChanged(
+  kind: String,
+  changed: Boolean,
+  build: JsonObjectBuilder.() -> Unit,
+): JsonObject? =
+  if (changed) {
+    buildJsonObject {
+      put("kind", JsonPrimitive(kind))
+      build()
+    }
+  } else {
+    null
+  }
 
 private fun buildCronSchedulePatch(
   original: GatewayCronJobDetail,
@@ -529,13 +516,8 @@ private fun buildCronSchedulePatch(
       require(original.scheduleKind == "at") { "Changing schedule type is not supported here." }
       val at = edit.at.trim()
       require(at.isNotEmpty()) { "One-time automations need an ISO time." }
-      if (at == original.scheduleAt) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("at"))
-          put("at", JsonPrimitive(at))
-        }
+      cronPatchIfChanged("at", at != original.scheduleAt) {
+        put("at", JsonPrimitive(at))
       }
     }
 
@@ -544,14 +526,9 @@ private fun buildCronSchedulePatch(
       val everyMs = edit.everyMs.trim().toLongOrNull()
       require(everyMs != null && everyMs > 0L) { "Interval must be a positive number of milliseconds." }
       val anchorMs = parseOptionalNonNegativeLong(edit.anchorMs, "Anchor")
-      if (everyMs == original.scheduleEveryMs && anchorMs == original.scheduleAnchorMs) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("every"))
-          put("everyMs", JsonPrimitive(everyMs))
-          anchorMs?.let { put("anchorMs", JsonPrimitive(it)) }
-        }
+      cronPatchIfChanged("every", everyMs != original.scheduleEveryMs || anchorMs != original.scheduleAnchorMs) {
+        put("everyMs", JsonPrimitive(everyMs))
+        anchorMs?.let { put("anchorMs", JsonPrimitive(it)) }
       }
     }
 
@@ -563,19 +540,15 @@ private fun buildCronSchedulePatch(
       val requestedStaggerMs = parseOptionalNonNegativeLong(edit.staggerMs, "Stagger")
       val staggerMs =
         requestedStaggerMs ?: if (original.scheduleStaggerMs != null) 0L else null
-      if (
-        expression == original.scheduleCronExpr &&
-        timezone == original.scheduleTimezone &&
-        staggerMs == original.scheduleStaggerMs
+      cronPatchIfChanged(
+        "cron",
+        expression != original.scheduleCronExpr ||
+          timezone != original.scheduleTimezone ||
+          staggerMs != original.scheduleStaggerMs,
       ) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("cron"))
-          put("expr", JsonPrimitive(expression))
-          timezone?.let { put("tz", JsonPrimitive(it)) }
-          staggerMs?.let { put("staggerMs", JsonPrimitive(it)) }
-        }
+        put("expr", JsonPrimitive(expression))
+        timezone?.let { put("tz", JsonPrimitive(it)) }
+        staggerMs?.let { put("staggerMs", JsonPrimitive(it)) }
       }
     }
 
@@ -584,14 +557,9 @@ private fun buildCronSchedulePatch(
       val command = edit.command.trim()
       require(command.isNotEmpty()) { "On-exit automations need a command." }
       val cwd = edit.cwd.trim().ifEmpty { null }
-      if (command == original.scheduleCommand && cwd == original.scheduleCwd) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("on-exit"))
-          put("command", JsonPrimitive(command))
-          cwd?.let { put("cwd", JsonPrimitive(it)) }
-        }
+      cronPatchIfChanged("on-exit", command != original.scheduleCommand || cwd != original.scheduleCwd) {
+        put("command", JsonPrimitive(command))
+        cwd?.let { put("cwd", JsonPrimitive(it)) }
       }
     }
   }
@@ -605,13 +573,8 @@ private fun buildCronPayloadPatch(
       require(original.payloadKind == "systemEvent") { "Changing payload type is not supported here." }
       val text = edit.text.trim()
       require(text.isNotEmpty()) { "System event text is required." }
-      if (text == original.payloadText) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("systemEvent"))
-          put("text", JsonPrimitive(text))
-        }
+      cronPatchIfChanged("systemEvent", text != original.payloadText) {
+        put("text", JsonPrimitive(text))
       }
     }
 
@@ -621,20 +584,16 @@ private fun buildCronPayloadPatch(
       require(message.isNotEmpty()) { "Agent message is required." }
       val model = edit.model.trim().ifEmpty { null }
       val thinking = edit.thinking.trim().ifEmpty { null }
-      if (
-        message == original.payloadText &&
-        model == original.payloadModel &&
-        thinking == original.payloadThinking
+      cronPatchIfChanged(
+        "agentTurn",
+        message != original.payloadText ||
+          model != original.payloadModel ||
+          thinking != original.payloadThinking,
       ) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("agentTurn"))
-          if (message != original.payloadText) put("message", JsonPrimitive(message))
-          if (model != original.payloadModel) put("model", model?.let(::JsonPrimitive) ?: JsonNull)
-          if (thinking != original.payloadThinking) {
-            put("thinking", thinking?.let(::JsonPrimitive) ?: JsonNull)
-          }
+        if (message != original.payloadText) put("message", JsonPrimitive(message))
+        if (model != original.payloadModel) put("model", model?.let(::JsonPrimitive) ?: JsonNull)
+        if (thinking != original.payloadThinking) {
+          put("thinking", thinking?.let(::JsonPrimitive) ?: JsonNull)
         }
       }
     }
@@ -646,16 +605,11 @@ private fun buildCronPayloadPatch(
       if (cwd == null && original.payloadCommandCwd != null) {
         error("The gateway does not support clearing a command working directory.")
       }
-      if (argv == original.payloadCommandArgv && cwd == original.payloadCommandCwd) {
-        null
-      } else {
-        buildJsonObject {
-          put("kind", JsonPrimitive("command"))
-          if (argv != original.payloadCommandArgv) {
-            put("argv", JsonArray(argv.map(::JsonPrimitive)))
-          }
-          if (cwd != original.payloadCommandCwd) put("cwd", JsonPrimitive(requireNotNull(cwd)))
+      cronPatchIfChanged("command", argv != original.payloadCommandArgv || cwd != original.payloadCommandCwd) {
+        if (argv != original.payloadCommandArgv) {
+          put("argv", JsonArray(argv.map(::JsonPrimitive)))
         }
+        if (cwd != original.payloadCommandCwd) put("cwd", JsonPrimitive(requireNotNull(cwd)))
       }
     }
 
@@ -691,17 +645,5 @@ private fun parseOptionalNonNegativeLong(
   require(parsed != null && parsed >= 0L) { "$label must be a non-negative number of milliseconds." }
   return parsed
 }
-
-private fun JsonObject.string(key: String): String? =
-  this[key]
-    .asStringOrNull()
-    ?.trim()
-    ?.takeIf { it.isNotEmpty() }
-
-private fun JsonObject.long(key: String): Long? =
-  (this[key] as? JsonPrimitive)
-    ?.content
-    ?.trim()
-    ?.toLongOrNull()
 
 private fun JsonObject.optionalBoolean(key: String): Boolean? = (this[key] as? JsonPrimitive)?.booleanOrNull

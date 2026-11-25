@@ -1,7 +1,5 @@
-/**
- * Cerebras provider plugin entrypoint.
- */
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyCerebrasConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { CEREBRAS_MODEL_DISCOVERY } from "./provider-catalog.js";
@@ -26,8 +24,17 @@ export default defineSingleProviderPluginEntry({
       noteTitle: "Cerebras",
     },
     catalog: {
+      discoveryMode: "strict",
       allowExplicitBaseUrl: true,
       liveModelDiscovery: CEREBRAS_MODEL_DISCOVERY,
     },
+    normalizeResolvedModel: ({ model }) =>
+      model.api === "openai-completions" &&
+      model.baseUrl.trim().replace(/\/+$/u, "") === "https://api.cerebras.ai/v1"
+        ? applyModelCompatPatch(model, {
+            supportsPromptCacheKey: model.compat?.supportsPromptCacheKey ?? true,
+            supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? false,
+          })
+        : model,
   },
 });

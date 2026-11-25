@@ -1,0 +1,385 @@
+import { randomUUID } from "node:crypto";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { captureSessionEntryCurrentRead } from "../../config/sessions/session-entry-current-runtime.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import {
+  placementTurnOwner,
+  type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
+} from "./placement-target.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import { captureRepositoryDiskCheckpoint } from "./repository-workspace-snapshot.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
+import type { WorkerEnvironmentService } from "./service.js";
+import { forkSessionRepositoryWorkspace } from "./session-repository-checkpoints.js";
+import {
+  createWorkerWorkspaceReconcileRequest,
+  type WorkerSessionWorkspace,
+} from "./session-workspace.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import {
+  createWorkspaceResultJournal,
+  settleStagedWorkspaceResult,
+} from "./workspace-result-settlement.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
+
+export function createRepositoryWorkspaceMutationService(options: {
+  placements: WorkerSessionPlacementStore;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
+  resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
+}) {
+  const { placements, environments } = options;
+  return {
+    async fork(
+      params: WorkerSessionPlacementIdentity & {
+        repository: SessionRepositoryWorkspaceRecord;
+        target: { agentId: string; sessionKey: string };
+        branchPrefix?: string;
+        runSetupScript: boolean;
+        assertCurrent: () => void;
+      },
+    ): Promise<SessionRepositoryWorkspaceRecord> {
+      const authority = params.repository.diskAuthority;
+      if (!authority) {
+        throw new Error("Repository child export requires its original disk");
+      }
+      const store = getSessionRepositoryWorkspaceStore();
+      const source = captureOpenClawStateWorkerContext({ path: store.path });
+      // Creation holds the parent's lifecycle. Reuse workspace exclusion without claiming
+      // another turn: a native parent may be spawning from its still-active turn.
+      return await options.workspaceOperations.run(authority.environmentId, async () => {
+        // Retain current parent predicates for Git/HTTP effects, not just SQLite writes.
+        const currentSource = await prepareSessionSourceAuthority(params.assertCurrent);
+        let child: SessionRepositoryWorkspaceRecord | undefined;
+        try {
+          return await captureRepositoryDiskCheckpoint(
+            {
+              identity: params,
+              repository: params.repository,
+              checkpointRef: workerWorkspaceResultRef("child-export-" + randomUUID()),
+              purpose: "child-fork",
+              placements,
+              environments,
+              assertCurrent: currentSource.assertCurrent,
+            },
+            async (snapshot, verifyCurrent) => {
+              child = await forkSessionRepositoryWorkspace({
+                ...params.target,
+                store,
+                branchPrefix: params.branchPrefix,
+                runSetupScript: params.runSetupScript,
+                sourceWorkspaceId: params.repository.workspaceId,
+                diskExport: { checkpointRef: snapshot.checkpointRef, verifyCurrent },
+                assertCurrent: currentSource.assertCurrent,
+              });
+              return child;
+            },
+          );
+        } catch (error) {
+          // Capture also owns resuming the parent. A failed resume must not leak an
+          // unexposed child after the checkpoint copier already returned it.
+          if (child) {
+            await store.delete({
+              workspaceId: child.workspaceId,
+              assertCurrent: () => source.admission.assertCurrent(),
+            });
+          }
+          throw error;
+        } finally {
+          await currentSource.release?.();
+        }
+      });
+    },
+    async mutate<T>(
+      params: WorkerSessionPlacementIdentity & {
+        assertCurrent: () => void;
+        assertEntryCurrent?: (entry: SessionEntryCurrentFacts | undefined) => void;
+        mutate: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>;
+      },
+    ): Promise<T> {
+      const scope = {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        storePath: resolveSessionStorePathForScope(params),
+      };
+      const source = captureSessionEntryMetadataRead(scope, params.assertCurrent);
+      const assertCallerCurrent = () => {
+        source?.assertCurrent();
+        params.assertCurrent();
+      };
+      const placement = await placements.getAsync(params.sessionId);
+      assertCallerCurrent();
+      if (placement?.state !== "active") {
+        throw new Error("Repository workspace editing requires an active cloud placement");
+      }
+      return await options.workspaceOperations.run(placement.environmentId, async () => {
+        let facts: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
+        let active = true;
+        let unregister = () => {};
+        const release = () => {
+          active = false;
+          facts?.release();
+          unregister();
+        };
+        using retained = {
+          [Symbol.dispose]: release,
+          assertCurrent() {
+            if (!active) {
+              throw new Error("Repository workspace session source is unavailable");
+            }
+          },
+        };
+        assertCallerCurrent();
+        const workspace = await options.resolveWorkspace(params);
+        if (workspace.kind !== "repository") {
+          throw new Error("Session no longer owns a cloud repository workspace");
+        }
+        const environment = environments.get(placement.environmentId);
+        if (
+          !workspace.repository.diskAuthority &&
+          !isCurrentActiveWorkerEnvironment(placement, environment)
+        ) {
+          throw new Error("Repository workspace environment is no longer current");
+        }
+        const assertEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => {
+          params.assertEntryCurrent?.(entry);
+          if (
+            entry?.sessionId !== params.sessionId ||
+            entry.repositoryWorkspaceId !== workspace.repository.workspaceId ||
+            workspace.repository.agentId !== params.agentId ||
+            workspace.repository.sessionKey !== params.sessionKey
+          ) {
+            throw new Error("Repository workspace edit lost its exact session placement owner");
+          }
+        };
+        const currentEntry = await withSessionEntryReadOnlyInWorker(
+          scope,
+          assertCallerCurrent,
+          async (read, owner) => {
+            if (!read.ok) {
+              throw toErrorObject(read.error, "Repository workspace session read failed");
+            }
+            assertEntryCurrent(read.value);
+            if (owner.kind === "file") {
+              if (!facts) {
+                throw new Error("Repository workspace session source is unavailable");
+              }
+              facts.initialize({
+                entry: read.value && projectSessionSharingEntry(read.value),
+                membership: new Set(),
+              });
+            }
+            return captureSessionEntryCurrentRead(scope, owner);
+          },
+          (database, identity) => {
+            facts = retainPreparedSessionSharingFacts({
+              databaseIdentity: identity.key,
+              sessionKey: scope.sessionKey,
+              acquiring: true,
+            });
+            unregister = registerOpenClawAgentDatabaseAsyncResource({
+              ...database,
+              revoke: release,
+              close: async () => release(),
+            });
+          },
+        );
+        const assertPlacementCurrent = (
+          current: WorkerSessionPlacementRecord | undefined,
+          requireReady = true,
+        ) => {
+          const currentEnvironment = environments.get(placement.environmentId);
+          if (workspace.repository.diskAuthority) {
+            assertRepositoryWorkspaceDiskIdentity(
+              workspace.repository.diskAuthority,
+              currentEnvironment,
+            );
+          }
+          if (
+            current?.state !== "active" ||
+            current.agentId !== params.agentId ||
+            current.sessionKey !== params.sessionKey ||
+            current.generation !== placement.generation ||
+            current.environmentId !== placement.environmentId ||
+            current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+            current.remoteWorkspaceDir !== placement.remoteWorkspaceDir ||
+            !isExactAttachedEnvironment(currentEnvironment, current) ||
+            (requireReady &&
+              (workspace.repository.diskAuthority
+                ? // File commands use the tunnel's current-build admission, not an old turn's
+                  // launch hash. Retained refresh deliberately preserves the placement epoch.
+                  !isWorkerRetainedWindowOpen(currentEnvironment)
+                : !isCurrentActiveWorkerEnvironment(current, currentEnvironment))) ||
+            currentEnvironment?.leaseId !== environment?.leaseId
+          ) {
+            throw new Error("Repository workspace edit lost its exact session placement owner");
+          }
+        };
+        const assertWorkerCurrent = () => {
+          assertCallerCurrent();
+          currentEntry.assertSourceCurrent();
+          retained.assertCurrent();
+          assertEntryCurrent(
+            currentEntry.kind === "file" ? facts?.readCurrent()?.entry : currentEntry.readCurrent(),
+          );
+        };
+        const currentCheck: PlacementTurnClaimCurrentCheck = {
+          ...(currentEntry.kind === "file"
+            ? { sessionEntry: { source: currentEntry.source, assertCurrent: assertEntryCurrent } }
+            : {}),
+          assertPlacementCurrent: (current) => assertPlacementCurrent(current),
+        };
+        const assertOwner = (requireReady = true) => {
+          assertWorkerCurrent();
+          assertPlacementCurrent(placements.get(params.sessionId), requireReady);
+        };
+        // The session mutation and workspace queue are already held, but no result
+        // claim exists yet: runtime refresh must finish before that claim is minted.
+        assertOwner(false);
+        if (
+          workspace.repository.diskAuthority &&
+          !isWorkerRetainedWindowOpen(environments.get(placement.environmentId))
+        ) {
+          await environments.ensureRetainedRunning({
+            environmentId: placement.environmentId,
+            expectedOwnerEpoch: placement.activeOwnerEpoch,
+            assertCurrent: () => assertOwner(false),
+          });
+        }
+        assertOwner();
+        const claim = await placements.claimWorkspaceMutationResult(
+          {
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            claimId: `workspace-mutation-${randomUUID()}`,
+            owner: placementTurnOwner(placement),
+          },
+          assertWorkerCurrent,
+          currentCheck,
+        );
+        const assertCurrent = () => {
+          assertOwner();
+          if (!placements.validateWorkspaceResultClaim(claim)) {
+            throw new Error("Repository workspace edit lost its result custody");
+          }
+        };
+        try {
+          assertCurrent();
+          const result = await params.mutate(assertCurrent);
+          assertCurrent();
+          // The retained disk owns editor bytes; only explicit publication/export captures them.
+          if (!result.changed || workspace.repository.diskAuthority) {
+            await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
+            await placements.completeWorkspaceResultAndReleaseTurn(
+              claim,
+              assertWorkerCurrent,
+              currentCheck,
+            );
+            return result.value;
+          }
+          const tunnel = await environments.startTunnel({
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+          });
+          assertCurrent();
+          if (
+            tunnel.environmentId !== placement.environmentId ||
+            tunnel.ownerEpoch !== placement.activeOwnerEpoch
+          ) {
+            throw new Error("Repository workspace capture tunnel owner changed");
+          }
+          const quiescence = await tunnel.quiesceWorkspace(placement.remoteWorkspaceDir);
+          let resumed = false;
+          try {
+            assertCurrent();
+            const stagedResultRef = workerWorkspaceResultRef(claim.claimId);
+            const journal = createWorkspaceResultJournal({
+              placement,
+              placements,
+              turnClaim: claim,
+              assertCurrent: assertWorkerCurrent,
+              current: currentCheck,
+            });
+            const reconciliation = await tunnel.reconcileWorkspace(
+              createWorkerWorkspaceReconcileRequest({
+                workspace,
+                remoteWorkspaceDir: placement.remoteWorkspaceDir,
+                baseManifestRef: placement.workspaceBaseManifestRef,
+                journal: journal.adapter,
+                stagedResult: {
+                  ref: stagedResultRef,
+                  record: (ref, workspaceId) =>
+                    placements.recordStagedWorkspaceResult(
+                      claim,
+                      ref,
+                      workspaceId,
+                      assertWorkerCurrent,
+                      currentCheck,
+                    ),
+                },
+                assertCurrent,
+              }),
+            );
+            await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+            assertCurrent();
+            if (!journal.wasAccepted()) {
+              throw new Error("Repository workspace edit was not durably accepted");
+            }
+            await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
+            await settleStagedWorkspaceResult({
+              assertCurrent,
+              placements,
+              turnClaim: claim,
+              workspace,
+              stagedResultRef,
+              conflictRetained: false,
+              complete: () =>
+                placements.completeWorkspaceResultAndReleaseTurn(
+                  claim,
+                  assertWorkerCurrent,
+                  currentCheck,
+                ),
+              beforeComplete: async () => {
+                await quiescence.resume();
+                resumed = true;
+                assertCurrent();
+              },
+            });
+            return result.value;
+          } finally {
+            if (!resumed) {
+              await quiescence.resume();
+            }
+          }
+        } catch (error) {
+          // The remote write may have completed before transport or capture failed.
+          // Retain its custody so ordinary result recovery can capture it safely.
+          if (placements.validateWorkspaceResultClaim(claim)) {
+            await placements.handoffWorkspaceResultRecovery(claim);
+          }
+          throw error;
+        }
+      });
+    },
+  };
+}

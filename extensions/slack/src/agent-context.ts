@@ -1,4 +1,3 @@
-// Slack plugin module normalizes Agent View active-context entities.
 import {
   asOptionalRecord,
   normalizeOptionalString,

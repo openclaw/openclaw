@@ -1,0 +1,123 @@
+openclaw-chat-clawhub-card {
+  display: block;
+  container-type: inline-size;
+  width: 384px;
+  max-width: 100%;
+  margin-block: 12px 20px;
+}
+
+.card.chat-clawhub-card {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-height: 63px;
+  padding: 9px 12px;
+  border-radius: 15px;
+
+  @container (width < 384px) {
+    gap: var(--space-2);
+    padding-inline: 10px;
+  }
+}
+
+.chat-clawhub-card__listing {
+  display: flex;
+  align-items: center;
+  flex: 1 1 10rem;
+  gap: inherit;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: start;
+}
+
+.chat-clawhub-card__icon {
+  display: grid;
+  flex: 0 0 32px;
+  height: 32px;
+  padding: 6px;
+  border-radius: 9px;
+  background: var(--brand-logo-chip-bg);
+  place-items: center;
+
+  & img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: var(--radius-sm);
+  }
+
+  & > svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+.chat-clawhub-card__identity {
+  display: grid;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.chat-clawhub-card__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 15px;
+  line-height: 22px;
+
+  & .plugin-card-author {
+    font-size: var(--control-ui-text-sm);
+    font-weight: 400;
+  }
+}
+
+.chat-clawhub-card__status {
+  min-height: 18px;
+  font-size: 13px;
+  line-height: 18px;
+
+  & > span {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+}
+
+.chat-clawhub-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: end;
+  max-width: 100%;
+  margin-inline-start: auto;
+  gap: var(--space-2);
+
+  & .btn {
+    min-height: 34px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+  }
+}
+
+/* The Template sign-in handoff changes two labels without moving the card. */
+.template-creator__sign-in {
+  & .chat-clawhub-card__identity {
+    flex: 1;
+    min-width: 0;
+  }
+
+  & [data-approval-code] {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    user-select: all;
+  }
+}
+
+.chat-clawhub-card__details {
+  border-color: transparent;
+  background: none;
+}

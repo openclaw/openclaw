@@ -6,23 +6,21 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSwarmProgressTest {
-  private val json = Json { ignoreUnknownKeys = true }
-
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun disabledSwarmDoesNotFetchChildSessions() =
     runTest {
       val methods = mutableListOf<String>()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             methods += method
             when (method) {
@@ -46,9 +44,7 @@ class ChatControllerSwarmProgressTest {
       val target = "agent:main:wear-b"
       val requests = mutableListOf<Pair<String, String?>>()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, params ->
             requests += method to params
             when (method) {
@@ -125,9 +121,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       val target = "agent:main:wear-b"
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -172,9 +166,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       val target = "agent:main:wear-b"
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -212,9 +204,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       val target = "agent:main:wear-b"
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -250,9 +240,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       val target = "main"
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, params ->
             when (method) {
               "chat.metadata" -> {
@@ -288,9 +276,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       val methods = mutableListOf<String>()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             methods += method
             error("foreign session must fail before Gateway read")
@@ -310,9 +296,7 @@ class ChatControllerSwarmProgressTest {
       val target = "agent:main:wear-large"
       var sessionsListCalls = 0
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, params ->
             when (method) {
               "chat.metadata" -> {
@@ -352,9 +336,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       var sessionsListCalls = 0
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -385,9 +367,7 @@ class ChatControllerSwarmProgressTest {
     runTest {
       var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -430,9 +410,7 @@ class ChatControllerSwarmProgressTest {
         }
         """.trimIndent()
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
+        createChatController(
           requestGateway = { method, _ ->
             when (method) {
               "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
@@ -485,10 +463,8 @@ class ChatControllerSwarmProgressTest {
       val listGateways = mutableListOf<String>()
       var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> "{}" },
+        createChatController(
+          requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -501,7 +477,7 @@ class ChatControllerSwarmProgressTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           },
@@ -542,10 +518,8 @@ class ChatControllerSwarmProgressTest {
       val listGate = CompletableDeferred<Unit>()
       var currentScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
       val controller =
-        ChatController(
-          scope = this,
-          json = json,
-          requestGateway = { _, _ -> "{}" },
+        createChatController(
+          requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
               "chat.metadata" -> {
@@ -571,7 +545,7 @@ class ChatControllerSwarmProgressTest {
               }
 
               else -> {
-                "{}"
+                emptyChatGatewayResponse(method)
               }
             }
           },

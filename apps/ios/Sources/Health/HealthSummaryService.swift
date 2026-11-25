@@ -14,27 +14,42 @@ enum HealthAuthorization {
     }
 
     static var readTypes: Set<HKObjectType> {
-        var types: Set<HKObjectType> = [HKWorkoutType.workoutType()]
-        if let steps = HKObjectType.quantityType(forIdentifier: .stepCount) {
-            types.insert(steps)
-        }
-        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
-            types.insert(sleep)
-        }
-        if let restingHeartRate = HKObjectType.quantityType(forIdentifier: .restingHeartRate) {
-            types.insert(restingHeartRate)
-        }
-        return types
+        [
+            HKWorkoutType.workoutType(),
+            HKQuantityType(.stepCount),
+            HKCategoryType(.sleepAnalysis),
+            HKQuantityType(.restingHeartRate),
+        ]
     }
 
     @MainActor
-    static func enable() async throws {
+    static func enable(isCurrent: @MainActor () -> Bool = { true }) async throws {
         guard self.isAvailable else {
             throw NSError(domain: "Health", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Health data is unavailable on this device.",
             ])
         }
-        try await HKHealthStore().requestAuthorization(toShare: [], read: self.readTypes)
+        let store = HKHealthStore()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            // The async HealthKit overlay leaves the main actor before starting the OS request.
+            guard !Task.isCancelled, isCurrent() else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            store.requestAuthorization(toShare: [], read: self.readTypes) { [store] success, error in
+                defer { withExtendedLifetime(store) {} }
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: NSError(
+                        domain: HKErrorDomain,
+                        code: HKError.Code.unknownError.rawValue))
+                }
+            }
+        }
+        guard !Task.isCancelled, isCurrent() else { throw CancellationError() }
         // HealthKit intentionally does not reveal read denial. This flag records only
         // the user's explicit OpenClaw sharing choice, never inferred authorization.
         UserDefaults.standard.set(true, forKey: self.enabledKey)
@@ -50,11 +65,7 @@ protocol HealthSummaryServicing: Sendable {
 }
 
 actor HealthSummaryService: HealthSummaryServicing {
-    private let healthStore: HKHealthStore
-
-    init(healthStore: HKHealthStore = HKHealthStore()) {
-        self.healthStore = healthStore
-    }
+    private let healthStore = HKHealthStore()
 
     func summary(params: OpenClawHealthSummaryParams) async throws -> OpenClawHealthSummaryPayload {
         guard HealthAuthorization.isEnabled else {
@@ -120,8 +131,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func stepCount(in range: DateInterval) async throws -> Int? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .stepCount) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.stepCount), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .cumulativeSum).result(for: self.healthStore)
@@ -129,8 +139,7 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func restingHeartRate(in range: DateInterval) async throws -> Double? {
-        guard let type = HKObjectType.quantityType(forIdentifier: .restingHeartRate) else { return nil }
-        let predicate = Self.quantityPredicate(type: type, range: range)
+        let predicate = Self.quantityPredicate(type: HKQuantityType(.restingHeartRate), range: range)
         let statistics = try await HKStatisticsQueryDescriptor(
             predicate: predicate,
             options: .discreteAverage).result(for: self.healthStore)
@@ -139,13 +148,12 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     private func sleepDuration(in range: DateInterval) async throws -> TimeInterval? {
-        guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
         let predicate = HKQuery.predicateForSamples(
             withStart: range.start,
             end: range.end,
             options: [])
         let descriptor = HKSampleQueryDescriptor(
-            predicates: [.categorySample(type: type, predicate: predicate)],
+            predicates: [.categorySample(type: HKCategoryType(.sleepAnalysis), predicate: predicate)],
             sortDescriptors: [],
             limit: nil)
         let samples = try await descriptor.result(for: self.healthStore)

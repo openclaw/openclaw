@@ -1,6 +1,9 @@
-// `openclaw update status`: combines install metadata, configured channel, and remote update checks.
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
+import { readSessionSqliteMigrationWarnings } from "../../commands/doctor-session-sqlite-warnings.js";
+import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -8,38 +11,282 @@ import {
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
+import { applyImplicitAgentRosterDefaults } from "../../config/implicit-agent-roster.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { isDefaultInstallIdentity, resolveIsNixMode } from "../../config/paths.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../../config/validation-core.js";
+import {
+  auditGatewayServiceConfig,
+  type ServiceDefinitionDrift,
+} from "../../daemon/service-audit.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  formatDeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { readGatewayLastInstallationReplacementAsync } from "../../infra/gateway-boot-lifecycle.js";
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import {
+  checkUpdateStatus,
+  formatGitInstallLabel,
+  type UpdateCheckResult,
+} from "../../infra/update-check.js";
+import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
+import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { withArtifactPreservingStateSnapshot } from "../../state/openclaw-state-inspection-snapshot.js";
+import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
-import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { formatCliCommand } from "../command-format.js";
+import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { readUpdateRecoverySetStatus } from "./status-recovery.js";
+import { inspectUpdateReleaseStatus } from "./status-releases.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
+import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
 
-/** Print update status in JSON or table form for scripts and humans. */
-export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
+async function readChannelStatusIssues(
+  config: OpenClawConfig,
+  timeoutMs = 5_000,
+  signal?: AbortSignal,
+): Promise<ChannelStatusIssue[]> {
+  try {
+    const [{ callGateway }, { collectChannelStatusIssues }, { loadDeviceIdentityIfPresentAsync }] =
+      await Promise.all([
+        import("../../gateway/call.js"),
+        import("../../infra/channels-status-issues.js"),
+        import("../../infra/device-identity-async.js"),
+      ]);
+    const payload = await callGateway({
+      method: "channels.status",
+      params: { probe: false, timeoutMs },
+      timeoutMs,
+      signal,
+      config,
+      sharedStateMode: "read-only",
+      // The RPC's default async identity lookup uses a writable actor, even for existing-only reads.
+      deviceIdentity: await loadDeviceIdentityIfPresentAsync(),
+    });
+    return collectChannelStatusIssues(payload, []);
+  } catch (error) {
+    throw new Error(`Channel inspection unavailable: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
   }
+}
 
-  const [root, config] = await Promise.all([resolveUpdateRoot(), readSourceConfigBestEffort()]);
-  const configChannel = normalizeUpdateChannel(config.update?.channel);
+export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
+  const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
+  // --timeout bounds update checks; a short network budget must not discard local history.
+  const timeoutMs = resolveSafeTimeoutDelayMs(Math.max(30_000, checkTimeoutMs ?? 0));
+  const scope = new AsyncWorkScope();
+  const timer = setTimeout(
+    () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
+    timeoutMs,
+  );
+  try {
+    await withSqliteDatabaseAdmissionWait(
+      { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
+      () =>
+        scope.run(() =>
+          withArtifactPreservingStateSnapshot(scope.signal, () =>
+            inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
+          ),
+        ),
+    );
+  } finally {
+    clearTimeout(timer);
+    scope.beginClose();
+  }
+}
 
-  const update = await checkUpdateStatus({
-    root,
-    timeoutMs: timeoutMs ?? 3500,
-    fetchGit: true,
-    useDetachedDevUpstream: configChannel === "dev",
-    includeRegistry: true,
-    resolveRegistryChannel: ({ installKind, git }) =>
-      resolveStatusRegistryUpdateChannel({
-        configChannel,
-        installKind,
-        git,
+async function inspectUpdateStatus(
+  opts: UpdateStatusOptions,
+  signal: AbortSignal,
+  timeoutMs: number,
+  checkTimeoutMs: number | undefined,
+): Promise<void> {
+  const inspectionErrors: { section: string; message: string }[] = [];
+  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>;
+  let retainedRunStatus: RunStatus | undefined;
+  const readRunStatus = async (): Promise<RunStatus> => {
+    // Keep completed history if optional enrichment outlives either enclosing deadline race.
+    retainedRunStatus = await readUpdateRunStatusWithOwedSteps((status) => {
+      retainedRunStatus = status;
+    });
+    return retainedRunStatus;
+  };
+  const deadline = performance.now() + timeoutMs;
+  const remainingMs = () => Math.max(1, deadline - performance.now());
+  const inspect = async <T>(
+    section: string,
+    operation: () => T | Promise<T>,
+    fallback: T,
+    onError?: (message: string) => void,
+  ): Promise<T> => {
+    try {
+      signal.throwIfAborted();
+      return await racePromiseWithAbortSignal(
+        Promise.resolve().then(operation),
+        signal,
+        (aborted) => aborted.reason,
+      );
+    } catch (error) {
+      const message = sanitizeTerminalText(
+        redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
+      );
+      inspectionErrors.push({ section, message });
+      onError?.(message);
+      return fallback;
+    }
+  };
+
+  const [root, config, runtimeFindings] = await Promise.all([
+    inspect<string | null>("installation root", resolveUpdateRoot, null),
+    inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
+    inspect("Node runtime", collectNodeRuntimeFindings, []),
+  ]);
+  const migrationWarningErrors: string[] = [];
+  const databaseInspectionPromise = inspect(
+    "state database",
+    () =>
+      withUpdateDatabaseEngine(process.env, async () => ({
+        // Start every database reader in the selected scope, but retain each result independently
+        // so a stalled migration reader cannot discard completed history or recovery information.
+        status: Promise.all([
+          inspect<RunStatus>("update history", readRunStatus, {
+            runStatusError: "Update history inspection unavailable",
+          }),
+          inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
+            "recovery sets",
+            () => readUpdateRecoverySetStatus(),
+            { recoverySetsError: "Recovery set inspection unavailable" },
+          ),
+          config.gateway?.mode === "remote"
+            ? undefined
+            : inspect(
+                "previous Gateway shutdown",
+                readGatewayLastInstallationReplacementAsync,
+                undefined,
+              ),
+        ]),
+        warnings: Promise.all([
+          inspect(
+            "migration warnings",
+            () => readDeferredPluginMigrationsAsync(),
+            [],
+            (message) => {
+              migrationWarningErrors[0] = message;
+            },
+          ),
+          inspect(
+            "migration warnings",
+            () => readSessionSqliteMigrationWarnings(),
+            [],
+            (message) => {
+              migrationWarningErrors[1] = message;
+            },
+          ),
+        ]),
+      })).catch((error: unknown) => {
+        const message = sanitizeTerminalText(
+          redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
+        );
+        inspectionErrors.push({ section: "state database", message });
+        migrationWarningErrors[0] = message;
+        return {
+          status: Promise.all([
+            Promise.resolve({ runStatusError: message }),
+            inspect(
+              "recovery sets",
+              () =>
+                readUpdateRecoverySetStatus(async () => {
+                  throw new Error(message);
+                }),
+              { recoverySetsError: "Recovery set inspection unavailable" },
+            ),
+            Promise.resolve(undefined),
+          ]),
+          warnings: Promise.resolve([[], []] as const),
+        };
       }),
-  });
+    undefined,
+    (message) => {
+      migrationWarningErrors[0] = message;
+    },
+  );
+  const configChannel = normalizeUpdateChannel(config.update?.channel);
+  const gitTargetChannel =
+    opts.json && (configChannel === "stable" || configChannel === "beta")
+      ? await inspect(
+          "channel configuration",
+          () => readUpdateChannelConfig(false).then(({ storedChannel }) => storedChannel),
+          null,
+        )
+      : null;
+
+  const [update, channelIssues] = await Promise.all([
+    inspect<UpdateCheckResult>(
+      "installation",
+      () =>
+        checkUpdateStatus({
+          root,
+          timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
+          signal,
+          fetchGit: true,
+          useDetachedDevUpstream: configChannel === "dev",
+          includeRegistry: true,
+          resolveRegistryChannel: ({ installKind, git }) =>
+            resolveStatusRegistryUpdateChannel({
+              configChannel,
+              installKind,
+              git,
+            }),
+        }),
+      { root, installKind: "unknown", packageManager: "unknown" },
+    ),
+    inspect(
+      "channels",
+      () =>
+        readChannelStatusIssues(config, Math.min(checkTimeoutMs ?? 5_000, remainingMs()), signal),
+      [],
+    ),
+  ]);
+  const git = update.git;
+  const currentSha = git?.sha;
+  const preferredTarget =
+    update.installKind === "git" &&
+    git &&
+    currentSha &&
+    git.dirty === false &&
+    (gitTargetChannel === "stable" || gitTargetChannel === "beta")
+      ? await inspect(
+          "Git target",
+          () =>
+            import("../../infra/update-runner-git-target.js").then(
+              ({ readPreferredGitChannelTarget }) =>
+                readPreferredGitChannelTarget({
+                  root: git.root,
+                  sha: currentSha,
+                  channel: gitTargetChannel,
+                  timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
+                }),
+            ),
+          undefined,
+        )
+      : undefined;
 
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
@@ -51,10 +298,131 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const channelLabel = channelInfo.label;
 
   const updateAvailability = resolveUpdateAvailability(update);
+  let immutableCoverage;
+  let immutableCoverageLines: string[] = [];
+  if (update.immutable) {
+    try {
+      const coverage = await inspect(
+        "immutable coverage",
+        async () => {
+          const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
+            await import("../../infra/update-immutable-inspection.js");
+          const value = await inspectImmutableUpdateCoverage({ root: update.immutable!.root });
+          return { value, lines: formatImmutableUpdateCoverage(value) };
+        },
+        undefined,
+      );
+      if (!coverage) {
+        throw new Error("Immutable coverage inspection unavailable");
+      }
+      immutableCoverage = coverage.value;
+      immutableCoverageLines = coverage.lines;
+    } catch (error) {
+      immutableCoverageLines = [`Immutable coverage unavailable: ${formatErrorMessage(error)}`];
+    }
+  }
+
+  const databaseInspection = await databaseInspectionPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = databaseInspection
+    ? await databaseInspection.status
+    : ([
+        { runStatusError: "Update history inspection unavailable" },
+        { recoverySetsError: "Recovery set inspection unavailable" },
+        undefined,
+      ] as const);
+  const runStatus = retainedRunStatus ?? inspectedRunStatus;
+  const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
+  const updateInProgress =
+    !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
+
+  const safeMessage = (message: string) =>
+    sanitizeTerminalText(redactSensitiveText(message, { mode: "tools" }));
+  const printWarning = (message: string) => defaultRuntime.log(theme.warn(message));
+  const configValidation = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(config));
+  const configWarnings = configValidation.ok
+    ? []
+    : [
+        ...formatConfigIssueLines(configValidation.issues, "", { normalizeRoot: true }),
+        "Run openclaw doctor --fix to repair the configuration.",
+      ].map(safeMessage);
+  const lastGatewayInstallationReplacement = replacement
+    ? { ...replacement, reason: safeMessage(replacement.reason) }
+    : undefined;
+  let serviceDefinition: { drift: ServiceDefinitionDrift[]; warnings: string[] } | undefined;
+  if (
+    config.gateway?.mode !== "remote" &&
+    isDefaultInstallIdentity(process.env) &&
+    !resolveIsNixMode(process.env)
+  ) {
+    try {
+      const command = await inspect(
+        "service command",
+        () =>
+          resolveGatewayService().readCommand(process.env, {
+            requireEffective: true,
+            timeoutMs: remainingMs(),
+          }),
+        null,
+        (message) => {
+          serviceDefinition = {
+            drift: [],
+            warnings: [safeMessage(`Service definition inspection failed: ${message}`)],
+          };
+        },
+      );
+      if (command) {
+        const audit = await inspect(
+          "service definition",
+          () => auditGatewayServiceConfig({ env: process.env, command, timeoutMs: remainingMs() }),
+          undefined,
+        );
+        if (!audit) {
+          throw new Error("Service definition inspection unavailable");
+        }
+        serviceDefinition = {
+          drift: audit.definitionDrift ?? [],
+          warnings: [
+            ...(audit.definitionDrift ?? []).map((fact) => fact.message),
+            ...(audit.definitionDriftError ? [audit.definitionDriftError] : []),
+          ].map(safeMessage),
+        };
+      }
+    } catch (error) {
+      serviceDefinition = {
+        drift: [],
+        warnings: [
+          safeMessage(`Service definition inspection failed: ${formatErrorMessage(error)}`),
+        ],
+      };
+    }
+  }
+  const safeChannelIssues = channelIssues.map((issue) =>
+    Object.assign({}, issue, {
+      channel: safeMessage(issue.channel),
+      accountId: safeMessage(issue.accountId),
+      message: safeMessage(issue.message),
+      ...(issue.fix ? { fix: safeMessage(issue.fix) } : {}),
+    }),
+  );
+  const [pendingMigrations, sessionWarnings] = databaseInspection
+    ? await databaseInspection.warnings
+    : [[], []];
+  const migrationWarnings = [
+    ...pendingMigrations.map((pending) =>
+      formatDeferredPluginMigration(
+        pending,
+        updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
+      ),
+    ),
+    ...sessionWarnings,
+  ].map(safeMessage);
+  const migrationWarningsError = migrationWarningErrors.filter(Boolean).join("\n");
+  const { releaseStatus, packageActivation, packageActivationError, packageReleases, releaseRows } =
+    await inspectUpdateReleaseStatus({ root, config, update, inspect, remainingMs, safeMessage });
 
   if (opts.json) {
     defaultRuntime.writeJson({
-      update,
+      update: preferredTarget ? { ...update, git: { ...update.git, preferredTarget } } : update,
       channel: {
         value: channelInfo.channel,
         source: channelInfo.source,
@@ -62,32 +430,123 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(releaseStatus ? { releaseStatus } : {}),
+      ...(immutableCoverage ? { immutableCoverage } : {}),
+      ...(update.immutable && !immutableCoverage
+        ? { immutableCoverageError: immutableCoverageLines[0] }
+        : {}),
+      ...(runtimeFindings.length > 0 ? { runtimeFindings } : {}),
+      ...(serviceDefinition ? { serviceDefinition } : {}),
+      ...(lastGatewayInstallationReplacement ? { lastGatewayInstallationReplacement } : {}),
+      ...(safeChannelIssues.length > 0 ? { channelIssues: safeChannelIssues } : {}),
+      ...(migrationWarnings.length > 0 ? { migrationWarnings } : {}),
+      ...(migrationWarningsError ? { migrationWarningsError } : {}),
+      ...runStatus,
+      ...(packageActivation ? { packageActivation } : {}),
+      ...(packageReleases.length ? { packageReleases } : {}),
+      ...(packageActivationError ? { packageActivationError } : {}),
+      ...recoveryStatus,
+      ...(configWarnings.length > 0 ? { configWarnings } : {}),
+      ...(inspectionErrors.length > 0 ? { inspectionErrors } : {}),
     });
     return;
   }
 
+  const displayedRun = activeRun ?? ("lastRun" in runStatus ? runStatus.lastRun : undefined);
+  const currentRunHealth =
+    displayedRun?.status === "failed"
+      ? await inspect(
+          "Gateway health",
+          () => readUpdateRunReportHealth(displayedRun.verification, { timeoutMs: remainingMs() }),
+          undefined,
+        )
+      : undefined;
   const gitLabel = formatGitInstallLabel(update);
-  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+  const updateLine =
+    releaseStatus?.notice ??
+    (releaseStatus?.trial && ["pending", "trial", "restoring"].includes(releaseStatus.trial.phase)
+      ? `release ${releaseStatus.trial.version} · ${releaseStatus.trial.phase}`
+      : formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""));
   const tableWidth = getTerminalTableWidth();
   const installLabel =
-    update.installKind === "git"
-      ? `git (${update.root ?? "unknown"})`
-      : update.installKind === "package"
-        ? update.packageManager
-        : "unknown";
+    update.installKind === "host"
+      ? (update.installOwner?.displayName ?? "host-managed")
+      : update.installKind === "immutable"
+        ? `immutable (${update.immutable?.root ?? update.root ?? "unknown"})`
+        : update.installKind === "git"
+          ? `git (${update.root ?? "unknown"})`
+          : update.installKind === "package"
+            ? update.packageManager
+            : "unknown";
 
+  const immutable = update.immutable;
+  const activation = immutable?.activation;
+  const lastActivation = immutable?.lastActivation;
+  const verifiedGateway = lastActivation?.gateway;
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...releaseRows,
+    ...(immutable
+      ? [
+          {
+            Item: "Immutable activation",
+            Value: activation
+              ? `pending recovery · ${activation.phase} (${activation.operationId})`
+              : immutable.activationEnabled
+                ? "enabled"
+                : "preparation only",
+          },
+        ]
+      : []),
+    ...(activation?.failure ? [{ Item: "Immutable failure", Value: activation.failure }] : []),
+    ...(activation?.recoveryCommand
+      ? [{ Item: "Recovery command (external Node)", Value: activation.recoveryCommand }]
+      : []),
+    ...(lastActivation
+      ? [
+          {
+            Item: "Last immutable activation",
+            Value: `${lastActivation.outcome === "succeeded" ? "accepted" : "restored"} · ${lastActivation.selectedSha} · verified ${new Date(lastActivation.verifiedAtMs).toISOString()} (${lastActivation.operationId})`,
+          },
+        ]
+      : []),
+    ...(verifiedGateway
+      ? [
+          {
+            Item: "Last verified Gateway (historical)",
+            Value: `version ${verifiedGateway.version} · build ${verifiedGateway.buildId} · PID ${verifiedGateway.pid} · boot ${verifiedGateway.bootId}`,
+          },
+        ]
+      : []),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
-      Value: updateAvailability.available ? theme.warn(`available · ${updateLine}`) : updateLine,
+      Value: activeRun
+        ? updateInProgress
+          ? `in progress · ${activeRun.phase}`
+          : "needs attention · see run details below"
+        : updateAvailability.available && !releaseStatus?.notice && !releaseStatus?.trial
+          ? theme.warn(`available · ${updateLine}`)
+          : updateLine,
     },
   ];
 
   defaultRuntime.log(theme.heading("OpenClaw update status"));
   defaultRuntime.log("");
+  for (const finding of runtimeFindings) {
+    const color =
+      finding.severity === "error"
+        ? theme.error
+        : finding.severity === "warning"
+          ? theme.warn
+          : theme.muted;
+    defaultRuntime.log(color(finding.message));
+    if (finding.fixHint) {
+      defaultRuntime.log(finding.fixHint);
+    }
+    defaultRuntime.log("");
+  }
   defaultRuntime.log(
     renderTable({
       width: tableWidth,
@@ -100,8 +559,137 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   );
   defaultRuntime.log("");
 
-  const updateHint = formatUpdateAvailableHint(update);
+  for (const line of immutableCoverageLines) {
+    defaultRuntime.log(safeMessage(line));
+  }
+
+  if (lastGatewayInstallationReplacement) {
+    const { reason, completedAtMs } = lastGatewayInstallationReplacement;
+    defaultRuntime.log(
+      `Previous Gateway installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
+    );
+    defaultRuntime.log("");
+  }
+  for (const warning of serviceDefinition?.warnings ?? []) {
+    printWarning(`Warning: ${warning}`);
+  }
+  for (const issue of safeChannelIssues) {
+    printWarning(`Channel ${issue.channel} ${issue.accountId}: ${issue.message}`);
+    if (issue.fix) {
+      defaultRuntime.log(issue.fix);
+    }
+  }
+  if (safeChannelIssues.length > 0) {
+    defaultRuntime.log("");
+  }
+
+  for (const warning of migrationWarnings) {
+    printWarning(`Warning: ${warning}`);
+  }
+  if (migrationWarningsError) {
+    printWarning(`Pending migration status unavailable: ${migrationWarningsError}`);
+  }
+  if (migrationWarnings.length > 0 || migrationWarningsError) {
+    defaultRuntime.log("");
+  }
+  for (const error of inspectionErrors) {
+    printWarning(`${error.section} unavailable: ${error.message}`);
+  }
+
+  if ("runReconciliationError" in runStatus) {
+    printWarning(`Update run reconciliation failed: ${runStatus.runReconciliationError}`);
+    defaultRuntime.log("");
+  }
+  if ("runStatusError" in runStatus) {
+    printWarning(`Update run status unavailable: ${runStatus.runStatusError}`);
+    defaultRuntime.log("");
+  } else {
+    const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
+    const run = activeRun ?? lastRun;
+    for (const advisory of advisories ?? []) {
+      if (advisory.runId !== run?.runId) {
+        defaultRuntime.log(advisory.message);
+      }
+    }
+    if (run) {
+      if (!activeRun) {
+        defaultRuntime.log(
+          `Last recorded update (${new Date(run.createdAtMs).toISOString()}, historical):`,
+        );
+      }
+      if (staleRun) {
+        defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
+      }
+      if (abandonedRun) {
+        defaultRuntime.log(
+          `Abandoned update detected; the Gateway will reconcile its recorded outcome. Stop the Gateway first (${formatCliCommand("openclaw gateway stop --force")}), then run ${formatCliCommand("openclaw update repair")} to reconcile it now.`,
+        );
+      }
+      // A refused restart on a Gateway that is not responding has a recovery verified against
+      // the live service just now; name it as the next step, not as saved triage advice.
+      const refusedRestartRecovery =
+        currentRunHealth?.kind === "unavailable"
+          ? await inspect(
+              "refused restart recovery",
+              () => resolveRefusedRestartRecovery({ run, activeRoot: update.root }),
+              undefined,
+            )
+          : undefined;
+      const report = renderUpdateRunReport(
+        run,
+        refusedRestartRecovery
+          ? { nextAction: refusedRestartRecovery }
+          : run.status === "failed"
+            ? { currentHealth: currentRunHealth }
+            : {},
+      );
+      const historical =
+        currentRunHealth?.kind === "responding"
+          ? projectUpdateRunHistory(run, currentRunHealth)
+          : null;
+      if (!abandonedRun && !staleRun) {
+        defaultRuntime.log(historical ?? report.headline);
+      }
+      for (const line of historical ? [] : report.lines) {
+        defaultRuntime.log(line);
+      }
+      defaultRuntime.log("");
+    }
+    // The displayed run's report already lists what that run owes.
+    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
+    for (const step of owedSteps ?? []) {
+      if (!reported.has(step.id)) {
+        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
+      }
+    }
+  }
+
+  if ("recoverySetsError" in recoveryStatus) {
+    printWarning(
+      safeMessage(`Update recovery sets unavailable: ${recoveryStatus.recoverySetsError}`),
+    );
+    defaultRuntime.log("");
+  } else {
+    for (const set of recoveryStatus.recoverySets) {
+      if (set.status === "incomplete" || set.status === "unreadable" || set.status === "warning") {
+        defaultRuntime.log(`Update capture: ${set.status}`);
+        defaultRuntime.log(safeMessage(set.directory));
+      } else {
+        const label = set.status === "manual" ? "Doctor capture" : "Update recovery set";
+        defaultRuntime.log(safeMessage(`${label} ${set.runId}: ${set.status}`));
+        defaultRuntime.log(safeMessage(set.manifestPath));
+      }
+      defaultRuntime.log(safeMessage(set.message));
+      defaultRuntime.log(safeMessage(`Next action: ${set.nextAction}`));
+      defaultRuntime.log("");
+    }
+  }
+
+  const updateHint = activeRun || releaseStatus?.notice ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
-    defaultRuntime.log(theme.warn(updateHint));
+    printWarning(updateHint);
+  }
+  for (const warning of configWarnings) {
+    printWarning(`Warning: ${warning}`);
   }
 }

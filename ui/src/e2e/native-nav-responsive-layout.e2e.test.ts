@@ -1,4 +1,4 @@
-import type { BrowserContext } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -18,9 +18,17 @@ suite.define(() => {
     context = undefined;
   });
 
+  const shellHas = (page: Page, name: string, present = true) => {
+    const result = expect.poll(() => page.locator(".shell").getAttribute("class"));
+    return present ? result.toContain(name) : result.not.toContain(name);
+  };
+
   async function openPage(options: {
     hasTouch?: boolean;
     height?: number;
+    historyMessages?: unknown[];
+    phone?: boolean;
+    route?: string;
     webChrome?: boolean;
     width?: number;
   }) {
@@ -28,6 +36,14 @@ suite.define(() => {
       hasTouch: options.hasTouch,
       locale: "en-US",
       serviceWorkers: "block",
+      ...(options.phone
+        ? {
+            deviceScaleFactor: 3,
+            isMobile: true,
+            userAgent:
+              "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+          }
+        : {}),
       viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
     });
     const page = await context.newPage();
@@ -36,43 +52,20 @@ suite.define(() => {
     }
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      ...(options.historyMessages ? { historyMessages: options.historyMessages } : {}),
     });
-    const response = await page.goto(suite.server.baseUrl);
+    const response = await page.goto(`${suite.server.baseUrl}${options.route ?? ""}`);
     expect(response?.status()).toBe(200);
-    await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+    const ready = options.route?.startsWith("settings/") ? ".settings-sidebar" : ".sidebar-rail";
+    await page.locator(ready).waitFor({ state: "attached" });
     return page;
   }
 
-  it("keeps only history controls in the Settings titlebar", async () => {
-    const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
-    expect(response?.status()).toBe(200);
-
-    const toolbar = page.locator(".macos-titlebar-controls");
-    await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    await expect.poll(() => toolbar.getByRole("button", { name: "Back" }).isVisible()).toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Forward" }).isVisible())
-      .toBe(true);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Expand sidebar" }).count())
-      .toBe(0);
-    await expect
-      .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
-      .toBe(0);
-    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
-  });
-
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
-    const page = await openPage({ webChrome: true });
-    const response = await page.goto(`${suite.server.baseUrl}settings/general`);
-    expect(response?.status()).toBe(200);
+    const page = await openPage({ webChrome: true, route: "settings/general" });
     await page.locator(".settings-sidebar").waitFor({ state: "visible" });
 
-    // WKWebView scrolls the document whenever it overflows, dragging the
-    // settings sidebar and content along. Force overflow the way stray
-    // content would, then confirm the root refuses to move.
+    // Force overflow as in WKWebView, where it can drag the entire Settings UI.
     const metrics = await page.evaluate(() => {
       const spacer = document.createElement("div");
       spacer.style.height = "3000px";
@@ -89,147 +82,299 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("keeps drawer and search reachable from the narrow chat title bar", async () => {
-    const page = await openPage({ width: 900 });
-    const header = page.locator(".chat-pane__header").first();
-    await expect
-      .poll(() => page.locator(".shell").getAttribute("class"))
-      .toContain("shell--merged-chat-chrome");
-    await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
-    await expect
-      .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
-      .toBe(true);
-    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    await header.locator(".chat-header-session-menu__trigger").click();
-    await page.getByText("Open command palette", { exact: true }).click();
-    await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
-  });
-
-  it("keeps browser sidebar header geometry aligned in LTR and RTL", async () => {
-    const page = await openPage({ width: 1440 });
-    const sidebarBrand = page.locator(".sidebar-brand");
-    const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
-
-    await expect
-      .poll(() =>
-        sidebarBrand
-          .locator(".sidebar-brand__collapse, .sidebar-brand__search")
-          .evaluateAll((buttons) =>
-            buttons.map((button) => {
-              const icon = button.querySelector("svg");
-              if (!icon) {
-                return null;
-              }
-              const buttonBox = button.getBoundingClientRect();
-              const iconBox = icon.getBoundingClientRect();
-              return Math.round(
-                buttonBox.left + buttonBox.width / 2 - (iconBox.left + iconBox.width / 2),
-              );
-            }),
-          ),
-      )
-      .toEqual([0, 0]);
-    await expect
-      .poll(() =>
-        sidebarBrand.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
-          const style = getComputedStyle(avatar);
-          return [style.width, style.height];
-        }),
-      )
-      .toEqual(["28px", "28px"]);
-    await expect
-      .poll(() =>
-        sidebarBrand.locator(".sidebar-brand__new-thread").evaluate((button) => {
-          const style = getComputedStyle(button);
-          return [style.width, style.height, style.boxShadow];
-        }),
-      )
-      .toEqual(["28px", "28px", "none"]);
-
-    const actionInset = async (direction: "ltr" | "rtl") => {
-      const [brandBox, actionsBox] = await Promise.all([
-        sidebarBrand.boundingBox(),
-        sidebarBrand.locator(".sidebar-brand__actions").boundingBox(),
-      ]);
-      if (!brandBox || !actionsBox) {
-        return null;
+  it.each([false, true])(
+    "keeps the compact chat drawer free of rail search (phone: %s)",
+    async (phone) => {
+      const page = await openPage(
+        phone ? { hasTouch: true, height: 852, phone, width: 393 } : { width: 900 },
+      );
+      if (phone) {
+        await shellHas(page, "shell--mobile-nav");
       }
-      return direction === "rtl"
-        ? Math.round(actionsBox.x - brandBox.x)
-        : Math.round(brandBox.x + brandBox.width - (actionsBox.x + actionsBox.width));
-    };
-    const nameFade = () =>
-      agentName.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return [style.paddingLeft, style.paddingRight, style.maskImage];
-      });
+      await shellHas(page, "shell--merged-chat-chrome");
+      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    await expect.poll(() => actionInset("ltr")).toBe(2);
-    await expect.poll(nameFade).toEqual(["0px", "8px", expect.stringContaining("90deg")]);
-    await page.evaluate(() => {
-      document.documentElement.dir = "rtl";
-    });
-    await expect.poll(() => actionInset("rtl")).toBe(0);
-    await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
-  });
+      const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
+      const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
+      await drawerButton.waitFor({ state: "visible" });
+      await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
+      await (phone ? drawerButton.tap() : drawerButton.click());
+      await shellHas(page, "shell--nav-drawer-open");
 
-  it("keeps the native sidebar avatar larger", async () => {
-    const page = await openPage({ webChrome: true, width: 1440 });
-    await expect
-      .poll(() =>
-        page.locator(".sidebar-agent-card__avatar").evaluate((avatar) => {
-          const style = getComputedStyle(avatar);
-          return [style.width, style.height];
-        }),
-      )
-      .toEqual(["32px", "32px"]);
-  });
+      // #203440 hides the desktop-only rail control on every mobile page, so the drawer is
+      // no longer a search surface. The count guard keeps this from passing on a page that
+      // failed to render; the hiding mechanism itself is covered by
+      // form-controls.browser.test.ts, so this only asserts the observable result.
+      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+      await expect.poll(() => drawerSearch.count()).toBe(1);
+      expect(await drawerSearch.isVisible()).toBe(false);
 
-  it("opens the mobile drawer by swipe across the full mobile-layout range", async () => {
-    const page = await openPage({ hasTouch: true, height: 393, width: 852 });
-    const shell = page.locator(".shell");
-    await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
+      // The open drawer traps focus and swallows the palette chord on purpose
+      // (`handleNavDrawerKeydown`), so the search case no longer reaches the palette from
+      // inside it. Close the drawer and prove the palette chord still works, so this case
+      // fails if the rail change also took the palette away.
+      await page.keyboard.press("Escape");
+      await shellHas(page, "shell--nav-drawer-open", false);
+      await page.keyboard.press(
+        (await page.evaluate(() => navigator.platform)).startsWith("Mac") ? "Meta+k" : "Control+k",
+      );
+      const paletteInput = page.locator(".cmd-palette__input");
+      await paletteInput.waitFor({ state: "visible" });
+      if (phone) {
+        await expect
+          .poll(() => paletteInput.evaluate((input) => input.matches(":focus")))
+          .toBe(true);
+      }
+    },
+  );
 
-    await page.locator(".content").evaluate((content) => {
-      const touch = (clientX: number, clientY: number) =>
-        new Touch({
-          identifier: 1,
-          target: content,
-          clientX,
-          clientY,
-          pageX: clientX,
-          pageY: clientY,
-          screenX: clientX,
-          screenY: clientY,
+  it.each([
+    { width: 852, height: 393, atomicMoves: true },
+    { width: 393, height: 852, atomicMoves: false },
+  ])(
+    "fully opens and closes the mobile drawer by swipe ($width px, atomic moves: $atomicMoves)",
+    async ({ width, height, atomicMoves }) => {
+      const page = await openPage({ hasTouch: true, height, width });
+      if (!atomicMoves) {
+        // Safari does not implement atomic DOM moves; drawer completion must not depend on them.
+        await page.evaluate(() => {
+          Object.defineProperty(Element.prototype, "moveBefore", {
+            configurable: true,
+            value: undefined,
+          });
         });
-      content.dispatchEvent(
-        new TouchEvent("touchstart", {
-          bubbles: true,
-          composed: true,
-          touches: [touch(24, 180)],
-          changedTouches: [touch(24, 180)],
-        }),
-      );
-      content.dispatchEvent(
-        new TouchEvent("touchmove", {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          touches: [touch(210, 184)],
-          changedTouches: [touch(210, 184)],
-        }),
-      );
-      content.dispatchEvent(
-        new TouchEvent("touchend", {
-          bubbles: true,
-          composed: true,
-          touches: [],
-          changedTouches: [touch(210, 184)],
-        }),
-      );
-    });
+      }
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      const shell = page.locator(".shell");
+      await shellHas(page, "shell--mobile-nav");
 
-    await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
-    await expect.poll(() => page.locator(".shell-nav.nav-drawer").isVisible()).toBe(true);
+      const dispatchTouch = async (type: string, x: number, y = 180) => {
+        await page.locator(".content").evaluate(
+          (content, point) => {
+            const touch = new Touch({
+              identifier: 1,
+              target: content,
+              clientX: point.x,
+              clientY: point.y,
+            });
+            content.dispatchEvent(
+              new TouchEvent(point.type, {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                touches: point.type === "touchend" ? [] : [touch],
+                changedTouches: [touch],
+              }),
+            );
+          },
+          { type, x, y },
+        );
+      };
+      // A short drag and a vertical scroll must leave the chat unobscured.
+      for (const point of [
+        { x: 44, y: 180 },
+        { x: 28, y: 240 },
+      ]) {
+        await dispatchTouch("touchstart", 24);
+        await dispatchTouch("touchmove", point.x, point.y);
+        expect(await shell.getAttribute("class")).not.toContain("shell--nav-drawer-open");
+        expect(
+          await page.locator(".shell-nav").evaluate((nav) => getComputedStyle(nav).opacity),
+        ).toBe("0");
+        await dispatchTouch("touchend", point.x, point.y);
+      }
+      await dispatchTouch("touchstart", 24);
+      await dispatchTouch("touchmove", 210, 184);
+
+      const drawer = page.locator(".shell-nav.nav-drawer");
+      // A deliberate swipe opens while the finger is still down, rather than
+      // exposing a clipped, non-interactive slice until touchend.
+      await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+
+      await dispatchTouch("touchend", 210, 184);
+
+      await shellHas(page, "shell--nav-drawer-open");
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+      await expect.poll(() => drawer.evaluate((element) => element.style.transform)).toBe("");
+      await expect.poll(() => drawer.locator("openclaw-toast-host").count()).toBe(1);
+      const backdrop = page.locator(".shell-nav-backdrop");
+      // Fixed/sticky backgrounds would leak a Safari native-chrome tint.
+      expect(
+        await backdrop.evaluate((element) => {
+          const positions: string[] = [];
+          for (
+            let ancestor: Element | null = element;
+            ancestor;
+            ancestor = ancestor.parentElement
+          ) {
+            positions.push(getComputedStyle(ancestor).position);
+          }
+          return positions.filter((position) => position === "fixed" || position === "sticky");
+        }),
+      ).toEqual([]);
+
+      // The scrim must cover safe-area padding as well as shell content.
+      await page.evaluate(() => {
+        const style = document.documentElement.style;
+        for (const [edge, value] of Object.entries({ top: 48, bottom: 30, left: 20, right: 20 })) {
+          style.setProperty(`--safe-area-${edge}`, `${value}px`);
+        }
+      });
+      for (const canvasHeight of [height, height - 100]) {
+        await page.setViewportSize({ width, height: canvasHeight });
+        await expect
+          .poll(async () => {
+            return backdrop.evaluate((element) => {
+              const canvas = document.querySelector("openclaw-app")!.getBoundingClientRect();
+              const scrim = element.getBoundingClientRect();
+              const corners: [number, number][] = [
+                [canvas.left + 1, canvas.top + 1],
+                [canvas.right - 1, canvas.top + 1],
+                [canvas.left + 1, canvas.bottom - 1],
+                [canvas.right - 1, canvas.bottom - 1],
+              ];
+              return {
+                bounds: [scrim.x, scrim.y, scrim.width, scrim.height],
+                canvas: [canvas.x, canvas.y, canvas.width, canvas.height],
+                coversCorners: corners.every(
+                  ([x, y]) => document.elementFromPoint(x, y) === element,
+                ),
+              };
+            });
+          })
+          .toEqual({
+            bounds: [0, 0, width, canvasHeight],
+            canvas: [0, 0, width, canvasHeight],
+            coversCorners: true,
+          });
+      }
+      await backdrop.click({ position: { x: width - 10, y: 100 } });
+      await shellHas(page, "shell--nav-drawer-open", false);
+      await expect.poll(() => shell.locator(":scope > openclaw-toast-host").count()).toBe(1);
+      await page.getByRole("button", { name: "Expand sidebar" }).click();
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(20);
+      expect(errors).toEqual([]);
+    },
+  );
+  it("opens from the reachable content edge after a landscape safe-area inset", async () => {
+    const page = await openPage({ hasTouch: true, width: 852, height: 393 });
+    await shellHas(page, "shell--mobile-nav");
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--safe-area-left", "48px");
+    });
+    await expect.poll(async () => (await page.locator(".content").boundingBox())?.x).toBe(48);
+    const cdp = await context!.newCDPSession(page);
+    const swipeFrom = async (x: number) => {
+      // CDP hit-tests the actual point, unlike dispatching a touch to .content.
+      expect(
+        await page
+          .locator(".content")
+          .evaluate(
+            (content, startX) => content.contains(document.elementFromPoint(startX, 180)),
+            x,
+          ),
+      ).toBe(true);
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y: 180 }],
+      });
+      for (let step = 1; step <= 12; step++) {
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x: x + step * 12, y: 180 }],
+        });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    // The inset moves the opening strip; it must not broaden content interception.
+    await swipeFrom(112);
+    await shellHas(page, "shell--nav-drawer-open", false);
+    await swipeFrom(72);
+    await shellHas(page, "shell--nav-drawer-open");
+  });
+
+  it("leaves swipes away from the left edge to chat content", async () => {
+    const text = [
+      "See https://docs.openclaw.ai/a/long/synthetic/path/for/the/swipe/regression/test now.",
+      "",
+      "| Column A | Column B | Column C | Column D | Column E | Column F |",
+      "| --- | --- | --- | --- | --- | --- |",
+      "| alpha-value | beta-value | gamma-value | delta-value | epsilon-value | zeta-value |",
+      "",
+      "```ts",
+      "const overwideLine = synthetic(argumentNumberOne, argumentNumberTwo, argumentNumberThree);",
+      "```",
+    ].join("\n");
+    const page = await openPage({
+      hasTouch: true,
+      height: 852,
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      phone: true,
+      width: 393,
+    });
+    await shellHas(page, "shell--mobile-nav");
+    const table = page.locator(".markdown-table__viewport").first();
+    await table.waitFor();
+    const url = page.url();
+    const cdp = await context!.newCDPSession(page);
+    // Real input lets Chromium arbitrate native scrolling and taps against the gesture.
+    const swipeFrom = async (selector: string) => {
+      const box = await page.locator(selector).first().boundingBox();
+      const start = { x: Math.max(box!.x + 12, 64), y: box!.y + Math.min(box!.height / 2, 12) };
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
+      for (let step = 1; step <= 12; step++) {
+        const touchPoints = [{ x: start.x + step * 12, y: start.y - step }];
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    for (const selector of [
+      ".chat-thread a[href]",
+      ".chat-thread pre",
+      ".markdown-table__viewport",
+    ]) {
+      await swipeFrom(selector);
+      await shellHas(page, "shell--nav-drawer-open", false);
+    }
+    // Swiping across the link must not follow it.
+    expect(page.url()).toBe(url);
+    expect(context!.pages()).toHaveLength(1);
+
+    // A table scrolled away from its left edge keeps the rightward swipe.
+    await table.evaluate((viewport) => (viewport.scrollLeft = 60));
+    await swipeFrom(".markdown-table__viewport");
+    await expect.poll(() => table.evaluate((viewport) => viewport.scrollLeft)).toBeLessThan(60);
+    await shellHas(page, "shell--nav-drawer-open", false);
+
+    // Canvas controls commonly use pointer events and disable native touch scrolling.
+    await page
+      .locator(".chat-thread pre")
+      .first()
+      .evaluate((pre) => {
+        const canvas = document.createElement("canvas");
+        pre.replaceChildren(canvas);
+        canvas.className = "gesture-canvas";
+        canvas.style.cssText = "display:block;width:240px;height:160px;touch-action:none";
+        let startX = 0;
+        canvas.addEventListener("pointerdown", (event) => {
+          startX = event.clientX;
+          canvas.setPointerCapture(event.pointerId);
+        });
+        canvas.addEventListener("pointermove", (event) => {
+          canvas.dataset.distance = String(event.clientX - startX);
+        });
+        canvas.addEventListener("pointerup", () => (canvas.dataset.completed = "true"));
+        canvas.addEventListener("pointercancel", () => (canvas.dataset.canceled = "true"));
+      });
+    await page.locator(".gesture-canvas").scrollIntoViewIfNeeded();
+    await swipeFrom(".gesture-canvas");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-distance")).toBe("144");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-completed")).toBe("true");
+    expect(await page.locator(".gesture-canvas").getAttribute("data-canceled")).toBeNull();
+    await shellHas(page, "shell--nav-drawer-open", false);
   });
 });

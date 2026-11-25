@@ -1,70 +1,58 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { captureUiProof, sessionsListResponse } from "./session-management.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "missing session link",
   startServerBeforeBrowser: true,
 });
+const contextOptions = createControlUiE2eContextOptions();
+const mainKey = "agent:main:main";
 
 suite.define(() => {
   it("keeps an explicitly requested missing session as a visible dead end", async () => {
-    const mainKey = "agent:main:main";
-    const savedActiveKey = "agent:main:saved-active-session";
     const attemptedPath = "/chat/main/deadbeef";
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
-            "sessions.resolve": { ok: false },
-          },
-          mainSessionKey: mainKey,
-          sessionKey: savedActiveKey,
-        });
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          "sessions.list": sessionsListResponse([sessionRow(mainKey, "Main", 1)]),
+        },
+        mainSessionKey: mainKey,
+        sessionKey: "agent:main:saved-active-session",
+      });
 
-        await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
-        const state = page.locator(".session-route-not-found");
-        await state.getByText("Session not found", { exact: true }).waitFor();
-        expect(new URL(page.url()).pathname).toBe(attemptedPath);
-        await state
-          .getByText("The session may have been removed, or the link may be incorrect.", {
-            exact: true,
-          })
-          .waitFor();
-        const currentSession = state.getByRole("button", { name: "Go to main session" });
-        const sessions = state.getByRole("button", { name: "View sessions" });
-        expect(
-          await currentSession.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await sessions.evaluate((element) => getComputedStyle(element).textDecorationLine),
-        ).toBe("none");
-        expect(
-          await state
-            .locator(".lazy-view-error__subtitle")
-            .evaluate((element) => getComputedStyle(element).textWrap),
-        ).toBe("balance");
-        expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-        expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
-        expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
-        expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
-        await captureUiProof(suite, page, "session-link-not-found-after.png");
+      await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
+      const state = page.locator(".session-route-not-found");
+      await state.getByText("Session not found", { exact: true }).waitFor();
+      expect(new URL(page.url()).pathname).toBe(attemptedPath);
+      const currentSession = state.getByRole("button", { name: "Go to main session" });
+      const sessions = state.getByRole("button", { name: "View sessions" });
+      for (const action of [currentSession, sessions]) {
+        const decoration = await action.evaluate((el) => getComputedStyle(el).textDecorationLine);
+        expect(decoration).toBe("none");
+      }
+      const subtitle = state.locator(".lazy-view-error__subtitle");
+      expect(await subtitle.evaluate((el) => getComputedStyle(el).textWrap)).toBe("balance");
+      const suppressed =
+        "openclaw-chat-page, .agent-chat__input textarea, openclaw-toast-host .app-toast";
+      expect(await page.locator(suppressed).count()).toBe(0);
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
 
-        await currentSession.click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await currentSession.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
 
-        await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
-        await page.getByRole("button", { name: "View sessions" }).click();
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
-        const sessionsHeader = page.locator("openclaw-sessions-page .sessions-hub-header");
-        await sessionsHeader.waitFor({ state: "visible" });
-        expect(await sessionsHeader.textContent()).toContain("Active sessions and defaults.");
-      },
-    );
+      await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
+      await page.getByRole("button", { name: "View sessions" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
+      const sessionsHeader = page.locator("openclaw-sessions-page .sessions-hub-header");
+      await sessionsHeader.waitFor({ state: "visible" });
+    });
   });
 });

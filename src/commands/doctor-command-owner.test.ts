@@ -1,61 +1,87 @@
-// Doctor command-owner tests cover channel sender formatting and configured owner detection.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { beforeEach, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   formatCommandOwnerFromChannelSender,
-  hasConfiguredCommandOwners,
+  formatCommandOwnerHint,
   noteCommandOwnerHealth,
 } from "./doctor-command-owner.js";
 
 const note = vi.hoisted(() => vi.fn());
+const owners = (...ownerAllowFrom: string[]) => ({ commands: { ownerAllowFrom } });
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+// mock-isolation: Capture command-owner diagnostics without writing to the operator's terminal.
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
-describe("command owner health", () => {
-  beforeEach(() => {
-    note.mockClear();
-  });
+beforeEach(() => note.mockClear());
 
-  it("detects configured command owners", () => {
-    expect(hasConfiguredCommandOwners({})).toBe(false);
-    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: [] } })).toBe(false);
-    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:123"] } })).toBe(
-      true,
-    );
-    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["*"] } })).toBe(false);
-    expect(hasConfiguredCommandOwners({ commands: { ownerAllowFrom: ["telegram:*"] } })).toBe(
-      false,
-    );
-  });
+it("formats pairing senders as channel-scoped command owners", () => {
+  expect(
+    ["123", "telegram:123"].map((id) =>
+      formatCommandOwnerFromChannelSender({ channel: "telegram", id }),
+    ),
+  ).toEqual(["telegram:123", "telegram:123"]);
+});
 
-  it("formats pairing senders as channel-scoped command owners", () => {
-    expect(formatCommandOwnerFromChannelSender({ channel: "telegram", id: "123" })).toBe(
-      "telegram:123",
-    );
-    expect(formatCommandOwnerFromChannelSender({ channel: "telegram", id: "telegram:123" })).toBe(
-      "telegram:123",
-    );
-  });
+it.each([{}, { channels: {} }, owners(), owners("*"), owners("telegram:*")])(
+  "explains local administrator recovery without requiring a channel: %j",
+  (cfg) => {
+    noteCommandOwnerHealth(cfg);
 
-  it("explains missing command owners in plain language", () => {
-    noteCommandOwnerHealth({});
+    const message = note.mock.calls[0]?.[0];
+    expect(message).toContain("No channel command owner is configured.");
+    expect(message).toContain("operator.admin");
+    expect(message).toContain("no channel is required");
+    expect(message).toContain("openclaw dashboard");
+    expect(message).toContain("Inbox > System > Limited access > Request admin");
+    expect(message).toContain("openclaw devices approve <requestId>");
+    expect(message).toContain("For external channels");
+    expect(message).toContain("commands.ownerAllowFrom");
+  },
+);
 
-    expect(note).toHaveBeenCalledWith(
-      [
-        "No command owner is configured.",
-        "A command owner is the human operator account allowed to run owner-only commands and approve dangerous actions, including /diagnostics, /export-session, /export-trajectory, /config, and exec approvals.",
-        "DM pairing only lets someone talk to the bot; it does not make that sender the owner for privileged commands.",
-        "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
-        "Restart the gateway after changing this if it is already running.",
-      ].join("\n"),
-      "Command owner",
-    );
-  });
+it.skipIf(process.platform === "win32")(
+  "quotes a sender id without overriding the selected profile",
+  () =>
+    withEnv({ OPENCLAW_PROFILE: "owner-proof" }, () => {
+      const id = "@o'brien$(printf injected) --profile decoy:example.org";
+      const hint = formatCommandOwnerHint({ cfg: {}, channel: "matrix", id });
+      const command = hint.slice(hint.indexOf("`") + 1, hint.lastIndexOf("`"));
+      const shellCommand = command.replace(/^openclaw /, "printf '%s\\n' ");
+      const args = execFileSync("/bin/sh", ["-c", shellCommand], { encoding: "utf8" })
+        .trim()
+        .split("\n");
+      expect(args).toEqual(
+        "--profile owner-proof config set commands.ownerAllowFrom"
+          .split(" ")
+          .concat(JSON.stringify([`matrix:${id}`])),
+      );
+    }),
+);
 
-  it("does not warn when command owners are configured", () => {
-    noteCommandOwnerHealth({ commands: { ownerAllowFrom: ["telegram:123"] } });
+it.each<[Parameters<typeof formatCommandOwnerHint>[0], string]>([
+  [
+    {
+      cfg: owners("slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"),
+      channel: "telegram",
+      id: "123",
+    },
+    `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '["slack:owner","telegram:123"]'\` in a terminal to make this sender a command owner.`,
+  ],
+  [
+    { channel: "telegram", id: "123" },
+    "Ask the operator to add `telegram:123` to `commands.ownerAllowFrom`.",
+  ],
+  [
+    { cfg: {}, channel: "webchat", id: "123" },
+    "Ask the operator to grant this Gateway client operator.admin access.",
+  ],
+])("formats owner guidance: %j", (params, expected) =>
+  expect(formatCommandOwnerHint(params)).toBe(expected),
+);
 
-    expect(note).not.toHaveBeenCalled();
-  });
+it("does not warn when command owners are configured", () => {
+  noteCommandOwnerHealth(owners("telegram:123"));
+
+  expect(note).not.toHaveBeenCalled();
 });

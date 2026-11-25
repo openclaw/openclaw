@@ -1,11 +1,5 @@
+import type { SessionCatalogProfileRelation } from "../../../../packages/gateway-protocol/src/index.js";
 import type { BoardFace } from "../board/settings.ts";
-
-type SessionNavigationHandoff = {
-  pathname: string;
-  sessionKey: string;
-  client: object | null;
-  hello: object | null;
-};
 
 type SessionNavigationHandoffOwner = {
   readonly snapshot: {
@@ -14,9 +8,9 @@ type SessionNavigationHandoffOwner = {
   };
 };
 
-const SESSION_NAVIGATION_HANDOFF_TTL_MS = 2_000;
 export const SESSION_NAVIGATION_INTENT_EVENT = "openclaw:session-navigation-intent";
 export type SessionNavigationIntent = {
+  agentId?: string;
   commit: () => boolean;
   face: BoardFace;
   sessionKey: string;
@@ -28,18 +22,15 @@ type SessionNavigationIntentOwner = {
 };
 const sessionNavigationHandoffs = new WeakMap<
   SessionNavigationHandoffOwner,
-  SessionNavigationHandoff
+  {
+    pathname: string;
+    sessionKey: string;
+    catalogProfileRelation?: SessionCatalogProfileRelation;
+    client: object | null;
+    hello: object | null;
+  }
 >();
 const sessionNavigationIntents = new WeakMap<SessionNavigationIntentOwner, object>();
-
-function announceSessionNavigationIntent(intent: SessionNavigationIntent): boolean {
-  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-    cancelable: true,
-    detail: intent,
-  });
-  globalThis.dispatchEvent(event);
-  return event.defaultPrevented;
-}
 
 export function runSessionNavigationIntent(
   owner: SessionNavigationIntentOwner,
@@ -64,7 +55,12 @@ export function runSessionNavigationIntent(
       return intent.commit();
     },
   };
-  if (!announceSessionNavigationIntent(guarded)) {
+  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+    cancelable: true,
+    detail: guarded,
+  });
+  globalThis.dispatchEvent(event);
+  if (!event.defaultPrevented) {
     guarded.commit();
   }
 }
@@ -73,23 +69,33 @@ export function prepareSessionNavigationHandoff(
   owner: SessionNavigationHandoffOwner,
   pathname: string,
   sessionKey: string,
+  catalogProfileRelation?: SessionCatalogProfileRelation,
 ): void {
   const { client, hello } = owner.snapshot;
-  const handoff = { pathname, sessionKey, client, hello };
+  const handoff = {
+    pathname,
+    sessionKey,
+    client,
+    hello,
+    ...(catalogProfileRelation
+      ? { catalogProfileRelation: structuredClone(catalogProfileRelation) }
+      : {}),
+  };
   sessionNavigationHandoffs.set(owner, handoff);
-  globalThis.setTimeout(() => {
-    if (sessionNavigationHandoffs.get(owner) === handoff) {
-      sessionNavigationHandoffs.delete(owner);
-    }
-  }, SESSION_NAVIGATION_HANDOFF_TTL_MS);
 }
 
 export function consumeSessionNavigationHandoff(
   owner: SessionNavigationHandoffOwner,
   pathname: string,
-): string | undefined {
+  expectedSessionKey?: string,
+): { sessionKey: string; catalogProfileRelation?: SessionCatalogProfileRelation } | undefined {
   const handoff = sessionNavigationHandoffs.get(owner);
-  if (!handoff || handoff.pathname !== pathname) {
+  if (
+    !handoff ||
+    handoff.pathname !== pathname ||
+    (expectedSessionKey !== undefined && handoff.sessionKey !== expectedSessionKey)
+  ) {
+    sessionNavigationHandoffs.delete(owner);
     return undefined;
   }
   sessionNavigationHandoffs.delete(owner);
@@ -99,5 +105,5 @@ export function consumeSessionNavigationHandoff(
   if (handoff.client !== client || handoff.hello !== hello) {
     return undefined;
   }
-  return handoff.sessionKey;
+  return handoff;
 }

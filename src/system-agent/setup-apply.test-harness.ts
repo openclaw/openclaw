@@ -1,7 +1,11 @@
+import path from "node:path";
 import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 type ConfigSnapshot = {
@@ -10,7 +14,7 @@ type ConfigSnapshot = {
   path: string;
   hash: string | null;
   parsed: unknown;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -45,7 +49,6 @@ const mocks = vi.hoisted(() => ({
   ensureWorkspace: vi.fn(),
   ensureGatewayService: vi.fn(),
   waitForGatewayReachable: vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(),
-  refreshPluginRegistry: vi.fn(),
   updateExecApprovals: vi.fn(),
   ensureOnboardingAgent: vi.fn(),
   verifySetupInferenceConfig: vi.fn(),
@@ -102,10 +105,6 @@ vi.mock("../wizard/setup.finalize.js", () => ({
   ensureGatewayServiceForOnboarding: mocks.ensureGatewayService,
 }));
 
-vi.mock("../plugins/registry-refresh.js", () => ({
-  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistry,
-}));
-
 vi.mock("../infra/exec-approvals.js", () => ({
   updateExecApprovals: mocks.updateExecApprovals,
 }));
@@ -128,8 +127,10 @@ export const runtime: RuntimeEnv = {
 
 export function snapshot(
   hash: string | null,
-  sourceConfig: OpenClawConfig,
-  runtimeConfig: OpenClawConfig = sourceConfig,
+  sourceConfig: OpenClawConfigWithLegacyRoster,
+  runtimeConfig: OpenClawConfig = materializeRuntimeConfig(sourceConfig, {
+    manifestRegistry: { plugins: [] },
+  }),
 ): ConfigSnapshot {
   return {
     exists: hash !== null,
@@ -139,49 +140,69 @@ export function snapshot(
     parsed: structuredClone(sourceConfig),
     sourceConfigBeforeMigrations: structuredClone(sourceConfig),
     config: runtimeConfig,
-    sourceConfig: runtimeConfig,
+    sourceConfig,
     runtimeConfig,
     issues: [],
   };
 }
 
 export function codexPluginMetadataSnapshot(homeScope: "agent" | "user") {
-  return {
-    manifestRegistry: {
-      diagnostics: [],
-      plugins: [
-        {
-          id: "codex",
-          origin: "global",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          settingsFiles: [],
-          hooks: [],
-          rootDir: "/tmp/codex",
-          source: "/tmp/codex/index.js",
-          manifestPath: "/tmp/codex/openclaw.plugin.json",
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              codexDynamicToolsLoading: { type: "string", default: "searchable" },
-              appServer: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  transport: { type: "string", default: "stdio" },
-                  homeScope: { type: "string", default: homeScope },
-                  requestTimeoutMs: { type: "number", default: 60_000 },
-                },
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "codex",
+        origin: "global",
+        settingsFiles: [],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            codexDynamicToolsLoading: { type: "string", default: "searchable" },
+            appServer: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                transport: { type: "string", default: "stdio" },
+                homeScope: { type: "string", default: homeScope },
+                requestTimeoutMs: { type: "number", default: 60_000 },
               },
             },
           },
         },
-      ],
-    },
-  } as never;
+      },
+    ],
+  });
+}
+
+export function snapshotSequence(...snapshots: Array<ConfigSnapshot | (() => ConfigSnapshot)>) {
+  let index = 0;
+  return async () => {
+    const next = snapshots[Math.min(index++, snapshots.length - 1)]!;
+    return typeof next === "function" ? next() : next;
+  };
+}
+
+export function transformAttempt(transform: CommitTransform, current: ConfigSnapshot, attempt = 0) {
+  return transform(current.sourceConfig, {
+    previousHash: current.hash,
+    snapshot: current,
+    attempt,
+  });
+}
+
+export function committed(
+  result: Awaited<ReturnType<CommitTransform>>,
+  previousHash: string | null,
+  config = result.nextConfig,
+) {
+  mocks.state.persistedConfig = config;
+  return {
+    nextConfig: config,
+    path: "/tmp/openclaw.json",
+    previousHash,
+    persistedHash: "persisted",
+    result: result.result,
+  };
 }
 
 export function materializePluginDefaults(
@@ -207,11 +228,125 @@ export function baseParams(
 }
 
 export function mainAgentModelConfig(model = "openai/gpt-5.5"): OpenClawConfig {
-  return { agents: { defaults: { model }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model }, entries: { main: {} } } };
 }
 
 export function setSetupCommitState(config: OpenClawConfig, initialSnapshot: ConfigSnapshot): void {
   mocks.state.initialSnapshot = initialSnapshot;
   mocks.state.commitConfig = config;
   mocks.state.commitSnapshot = initialSnapshot;
+}
+
+export function resetSetupApplyMocks(): void {
+  vi.resetAllMocks();
+  mocks.events.length = 0;
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { model: { primary: "openai/gpt-5.5" } },
+      entries: { main: {} },
+    },
+  };
+  setSetupCommitState(structuredClone(config), snapshot("probe", config));
+  mocks.state.commitPreviousHash = "probe";
+  mocks.state.persistedConfig = undefined;
+  mocks.ensureOnboardingAgent.mockImplementation(
+    async ({ config: current, firstAgent, workspace }) => {
+      const name = firstAgent?.name ?? "main";
+      const id = name.toLowerCase();
+      const team = firstAgent?.team === true;
+      const createdAgentIds = team ? [id, "researcher", "writer", "reviewer"] : [id];
+      const next = {
+        ...current,
+        agents: {
+          ...current.agents,
+          ...(team
+            ? {
+                ownership: "explicit" as const,
+                defaults: { ...current.agents?.defaults, systemAgent: { agentId: id } },
+              }
+            : {}),
+          entries: Object.fromEntries(
+            createdAgentIds.map((agentId) => [
+              agentId,
+              {
+                workspace: team ? path.join(workspace, agentId) : workspace,
+                agentDir: `/agents/${agentId}`,
+                ...(team
+                  ? {
+                      subagents:
+                        agentId === id
+                          ? {
+                              allowAgents: createdAgentIds.slice(1),
+                              delegationMode: "prefer" as const,
+                            }
+                          : { allowAgents: [] },
+                    }
+                  : {}),
+              },
+            ]),
+          ),
+        },
+      };
+      mocks.state.persistedConfig = next;
+      setSetupCommitState(next, snapshot("agent-create", next));
+      mocks.state.commitPreviousHash = "agent-create";
+      mocks.events.push("agent-create");
+      return {
+        config: next,
+        agentId: id,
+        bootstrapPending: true,
+        createdAgent: true,
+        createdAgentIds,
+        configHash: "agent-create",
+      };
+    },
+  );
+  mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+  mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+  mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
+    snapshot: await mocks.readVerifiedSnapshot(),
+  }));
+  mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
+    const currentConfig = structuredClone(mocks.state.commitConfig);
+    const result = await params.transform(currentConfig, {
+      previousHash: mocks.state.commitPreviousHash,
+      snapshot: mocks.state.commitSnapshot,
+      attempt: 0,
+    });
+    mocks.events.push("commit");
+    mocks.state.initialSnapshot = snapshot("persisted", result.nextConfig);
+    return committed(result, mocks.state.commitPreviousHash);
+  });
+  mocks.configureGateway.mockImplementation(
+    async ({
+      nextConfig,
+      quickstartGateway,
+    }: Parameters<
+      typeof import("../wizard/setup.gateway-config.js").configureGatewayForSetup
+    >[0]) => ({
+      nextConfig,
+      settings: {
+        authMode: quickstartGateway.authMode,
+        bind: quickstartGateway.bind,
+        customBindHost: quickstartGateway.customBindHost,
+        gatewayToken: quickstartGateway.token,
+        port: quickstartGateway.port,
+      },
+    }),
+  );
+  mocks.ensureWorkspace.mockImplementation(async () => {
+    mocks.events.push("workspace");
+    return { bootstrapPending: true };
+  });
+  mocks.ensureGatewayService.mockResolvedValue({
+    gateway: { status: "skipped", reason: "explicit" },
+    containerWithoutUserSystemd: false,
+  });
+  mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
+  mocks.updateExecApprovals.mockResolvedValue(undefined);
+  mocks.verifySetupInferenceConfig.mockResolvedValue({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 1,
+  });
 }

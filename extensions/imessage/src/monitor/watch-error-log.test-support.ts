@@ -3,18 +3,17 @@ import { describe, expect, it } from "vitest";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 describe("sanitizeIMessageWatchErrorPayload", () => {
-  it("keeps only code and a sanitized truncated message", () => {
+  it("keeps the failure code without copying private watch error content", () => {
     expect(
       sanitizeIMessageWatchErrorPayload({
         code: 500,
-        message: `boom\n\t\u001b[2K${"x".repeat(250)}`,
+        message: "private-watch-error-content",
         chatId: "chat-123",
         participants: ["+15555550123"],
         path: "/Users/me/Library/Messages/chat.db",
       }),
     ).toEqual({
       code: 500,
-      message: `boom\\n\\t${"x".repeat(191)}…`,
     });
   });
 

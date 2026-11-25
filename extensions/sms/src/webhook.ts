@@ -1,4 +1,3 @@
-// Sms plugin module implements webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -6,7 +5,10 @@ import {
   isRequestBodyLimitError,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  createWebhookInFlightLimiter,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import {
   createSmsDeliveryRecorder,
@@ -25,6 +27,8 @@ import {
 import type { ResolvedSmsAccount } from "./types.js";
 
 const INVALID_REQUEST_MAX_REQUESTS = 300;
+const PRE_AUTH_MAX_IN_FLIGHT = 64;
+const PRE_AUTH_MAX_IN_FLIGHT_PER_CLIENT = 16;
 const INBOUND_DISPATCH_MAX_REQUESTS = 30;
 const DELIVERY_CALLBACK_MAX_REQUESTS = 3_000;
 const DELIVERY_CALLBACK_WINDOW_MS = 60_000;
@@ -107,6 +111,18 @@ function rejectInvalidRequestRateLimit(params: {
 // Each account route owns one durable ingress adapter.
 export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
   let deliveryRecorder = params.delivery;
+  const preAuthInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: PRE_AUTH_MAX_IN_FLIGHT,
+    maxTrackedKeys: 1,
+  });
+  const preAuthInFlightKey = accountRouteRateLimitKey(params.account);
+  // Bound pending bodies per source as well as per route. Shared provider egress
+  // still shares this reader budget; validated sender quotas remain separate.
+  const clientInFlightLimiter = createWebhookInFlightLimiter({
+    maxInFlightPerKey: PRE_AUTH_MAX_IN_FLIGHT_PER_CLIENT,
+    // Route admission happens first, so live client keys cannot exceed this cap.
+    maxTrackedKeys: PRE_AUTH_MAX_IN_FLIGHT,
+  });
   // Status persistence gets a separate route-level safety fuse. It stays much
   // looser than inbound quotas; overflow gets a visible 5xx instead of a false ack.
   const deliveryCallbackRateLimiter = createFixedWindowRateLimiter({
@@ -124,52 +140,67 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
     const clientAddressKey = rateLimitKey({ account: params.account, subject: clientAddress });
     const invalidRequestRateLimited = invalidRequestRateLimiter.isRateLimited(clientAddressKey);
 
+    const routeAdmitted = preAuthInFlightLimiter.tryAcquire(preAuthInFlightKey);
+    if (!routeAdmitted || !clientInFlightLimiter.tryAcquire(clientAddressKey)) {
+      if (routeAdmitted) {
+        preAuthInFlightLimiter.release(preAuthInFlightKey);
+      }
+      params.log?.warn?.("SMS webhook pre-authentication concurrency limit exceeded");
+      await sendHttpRequestRejection(req, res, 429, "Rate limit exceeded", TWIML_CONTENT_TYPE);
+      return true;
+    }
+
     let form: Record<string, string>;
     try {
-      form = await readTwilioWebhookForm(req);
-    } catch (error) {
-      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        await sendHttpRequestRejection(req, res, 413, "Payload too large", TWIML_CONTENT_TYPE);
-        return true;
-      }
-      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-        // Twilio retries 5xx responses. Keep that outcome while the shared owner closes in order.
-        res.setHeader("cache-control", "no-store");
-        await sendHttpRequestRejection(
-          req,
-          res,
-          500,
-          "Internal Server Error",
-          "text/plain; charset=utf-8",
-        );
-        return true;
-      }
-      throw error;
-    }
-    assertSmsCredentialOwnerAvailable(params.account);
-
-    if (!params.account.dangerouslyDisableSignatureValidation) {
-      const ok = verifyTwilioSignature({
-        signature: headerValue(req.headers["x-twilio-signature"]),
-        url: resolveTwilioWebhookSignatureUrl({
-          req,
-          publicWebhookUrl: params.account.publicWebhookUrl,
-        }),
-        authToken: params.account.authToken,
-        form,
-      });
-      if (!ok) {
-        if (invalidRequestRateLimited) {
-          return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
+      try {
+        form = await readTwilioWebhookForm(req);
+      } catch (error) {
+        if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+          await sendHttpRequestRejection(req, res, 413, "Payload too large", TWIML_CONTENT_TYPE);
+          return true;
         }
-        params.log?.warn?.("SMS webhook rejected invalid Twilio signature");
-        respondTwiml(res, 403, "Invalid signature");
-        return true;
+        if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+          // Twilio retries 5xx responses. Keep that outcome while the shared owner closes in order.
+          res.setHeader("cache-control", "no-store");
+          await sendHttpRequestRejection(
+            req,
+            res,
+            500,
+            "Internal Server Error",
+            "text/plain; charset=utf-8",
+          );
+          return true;
+        }
+        throw error;
       }
-    }
+      assertSmsCredentialOwnerAvailable(params.account);
 
-    if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
-      return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
+      if (!params.account.dangerouslyDisableSignatureValidation) {
+        const ok = verifyTwilioSignature({
+          signature: headerValue(req.headers["x-twilio-signature"]),
+          url: resolveTwilioWebhookSignatureUrl({
+            req,
+            publicWebhookUrl: params.account.publicWebhookUrl,
+          }),
+          authToken: params.account.authToken,
+          form,
+        });
+        if (!ok) {
+          if (invalidRequestRateLimited) {
+            return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
+          }
+          params.log?.warn?.("SMS webhook rejected invalid Twilio signature");
+          respondTwiml(res, 403, "Invalid signature");
+          return true;
+        }
+      }
+
+      if (invalidRequestRateLimited && params.account.dangerouslyDisableSignatureValidation) {
+        return rejectInvalidRequestRateLimit({ key: clientAddressKey, log: params.log, res });
+      }
+    } finally {
+      clientInFlightLimiter.release(clientAddressKey);
+      preAuthInFlightLimiter.release(preAuthInFlightKey);
     }
 
     // Provider delivery transitions use a separate route quota from inbound messages.

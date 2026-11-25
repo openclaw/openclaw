@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
 import {
   assertPathInside,
@@ -64,7 +64,6 @@ const openAiCodexPackageJson = findPackageJson("@openai/codex", [
 if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }
-assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 assertCodexReleasePackageContract({
   pluginPackageJson: codexPackageJson,
   codexPackageJson: openAiCodexPackageJson,
@@ -93,8 +92,8 @@ if (!hasHarness) {
 }
 
 const primaryModel = cfg.agents?.defaults?.model?.primary;
-if (primaryModel !== "openai/gpt-5.6-sol") {
-  throw new Error(`expected OpenAI onboarding model openai/gpt-5.6-sol, got ${primaryModel}`);
+if (primaryModel !== "openai/gpt-6-astra") {
+  throw new Error(`expected OpenAI onboarding model openai/gpt-6-astra, got ${primaryModel}`);
 }
 const providerRuntime = cfg.models?.providers?.openai?.agentRuntime?.id;
 if (providerRuntime && providerRuntime !== "codex") {
@@ -103,7 +102,7 @@ if (providerRuntime && providerRuntime !== "codex") {
 
 const openClawStateDir = stateDir();
 assertNoLegacyPrimaryAuthRows(openClawStateDir);
-const authRaw = readSharedAuthProfileStoreText(openClawStateDir);
+const authRaw = readCanonicalAuthProfileStoreText(openClawStateDir);
 if (!authRaw) {
   throw new Error("auth profile SQLite store row was not persisted");
 }

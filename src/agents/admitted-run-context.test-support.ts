@@ -1,9 +1,64 @@
-import type { AdmittedRunContext, PreparedAgentRunAdmission } from "./admitted-run-context.js";
-import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
+import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "./operational-run-instance.js";
+
+const diagnosticFixtureContexts = new WeakSet<AdmittedRunContext>();
+
+/** Fixtures below the identity owner issue opaque grants unless they bind a real profile. */
+export function createTestOperatorAuthority(
+  source: Omit<AdmittedRunOperatorAuthority, "canonicalIdentity" | "grant"> &
+    Partial<Pick<AdmittedRunOperatorAuthority, "canonicalIdentity" | "grant">>,
+): AdmittedRunOperatorAuthority {
+  return createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
+    grant: decideTurnGrant(source.scopes),
+    ...source,
+  });
+}
 
 /** Explicit no-audit carrier for fixtures that enter below the admission owner. */
 export function createTestAdmittedRunContext(runId: string): AdmittedRunContext {
-  return Object.freeze({ operationalRunInstance: createOperationalRunInstanceRef(runId) });
+  const context = Object.freeze(
+    prepareGatewayContextBindingOwner({
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+    }),
+  );
+  diagnosticFixtureContexts.add(context);
+  return context;
+}
+
+/** Owns real admission for diagnostic fixtures, never renewing supplied or revoked authority. */
+export async function withTestRunAdmission<T>(
+  params: {
+    admittedRunContext: AdmittedRunContext;
+    runId: string;
+    agentId?: string;
+    config?: OpenClawConfig;
+  },
+  run: (context: AdmittedRunContext) => Promise<T>,
+): Promise<T> {
+  if (!diagnosticFixtureContexts.has(params.admittedRunContext)) {
+    return await run(params.admittedRunContext);
+  }
+  const { prepareSystemAgentRunAdmission } = await import("./admitted-run-context.js");
+  const admission = prepareSystemAgentRunAdmission(
+    params.config ?? {},
+    params.runId,
+    params.agentId ?? "test",
+    "prepared-run-fixture",
+  );
+  try {
+    return await run(await admission.admit("embedded"));
+  } finally {
+    admission.close();
+  }
 }
 
 /** Explicit prepared-owner seam for tests that exercise post-selection admission. */
@@ -12,6 +67,8 @@ export function createTestPreparedRunAdmission(runId: string): PreparedAgentRunA
   return Object.freeze({
     operationalRunInstance: admitted.operationalRunInstance,
     admit: async () => admitted,
+    assertSourceCurrent: () => {},
+    assertCurrent: () => {},
     close: () => {},
   });
 }

@@ -1,7 +1,21 @@
 import { vi, type Mock } from "vitest";
-import { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient, GatewayRequestError } from "../api/gateway.ts";
 
-export type GatewayRequestHandler = (method: string, params?: unknown) => unknown;
+export function missingReadScopeErrorFixture(): GatewayRequestError {
+  return new GatewayRequestError({
+    code: "FORBIDDEN",
+    message: "permission denied",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+}
+
+export type GatewayRequestHandler = (
+  ...args: Parameters<GatewayBrowserClient["request"]>
+) => unknown;
 
 export type GatewayRequestMock = Mock<GatewayRequestHandler>;
 
@@ -19,7 +33,10 @@ export function createTestGatewayClient(request: GatewayRequestHandler): Gateway
     get: () => "test-recovery-scope",
   });
   Object.defineProperty(client, "recoveryScopeReady", { configurable: true, get: () => true });
-  client.request = async <T = unknown>(method: string, params?: unknown): Promise<T> =>
-    (await request(method, params)) as T;
+  const connectSent = Promise.resolve(true);
+  Object.defineProperty(client, "connectSent", { configurable: true, get: () => connectSent });
+  client.request = async <T = unknown>(
+    ...args: Parameters<GatewayBrowserClient["request"]>
+  ): Promise<T> => (await request(...args)) as T;
   return client;
 }

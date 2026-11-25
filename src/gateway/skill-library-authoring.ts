@@ -2,13 +2,17 @@ import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import {
   mergeSkillLibrarySupportFiles,
   type SkillLibraryAuthoringCapability,
 } from "../skills/library/authoring.js";
-import { SkillLibraryError } from "../skills/library/errors.js";
+import {
+  prepareSkillLibrarySession,
+  type PreparedSkillLibrarySession,
+} from "../skills/library/selection.js";
 import {
   listSkillLibrary,
   resolveSkillLibraryPresentation,
@@ -16,9 +20,8 @@ import {
   saveSkillLibrary,
   mutateSkillLibrary,
 } from "../skills/library/service.js";
-import { resolveSkillLibraryActor } from "../skills/library/store.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "../state/user-profiles-internal.js";
+import { SkillLibraryError } from "../skills/skill-library-error.js";
+import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -34,40 +37,63 @@ export function invalidateSkillAuthoringForOtherRequester(
 ): void {
   for (const grant of active.get(sessionKey) ?? []) {
     if (grant.profileId !== profileId) {
-      const db = openOpenClawStateDatabase().db;
-      if (
-        !profileId ||
-        selectResolvedUserProfileById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileById(db, profileId)?.id
-      ) {
+      const canonical = readResidentUserProfileId(grant.profileId);
+      if (!profileId || !canonical || canonical !== readResidentUserProfileId(profileId)) {
         grant.revoke();
       }
     }
   }
 }
 
-/** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
-export function prepareGatewaySkillAuthoring(
+function grantsSkillAuthoring(options: SkillLibraryRequestOwner, grant: TurnGrant | undefined) {
+  const client = options.client;
+  return Boolean(
+    grant?.skillAuthoring &&
+    client?.authenticatedUserProfile &&
+    !client.internal?.syntheticClient &&
+    !client.internal?.agentRuntimeIdentity &&
+    !client.internal?.senderAttribution &&
+    !client.internal?.pluginRuntimeOwnerId &&
+    !client.internal?.approvalRuntime &&
+    !client.internal?.delegatedToolPolicyHandoffId,
+  );
+}
+
+async function prepareGatewaySkillLibrarySession(
+  options: SkillLibraryRequestOwner,
+  grant: TurnGrant | undefined,
+): Promise<PreparedSkillLibrarySession | undefined> {
+  if (!grantsSkillAuthoring(options, grant)) {
+    return undefined;
+  }
+  return prepareSkillLibrarySession(libraryAuthority(options));
+}
+
+export async function prepareGatewaySkillLibraryTurn(
+  request: { owner: SkillLibraryRequestOwner; grant: TurnGrant | undefined; sessionKey: string },
+  prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
+  onAuthoring: () => void,
+): Promise<SkillLibraryAuthoringCapability | undefined> {
+  const prepared = await prepareGatewaySkillLibrarySession(request.owner, request.grant);
+  await prepareSessionCreation(prepared);
+  onAuthoring();
+  return prepareGatewaySkillAuthoring(request.owner, request.sessionKey, request.grant, prepared);
+}
+
+/** The turn's admitted grant mints the namespace; actions remain normal tool policy. */
+export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
-  isHumanTurn: boolean,
-): SkillLibraryAuthoringCapability | undefined {
-  const client = options.client;
-  if (
-    !isHumanTurn ||
-    !client?.authenticatedUserProfile ||
-    client.internal?.syntheticClient ||
-    client.internal?.agentRuntimeIdentity ||
-    client.internal?.senderAttribution ||
-    client.internal?.pluginRuntimeOwnerId ||
-    client.internal?.approvalRuntime ||
-    client.internal?.cronRunContinuation ||
-    client.internal?.delegatedToolPolicyHandoffId
-  ) {
+  grant: TurnGrant | undefined,
+  prepared?: PreparedSkillLibrarySession,
+): Promise<SkillLibraryAuthoringCapability | undefined> {
+  if (!grant || !grantsSkillAuthoring(options, grant)) {
     return undefined;
   }
   const authority = libraryAuthority(options);
-  const library = resolveSkillLibraryPresentation(authority);
+  const library = prepared?.presentation ?? (await resolveSkillLibraryPresentation(authority));
+  prepared?.assertCurrent();
+  authority.assertCurrent();
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }
@@ -85,14 +111,14 @@ export function prepareGatewaySkillAuthoring(
       !owner ||
       getAdmittedRunDelegatedAuthority(bound) !== owner ||
       caller?.operationalRunInstance !== bound.operationalRunInstance ||
-      !caller.receiptAuthority ||
-      caller.receiptAuthority() === false
+      !caller.receiptAuthority
     ) {
       throw new SkillLibraryError(
         "AUTHORITY_EXPIRED",
         "Personal authoring authority expired or this turn has mixed requesters. Send a fresh attributed message requesting the change.",
       );
     }
+    caller.receiptAuthority();
   };
   const currentAuthority = { ...authority, assertCurrent, namespace: "personal" as const };
   return {
@@ -117,21 +143,21 @@ export function prepareGatewaySkillAuthoring(
           "Personal authoring run was not admitted.",
         );
       }
-      const grant = {
+      const binding = {
         profileId,
         revoke: () => {
           revoked = true;
         },
       };
       const grants = active.get(sessionKey) ?? new Set();
-      grants.add(grant);
+      grants.add(binding);
       active.set(sessionKey, grants);
       const stop = registerAgentRunDelegatedAuthorityClosedHandler((closed) => {
         if (closed !== owner) {
           return;
         }
         revoked = true;
-        grants.delete(grant);
+        grants.delete(binding);
         if (!grants.size) {
           active.delete(sessionKey);
         }
@@ -140,10 +166,11 @@ export function prepareGatewaySkillAuthoring(
     },
     assertWorkspaceCurrent() {
       assertCurrent();
-      if (!resolveSkillLibraryActor(openOpenClawStateDatabase().db, authority).admin) {
+      // Decided once at admission; a role change applies to the next turn.
+      if (!grant.owner) {
         throw new SkillLibraryError(
           "FORBIDDEN",
-          "Workspace authoring requires current administrator authority.",
+          "Workspace authoring requires administrator authority.",
         );
       }
     },
@@ -152,15 +179,12 @@ export function prepareGatewaySkillAuthoring(
       if (input.action === "list") {
         return listSkillLibrary(currentAuthority);
       }
-      if (input.action === "read") {
+      if (input.action === "read" || input.action === "activate") {
         if (!input.skillId) {
           throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
         }
-        return readSkillLibrary(currentAuthority, input.skillId, input.revision);
-      }
-      if (input.action === "activate") {
-        if (!input.skillId) {
-          throw new SkillLibraryError("INVALID_BUNDLE", "Choose skill_id from list.");
+        if (input.action === "read") {
+          return readSkillLibrary(currentAuthority, input.skillId, input.revision);
         }
         return activateLibrarySelection(
           { ...options, sessionMutationCommitGuard: assertCurrent },

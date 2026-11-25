@@ -3,34 +3,17 @@ import Foundation
 import OpenClawKit
 import Speech
 
+struct TalkSpeechLanguageSelection: Equatable {
+    /// Provider synthesis accepts a two-letter language, while the system
+    /// voice accepts a BCP 47 locale. Keep both forms so fallback stays correct.
+    let provider: String?
+    let systemVoice: String?
+}
+
 enum TalkSpeechLocale {
-    static let storageKey = "talk.speechLocale"
-    static let automaticID = "auto"
     static let fallbackLocaleID = "en-US"
 
-    struct Option: Identifiable {
-        let id: String
-        let label: String
-    }
-
-    static func supportedOptions(
-        supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> [Option]
-    {
-        var seen = Set<String>()
-        let dynamic: [Option] = supportedLocales
-            .compactMap { locale in
-                let id = self.canonicalID(locale.identifier)
-                guard seen.insert(id).inserted else { return nil }
-                return Option(id: id, label: self.friendlyName(for: locale))
-            }
-            .sorted { (lhs: Option, rhs: Option) in
-                lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
-            }
-        return [Option(id: self.automaticID, label: "Automatic")] + dynamic
-    }
-
     static func resolvedLocaleID(
-        localSelection: String?,
         gatewaySelection: String?,
         deviceLocaleID: String = Locale.autoupdatingCurrent.identifier,
         fallbackLocaleID: String = Self.fallbackLocaleID,
@@ -38,7 +21,6 @@ enum TalkSpeechLocale {
     {
         TalkConfigParsing.resolvedSpeechRecognitionLocaleID(
             preferredLocaleIDs: [
-                TalkConfigParsing.normalizedExplicitSpeechLocaleID(localSelection),
                 TalkConfigParsing.normalizedExplicitSpeechLocaleID(gatewaySelection),
                 deviceLocaleID,
             ],
@@ -46,15 +28,28 @@ enum TalkSpeechLocale {
             supportedLocaleIDs: supportedLocaleIDs)
     }
 
+    static func resolvedLanguages(
+        directiveLanguage: String?,
+        gatewaySelection: String?,
+        isSystemVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable)
+        -> TalkSpeechLanguageSelection
+    {
+        TalkSpeechLanguageSelection(
+            provider: ElevenLabsTTSClient.validatedLanguage(directiveLanguage),
+            systemVoice: TalkSpeechLocale.resolvedSynthesisLocaleID(
+                directiveLanguage: directiveLanguage,
+                gatewaySelection: gatewaySelection,
+                isVoiceAvailable: isSystemVoiceAvailable))
+    }
+
     static func resolvedSynthesisLocaleID(
         directiveLanguage: String?,
-        localSelection: String?,
         gatewaySelection: String?,
         isVoiceAvailable: (String) -> Bool = TalkSpeechLocale.isSystemVoiceAvailable) -> String?
     {
         // A missing higher-priority voice must not mask a later configured voice.
         // Return nil only after every candidate fails so synthesis uses the device default.
-        [directiveLanguage, localSelection, gatewaySelection]
+        [directiveLanguage, gatewaySelection]
             .compactMap { TalkConfigParsing.normalizedExplicitSpeechLocaleID($0) }
             .first(where: isVoiceAvailable)
     }
@@ -64,49 +59,21 @@ enum TalkSpeechLocale {
     }
 
     static func makeRecognizer(
-        localSelection: String?,
         gatewaySelection: String?,
         supportedLocales: Set<Locale> = SFSpeechRecognizer.supportedLocales()) -> (
         recognizer: SFSpeechRecognizer?,
         localeID: String?)
     {
         let supportedIDs = Set(supportedLocales.map(\.identifier))
-        guard let localeID = self.resolvedLocaleID(
-            localSelection: localSelection,
+        if let localeID = self.resolvedLocaleID(
             gatewaySelection: gatewaySelection,
-            supportedLocaleIDs: supportedIDs)
-        else {
-            let recognizer = SFSpeechRecognizer()
-            return (recognizer, recognizer?.locale.identifier)
-        }
-
-        if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID)) {
+            supportedLocaleIDs: supportedIDs),
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID))
+        {
             return (recognizer, localeID)
         }
 
         let recognizer = SFSpeechRecognizer()
         return (recognizer, recognizer?.locale.identifier)
-    }
-
-    private static func canonicalID(_ raw: String) -> String {
-        raw.replacingOccurrences(of: "_", with: "-")
-    }
-
-    private static func friendlyName(for locale: Locale) -> String {
-        let id = self.canonicalID(locale.identifier)
-        let cleanLocale = Locale(identifier: id)
-        if let langCode = cleanLocale.language.languageCode?.identifier,
-           let lang = cleanLocale.localizedString(forLanguageCode: langCode),
-           let regionCode = cleanLocale.region?.identifier,
-           let region = cleanLocale.localizedString(forRegionCode: regionCode)
-        {
-            return "\(lang) (\(region))"
-        }
-        if let langCode = cleanLocale.language.languageCode?.identifier,
-           let lang = cleanLocale.localizedString(forLanguageCode: langCode)
-        {
-            return lang
-        }
-        return cleanLocale.localizedString(forIdentifier: id) ?? id
     }
 }

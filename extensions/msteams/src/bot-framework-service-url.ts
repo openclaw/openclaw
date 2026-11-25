@@ -1,4 +1,3 @@
-// Msteams plugin module implements bot framework service url behavior.
 import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   normalizeHostnameSuffixAllowlist,
@@ -21,12 +20,7 @@ const BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = normalizeHostnameSuffixAllowlis
 );
 
 export function describeBotFrameworkServiceUrlHost(serviceUrl: string): string {
-  try {
-    const parsed = new URL(serviceUrl.trim());
-    return parsed.hostname || "invalid-url";
-  } catch {
-    return "invalid-url";
-  }
+  return URL.parse(serviceUrl.trim())?.hostname || "invalid-url";
 }
 
 export function isAllowedBotFrameworkServiceUrl(serviceUrl: unknown): serviceUrl is string {

@@ -1,14 +1,17 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 extension RootTabs {
     private static var sidebarPersistentWidthThreshold: CGFloat {
-        980
+        self.sidebarSplitIdealWidth + self.sidebarDetailMinimumWidth
     }
 
-    static let sidebarSplitIdealWidth: CGFloat = 316
-    static let sidebarSplitMaximumWidth: CGFloat = 340
+    static let sidebarSplitIdealWidth: CGFloat = 300
+    static let sidebarSplitMaximumWidth: CGFloat = 320
+    static let sidebarDetailMinimumWidth: CGFloat = 500
     // Keep the web drawer's 86% reveal while using more of current iPhone widths.
     static let sidebarDrawerMaximumWidth: CGFloat = 340
     static let sidebarShowButtonAccessibilityIdentifier = "RootTabs.Sidebar.Show"
@@ -18,6 +21,7 @@ extension RootTabs {
         case chat
         case overview
         case activity
+        case systems
         case agents
         case workboard
         case skillWorkshop
@@ -42,6 +46,7 @@ extension RootTabs {
             case .chat: String(localized: "Chat")
             case .overview: String(localized: "Overview")
             case .activity: String(localized: "Activity")
+            case .systems: String(localized: "Systems")
             case .agents: String(localized: "Agents")
             case .workboard: String(localized: "Workboard")
             case .skillWorkshop: String(localized: "Skill Workshop")
@@ -71,6 +76,7 @@ extension RootTabs {
             case .chat: "bubble.left"
             case .overview: "chart.bar"
             case .activity: "waveform.path.ecg"
+            case .systems: "server.rack"
             case .agents: "person.2"
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
@@ -88,17 +94,43 @@ extension RootTabs {
             }
         }
 
-        var settingsRoute: SettingsRoute? {
+        var screen: SidebarScreen {
             switch self {
-            case .gateway:
-                .gateway
-            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
-                 .files,
-                 .dreaming,
-                 .usage, .cron, .desktop, .terminal, .settings, .docs:
-                nil
+            case .activity: .dashboard(DashboardRouteMap.activityPagePath)
+            case .systems: .dashboard(DashboardRouteMap.systemsPagePath)
+            case .workboard: .dashboard(DashboardRouteMap.workboardPagePath)
+            case .skillWorkshop: .dashboard(DashboardRouteMap.skillWorkshopPagePath)
+            case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
+            case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
+            case .usage: .dashboard(DashboardRouteMap.usagePagePath)
+            case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .chat: .chat
+            case .overview: .overview
+            case .agents: .agents
+            case .sessions: .sessions
+            case .files: .files
+            case .desktop: .desktop
+            case .terminal: .terminal
+            case .docs: .docs
+            case .settings: .settings
+            case .gateway: .gateway
             }
         }
+
+        var settingsRoute: SettingsRoute? {
+            self == .gateway ? .gateway : nil
+        }
+    }
+
+    enum SidebarScreen: Equatable {
+        case dashboard(String)
+        case chat, overview, agents, sessions, files, desktop, terminal, docs, settings, gateway
+    }
+
+    static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {
+        servingEnabled && disclosureAccepted
+            ? DashboardRouteMap.devicePermissionsSettingsPath
+            : DashboardRouteMap.deviceSettingsPath
     }
 
     enum SidebarLayoutMode: Equatable {
@@ -106,29 +138,41 @@ extension RootTabs {
         case split
     }
 
-    static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
-        windowSize ?? contentSize
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
     }
 
-    static func sidebarLayoutMode(containerSize: CGSize) -> SidebarLayoutMode {
-        containerSize.width < self.sidebarPersistentWidthThreshold || containerSize.height > containerSize.width
-            ? .drawer
-            : .split
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
     }
 
-    static func preferredSidebarVisibility(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .split
+    /// The sidebar needs regular space in both axes and enough usable detail width.
+    /// Keyboard avoidance changes height, not this width budget or the size classes.
+    static func sidebarLayoutMode(
+        containerSize: CGSize,
+        horizontalSizeClass: UserInterfaceSizeClass?,
+        verticalSizeClass: UserInterfaceSizeClass?,
+        usesAccessibilityText: Bool = false) -> SidebarLayoutMode
+    {
+        horizontalSizeClass == .regular && verticalSizeClass == .regular &&
+            !usesAccessibilityText && containerSize.width >= self.sidebarPersistentWidthThreshold
+            ? .split
+            : .drawer
     }
 
-    static func shouldCollapseSidebarAfterSelection(layoutMode: SidebarLayoutMode) -> Bool {
-        layoutMode == .drawer
+    static func sidebarVisibility(layoutMode: SidebarLayoutMode, splitPreference: Bool?) -> Bool {
+        layoutMode == .split ? (splitPreference ?? true) : false
     }
 
     static func sidebarWidth(containerWidth: CGFloat, isDrawerLayout: Bool) -> CGFloat {
         if isDrawerLayout {
             return min(self.sidebarDrawerMaximumWidth, containerWidth * 0.86)
         }
-        return min(self.sidebarSplitMaximumWidth, max(self.sidebarSplitIdealWidth, containerWidth * 0.25))
+        return min(
+            self.sidebarSplitMaximumWidth,
+            max(self.sidebarSplitIdealWidth, containerWidth * 0.25),
+            max(0, containerWidth - self.sidebarDetailMinimumWidth))
     }
 
     static func sidebarContentOffset(
@@ -152,26 +196,19 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
-    static func shouldShowSidebarRevealInDestinationHeader(
+    /// The destination header's sidebar control hides the sidebar only beside a visible
+    /// split sidebar; a drawer is dismissed from its own header, scrim, or swipe.
+    static func sidebarHeaderControlHidesSidebar(
         isSidebarVisible: Bool,
         layoutMode: SidebarLayoutMode) -> Bool
     {
-        switch layoutMode {
-        case .split:
-            true
-        case .drawer:
-            !isSidebarVisible
-        }
+        layoutMode == .split && isSidebarVisible
     }
 
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
-        guard let flagIndex = arguments.firstIndex(of: "--openclaw-sidebar-visibility") else {
-            return nil
-        }
-        let valueIndex = arguments.index(after: flagIndex)
-        guard arguments.indices.contains(valueIndex) else { return nil }
-
-        switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
+        else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "visible", "show", "shown", "open", "true", "1":
             return true
         case "hidden", "hide", "closed", "false", "0":
@@ -208,6 +245,15 @@ extension RootTabs {
         return .settings
     }
 
+    /// A pending registry read is not evidence of a fresh install.
+    static func shouldOfferFirstGatewaySetup(
+        hasConnectedOnce: Bool,
+        hasSavedGateway: Bool?,
+        hasRuntimeOrLegacyGatewayConfig: Bool) -> Bool
+    {
+        !hasConnectedOnce && hasSavedGateway == false && !hasRuntimeOrLegacyGatewayConfig
+    }
+
     static func shouldPresentQuickSetup(
         quickSetupDismissed: Bool,
         showOnboarding: Bool,
@@ -232,6 +278,7 @@ extension RootTabs {
         .cron,
         .sessions,
         .activity,
+        .systems,
         .skillWorkshop,
         .agents,
         .instances,

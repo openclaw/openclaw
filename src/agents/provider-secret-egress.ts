@@ -1,83 +1,10 @@
-import {
-  looksLikeSecretSentinel,
-  mintSecretSentinel,
-  swapSecretSentinelsInText,
-} from "../secrets/sentinel.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { assertProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
+import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  type ModelProviderRequestTransportOverrides,
 } from "./provider-request-config.js";
-
-type PreparedProviderRuntimeAuth = {
-  apiKey: string;
-  baseUrl?: string;
-  request?: ModelProviderRequestTransportOverrides;
-  expiresAt?: number;
-};
-
-function protectRuntimeAuthValue(params: {
-  value: string;
-  provider: string;
-  label: string;
-}): string {
-  if (!params.value) {
-    return params.value;
-  }
-  return looksLikeSecretSentinel(params.value)
-    ? params.value
-    : mintSecretSentinel(params.value, {
-        label: `model-auth:${params.provider}:${params.label}`,
-      });
-}
-
-/** Re-sentinels credentials returned by a provider auth exchange. */
-export function protectPreparedProviderRuntimeAuth(params: {
-  provider: string;
-  preparedAuth: PreparedProviderRuntimeAuth | null | undefined;
-}): PreparedProviderRuntimeAuth | undefined {
-  const { preparedAuth } = params;
-  if (!preparedAuth) {
-    return undefined;
-  }
-  const protect = (value: string, label: string): string =>
-    !value || isNonSecretApiKeyMarker(value)
-      ? value
-      : protectRuntimeAuthValue({ value, provider: params.provider, label });
-  const request = preparedAuth.request;
-  const headers = request?.headers
-    ? Object.fromEntries(
-        Object.entries(request.headers).map(([name, value]) => [
-          name,
-          protect(value, `runtime-header:${name.toLowerCase()}`),
-        ]),
-      )
-    : undefined;
-  const auth = request?.auth;
-  const protectedAuth =
-    auth?.mode === "authorization-bearer"
-      ? { ...auth, token: protect(auth.token, "runtime-bearer") }
-      : auth?.mode === "header"
-        ? {
-            ...auth,
-            value: protect(auth.value, `runtime-auth-header:${auth.headerName.toLowerCase()}`),
-          }
-        : auth;
-  return {
-    ...preparedAuth,
-    apiKey: protect(preparedAuth.apiKey, "runtime-api-key"),
-    ...(request
-      ? {
-          request: {
-            ...request,
-            ...(headers ? { headers } : {}),
-            ...(protectedAuth ? { auth: protectedAuth } : {}),
-          },
-        }
-      : {}),
-  };
-}
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 
 export function unwrapSecretSentinelsForProviderEgress(value: string, boundary: string): string {
   const swapped = swapSecretSentinelsInText(value);
@@ -162,6 +89,7 @@ function unwrapRequestTransportSentinelsForProviderEgress(
 export function unwrapModelHeaderSentinelsForProviderEgress<
   T extends { headers?: Record<string, unknown> },
 >(model: T, boundary: string): T {
+  assertProviderAuthAuthority(model);
   // Plugin transports read both visible headers and the symbol-attached request
   // overrides; both can carry sentinels minted by protectPreparedProviderRuntimeAuth.
   const headers = model.headers
@@ -172,7 +100,7 @@ export function unwrapModelHeaderSentinelsForProviderEgress<
   if (headers === model.headers && unwrappedRequest === request) {
     return model;
   }
-  const next = headers === model.headers ? ({ ...model } as T) : ({ ...model, headers } as T);
+  const next = headers === model.headers ? { ...model } : { ...model, headers };
   return unwrappedRequest === request
     ? next
     : attachModelProviderRequestTransport(next, unwrappedRequest);

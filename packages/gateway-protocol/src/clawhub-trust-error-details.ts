@@ -1,4 +1,8 @@
-import { isProtocolRecord } from "./protocol-value-normalization.js";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes } from "./gateway-error-codes.js";
+import { asProtocolRecord, isProtocolRecord } from "./protocol-value-normalization.js";
+
+export const CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED";
 
 /** Structured ClawHub trust details carried in gateway error payloads. */
 export const ClawHubTrustErrorCodes = {
@@ -13,10 +17,6 @@ export type ClawHubTrustErrorDetails = {
   version?: string;
   warning?: string;
 };
-
-function normalizeNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 export function isClawHubTrustErrorCode(value: unknown): value is ClawHubTrustErrorCode {
   return (
@@ -46,20 +46,27 @@ export function readClawHubTrustErrorDetails(
   if (!isProtocolRecord(details)) {
     return undefined;
   }
-  const raw = details as {
-    clawhubTrustCode?: unknown;
-    version?: unknown;
-    warning?: unknown;
-  };
-  const code = isClawHubTrustErrorCode(raw.clawhubTrustCode) ? raw.clawhubTrustCode : undefined;
-  const version = normalizeNonEmptyString(raw.version);
-  const warning = normalizeNonEmptyString(raw.warning);
-  if (!code && !version && !warning) {
-    return undefined;
-  }
-  return {
-    ...(code ? { clawhubTrustCode: code } : {}),
-    ...(version ? { version } : {}),
-    ...(warning ? { warning } : {}),
-  };
+  return buildClawHubTrustErrorDetails({
+    code: isClawHubTrustErrorCode(details.clawhubTrustCode) ? details.clawhubTrustCode : undefined,
+    version: readNonBlankString(details.version),
+    warning: readNonBlankString(details.warning),
+  });
+}
+
+export type ClawHubRiskAcknowledgementRequiredErrorDetails = {
+  code: typeof CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED;
+  warning: string;
+};
+
+export function readClawHubRiskAcknowledgementRequiredError(
+  error: unknown,
+): ClawHubRiskAcknowledgementRequiredErrorDetails | null {
+  const record = asProtocolRecord(error);
+  const details = asProtocolRecord(record?.details);
+  const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
+  return record?.code === ErrorCodes.INVALID_REQUEST &&
+    details?.code === CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
+    warning
+    ? { code: CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
+    : null;
 }

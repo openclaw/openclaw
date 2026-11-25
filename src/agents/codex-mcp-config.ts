@@ -4,15 +4,14 @@
  * compatible with Codex's MCP config shape.
  */
 import crypto from "node:crypto";
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import {
-  loadEnabledBundleMcpConfig,
-  type BundleMcpConfig,
-  type BundleMcpServerConfig,
-} from "../plugins/bundle-mcp.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
+import type { McpToolGrant } from "../infra/exec-approvals-mcp.js";
+import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { isRecord } from "../utils.js";
 import {
   decodeHeaderEnvPlaceholder,
@@ -90,12 +89,35 @@ export function applyCodexSessionMcpToolDenials(
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
+  grants: readonly McpToolGrant[] = [],
 ): Record<string, unknown> {
   const next = normalizeBundleMcpServerConfig(server);
+  const connectionTimeoutMs = clampPositiveTimerTimeoutMs(server.connectionTimeoutMs);
+  const requestTimeoutMs = clampPositiveTimerTimeoutMs(server.requestTimeoutMs);
+  if (connectionTimeoutMs !== undefined) {
+    next.startup_timeout_sec = connectionTimeoutMs / 1_000;
+  }
+  if (requestTimeoutMs !== undefined) {
+    next.tool_timeout_sec = requestTimeoutMs / 1_000;
+  }
+  if (typeof server.supportsParallelToolCalls === "boolean") {
+    next.supports_parallel_tool_calls = server.supportsParallelToolCalls;
+  }
   applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveProjectedMcpCodexToolApprovalMode(name, server);
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
+  }
+  // Codex downgrades remembered approvals under explicit prompt; only auto
+  // (including its default) accepts durable grants. Server-wide approve is already sufficient.
+  if (defaultToolsApprovalMode === undefined || defaultToolsApprovalMode === "auto") {
+    const tools = grants
+      .filter((grant) => grant.server === name)
+      .map((grant) => [grant.tool, { approval_mode: "approve" }] as const)
+      .toSorted(([left], [right]) => left.localeCompare(right));
+    if (tools.length > 0) {
+      next.tools = Object.fromEntries(tools);
+    }
   }
   const httpHeaders = normalizeMcpStringRecord(server.headers);
   if (httpHeaders) {
@@ -144,7 +166,7 @@ export function loadCodexBundleMcpApprovalConfig(
   params: Pick<LoadCodexBundleMcpThreadConfigParams, "workspaceDir" | "cfg" | "toolOverrides">,
 ): CodexMcpServersConfig {
   const { config } = loadEnabledBundleMcpConfig(params);
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const selected = selectCodexBundleMcpConfig(
     { mcpServers: { ...config.mcpServers, ...configuredMcp } },
     configuredMcp,
@@ -165,7 +187,7 @@ export function loadCodexBundleMcpApprovalConfig(
 
 function selectCodexBundleMcpConfig(
   config: BundleMcpConfig,
-  configuredMcp: ReturnType<typeof normalizeConfiguredMcpServers>,
+  configuredMcp: Record<string, McpServerConfig>,
   toolOverrides: LoadCodexBundleMcpThreadConfigParams["toolOverrides"],
 ): BundleMcpConfig {
   const serverOverrides = toolOverrides?.mcpServers;
@@ -211,9 +233,9 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 }
 
 /** Load bundle MCP config for one Codex app-server thread. */
-export function loadCodexBundleMcpThreadConfigCore(
+export async function loadCodexBundleMcpThreadConfigCore(
   params: LoadCodexBundleMcpThreadConfigParams,
-): CodexBundleMcpThreadConfig {
+): Promise<CodexBundleMcpThreadConfig> {
   const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
@@ -232,7 +254,7 @@ export function loadCodexBundleMcpThreadConfigCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
   });
-  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const configuredMcp = params.cfg?.mcp?.servers ?? {};
   const serverOverrides = params.toolOverrides?.mcpServers;
   const effectiveConfig = selectCodexBundleMcpConfig(
     bundleMcp.config,
@@ -265,27 +287,28 @@ export function loadCodexBundleMcpThreadConfigCore(
       "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
     );
   }
-  const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
-    config: effectiveConfig,
+  // Enabled configured servers reach Codex through the user-server projection
+  // and win a name collision there, as in the merged surface above. Sending the
+  // bundled copy too makes Codex merge both into one invalid entry (#194825).
+  const bundleOnlyConfig = {
+    mcpServers: Object.fromEntries(
+      Object.entries(effectiveConfig.mcpServers).filter(
+        ([name]) => !Object.hasOwn(enabledConfiguredMcp, name),
+      ),
+    ),
+  };
+  const preparedDataDirs = await prepareOwnedBundleMcpDataDirs({
+    config: bundleOnlyConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},
   });
   const diagnostics = [...bundleMcp.diagnostics, ...preparedDataDirs.diagnostics];
   const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config);
-  if (Object.keys(mcpServers).length === 0) {
-    return {
-      diagnostics,
-      evaluated: true,
-      staticServerNames,
-      userStaticServerNames,
-    };
-  }
+  const hasServers = Object.keys(mcpServers).length > 0;
   return {
-    configPatch: {
-      mcp_servers: mcpServers,
-    },
+    ...(hasServers ? { configPatch: { mcp_servers: mcpServers } } : {}),
     diagnostics,
     evaluated: true,
-    fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
+    ...(hasServers ? { fingerprint: fingerprintCodexMcpServersConfig(mcpServers) } : {}),
     staticServerNames,
     userStaticServerNames,
   };

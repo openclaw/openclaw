@@ -1,26 +1,29 @@
-/**
- * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, and credential transport.
- */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
   CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { parseClaudeCliJsonlEvent } from "./cli-output.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
+import {
+  classifyClaudeCliErrorCode,
+  parseClaudeCliJsonlEvent,
+  parseClaudeCliJsonlLifecycleEvent,
+} from "./cli-output.js";
+import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
   resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
-import anthropicPluginPackage from "./package.json" with { type: "json" };
+import { appendClaudeCliToolNamingGuidance } from "./cli-tool-naming.js";
 
 type ClaudeCliAuthCredential =
   | { type: "oauth"; access: string; expires: number }
@@ -38,12 +41,6 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
-// SDK import and query() set these in process.env. Seed them before core
-// fingerprints the child env so the first resumed turn keeps its warm query.
-const CLAUDE_AGENT_SDK_ENV = {
-  CLAUDE_AGENT_SDK_VERSION: anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"],
-  NoDefaultCurrentDirectoryInExePath: "1",
-};
 const CLAUDE_CLI_DEFAULT_ARGS = [
   "-p",
   "--output-format",
@@ -55,8 +52,60 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--allowedTools",
   "mcp__openclaw__*",
   "--disallowedTools",
-  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+  "ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor",
 ] as const;
+
+// Only equivalent bare tools confer general capabilities; Glob and notebook-cell
+// edits do not. Bash is foreground-only at launch, so it never grants `process`.
+const CLAUDE_NATIVE_TOOL_CAPABILITIES: Readonly<Record<string, string>> = {
+  read: "read",
+  grep: "read",
+  write: "write",
+  edit: "edit",
+  bash: "exec",
+  webfetch: "web_fetch",
+  websearch: "web_search",
+  askuserquestion: "ask_user",
+};
+
+function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): readonly string[] {
+  const selected = new Set(nativeTools.map((name) => name.trim().toLowerCase()));
+  // Mapping order keeps persisted caps deterministic across native initialization events.
+  return [
+    ...new Set(
+      Object.entries(CLAUDE_NATIVE_TOOL_CAPABILITIES)
+        .filter(([name]) => selected.has(name))
+        .map(([, capability]) => capability),
+    ),
+  ];
+}
+
+// Agent and Workflow descendants inherit the parent's tool list, so they confer no
+// capability of their own. WebSearch runs on Anthropic's servers and confers web_search,
+// which core keeps only while the turn's OpenClaw policy allows it and no configured
+// OpenClaw search provider already serves it. Order is canonical:
+// equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow", "WebSearch"] as const;
+// Used when the operator sets no `default` list; an explicit list (even []) replaces it.
+const CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS: readonly string[] = ["WebSearch"];
+
+/** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
+function resolveClaudeManagedNativeTools(
+  ctx: Parameters<NonNullable<CliBackendPlugin["resolveManagedNativeTools"]>>[0],
+): readonly string[] {
+  const pluginConfig = ctx.config?.plugins?.entries?.anthropic?.config;
+  const configured = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
+  const selection = isRecord(configured) ? configured : {};
+  const agents = isRecord(selection.agents) ? selection.agents : undefined;
+  const selected = Object.hasOwn(agents ?? {}, ctx.agentId)
+    ? agents?.[ctx.agentId]
+    : Object.hasOwn(selection, "default")
+      ? selection.default
+      : CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS;
+  return Array.isArray(selected)
+    ? CLAUDE_MANAGED_NATIVE_TOOLS.filter((name) => selected.includes(name))
+    : [];
+}
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -92,6 +141,7 @@ function createClaudeCliAuthInput(params: {
 
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
+  isOAuthToken: (value: string) => boolean,
 ): ClaudeCliPreparedExecution | undefined {
   // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
   // OpenClaw-owned). Native `claude` logins are never forwarded; the current
@@ -123,15 +173,19 @@ function resolveClaudeCliAuthInput(
     });
   }
   if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    // Claude Code rejects an OAuth token on its API-key descriptor ("Invalid API key").
+    // Older imports stored subscription tokens as api_key profiles; send them the way
+    // the Anthropic HTTP route already does, by the credential's own shape.
     return createClaudeCliAuthInput({
-      envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+      envName: isOAuthToken(credential.key)
+        ? "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"
+        : "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
       value: credential.key,
     });
   }
   return undefined;
 }
 
-/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(
   options: {
     ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
@@ -161,7 +215,13 @@ export function buildAnthropicCliBackend(
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    hostOwnedTools: ["exec", "process"],
     toolAvailabilityEnforcement: "execution-args",
+    transformSystemPrompt: ({ systemPrompt, openClawMcpToolNames }) =>
+      appendClaudeCliToolNamingGuidance(systemPrompt, openClawMcpToolNames),
+    projectNativeToolAuthority: projectClaudeNativeToolAuthority,
+    resolveManagedNativeTools: resolveClaudeManagedNativeTools,
+    nativeToolSearch: "ToolSearch",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     manualCompaction: {
@@ -170,6 +230,9 @@ export function buildAnthropicCliBackend(
         return instructions ? `/compact ${instructions}` : "/compact";
       },
       input: "arg",
+      // Live turns send OpenClaw's prompt as Claude Code's replacement system prompt;
+      // the resumed compaction process must too, or its prefix misses their cache.
+      systemPromptFileArg: "--system-prompt-file",
       validateOutput: (rawOutput) => {
         for (const line of rawOutput.split("\n")) {
           try {
@@ -235,47 +298,69 @@ export function buildAnthropicCliBackend(
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
     prepareExecution: (context) => {
-      const prepare = () => {
-        const credentialContext = context as typeof context & {
-          authCredential?: ClaudeCliAuthCredential;
-          isolatedCompletionPrompt?: string;
-          isolatedCompletionSystemPrompt?: string;
-        };
-        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+      const credentialContext = context as typeof context & {
+        authCredential?: ClaudeCliAuthCredential;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
+      };
+      const prepare = (isOAuthToken: (value: string) => boolean = () => false) => {
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential, isOAuthToken);
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
-        const agentSdkExecution =
+        const cliExecution =
           !isolatedCompletion && context.executionMode === "agent"
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
-                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
-                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                  const { executeClaudeCli } = await import("./cli.runtime.js");
+                  executionContext.assertCurrent?.();
+                  yield* executeClaudeCli(executionContext, authInput?.secretInput);
                 },
               }
             : undefined;
         const env = {
-          ...(agentSdkExecution ? CLAUDE_AGENT_SDK_ENV : {}),
+          // Claude rebuilds the startup Git snapshot on process resume, rewriting
+          // the conversation prefix after workspace edits or commits. OpenClaw
+          // supplies workspace instructions; Git state can be read with tools.
+          CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
+          ...(context.toolAvailability
+            ? {
+                ENABLE_TOOL_SEARCH:
+                  context.toolAvailability.discovery?.includes("ToolSearch") ||
+                  context.toolAvailability.native.includes("ToolSearch")
+                    ? "true"
+                    : "false",
+              }
+            : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
-        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
-          ? {
-              env,
-              // The paired side-question argv projection disables settings, memory,
-              // hooks, session persistence, and tools before process launch.
-              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
-              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-              ...agentSdkExecution,
-            }
-          : undefined;
+        return {
+          env,
+          // The paired side-question argv projection disables settings, memory,
+          // hooks, session persistence, and tools before process launch.
+          ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+          ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+          ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+          ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+          ...cliExecution,
+        };
       };
       const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
-      return supportProbe ? supportProbe.then(prepare) : prepare();
+      // The setup entry stays light: only API-key profiles need the shared credential classifier.
+      const classifier =
+        credentialContext.authCredential?.type === "api_key"
+          ? import("openclaw/plugin-sdk/provider-stream-shared").then(
+              (sdk) => sdk.isAnthropicOAuthApiKey,
+            )
+          : undefined;
+      return supportProbe || classifier
+        ? Promise.all([supportProbe, classifier]).then(([, isOAuthToken]) => prepare(isOAuthToken))
+        : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    classifyErrorCode: classifyClaudeCliErrorCode,
+    parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {
         excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),

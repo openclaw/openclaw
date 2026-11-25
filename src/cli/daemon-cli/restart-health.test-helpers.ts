@@ -1,5 +1,13 @@
 import { vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { GatewayService } from "../../daemon/service.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -10,26 +18,93 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
-export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
+export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
   () => "gateway",
 );
-export const probeGateway = vi.fn();
+export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
+
+export function gatewayResponseError(message: string, code?: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details: code ? { code } : undefined,
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayProtocolMismatchError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "INVALID_REQUEST",
+    message: "protocol mismatch",
+    details: {
+      code: "PROTOCOL_MISMATCH",
+      clientMinProtocol: 5,
+      clientMaxProtocol: 5,
+      expectedProtocol: 4,
+      minimumProbeProtocol: 3,
+    },
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayVerifiedUserRequiredError(): GatewayProtocolRequestError {
+  return gatewayResponseError(
+    "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    "AUTH_VERIFIED_USER_REQUIRED",
+  );
+}
+export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
+
+vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
+  return {
+    ...actual,
+    createConfiguredGatewayLocalProbe: (
+      ...args: Parameters<typeof actual.createConfiguredGatewayLocalProbe>
+    ) => {
+      const probe = actual.createConfiguredGatewayLocalProbe(...args);
+      return {
+        ...probe,
+        requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) => {
+          if (params.pathname === "/startupz") {
+            return requestStartupProbe(params);
+          }
+          // Only intercept readiness endpoints when a test provides an explicit
+          // implementation; otherwise fall through to the real loopback transport
+          // so existing real-HTTP readiness tests keep exercising real sockets.
+          if (
+            (params.pathname === "/healthz" || params.pathname === "/readyz") &&
+            requestReadinessProbe.getMockImplementation() !== undefined
+          ) {
+            return requestReadinessProbe(params);
+          }
+          return probe.requestHttp(params);
+        },
+      };
+    },
+  };
+});
+
 export const createConfigIO = vi.fn();
 export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
-const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
 export const readActiveGatewayLockIdentity = vi.fn();
+export const readGatewayOwnerLease =
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
 export const resolveGatewayServiceProbeHosts = vi.fn<
   (_params?: unknown) => Promise<readonly string[]>
 >(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports-format.js", () => ({
-  classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
+  classifyPortListener: (listener: unknown) => classifyPortListener(listener),
   formatPortDiagnostics: vi.fn(() => []),
 }));
 
@@ -42,8 +117,9 @@ vi.mock("../../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
 }));
 
-vi.mock("../../gateway/probe.js", () => ({
-  probeGateway: (opts: unknown) => probeGateway(opts),
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -55,13 +131,19 @@ vi.mock("../../gateway/probe-auth.js", () => ({
     resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
+// mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
-  hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
 }));
 
+vi.mock("../../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease: (params: { env?: NodeJS.ProcessEnv; port?: number }) =>
+    readGatewayOwnerLease(params),
+}));
+
 vi.mock("../../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
+  readActiveGatewayLockIdentity: (params?: { env?: NodeJS.ProcessEnv }) =>
+    readActiveGatewayLockIdentity(params),
   isSameGatewayLockIdentity: (
     previous: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
     current: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
@@ -81,14 +163,14 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 
 const originalPlatform = process.platform;
 
 export function makeGatewayService(
-  runtime: { status: "running"; pid: number } | { status: "stopped" },
+  runtime: { status: "running"; pid: number } | { status: "stopped" | "unknown" },
 ): GatewayService {
   return {
     readRuntime: vi.fn(async () => runtime),
@@ -96,12 +178,47 @@ export function makeGatewayService(
   } as unknown as GatewayService;
 }
 
-export function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected first mock call");
-  }
-  return call[0];
+export function portUsage(
+  listeners: PortUsage["listeners"] = [],
+  overrides: Partial<PortUsage> = {},
+): PortUsage {
+  return {
+    port: 18789,
+    status: listeners.length ? "busy" : "free",
+    listeners,
+    hints: [],
+    ...overrides,
+  };
+}
+
+export function ownerLease(pid: number, state: "live" | "dead" = "live", startedAt = 1000) {
+  return {
+    owner: `owner-${pid}`,
+    pid,
+    host: "gateway-test-host",
+    startedAt,
+    port: 18789,
+    mode: "supervised" as const,
+    supervisor: { kind: "schtasks" as const, name: "OpenClaw Gateway" },
+    state,
+    expired: state === "dead",
+  };
+}
+
+export async function waitForRunningGateway(
+  options: Partial<
+    Extract<
+      Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0],
+      { service: unknown }
+    >
+  > = {},
+) {
+  const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  return waitForGatewayHealthyRestart({
+    service: makeGatewayService({ status: "running", pid: 8000 }),
+    port: 18789,
+    ...options,
+  });
 }
 
 const previousGatewayLockIdentity: GatewayLockIdentity = {
@@ -127,7 +244,6 @@ export async function inspectGatewayRestartWithSnapshot(params: {
   portUsage: PortUsage;
   expectedVersion?: string;
   expectedBuildId?: string;
-  includeUnknownListenersAsStale?: boolean;
 }) {
   const service = makeGatewayService(params.runtime);
   inspectPortUsage.mockResolvedValue(params.portUsage);
@@ -138,43 +254,30 @@ export async function inspectGatewayRestartWithSnapshot(params: {
     probeHosts: ["127.0.0.1"],
     ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
     ...(params.expectedBuildId === undefined ? {} : { expectedBuildId: params.expectedBuildId }),
-    ...(params.includeUnknownListenersAsStale === undefined
-      ? {}
-      : { includeUnknownListenersAsStale: params.includeUnknownListenersAsStale }),
   });
 }
 
-export async function inspectUnknownListenerFallback(params: {
+export async function inspectUnknownListener(params: {
   runtime: { status: "running"; pid: number } | { status: "stopped" };
-  includeUnknownListenersAsStale: boolean;
 }) {
   Object.defineProperty(process, "platform", { value: "win32", configurable: true });
   classifyPortListener.mockReturnValue("unknown");
   return inspectGatewayRestartWithSnapshot({
     runtime: params.runtime,
-    portUsage: {
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 10920, command: "unknown" }],
-      hints: [],
-    },
-    includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+    portUsage: portUsage([{ pid: 10920, command: "unknown" }]),
   });
 }
 
-export async function inspectAmbiguousOwnershipWithProbe(
-  probeResult: Awaited<ReturnType<typeof probeGateway>>,
-) {
+export async function inspectAmbiguousOwnershipWithProbe(error?: Error) {
   classifyPortListener.mockReturnValue("unknown");
-  probeGateway.mockResolvedValue(probeResult);
+  if (error) {
+    callGateway.mockRejectedValue(error);
+  } else {
+    callGateway.mockImplementation(gatewayHealthResponse());
+  }
   return inspectGatewayRestartWithSnapshot({
     runtime: { status: "running", pid: 8000 },
-    portUsage: {
-      port: 18789,
-      status: "busy",
-      listeners: [{ commandLine: "" }],
-      hints: [],
-    },
+    portUsage: portUsage([{ commandLine: "" }]),
   });
 }
 
@@ -185,12 +288,7 @@ export async function waitForStoppedFreeGatewayRestart(
 ) {
   const attempts = process.platform === "win32" ? 360 : 120;
   const service = makeGatewayService({ status: "stopped" });
-  inspectPortUsage.mockResolvedValue({
-    port: 18789,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
+  inspectPortUsage.mockResolvedValue(portUsage());
 
   const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
   return waitForGatewayHealthyRestart({
@@ -203,40 +301,26 @@ export async function waitForStoppedFreeGatewayRestart(
 }
 
 export function resetRestartHealthMocks() {
+  requestStartupProbe.mockReset().mockResolvedValue(null);
+  requestReadinessProbe.mockReset();
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
-  inspectPortUsage.mockReset();
-  readBestEffortConfig.mockReset();
-  readBestEffortConfig.mockResolvedValue({});
-  createConfigIO.mockReset();
-  createConfigIO.mockReturnValue({
+  // These transport-mocked lifecycle tests spoof OS state; they must not load
+  // native credential storage under a platform different from the running host.
+  readBestEffortConfig.mockReset().mockResolvedValue({ gateway: { auth: { mode: "none" } } });
+  createConfigIO.mockReset().mockReturnValue({
     readBestEffortConfig: () => readBestEffortConfig(),
   });
-  resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
-  resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({ auth: {} });
-  inspectPortUsage.mockResolvedValue({
-    port: 0,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
-  sleep.mockReset();
-  sleep.mockImplementation(async (ms: number) => {
+  resolveGatewayProbeAuthSafeWithSecretInputs.mockReset().mockResolvedValue({ auth: {} });
+  inspectPortUsage.mockReset().mockResolvedValue(portUsage([], { port: 0 }));
+  sleep.mockReset().mockImplementation(async (ms: number) => {
     monotonicClock.nowMs += ms;
   });
-  classifyPortListener.mockReset();
-  classifyPortListener.mockReturnValue("gateway");
-  probeGateway.mockReset();
-  probeGateway.mockResolvedValue({
-    ok: false,
-    close: null,
-  });
-  hasActiveStartupMigrationLease.mockReset();
-  hasActiveStartupMigrationLease.mockReturnValue(false);
-  readActiveGatewayLockIdentity.mockReset();
-  readActiveGatewayLockIdentity.mockResolvedValue(undefined);
-  resolveGatewayServiceProbeHosts.mockReset();
-  resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
+  classifyPortListener.mockReset().mockReturnValue("gateway");
+  callGateway.mockReset().mockRejectedValue(new Error("connect ECONNREFUSED"));
+  readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
+  readGatewayOwnerLease.mockReset().mockReturnValue(undefined);
+  resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
 }
 
 export function restoreRestartHealthMocks() {

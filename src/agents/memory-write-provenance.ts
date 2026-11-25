@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isMissingPathError } from "../infra/errors.js";
+import { isMissingPathError, readErrorCause } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import {
@@ -20,8 +20,8 @@ export type MemoryWriteProvenanceObserver = {
 };
 
 type ProvenanceWriteOperations = {
-  readFile: (absolutePath: string) => Promise<Buffer | string>;
-  writeFile: (absolutePath: string, content: string) => Promise<void>;
+  readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer | string>;
+  writeFile: (absolutePath: string, content: string, signal?: AbortSignal) => Promise<void>;
   remove?: (absolutePath: string) => Promise<void>;
 };
 
@@ -32,43 +32,40 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   if (!observer) {
     return operations;
   }
+  const readContentBefore = (absolutePath: string, signal?: AbortSignal) =>
+    operations
+      .readFile(absolutePath, signal)
+      .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
+      .catch((error: unknown) => {
+        if (!isMissingPathError(error) && !isMissingPathError(readErrorCause(error))) {
+          throw error;
+        }
+        return "";
+      });
   const remove = operations.remove;
   return {
     ...operations,
-    writeFile: async (absolutePath: string, content: string) => {
+    writeFile: async (absolutePath: string, content: string, signal?: AbortSignal) => {
+      const commit = () => {
+        signal?.throwIfAborted();
+        return operations.writeFile(absolutePath, content, signal);
+      };
       if (!(await observer.classifies(absolutePath))) {
-        await operations.writeFile(absolutePath, content);
+        await commit();
         return;
       }
-      const contentBefore = await operations
-        .readFile(absolutePath)
-        .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-        .catch((error: unknown) => {
-          if (!isMissingPathError(error)) {
-            throw error;
-          }
-          return "";
-        });
       await observer.write({
         absolutePath,
-        contentBefore,
+        contentBefore: await readContentBefore(absolutePath, signal),
         contentAfter: content,
-        commit: () => operations.writeFile(absolutePath, content),
+        commit,
       });
     },
     ...(remove
       ? {
           remove: async (absolutePath: string) => {
             const contentBefore = (await observer.classifies(absolutePath))
-              ? await operations
-                  .readFile(absolutePath)
-                  .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-                  .catch((error: unknown) => {
-                    if (!isMissingPathError(error)) {
-                      throw error;
-                    }
-                    return "";
-                  })
+              ? await readContentBefore(absolutePath)
               : "";
             await remove(absolutePath);
             await observer.clearAfterDelete(absolutePath, contentBefore);

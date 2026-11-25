@@ -32,33 +32,31 @@ enum PermissionRequestBridge {
         }
 
         func canStartRequest() -> Bool {
-            self.lock.lock()
-            let canStart = !self.hasResumed
-            self.lock.unlock()
-            return canStart
+            self.lock.withLock { !self.hasResumed }
         }
     }
 
-    static func awaitRequest(
-        _ start: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
+    @MainActor static func awaitRequest(
+        isCurrent: @escaping @MainActor @Sendable () -> Bool = { true },
+        _ start: @escaping @MainActor @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
     {
         let box = Box()
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation(isolation: nil) { continuation in
-                guard !Task.isCancelled else {
-                    continuation.resume(returning: false)
+        let granted = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard box.install(continuation) else { return }
+                // Privileged actions require current owner-held authority after awaited work and before side effects.
+                // Keep this check and OS initiation synchronous on the main actor.
+                guard box.canStartRequest(), !Task.isCancelled, isCurrent() else {
+                    box.resume(false)
                     return
                 }
-                guard box.install(continuation) else { return }
-                Task { @MainActor in
-                    guard box.canStartRequest() else { return }
-                    start { granted in
-                        box.resume(granted)
-                    }
+                start { granted in
+                    box.resume(granted)
                 }
             }
         } onCancel: {
             box.resume(false)
         }
+        return !Task.isCancelled && isCurrent() && granted
     }
 }

@@ -1,10 +1,7 @@
-// Model Catalog Core module implements model catalog refs behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeProviderId } from "./provider-id.js";
 
 export { normalizeProviderId as normalizeModelCatalogProviderId } from "./provider-id.js";
-
-// Stable model catalog ref and merge-key builders.
 
 export type ModelCatalogRef = {
   provider: string;

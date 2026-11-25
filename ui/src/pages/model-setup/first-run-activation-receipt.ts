@@ -1,9 +1,11 @@
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { activationTimeoutForKind } from "./state.ts";
+import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
 const FIRST_RUN_ACTIVATION_RECEIPT_KEY = "openclaw.modelSetup.pendingActivation.v1";
 const DEVICE_IDENTITY_KEY = "openclaw-device-identity-v1";
@@ -23,20 +25,25 @@ export function subscribeFirstRunActivationCleared(
     }
   };
   receiptClearedListeners.add(listener);
-  window.addEventListener("storage", onStorage);
+  const stopStorage = listen(window, "storage", { handleEvent: onStorage });
   return () => {
     receiptClearedListeners.delete(listener);
-    window.removeEventListener("storage", onStorage);
+    stopStorage();
   };
 }
 
-type ActivationContext = Pick<ApplicationContext, "gateway" | "agentSelection">;
+/** The agent is the selection of the surface that started the activation. */
+type ActivationContext = Pick<ApplicationContext, "gateway"> & {
+  agentSelection: { state: { selectedId: string | null } };
+};
 
 export type FirstRunActivationReceipt = {
   version: 1;
   gatewayUrl: string;
   agentId: string;
   modelRef: string | null;
+  modelTarget?: "utility";
+  wizard?: ModelSetupWizardRecovery;
   kind: string;
   deadlineMs: number;
   owner: string;
@@ -78,12 +85,21 @@ function activationOwner(
       connection.bootstrapToken,
       connection.bootstrapProfile ?? "",
       deviceToken ?? "",
+      ...(receipt.modelTarget ? [receipt.modelTarget] : []),
+      ...(receipt.wizard
+        ? [
+            receipt.wizard.sessionId,
+            receipt.wizard.authChoice,
+            receipt.wizard.authKind ?? "",
+            ...(receipt.wizard.selectModel === undefined
+              ? []
+              : [String(receipt.wizard.selectModel)]),
+          ]
+        : []),
     ];
     const encoder = new TextEncoder();
     const framed = values.map((value) => `${encoder.encode(value).length}:${value}`).join("|");
-    return Array.from(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return bytesToHex(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)));
   } catch {
     return null;
   }
@@ -128,6 +144,20 @@ export function readFirstRunActivationReceipt(
       typeof receipt.gatewayUrl !== "string" ||
       typeof receipt.agentId !== "string" ||
       (receipt.modelRef !== null && typeof receipt.modelRef !== "string") ||
+      (receipt.modelTarget !== undefined && receipt.modelTarget !== "utility") ||
+      (receipt.wizard !== undefined &&
+        ((receipt.kind !== "provider-auth" && receipt.kind !== "provider-login") ||
+          !receipt.wizard ||
+          typeof receipt.wizard.sessionId !== "string" ||
+          !receipt.wizard.sessionId ||
+          typeof receipt.wizard.authChoice !== "string" ||
+          !receipt.wizard.authChoice ||
+          (receipt.wizard.selectModel !== undefined &&
+            typeof receipt.wizard.selectModel !== "boolean") ||
+          (receipt.wizard.authKind !== undefined &&
+            receipt.wizard.authKind !== "secret" &&
+            receipt.wizard.authKind !== "oauth" &&
+            receipt.wizard.authKind !== "device-code"))) ||
       typeof receipt.kind !== "string" ||
       typeof receipt.deadlineMs !== "number" ||
       !Number.isFinite(receipt.deadlineMs) ||
@@ -157,7 +187,13 @@ export function firstRunActivationDeadline(kind: string): number {
 
 export function persistFirstRunActivationReceipt(
   context: ActivationContext,
-  candidate: { kind: string; modelRef?: string | null; deadlineMs?: number },
+  candidate: {
+    kind: string;
+    modelRef?: string | null;
+    modelTarget?: "utility";
+    wizard?: ModelSetupWizardRecovery;
+    deadlineMs?: number;
+  },
 ): FirstRunActivationReceipt | null {
   const storage = getSafeLocalStorage();
   if (!storage || context.gateway.snapshot.phase !== "connected") {
@@ -169,6 +205,8 @@ export function persistFirstRunActivationReceipt(
       gatewayUrl: gatewayCredentialScope(context.gateway.connection.gatewayUrl),
       agentId: context.agentSelection.state.selectedId ?? "",
       modelRef: candidate.modelRef ?? null,
+      ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
+      ...(candidate.wizard ? { wizard: candidate.wizard } : {}),
       kind: candidate.kind,
       deadlineMs: candidate.deadlineMs ?? firstRunActivationDeadline(candidate.kind),
     };
@@ -191,31 +229,13 @@ export function clearFirstRunActivationReceipt(expected?: FirstRunActivationRece
   }
 }
 
-export function resumeFirstRunActivation(
-  navigation: {
-    context: ActivationContext;
-    isStillDefaultLanding: () => boolean;
-    redirect: () => void;
-  },
-  ownerSnapshot: ActivationContext["gateway"]["snapshot"],
-  ownerRevision: number,
-  ownerAgentId: string | null,
-  isSettled: () => boolean,
-  settle: () => void,
-): void {
-  const { context } = navigation;
-  const snapshot = context.gateway.snapshot;
-  if (
-    !isSettled() &&
-    snapshot.phase === "connected" &&
-    snapshot.client === ownerSnapshot.client &&
-    snapshot.hello === ownerSnapshot.hello &&
-    context.gateway.connectionRevision === ownerRevision &&
-    (context.agentSelection.state.selectedId?.trim() || null) === ownerAgentId &&
-    navigation.isStillDefaultLanding() &&
-    readFirstRunActivationReceipt(context) !== null
-  ) {
-    navigation.redirect();
+/** A cheap kind check before an owner validates the record against its connection. */
+export function hasFirstRunActivationReceipt(kind: string): boolean {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(FIRST_RUN_ACTIVATION_RECEIPT_KEY);
+    const receipt: { kind?: unknown } | null = raw ? JSON.parse(raw) : null;
+    return receipt?.kind === kind;
+  } catch {
+    return false;
   }
-  settle();
 }

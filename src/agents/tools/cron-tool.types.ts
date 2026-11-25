@@ -1,8 +1,10 @@
 // Cron tool type declarations shared with the cron tool implementation.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
-import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../exec-defaults.js";
+import type { SandboxContext } from "../sandbox/types.js";
 import type { callGatewayTool } from "./gateway.js";
 
 export type CronCreatorToolAllowlistEntry =
@@ -11,8 +13,12 @@ export type CronCreatorToolAllowlistEntry =
       /** Canonical policy name persisted into toolsAllow caps. */
       name: string;
       pluginId?: string;
+      /** Node-claimed owners cannot grant plugin-scoped access. */
+      ownerUnverified?: true;
       /** Runtime-specific alias the creator surface presented for this tool. */
       aliasName?: string;
+      /** Runtime owner that supplied exec; required for process-bearing stream writes. */
+      execOrigin?: "openclaw" | "native";
       /** Restrict-only execution policy carried by a host-created alias projection. */
       execTarget?: { host: "gateway"; ask?: "always" };
     };
@@ -39,9 +45,13 @@ export type CronCreatorToolAuthoritySnapshot = Omit<
 > & {
   /** Gateway-process one-shot proof consumed only at the matching cron write. */
   grant: CronCreatorAuthorityGrant;
+  /** The creator captured runtime app authority (Codex apps); its default list stays concrete. */
+  holdsRuntimeAuthority?: true;
 };
 
 export type CronToolOptions = {
+  /** A model-facing chat add must identify its slot before the scheduler can mutate. */
+  requireCreationPlan?: boolean;
   agentSessionKey?: string;
   agentId?: string;
   /** Authenticated source account; authority must not be inferred from delivery. */
@@ -53,6 +63,13 @@ export type CronToolOptions = {
    * config keeps the full surface for config-less callers.
    */
   config?: OpenClawConfig;
+  /** Exact session and run-local exec policy used by this creator turn. */
+  execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+  /** Whether auto host selection resolves into this turn's sandbox. */
+  sandboxed?: boolean;
+  /** Actual host-prepared target; a sandboxed flag cannot grant persistent execution. */
+  sandboxContext?: SandboxContext;
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.
@@ -72,16 +89,7 @@ export type CronToolOptions = {
   runId?: string;
 };
 
-export type CronToolCallerScope = {
-  kind: "agentTool";
-  agentId: string;
-};
-
 export type GatewayToolCaller = typeof callGatewayTool;
-
-export type CronToolDeps = {
-  callGatewayTool?: GatewayToolCaller;
-};
 
 export type ChatMessage = {
   role?: unknown;

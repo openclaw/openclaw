@@ -22,43 +22,12 @@ import {
 } from "./hook-policy-decisions.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index-types.js";
 import type { InstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginManifestContracts } from "./manifest-types.js";
+import {
+  CONVERSATION_ACCESS_SURFACE_ENTRY,
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+} from "./manifest-contract-keys.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-
-const MANIFEST_CONTRACT_FAMILIES = [
-  "embeddedExtensionFactories",
-  "agentToolResultMiddleware",
-  "trustedToolPolicies",
-  "externalAuthProviders",
-  "embeddingProviders",
-  "speechProviders",
-  "realtimeTranscriptionProviders",
-  "realtimeVoiceProviders",
-  "mediaUnderstandingProviders",
-  "transcriptSourceProviders",
-  "documentExtractors",
-  "imageGenerationProviders",
-  "videoGenerationProviders",
-  "musicGenerationProviders",
-  "webContentExtractors",
-  "webFetchProviders",
-  "webSearchProviders",
-  "workerProviders",
-  "usageProviders",
-  "migrationProviders",
-  "gatewayMethodDispatch",
-  "tools",
-] as const satisfies readonly (keyof PluginManifestContracts)[];
-
-type MissingManifestContractFamilies = Exclude<
-  keyof PluginManifestContracts,
-  (typeof MANIFEST_CONTRACT_FAMILIES)[number]
->;
-
-const REVIEWED_MANIFEST_CONTRACT_FAMILIES: MissingManifestContractFamilies extends never
-  ? typeof MANIFEST_CONTRACT_FAMILIES
-  : never = MANIFEST_CONTRACT_FAMILIES;
 
 type PluginCapabilityManifest = {
   channels?: readonly string[];
@@ -138,6 +107,14 @@ export function computeDeclaredSurfaceHash(declared: PluginAcceptedDeclaredSurfa
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+/** An approved review, unmodified since approval, that included conversation access. */
+export function isConversationAccessAccepted(record: PluginInstallRecord): boolean {
+  return (
+    record.acceptedSurface?.contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY) === true &&
+    record.acceptedSurfaceHash === computeDeclaredSurfaceHash(record.acceptedSurface)
+  );
+}
+
 export function resolvePluginInstallRecordIntegrity(
   record: Pick<PluginInstallRecord, "integrity" | "npmIntegrity" | "clawpackSha256" | "gitCommit">,
 ):
@@ -183,11 +160,28 @@ export function buildPluginCapabilitySummary(params: {
   manifest: PluginCapabilityManifest;
   origin: PluginOrigin | "official";
   entryConfig?: PluginEntryConfig;
+  /**
+   * Installed plugins: whether their approved review includes conversation access.
+   * Previews (catalog, template plan, consent review): `"if-declared"` shows the grant
+   * that approving this surface produces.
+   */
+  conversationAccessAccepted?: boolean | "if-declared";
 }): { declared: PluginDeclaredSurface; grants: PluginOperatorGrants } {
   const { manifest, entryConfig } = params;
   const hooks = entryConfig?.hooks;
   const llm = entryConfig?.llm;
   const subagent = entryConfig?.subagent;
+  const contracts = [
+    ...new Set(
+      PLUGIN_MANIFEST_CONTRACT_KEYS.flatMap((family) =>
+        (manifest.contracts?.[family] ?? []).map((id) => `${family}: ${id}`),
+      ),
+    ),
+  ].toSorted();
+  const conversationAccessAccepted =
+    params.conversationAccessAccepted === "if-declared"
+      ? contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY)
+      : params.conversationAccessAccepted === true;
   return {
     declared: {
       channels: (
@@ -204,13 +198,7 @@ export function buildPluginCapabilitySummary(params: {
           ...Object.keys(manifest.toolMetadata ?? {}),
         ]),
       ].toSorted(),
-      contracts: [
-        ...new Set(
-          REVIEWED_MANIFEST_CONTRACT_FAMILIES.flatMap((family) =>
-            (manifest.contracts?.[family] ?? []).map((id) => `${family}: ${id}`),
-          ),
-        ),
-      ].toSorted(),
+      contracts,
       hooks: (manifest.hooks ?? []).toSorted(),
       mcpServers: Object.keys(manifest.mcpServers ?? {}).toSorted(),
       cliCommands: (manifest.cliCommands ?? []).map((command) => command.name).toSorted(),
@@ -224,10 +212,10 @@ export function buildPluginCapabilitySummary(params: {
       hooks: {
         allowPromptInjection: buildHookGrant(
           resolvePromptInjectionAllowed(hooks),
-          hooks?.allowPromptInjection,
+          hooks?.allowPromptModification,
         ),
         allowConversationAccess: buildHookGrant(
-          resolveConversationAccessAllowed(params.origin, hooks),
+          resolveConversationAccessAllowed(params.origin, hooks, conversationAccessAccepted),
           hooks?.allowConversationAccess,
         ),
       },
@@ -266,8 +254,12 @@ export function buildPluginCapabilitySummary(params: {
   };
 }
 
-export type PluginCapabilityConsentReview = Omit<PluginsInspectResult, "ok" | "plugin"> & {
+export type PluginCapabilityConsentReview = Omit<
+  PluginsInspectResult,
+  "ok" | "plugin" | "components" | "catalog"
+> & {
   pluginId: string;
+  reviewToken: string;
   name: string;
   version?: string;
   widened?: Partial<PluginAcceptedDeclaredSurface>;
@@ -305,10 +297,13 @@ export function buildPluginCapabilityConsentReview(params: {
   widened?: Partial<PluginAcceptedDeclaredSurface>;
 }): PluginCapabilityConsentReview {
   const { pluginId, manifest, record } = params;
+  // The review shows the grants its approval produces.
   const summary = buildPluginCapabilitySummary({
     manifest,
     origin: "global",
     entryConfig: params.config.plugins?.entries?.[pluginId],
+    conversationAccessAccepted:
+      params.declared?.contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY) ?? "if-declared",
   });
   const declared = params.declared ?? summary.declared;
   const spec = record.resolvedSpec ?? record.spec;
