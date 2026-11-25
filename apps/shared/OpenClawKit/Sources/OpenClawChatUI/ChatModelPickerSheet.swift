@@ -16,6 +16,9 @@ struct ChatModelPickerSheet: View {
     /// it stays one height through a push.
     @ScaledMetric(relativeTo: .body) private var scaledRestingHeight: CGFloat = Self.restingHeight
     private static let restingHeight: CGFloat = 456
+    /// The first card sits this far below the title bar, as in the system's own sheets with a headerless first
+    /// section (Reminders' New List: 8.7 pt); the list's default top inset left 33.6 pt.
+    static let listTopMargin: CGFloat = 9
     /// The floating search field at the bottom does not inset the list; this lets the last row scroll clear.
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
     @State private var query = ""
@@ -29,6 +32,7 @@ struct ChatModelPickerSheet: View {
             }
             .listStyle(.insetGrouped)
             .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
+            .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
             .navigationTitle(Text("Model"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -206,6 +210,7 @@ private struct ChatModelPickerProviderPage: View {
         }
         .listStyle(.insetGrouped)
         .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .navigationTitle(Text(verbatim: provider?.displayName ?? self.providerID))
         .navigationBarTitleDisplayMode(.inline)
     }
