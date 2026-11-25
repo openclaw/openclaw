@@ -155,6 +155,13 @@ const enCron = {
       emptyConditionUnchecked:
         "The condition has not been checked yet. Scheduled checks with no match are not listed here.",
       loadMore: "Load more activity",
+      failure: {
+        load: "Couldn’t load run history.",
+        more: "Couldn’t load more runs.",
+        readAccess: "Ask an admin for read access to view run history.",
+        accessDenied: "You don’t have access to this run history.",
+        automationUnavailable: "This automation isn’t available.",
+      },
       loading: "Loading runs…",
       runStatusOk: "Completed",
       runStatusError: "Error",
