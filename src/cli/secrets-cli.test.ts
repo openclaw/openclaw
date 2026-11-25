@@ -314,14 +314,14 @@ describe("secrets CLI", () => {
       const applyOnlyWarning = "Additional apply warning.";
       runSecretsApply.mockResolvedValue({
         ...createSecretsApplyResult({ mode: mode === "dry-run" ? "dry-run" : "write" }),
-        warningCount: 2,
-        warnings: [warning, applyOnlyWarning],
+        warningCount: 4,
+        warnings: [warning, applyOnlyWarning, warning, applyOnlyWarning],
       });
       if (mode === "configure") {
         const configured = createConfigureInteractiveResult();
         runSecretsConfigureInteractive.mockResolvedValue({
           ...configured,
-          preflight: { ...configured.preflight, warningCount: 1, warnings: [warning] },
+          preflight: { ...configured.preflight, warningCount: 2, warnings: [warning, warning] },
         });
         await runSecrets(["secrets", "configure", "--apply", "--yes"]);
       } else {
