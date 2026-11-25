@@ -121,7 +121,7 @@ export async function tryRunReleaseUpdateCommand(
     }
     return false;
   }
-  if (!owned && (await isNodeOnlyUpdateInstallation(env))) {
+  if (prepared.installKind === "package" && !owned && (await isNodeOnlyUpdateInstallation(env))) {
     return false;
   }
   await assertReleaseUpdateAdmission({

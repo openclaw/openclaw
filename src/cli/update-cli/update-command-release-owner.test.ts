@@ -183,14 +183,24 @@ it.each([
   },
 );
 
-it("keeps a node-only installation with its package installer without creating a trial", async () => {
-  facts.gateway = false;
-  facts.node = true;
-  await updateCommand(options());
-  expect(legacy).toHaveBeenCalledOnce();
-  expect(release).not.toHaveBeenCalled();
-  await expect(fs.stat(resolvePrefix())).rejects.toMatchObject({ code: "ENOENT" });
-});
+it.each(["package", "git"] as const)(
+  "routes an unconverted node-only %s installation through its owner",
+  async (kind) => {
+    facts.kind = kind;
+    facts.gateway = false;
+    facts.node = true;
+    const sha = "a".repeat(40);
+    await updateCommand({ ...options(), ...(kind === "git" ? { sha } : {}) });
+    if (kind === "git") {
+      expect(release).toHaveBeenCalledWith(expect.objectContaining({ sha }));
+      expect(legacy).not.toHaveBeenCalled();
+    } else {
+      expect(legacy).toHaveBeenCalledOnce();
+      expect(release).not.toHaveBeenCalled();
+    }
+    await expect(fs.stat(resolvePrefix())).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
 
 it.each(["1.2.3", "beta", "./openclaw.tgz", "npm:openclaw@1.2.3"])(
   "keeps documented package target %s on its release owner",
