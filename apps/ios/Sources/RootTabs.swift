@@ -89,6 +89,8 @@ struct RootTabs: View {
     // Swipe-up hides the current problem until it changes or resolves.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
+    /// Set while onboarding starts with OpenClaw ID sign-in; nil shows the setup wizard.
+    @State private var openClawIDSetup: OpenClawIDSetupModel?
     @State private var hasSavedGateway: Bool?
     @State private var gatewayRegistryRefreshID = UUID()
     @State private var didEvaluateOnboarding: Bool = false
@@ -744,23 +746,14 @@ struct RootTabs: View {
                     }
                 }
             }
-            .fullScreenCover(isPresented: self.$showOnboarding) {
-                OnboardingWizardView(
-                    allowSkip: true,
-                    offersNewUserGuide: offersNewUserGuide,
-                    onRequestLocalNetworkAccess: { reason in
-                        self.requestLocalNetworkAccess(reason: reason)
-                    },
-                    onClose: {
-                        self.showOnboarding = false
-                    },
-                    onComplete: {
-                        self.showOnboarding = false
-                        self.selectSidebarDestination(.chat)
-                    })
-                    .environment(self.appModel)
-                    .environment(self.voiceWake)
-                    .environment(self.gatewayController)
+            .fullScreenCover(isPresented: self.$showOnboarding, onDismiss: { self.openClawIDSetup = nil }) {
+                if let openClawIDSetup {
+                    OpenClawIDOnboardingView(
+                        model: openClawIDSetup,
+                        onOtherWays: { self.openClawIDSetup = nil })
+                } else {
+                    self.onboardingWizard(offersNewUserGuide: offersNewUserGuide)
+                }
             }
             .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
@@ -933,9 +926,38 @@ extension RootTabs {
         }
     }
 
+    /// OpenClaw ID builds open onboarding on sign-in; the wizard stays one tap away.
+    private func presentOnboarding() {
+        if IOSOpenClawIDFeature.isEnabled {
+            self.openClawIDSetup = OpenClawIDSetupModel(
+                service: IOSOpenClawIDFeature.setupService(),
+                onJoined: { _ in })
+        }
+        self.showOnboarding = true
+    }
+
+    private func onboardingWizard(offersNewUserGuide: Bool) -> some View {
+        OnboardingWizardView(
+            allowSkip: true,
+            offersNewUserGuide: offersNewUserGuide,
+            onRequestLocalNetworkAccess: { reason in
+                self.requestLocalNetworkAccess(reason: reason)
+            },
+            onClose: {
+                self.showOnboarding = false
+            },
+            onComplete: {
+                self.showOnboarding = false
+                self.selectSidebarDestination(.chat)
+            })
+            .environment(self.appModel)
+            .environment(self.voiceWake)
+            .environment(self.gatewayController)
+    }
+
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
-            self.showOnboarding = true
+            self.presentOnboarding()
             return
         }
 
@@ -951,7 +973,7 @@ extension RootTabs {
         case .none:
             self.maybeRequestLocalNetworkAccess(reason: "root_appear")
         case .onboarding:
-            self.showOnboarding = true
+            self.presentOnboarding()
         case .settings:
             self.didAutoOpenSettings = true
             self.selectSidebarDestination(.gateway)

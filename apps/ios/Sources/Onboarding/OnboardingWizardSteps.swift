@@ -122,7 +122,7 @@ private struct OnboardingIntroIcon: View {
     }
 }
 
-private struct OnboardingSafetyRow: View {
+struct OnboardingSafetyRow: View {
     let symbol: String
     let title: LocalizedStringKey
 
