@@ -21,6 +21,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { listLegacyPairingStoreFiles } from "../infra/pairing-files.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
@@ -45,7 +46,10 @@ import { detectLegacyNodeHostConfig } from "../infra/state-migrations.node-host.
 import { resolveLegacyProfileMigrationExceptions } from "../infra/state-migrations.profile-scope.js";
 import { detectLegacyRescuePending } from "../infra/state-migrations.rescue-pending.js";
 import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
-import { listExistingRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import {
+  listExistingRetiredStateFiles,
+  RetiredStateFormatError,
+} from "../infra/state-migrations.retired-files.js";
 import { listRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
 import { resolveLegacyConfigHealthPath } from "../infra/state-migrations.runtime-state.js";
 import { resolveSharedAuthMigrationSources } from "../infra/state-migrations.shared-auth-store.js";
@@ -246,6 +250,21 @@ export async function discoverDatabases(
   // Fresh catalogs belong to bootstrap, not schema rollback. Only retained
   // legacy sources can make an import create them during this upgrade. Use
   // source owners here: the full detector needs already-migrated agent readers.
+  return {
+    targets: (await hasLegacyStateSources(stateDir, config, env, targets))
+      ? targets
+      : targets.filter((target) => target.version !== 0),
+    metadataRows,
+  };
+}
+
+/** Inspect retained source facts without opening an agent for schema repair. */
+export async function hasLegacyStateSources(
+  stateDir: string,
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  targets: readonly DatabaseTarget[],
+): Promise<boolean> {
   const doctorSources = { stateDir, env, doctorOnlyStateMigrations: true };
   let hasLegacySource = await withArtifactPreservingStateReads(
     async () =>
@@ -282,7 +301,16 @@ export async function discoverDatabases(
         deferConfiguredAccountDiscovery: true,
       }).hasLegacy,
     { agentDatabases: true },
-  );
+  ).catch((error: unknown) => {
+    if (
+      error instanceof RetiredStateFormatError &&
+      (hasErrnoCode(error.cause, "EACCES") || hasErrnoCode(error.cause, "EPERM"))
+    ) {
+      // Startup's warning owner reports unreadable retired files without importing them.
+      return false;
+    }
+    throw error;
+  });
 
   if (!hasLegacySource) {
     const sessionStores = [
@@ -363,12 +391,7 @@ export async function discoverDatabases(
       }
     }
   }
-  // Source presence deliberately keeps prospective destinations conservative;
-  // exact import destinations remain with the existing Doctor migration owners.
-  if (!hasLegacySource) {
-    return { targets: targets.filter((target) => target.version !== 0), metadataRows };
-  }
-  return { targets, metadataRows };
+  return hasLegacySource;
 }
 
 export const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>

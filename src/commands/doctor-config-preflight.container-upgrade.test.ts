@@ -112,16 +112,11 @@ function seedSchema19Agent(stateDir: string, unsafe = false): string {
 }
 
 describe("container image replacement Doctor repair and startup readiness", () => {
-  it("preserves schema 19 at startup, then backs it up and repairs it through Doctor", async () => {
+  it("backs up and repairs schema 19 through Doctor before container startup", async () => {
     await withContainerState(async (stateDir) => {
       const databasePath = seedSchema19Agent(stateDir);
-      const original = fs.readFileSync(databasePath);
       await withAgentDatabaseStartupAdmission(
         async () => {
-          await expect(runStartupConfigPreflight({ gateway: true })).rejects.toMatchObject({
-            code: 78,
-          });
-          expect(fs.readFileSync(databasePath)).toEqual(original);
           await repairContainerState();
           await runStartupConfigPreflight({ gateway: true });
           expect(listAgentDatabaseAdmissionRefusals()).toEqual([]);

@@ -261,6 +261,27 @@ function* repairOpenedStateSchemaSteps(
         warnings: [],
       };
     }
+    // Normalization and private preservation readers require a readable catalog.
+    // Publish its owner-rechecked repair before inspecting historical values.
+    const preparedSchemaRepair =
+      scope === "doctor" || scope === "readability"
+        ? prepareStateDatabaseSchemaRepair(db, pathname, env)
+        : undefined;
+    let catalogChanges: string[] = [];
+    if (preparedSchemaRepair?.needed) {
+      const repairCatalog = () => {
+        catalogChanges = preparedSchemaRepair.applyReadability();
+      };
+      const apply = yield {
+        sync() {
+          repairCatalog();
+        },
+        async prepare() {
+          return repairCatalog;
+        },
+      };
+      apply?.();
+    }
     const normalizationVersion = scope === "doctor" ? readSqliteUserVersion(db) : 0;
     if (normalizationVersion > 0 && normalizationVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
       // The first async resume can precede capture; yield before this existing repair writes.
@@ -277,29 +298,6 @@ function* repairOpenedStateSchemaSteps(
         },
       };
       applyNormalization?.();
-    }
-    // Private preservation readers cannot inspect the recognized malformed catalog.
-    // Publish its owner-rechecked repair before credential or orphan preparation.
-    const preparedSchemaRepair =
-      scope === "doctor" || scope === "readability"
-        ? prepareStateDatabaseSchemaRepair(db, pathname, env)
-        : undefined;
-    let catalogChanges: string[] = [];
-    if (preparedSchemaRepair?.needed) {
-      const repairCatalog = () => {
-        catalogChanges = preparedSchemaRepair.applyReadability();
-      };
-      const apply = yield {
-        sync() {
-          if (scope === "readability") {
-            repairCatalog();
-          }
-        },
-        async prepare() {
-          return repairCatalog;
-        },
-      };
-      apply?.();
     }
     if (scope === "version" || scope === "doctor") {
       yield {

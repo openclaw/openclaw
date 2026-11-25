@@ -87,7 +87,11 @@ it.each(["state", "agent"] as const)(
     const before = await fs.readFile(file);
     expect(await checkRelease({ env, configPath })).toMatchObject({
       ok: false,
-      reason: expect.stringContaining(`${kind}-schema-newer`),
+      reason: expect.stringContaining(
+        kind === "state"
+          ? `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`
+          : "agent-schema-newer",
+      ),
     });
     expect(await fs.readFile(file)).toEqual(before);
   },

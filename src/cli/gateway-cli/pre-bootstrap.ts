@@ -701,10 +701,16 @@ export async function recheckGatewayRunBootstrap(
   }
   // Selection already admitted any current-config backup. Later authored drift
   // must be validated by a new startup attempt.
+  // A projection changes the normalized view, not its authored, env-resolved inputs.
+  // Compare the same pre-migration view so implicit roster defaults are not authored drift.
   const change =
     !prepared.snapshot.valid && current.valid
       ? describeConfigSnapshotInputChange(
-          prepared.snapshot,
+          {
+            ...prepared.snapshot,
+            sourceConfig:
+              prepared.snapshot.sourceConfigBeforeMigrations ?? prepared.snapshot.sourceConfig,
+          },
           {
             ...current,
             sourceConfig: current.sourceConfigBeforeMigrations ?? current.sourceConfig,

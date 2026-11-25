@@ -72,6 +72,13 @@ export function normalizeSqliteText(db: DatabaseSync): void {
             continue;
           }
           const c = quote(column.name);
+          // An unchanged predecessor may have lazy FTS triggers for newer columns.
+          // Do not compile their UPDATE programs unless this column needs conversion.
+          if (
+            !db.prepare(`SELECT 1 FROM ${quote(name)} WHERE typeof(${c}) = 'blob' LIMIT 1`).get()
+          ) {
+            continue;
+          }
           // Preserve SQLite's constraint diagnostic, including the conflicting table and key.
           db.prepare(
             `UPDATE ${quote(name)} SET ${c} = CAST(${c} AS TEXT) WHERE typeof(${c}) = 'blob'`,

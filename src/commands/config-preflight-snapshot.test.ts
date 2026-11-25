@@ -395,12 +395,14 @@ it("reads live startup metadata without copying the state database while writers
     const readIndex = () =>
       readPersistedInstalledPluginIndexRowSync({ env: process.env })?.value_json;
     try {
-      const beforeIndex = JSON.stringify(
-        createInstalledPluginIndex({ plugins: [], generatedAtMs: 1 }),
-      );
-      const afterIndex = JSON.stringify(
-        createInstalledPluginIndex({ plugins: [], generatedAtMs: 2 }),
-      );
+      const beforeIndex = JSON.stringify({
+        revision: 1,
+        index: createInstalledPluginIndex({ plugins: [], generatedAtMs: 1 }),
+      });
+      const afterIndex = JSON.stringify({
+        revision: 2,
+        index: createInstalledPluginIndex({ plugins: [], generatedAtMs: 2 }),
+      });
       const setMetadata = writer.prepare(
         `INSERT INTO config_machine_state(state_key, value_json, updated_at_ms)
            VALUES ('plugins.bundledDiscovery', ?, 1), ('plugins.installedIndex', ?, 1)

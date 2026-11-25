@@ -13,6 +13,7 @@ import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js"
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseReadOnly,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -187,9 +188,14 @@ it.each(["heartbeat", "included diagnostics"] as const)(
           if (includeBefore !== undefined) {
             expect(fs.readFileSync(includePath, "utf8")).toBe(includeBefore);
           }
-          expect(getActiveOpenClawStateDatabaseReadSnapshot({ env: state.env })?.location).toBe(
-            databasePath,
-          );
+          // Current guards deliberately leave the discovery snapshot. Inspect the
+          // actual native reader so a private copy cannot satisfy this source check.
+          expect(
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) => db.prepare("PRAGMA database_list").get()?.file,
+              { env: state.env },
+            ),
+          ).toBe(databasePath);
         }
         return recheckGatewayRunBootstrap({ opts: {}, runtime, snapshot });
       });

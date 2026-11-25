@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getGatewayStartGuardErrors } from "../cli/gateway-cli/pre-bootstrap.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -10,6 +11,7 @@ import {
   type ConfigSnapshotReadMeasure,
   type ConfigSnapshotReadOptions,
 } from "../config/io.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { PreparedConfigRecovery } from "../config/io.types.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isExistingLegacySessionStore } from "../config/sessions/legacy-store-source.js";
@@ -49,20 +51,12 @@ import {
   withCurrentOpenClawStateReadScope,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { upgradeStateOnGatewayStart } from "../state/state-upgrade-startup.js";
-import { normalizeHeartbeatRepairSource } from "./doctor-automatic-heartbeat-repair.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
-import { tryProjectRetiredHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
 } from "./doctor-startup-migration-refusal.js";
-import { planLegacyConfigForUpdateChannel } from "./doctor/legacy-config-repair.js";
-import {
-  canPlanAutomaticConfigRepair,
-  planAutomaticConfigRepair,
-} from "./doctor/shared/automatic-config-repair.js";
 
 export type ConfigPreflightSnapshotRead = {
   databaseEngineSelection?: DatabaseEngineSelection;
@@ -154,12 +148,35 @@ async function readConfigPreflightSnapshot(
       async () => {
         if (params.includePluginMetadata && !params.skipPluginValidation) {
           let result = await readConfigFileSnapshotWithPluginMetadata(readOptions);
-          if (
+          const authoredDefaults = asOptionalRecord(
+            asOptionalRecord(asOptionalRecord(result.snapshot.parsed)?.agents)?.defaults,
+          );
+          // Only heartbeat and include repairs need a projection before their owner writes.
+          const hasProjectedRepairSource =
+            Boolean(authoredDefaults && Object.hasOwn(authoredDefaults, "heartbeat")) ||
+            containsConfigIncludeDirective(result.snapshot.parsed);
+          // Optional repair imports keep ordinary config reads outside Doctor's module graph.
+          const automaticRepair =
             params.purpose === "startup" &&
             isStartupConfigStateRead() &&
-            !isConfigReadFailure(result.snapshot) &&
-            (!result.snapshot.valid || canPlanAutomaticConfigRepair(result.snapshot))
+            hasProjectedRepairSource &&
+            !isConfigReadFailure(result.snapshot)
+              ? await import("./doctor/shared/automatic-config-repair.js")
+              : undefined;
+          if (
+            automaticRepair &&
+            (!result.snapshot.valid ||
+              automaticRepair.canPlanAutomaticConfigRepair(result.snapshot))
           ) {
+            const [
+              { normalizeHeartbeatRepairSource },
+              { tryProjectRetiredHeartbeatConfig },
+              { planLegacyConfigForUpdateChannel },
+            ] = await Promise.all([
+              import("./doctor-automatic-heartbeat-repair.js"),
+              import("./doctor-heartbeat-legacy.js"),
+              import("./doctor/legacy-config-repair.js"),
+            ]);
             const env = cloneEnvWithPlatformSemantics(process.env);
             const captured = await createConfigIO({
               configPath: result.snapshot.path,
@@ -184,7 +201,10 @@ async function readConfigPreflightSnapshot(
                     pendingStateMigration: true as const,
                   }
                 : undefined;
-            const repair = await planAutomaticConfigRepair(captured.snapshot, heartbeatMigration);
+            const repair = await automaticRepair.planAutomaticConfigRepair(
+              captured.snapshot,
+              heartbeatMigration,
+            );
             const includeRepair =
               !repair && !heartbeatMigration && captured.snapshot.includedPaths?.length
                 ? planLegacyConfigForUpdateChannel(captured.snapshot, captured.writeOptions)
@@ -412,6 +432,16 @@ export async function readAdmittedConfigSnapshot(params: {
                   throwStartupMigrationGuardRejected();
                 }
                 if (read.snapshot.valid) {
+                  // Validate retained credential inputs before recovery or schema maintenance
+                  // can change the shared database. Their existing owner stays read-only here.
+                  await measureDoctorConfigPreflightStep(
+                    "admission.client-credential-sources",
+                    async () => {
+                      const { prepareRequiredLegacyClientCredentials } =
+                        await import("./startup-client-credentials.js");
+                      await prepareRequiredLegacyClientCredentials(env);
+                    },
+                  );
                   recoverOpenClawStateRollbackJournalForStartup({ env: params.env });
                 }
                 return { ...read, ...(recovery ? { recovery } : {}) };
@@ -440,6 +470,8 @@ export async function readAdmittedConfigSnapshot(params: {
         // wrong owners before readiness can refuse. The recovery owner applies
         // that candidate only after the unchanged readiness checks below admit it.
         if (!("recovery" in admitted && admitted.recovery)) {
+          // Schema maintenance must not load Doctor migrations for ordinary config reads.
+          const { upgradeStateOnGatewayStart } = await import("../state/state-upgrade-startup.js");
           await upgradeStateOnGatewayStart(
             env,
             () =>

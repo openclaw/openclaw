@@ -25,6 +25,7 @@ import {
 } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
@@ -93,6 +94,8 @@ describe("startup retained deletion", () => {
         const seedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-current-agent-"));
         dirs.push(seedDir);
         const seedPath = path.join(seedDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+        // Publish genuine deletion custody before Doctor discovers the agent.
+        openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: seedDir } });
         fs.mkdirSync(path.dirname(seedPath), { recursive: true });
         {
           using active = new DatabaseSync(seedPath);
@@ -100,6 +103,9 @@ describe("startup retained deletion", () => {
           active.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
             INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
               VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
+          active.exec(`INSERT INTO session_nodes
+            (session_key, current_session_id, entry_json, updated_at)
+            VALUES ('agent:main:main', 'active-session', '{"sessionId":"active-session"}', 1)`);
         }
         // Prepare both Doctor content owners before treating the agent as current.
         const prepared = await autoMigrateLegacyState({
@@ -180,18 +186,23 @@ describe("startup retained deletion", () => {
         log,
       });
       if (cleanupCompleted) {
-        await expect(upgrade).resolves.toEqual({ status: "upgraded" });
-        using state = new DatabaseSync(statePath, { readOnly: true });
-        const ownership = state
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
-          )
-          .get();
-        expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
+        await expect(upgrade).resolves.toEqual({
+          status: upgradeShared ? "upgraded" : "current",
+        });
+        if (upgradeShared) {
+          using state = new DatabaseSync(statePath, { readOnly: true });
+          const ownership = state
+            .prepare(
+              "SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'",
+            )
+            .get();
+          expect(JSON.parse(String(ownership?.value_json))).toEqual({ location: "state-db" });
+        }
       } else {
-        await expect(upgrade).rejects.toThrow(
-          "OpenClaw agent database is unavailable while agent retired is deleted.",
-        );
+        await expect(upgrade).resolves.toEqual({
+          status: "refused",
+          reason: "OpenClaw agent database is unavailable while agent retired is deleted.",
+        });
       }
       await closeOpenClawAgentDatabasesAsync();
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);

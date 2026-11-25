@@ -24,6 +24,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db-cache.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
@@ -52,6 +53,8 @@ describe("startup canonical ownership", () => {
       const seedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-current-agent-"));
       dirs.push(seedDir);
       const seedPath = path.join(seedDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      // Publish genuine deletion custody before Doctor discovers the agent.
+      openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: seedDir } });
       fs.mkdirSync(path.dirname(seedPath), { recursive: true });
       {
         using agent = new DatabaseSync(seedPath);
@@ -85,7 +88,7 @@ describe("startup canonical ownership", () => {
       await closeOpenClawStateDatabaseAsync();
       fs.renameSync(seedPath, agentPath);
     }
-    fs.truncateSync(agentPath, 64 * 1024 * 1024 + 1);
+    fs.truncateSync(agentPath, 64 * 1024 * 1024 + 4096);
     const statePath = path.join(stateDir, "state/openclaw.sqlite");
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     {

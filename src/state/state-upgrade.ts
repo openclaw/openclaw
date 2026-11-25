@@ -60,6 +60,7 @@ import {
   discoverDatabases,
   expectedVersion,
   floorRaisingDatabases,
+  hasLegacyStateSources,
   isUpgradeRestorePath,
   outdatedDatabases,
   stateUpgradeRefusal,
@@ -139,14 +140,9 @@ export async function upgradeStateDirectory(params: {
     try {
       restore = await beginStateUpgradeRestore(env);
       if (outdated.length === 0 && !configRepair && !includeRepair) {
-        const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config, env });
-        const legacy = await detectLegacyStateMigrations({
-          cfg: config,
-          env,
-          doctorOnlyStateMigrations: true,
-          legacySessionSurfaces,
-        });
-        if (!hasRealLegacyWork(legacy, env, inventory.targets)) {
+        // A current store's admission owns additive schema repair. Deciding
+        // whether imports are needed must not open it through the full detector.
+        if (!(await hasLegacyStateSources(stateDir, config, env, inventory.targets))) {
           await publishStateUpgradeRestore(restore, { targets: [], config });
           return { status: "current" };
         }
