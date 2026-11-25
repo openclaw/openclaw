@@ -31,11 +31,26 @@ struct ChatComposerAddSheet: View {
     @State private var detent: PresentationDetent?
     @State private var library = ChatRecentPhotosLibrary()
     @State private var selection = ChatRecentPhotoSelection()
+    /// A change reloads the catalog, which is empty meanwhile; the pages keep the last settled facts until it
+    /// settles, and the switch just flipped shows its new value.
+    @State private var settled: ChatComposerCapabilityFacts?
+    @State private var pending: [String: Bool] = [:]
     /// The root's own height, so it rests without scrolling at every text size; measured at the root and kept
     /// through a push.
     @State private var restingHeight: CGFloat = 436
 
     var body: some View {
+        let live = ChatComposerCapabilityFacts(self.viewModel)
+        let busy = self.viewModel.composerCapabilitiesBusy
+        let caps = ChatComposerCapabilityDisplay(
+            facts: busy ? (self.settled ?? live) : live,
+            pending: self.pending,
+            change: { key, isOn, toggle in
+                self.pending[key] = isOn
+                toggle()
+                // Nothing started (refused before sending): show the real state again.
+                if !self.viewModel.composerCapabilitiesBusy { self.pending[key] = nil }
+            })
         NavigationStack(path: self.$path) {
             List {
                 self.photoSection
@@ -55,7 +70,7 @@ struct ChatComposerAddSheet: View {
                         .accessibilityIdentifier("chat-composer-add-skills")
                         NavigationLink(value: Route.connectors) {
                             LabeledContent {
-                                if let count = self.connectorsOnCount {
+                                if let count = caps.connectorsOnCount {
                                     Text(verbatim: String(format: String(localized: "%lld on"), count))
                                         .font(OpenClawChatTypography.settingsBody)
                                 }
@@ -110,6 +125,8 @@ struct ChatComposerAddSheet: View {
                             Text(verbatim: String(format: String(localized: "Add %lld"), self.selection.marked.count))
                                 .font(OpenClawChatTypography.settingsBody)
                                 .fontWeight(.semibold)
+                                // The button keeps one width as the count changes.
+                                .monospacedDigit()
                         }
                         .modifier(ChatComposerProminentToolbarButton())
                         .accessibilityIdentifier("chat-composer-add-marked")
@@ -124,6 +141,7 @@ struct ChatComposerAddSheet: View {
                 case .skills:
                     ChatComposerSkillsPage(
                         viewModel: self.viewModel,
+                        caps: caps,
                         onSwitches: { self.path.append(.skillSwitches) },
                         onSearch: { self.detent = .large },
                         onInsert: { skill in
@@ -134,12 +152,17 @@ struct ChatComposerAddSheet: View {
                 case .skillSwitches:
                     ChatComposerSkillSwitchesPage(
                         viewModel: self.viewModel,
+                        caps: caps,
                         onSearch: { self.detent = .large },
                         onClose: { self.onClose(nil) })
                 case .connectors:
-                    ChatComposerConnectorsPage(viewModel: self.viewModel, onClose: { self.onClose(nil) })
+                    ChatComposerConnectorsPage(viewModel: self.viewModel, caps: caps, onClose: { self.onClose(nil) })
                 case let .connector(name):
-                    ChatComposerConnectorPage(viewModel: self.viewModel, name: name, onClose: { self.onClose(nil) })
+                    ChatComposerConnectorPage(
+                        viewModel: self.viewModel,
+                        caps: caps,
+                        name: name,
+                        onClose: { self.onClose(nil) })
                 case .branches:
                     ChatComposerBranchesPage(viewModel: self.viewModel, onClose: { self.onClose(nil) })
                 }
@@ -157,6 +180,15 @@ struct ChatComposerAddSheet: View {
             await self.viewModel.loadComposerCapabilities()
         }
         .onAppear { self.viewModel.loadSlashCommandsIfNeeded() }
+        .onChange(of: live, initial: true) { _, live in
+            if !self.viewModel.composerCapabilitiesBusy { self.settled = live }
+        }
+        .onChange(of: busy) { _, busy in
+            if !busy {
+                self.settled = ChatComposerCapabilityFacts(self.viewModel)
+                self.pending = [:]
+            }
+        }
         .onChange(of: self.library.assets) { _, assets in
             // A photo that left the library, or a limited grant, can't stay marked.
             let ids = Set(assets.map(\.localIdentifier))
@@ -168,12 +200,6 @@ struct ChatComposerAddSheet: View {
 
     private var showsCapabilities: Bool {
         self.viewModel.supportsComposerCapabilities && self.viewModel.composerCapabilityControlsAvailable
-    }
-
-    private var connectorsOnCount: Int? {
-        let catalog = self.viewModel.composerCapabilityCatalog
-        guard catalog.connectorsAvailable, !catalog.connectors.isEmpty else { return nil }
-        return catalog.connectors.count(where: self.viewModel.composerConnectorEnabled)
     }
 
     private func attach(_ ids: [String]) {
@@ -455,6 +481,7 @@ extension OpenClawChatComposerSkill {
 /// to turn itself on first.
 private struct ChatComposerSkillsPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
+    let caps: ChatComposerCapabilityDisplay
     let onSwitches: () -> Void
     let onSearch: () -> Void
     let onInsert: (OpenClawChatComposerSkill) -> Void
@@ -466,13 +493,13 @@ private struct ChatComposerSkillsPage: View {
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
 
     var body: some View {
-        let catalog = self.viewModel.composerCapabilityCatalog
+        let catalog = self.caps.facts.catalog
         let blocked = !self.viewModel.attachments.isEmpty
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let skills = catalog.skills.filter { $0.isUsable && $0.matches(query) }
         List {
             Section {
-                if self.viewModel.composerCapabilitiesLoading {
+                if !catalog.skillsAvailable, self.viewModel.composerCapabilitiesLoading {
                     ProgressView().frame(maxWidth: .infinity)
                 } else if !catalog.skillsAvailable {
                     Text("Skills unavailable").font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
@@ -514,7 +541,7 @@ private struct ChatComposerSkillsPage: View {
 
     @ViewBuilder
     private func skillRow(_ skill: OpenClawChatComposerSkill, blocked: Bool) -> some View {
-        let isOn = self.viewModel.composerSkillEnabled(skill)
+        let isOn = self.caps.isOn(ChatComposerCapabilityFacts.skill(skill.key))
         let invocation = self.viewModel.composerSkillInvocation(skill)
         let expanded = !isOn && self.expandedOffSkill == skill.key
         VStack(alignment: .leading, spacing: 10) {
@@ -545,7 +572,7 @@ private struct ChatComposerSkillsPage: View {
             .accessibilityValue(isOn ? Text(verbatim: "") : Text("Off for this chat."))
             .accessibilityIdentifier("chat-composer-skill-\(skill.key)")
             if expanded {
-                let reason = self.viewModel.composerCapabilityCatalog.toolOverrideMutationAvailable
+                let reason = self.caps.facts.catalog.toolOverrideMutationAvailable
                     ? nil : self.viewModel.composerToolOverrideMutationDisabledReason
                 if let reason {
                     Text(verbatim: reason).font(OpenClawChatTypography.settingsFootnote).foregroundStyle(.secondary)
@@ -598,6 +625,7 @@ private struct ChatComposerSkillSwitchesButton: ViewModifier {
 /// Every usable skill with its switch for this chat.
 private struct ChatComposerSkillSwitchesPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
+    let caps: ChatComposerCapabilityDisplay
     let onSearch: () -> Void
     let onClose: () -> Void
     @State private var query = ""
@@ -605,7 +633,7 @@ private struct ChatComposerSkillSwitchesPage: View {
     @ScaledMetric(relativeTo: .body) private var searchClearance: CGFloat = 64
 
     var body: some View {
-        let catalog = self.viewModel.composerCapabilityCatalog
+        let catalog = self.caps.facts.catalog
         let query = self.query.trimmingCharacters(in: .whitespacesAndNewlines)
         let skills = catalog.skills.filter { $0.isUsable && $0.matches(query) }
         List {
@@ -614,7 +642,7 @@ private struct ChatComposerSkillSwitchesPage: View {
                     ChatComposerNoResults(query: query)
                 }
                 ForEach(skills) { skill in
-                    Toggle(isOn: chatCapabilityToggle(self.viewModel.composerSkillEnabled(skill)) {
+                    Toggle(isOn: self.caps.binding(ChatComposerCapabilityFacts.skill(skill.key)) {
                         self.viewModel.toggleComposerSkill(skill)
                     }) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -660,13 +688,14 @@ private struct ChatComposerSkillSwitchesPage: View {
 
 private struct ChatComposerConnectorsPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
+    let caps: ChatComposerCapabilityDisplay
     let onClose: () -> Void
 
     var body: some View {
-        let catalog = self.viewModel.composerCapabilityCatalog
+        let catalog = self.caps.facts.catalog
         List {
             Section {
-                if self.viewModel.composerCapabilitiesLoading {
+                if !catalog.connectorsAvailable, self.viewModel.composerCapabilitiesLoading {
                     ProgressView().frame(maxWidth: .infinity)
                 } else if !catalog.connectorsAvailable {
                     Text("Connectors unavailable").font(OpenClawChatTypography.settingsBody)
@@ -676,7 +705,7 @@ private struct ChatComposerConnectorsPage: View {
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(catalog.connectors) { connector in
-                        let isOn = self.viewModel.composerConnectorEnabled(connector)
+                        let isOn = self.caps.isOn(ChatComposerCapabilityFacts.connector(connector.name))
                         NavigationLink(value: ChatComposerAddSheet.Route.connector(connector.name)) {
                             LabeledContent {
                                 Text(isOn ? "On" : "Off").font(OpenClawChatTypography.settingsBody)
@@ -707,18 +736,19 @@ private struct ChatComposerConnectorsPage: View {
 /// this chat with what it says about itself, then each of its tools with a switch.
 private struct ChatComposerConnectorPage: View {
     @Bindable var viewModel: OpenClawChatViewModel
+    let caps: ChatComposerCapabilityDisplay
     let name: String
     let onClose: () -> Void
 
     var body: some View {
-        let catalog = self.viewModel.composerCapabilityCatalog
+        let catalog = self.caps.facts.catalog
         let connector = catalog.connectors.first { $0.name == self.name }
         let canChange = catalog.toolOverrideMutationAvailable && !self.viewModel.composerCapabilityMutationDisabled
         List {
             if let connector {
-                let isOn = self.viewModel.composerConnectorEnabled(connector)
+                let isOn = self.caps.isOn(ChatComposerCapabilityFacts.connector(connector.name))
                 Section {
-                    Toggle(isOn: chatCapabilityToggle(self.viewModel.composerConnectorEnabled(connector)) {
+                    Toggle(isOn: self.caps.binding(ChatComposerCapabilityFacts.connector(connector.name)) {
                         self.viewModel.toggleComposerConnector(connector)
                     }) {
                         Text("On for this chat").font(OpenClawChatTypography.settingsBody)
@@ -735,7 +765,7 @@ private struct ChatComposerConnectorPage: View {
                 if !connector.tools.isEmpty {
                     Section {
                         ForEach(connector.tools) { tool in
-                            Toggle(isOn: chatCapabilityToggle(self.viewModel.composerToolEnabled(
+                            Toggle(isOn: self.caps.binding(ChatComposerCapabilityFacts.tool(
                                 server: connector.name,
                                 tool: tool.name))
                             {
@@ -827,18 +857,60 @@ private struct ChatComposerBranchesPage: View {
 
 // MARK: - Shared pieces
 
-/// A switch bound to a Gateway-owned value. A refreshed catalog that already holds the requested state does not
-/// replay the toggle.
-@MainActor
-private func chatCapabilityToggle(
-    _ value: @autoclosure @escaping @MainActor () -> Bool,
-    toggle: @escaping @MainActor () -> Void) -> Binding<Bool>
-{
-    Binding(get: value, set: {
-        if $0 != value() {
-            toggle()
+/// What the capability pages draw: skills, connectors and tools, and whether each is on for this chat.
+struct ChatComposerCapabilityFacts: Equatable {
+    var catalog: OpenClawChatComposerCapabilityCatalog
+    var on: [String: Bool] = [:]
+
+    @MainActor
+    init(_ viewModel: OpenClawChatViewModel) {
+        self.catalog = viewModel.composerCapabilityCatalog
+        for skill in self.catalog.skills {
+            self.on[Self.skill(skill.key)] = viewModel.composerSkillEnabled(skill)
         }
-    })
+        for connector in self.catalog.connectors {
+            self.on[Self.connector(connector.name)] = viewModel.composerConnectorEnabled(connector)
+            for tool in connector.tools {
+                self.on[Self.tool(server: connector.name, tool: tool.name)] =
+                    viewModel.composerToolEnabled(server: connector.name, tool: tool.name)
+            }
+        }
+    }
+
+    static func skill(_ key: String) -> String {
+        "skill\u{1f}" + key
+    }
+
+    static func connector(_ name: String) -> String {
+        "connector\u{1f}" + name
+    }
+
+    static func tool(server: String, tool: String) -> String {
+        "tool\u{1f}" + server + "\u{1f}" + tool
+    }
+}
+
+/// The facts a page shows, with the switch just flipped at its new value until the Gateway settles.
+struct ChatComposerCapabilityDisplay {
+    let facts: ChatComposerCapabilityFacts
+    let pending: [String: Bool]
+    let change: (_ key: String, _ isOn: Bool, _ toggle: () -> Void) -> Void
+
+    func isOn(_ key: String) -> Bool {
+        self.pending[key] ?? self.facts.on[key] ?? false
+    }
+
+    /// The Gateway owns the value; a switch that already shows the requested state does not toggle again.
+    func binding(_ key: String, toggle: @escaping () -> Void) -> Binding<Bool> {
+        Binding(get: { self.isOn(key) }, set: { isOn in
+            if isOn != self.isOn(key) { self.change(key, isOn, toggle) }
+        })
+    }
+
+    var connectorsOnCount: Int? {
+        guard self.facts.catalog.connectorsAvailable, !self.facts.catalog.connectors.isEmpty else { return nil }
+        return self.facts.catalog.connectors.count { self.isOn(ChatComposerCapabilityFacts.connector($0.name)) }
+    }
 }
 
 /// A page's footer: its own line, or the error from the last change, which replaces it.
