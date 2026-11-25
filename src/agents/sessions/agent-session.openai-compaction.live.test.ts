@@ -414,11 +414,11 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         expect(maximumObservedPromptTokens).toBeGreaterThan(272_000);
       }
 
-      let recallAssistantCompletions = 0;
+      let recallAssistantMessageEnds = 0;
       let recallCompletionHasMarker = false;
       const unsubscribe = session.subscribe((event) => {
         if (event.type === "message_end" && event.message.role === "assistant") {
-          recallAssistantCompletions += 1;
+          recallAssistantMessageEnds += 1;
           recallCompletionHasMarker =
             event.message.content
               .filter((block) => block.type === "text")
@@ -438,7 +438,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           .getBranch()
           .filter((entry) => entry.type === "compaction")
           .map((entry) => entry.summary.includes(durableMarker)),
-        recallAssistantCompletions,
+        recallAssistantMessageEnds,
         recallCompletionHasMarker,
       });
       expect(session.getLastAssistantText()?.trim(), failureReceipt).toBe(durableMarker);
