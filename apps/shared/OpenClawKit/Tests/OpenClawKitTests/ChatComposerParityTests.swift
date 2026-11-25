@@ -235,7 +235,8 @@ struct ChatComposerStateTests {
     @Test func `model selection target describes only gateway owned values`() {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let expectations: [(String?, String?)] = [
-            ("session", "Changes this session only"),
+            // A session-scoped pick needs no note.
+            ("session", nil),
             ("agent", "Changes this agent's default"),
             ("global", "Changes the global default"),
             ("future-target", nil),
