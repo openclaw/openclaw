@@ -3,6 +3,7 @@ import {
   historyKeymap,
   insertNewline,
   isolateHistory,
+  redo,
   standardKeymap,
   undo,
 } from "@codemirror/commands";
@@ -17,6 +18,11 @@ import {
   type StateEffect,
 } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from "@codemirror/view";
+import {
+  isApplePlatform,
+  matchesKeyboardShortcut,
+  resolveAsciiShortcutKey,
+} from "../../../../../src/shared/keyboard-shortcuts.ts";
 import { registerComposerEditor } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { composerEditorTheme } from "./composer-editor-theme.ts";
@@ -207,6 +213,24 @@ export function mountComposerEditor(
         undoHistory.of(history()),
         // Textarea editing, not code editing: no auto-indent or line commands.
         keymap.of([
+          {
+            any(editor, event) {
+              // CM tries printable keys without Shift first; Caps Lock can make
+              // Shift+Z look like the unshifted undo binding. Match modifiers first.
+              if (
+                !matchesKeyboardShortcut(
+                  { modifiers: ["mod", "shift"], key: "z", platformSpecific: true },
+                  event,
+                  isApplePlatform(),
+                  resolveAsciiShortcutKey(event),
+                )
+              ) {
+                return false;
+              }
+              redo(editor);
+              return true;
+            },
+          },
           { key: "Enter", run: insertNewline, shift: insertNewline },
           ...standardKeymap,
           ...historyKeymap,
