@@ -196,6 +196,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/session-accessor.sqlite-transcript-store.test.ts",
   "src/config/sessions/session-accessor.sqlite-entry-revalidation.test.ts",
   "src/config/sessions/startup-migration.registry-recovery.test.ts",
+  "src/gateway/human-mention-access.test.ts",
+  "src/gateway/session-row-invited-access.test.ts",
   "src/gateway/mention-inbox.worker.test.ts",
   "src/gateway/mention-inbox.test.ts",
   "src/gateway/mention-inbox.guest.test.ts",
