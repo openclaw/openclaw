@@ -12,7 +12,7 @@ const googlePlanRefusal = "This request requires an active Google AI Ultra subsc
 function createFailureSuite(provider: "fixture" | "google") {
   const google = provider === "google";
   let instance: OpenClawTestInstance;
-  let upstreamRequests = 0;
+  const requestedProviders: string[] = [];
   const suite = createControlUiE2eSuite({
     name: provider + " provider failure",
     startServerBeforeBrowser: true,
@@ -27,11 +27,12 @@ function createFailureSuite(provider: "fixture" | "google") {
                 response.end(JSON.stringify({ data: [{ id: "current" }] }));
                 return;
               }
-              upstreamRequests += 1;
-              response.writeHead(google ? 403 : 401, { "content-type": "application/json" });
+              const googleRequest = request.url?.startsWith("/v1beta/") === true;
+              requestedProviders.push(googleRequest ? "google" : "fixture");
+              response.writeHead(googleRequest ? 403 : 401, { "content-type": "application/json" });
               response.end(
                 JSON.stringify({
-                  error: google
+                  error: googleRequest
                     ? { code: 403, status: "PERMISSION_DENIED", message: googlePlanRefusal }
                     : { message: "Incorrect API key provided", code: "invalid_api_key" },
                 }),
@@ -39,21 +40,43 @@ function createFailureSuite(provider: "fixture" | "google") {
             });
           }),
       });
-      const baseUrl = `http://127.0.0.1:${upstream.claim.port}/${google ? "v1beta" : "v1"}`;
-      instance = await createChatGatewayInstance({
-        name: "chat-provider-failure-cause",
-        provider,
-        identity: "Assistant",
-        model: "current",
-        api: google ? "google-generative-ai" : "openai-completions",
-        baseUrl,
+      const origin = `http://127.0.0.1:${upstream.claim.port}`;
+      const primary = {
+        api: "openai-completions",
+        baseUrl: `${origin}/v1`,
         apiKey: "sk-synthetic-revoked",
         models: [{ id: "current", name: "Fixture model" }],
+      };
+      instance = await createChatGatewayInstance({
+        name: "chat-provider-failure-cause",
+        provider: "fixture",
+        identity: "Assistant",
+        model: "current",
+        ...primary,
+        defaults: google
+          ? {
+              model: { primary: "fixture/current", fallbacks: ["google/current"] },
+              modelPolicy: { allow: ["fixture/*", "google/*"] },
+            }
+          : undefined,
         config: {
           update: { checkOnStart: false },
           browser: { enabled: false },
           ...(google
-            ? { plugins: { allow: ["google"], entries: { google: { enabled: true } } } }
+            ? {
+                plugins: { allow: ["google"], entries: { google: { enabled: true } } },
+                models: {
+                  catalogRefresh: { enabled: false },
+                  providers: {
+                    fixture: primary,
+                    google: {
+                      ...primary,
+                      api: "google-generative-ai",
+                      baseUrl: `${origin}/v1beta`,
+                    },
+                  },
+                },
+              }
             : {}),
         },
       });
@@ -95,10 +118,10 @@ function createFailureSuite(provider: "fixture" | "google") {
     return url.href;
   }
 
-  return { suite, open, upstreamRequests: () => upstreamRequests };
+  return { suite, open, requestedProviders };
 }
 
-const { suite, open, upstreamRequests } = createFailureSuite("fixture");
+const { suite, open, requestedProviders } = createFailureSuite("fixture");
 
 suite.define(() => {
   it("shows a rejected key's cause on the failed reply and links to Models", async () => {
@@ -111,7 +134,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const failure = page.locator(".chat-run-failure").first();
         await failure.waitFor({ timeout: 60_000 });
-        expect(upstreamRequests()).toBeGreaterThan(0);
+        expect(requestedProviders).toContain("fixture");
         const shot = process.env.OPENCLAW_E2E_SHOT;
         if (shot) {
           await page.screenshot({ path: shot });
@@ -139,7 +162,7 @@ suite.define(() => {
 const google = createFailureSuite("google");
 
 google.suite.define(() => {
-  it("shows Google's plan refusal on the failed reply after reload", async () => {
+  it("shows Google's plan refusal when fallback fails, including after reload", async () => {
     await google.suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
@@ -153,16 +176,13 @@ google.suite.define(() => {
           await failure.locator(".chat-run-failure__toggle").click();
           const details = page.locator(".chat-run-failure__log");
           await details.waitFor();
-          if (process.env.OPENCLAW_E2E_SHOT) {
-            await page.screenshot({ path: process.env.OPENCLAW_E2E_SHOT, animations: "disabled" });
-          }
+          expect([...new Set(google.requestedProviders)]).toEqual(["fixture", "google"]);
           expect(await details.textContent()).toBe(googlePlanRefusal);
           expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
             googlePlanRefusal,
           );
         };
         await checkMessage();
-        expect(google.upstreamRequests()).toBeGreaterThan(0);
         await page.reload();
         await waitForControlUiGatewayReady(page);
         await checkMessage();
