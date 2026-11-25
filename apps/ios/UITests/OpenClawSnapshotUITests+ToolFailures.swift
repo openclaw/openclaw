@@ -35,8 +35,11 @@ extension OpenClawSnapshotUITests {
         ] {
             XCTAssertFalse(row(absent).exists, absent)
         }
-        XCTAssertEqual(app.buttons.matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chat-tool-activity-", "Couldn't launch")).count, 2)
+        XCTAssertEqual(
+            app.buttons.matching(NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@", "chat-tool-activity-",
+                "Couldn't launch")).count,
+            2)
         XCTAssertFalse(app.staticTexts["agent:main:subagent:fixture-composer"].exists, "The key is never a name")
         self.attachScreenshot(named: "tool-failures-collapsed")
 
