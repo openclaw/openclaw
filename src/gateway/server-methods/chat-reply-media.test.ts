@@ -229,18 +229,22 @@ it("keeps deferred tool media rejection visible", async () => {
 it("preserves named rejection outcomes and metadata beside trusted local audio", async () => {
   const { workspaceDir, cfg } = createMediaTestContext();
   const documentPath = path.join(workspaceDir, "report.json");
+  const sqlPath = path.join(workspaceDir, "schema.sql");
+  const sqlBody = "SELECT name FROM widgets;\n";
   const unsupportedPath = path.join(workspaceDir, "script.js");
   const audioPath = path.join(workspaceDir, "voice.mp3");
   await writeMedia(documentPath, '{"ready":true}\n');
+  await writeMedia(sqlPath, sqlBody);
   await writeMedia(unsupportedPath, "export default true;\n");
   await createAudioFile(audioPath);
 
   const payload = await normalizeReplyMedia(cfg, [
     {
       text: "Artifacts ready",
-      mediaUrls: [documentPath, unsupportedPath, audioPath],
+      mediaUrls: [documentPath, sqlPath, unsupportedPath, audioPath],
       attachments: [
         { name: "report.json", mimeType: "application/json", trustedLocalMedia: true },
+        { name: "schema.sql", mimeType: "text/x-sql", trustedLocalMedia: true },
         { name: "script.js", mimeType: "text/javascript", trustedLocalMedia: true },
         { name: "voice.mp3", mimeType: "audio/mpeg", trustedLocalMedia: true },
       ],
@@ -250,15 +254,19 @@ it("preserves named rejection outcomes and metadata beside trusted local audio",
 
   expect(payload).toMatchObject({
     text: "Artifacts ready\n⚠️ script.js: Rejected by the local attachment allowlist. Send a supported file type.",
-    mediaUrls: [expect.stringMatching(/\.json$/u), audioPath],
+    mediaUrls: [expect.stringMatching(/\.json$/u), expect.stringMatching(/\.sql$/u), audioPath],
     attachments: [
       { name: "report.json", mimeType: "application/json" },
+      { name: "schema.sql", mimeType: "text/x-sql" },
       { name: "voice.mp3", mimeType: "audio/mpeg" },
     ],
   });
 
   assert(payload, "Expected a prepared mixed-media payload");
   const preparedMediaUrls = payload.mediaUrls ?? [];
+  expect(
+    await fs.readFile(expectDefined(preparedMediaUrls[1], "prepared SQL attachment path"), "utf8"),
+  ).toBe(sqlBody);
   const missingDocument = path.join(workspaceDir, "missing.json");
   payload.mediaUrls = [...preparedMediaUrls, missingDocument];
   payload.attachments = [
@@ -277,6 +285,12 @@ it("preserves named rejection outcomes and metadata beside trusted local audio",
   ]);
   expect(mediaBySource?.get(documentPath)).toEqual([
     expect.objectContaining({ type: "attachment" }),
+  ]);
+  expect(mediaBySource?.get(sqlPath)).toEqual([
+    expect.objectContaining({
+      type: "attachment",
+      attachment: expect.objectContaining({ label: "schema.sql", mimeType: "text/x-sql" }),
+    }),
   ]);
   expect(mediaBySource?.get(audioPath)).toEqual([expect.objectContaining({ type: "audio" })]);
   expect(content?.filter((block) => block.type === "attachment_error")).toEqual([

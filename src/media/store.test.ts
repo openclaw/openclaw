@@ -196,6 +196,20 @@ describe("media store", () => {
     }
   });
 
+  it("preserves SQL files fetched with a generic text header", async () => {
+    const content = Buffer.from("SELECT name FROM widgets;\n");
+    const saved = await store.saveMediaBuffer(
+      content,
+      "text/plain",
+      "tool-file-transfer",
+      1024,
+      "/workspace/query.sql",
+    );
+    expect(saved.path).toMatch(/\.sql$/);
+    expect(saved.contentType).toBe("text/x-sql");
+    expect((await store.readMediaBuffer(saved.id, "tool-file-transfer")).buffer).toEqual(content);
+  });
+
   it("finishes short nonblocking media reads", async () => {
     const content = Buffer.from("synthetic media bytes");
     const saved = await store.saveMediaBuffer(content, "text/plain");

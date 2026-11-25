@@ -45,6 +45,8 @@ const EXT_BY_MIME: Record<string, string> = {
   "video/quicktime": ".mov",
   "application/pdf": ".pdf",
   "application/json": ".json",
+  "text/x-sql": ".sql",
+  "application/sql": ".sql",
   "application/yaml": ".yaml",
   "application/zip": ".zip",
   "application/gzip": ".gz",
