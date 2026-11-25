@@ -4214,6 +4214,7 @@ async function main() {
       }
       throw new Error(
         `Job ${jobId} ${JSON.stringify(job.name)} is ${job.status}. Retry the log request after the job completes.`,
+        { cause: error },
       );
     }
     const output = options.grep

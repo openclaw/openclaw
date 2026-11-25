@@ -3009,7 +3009,9 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
 
 export function formatReleaseStateOutcome(payload, { observedDrainStatus } = {}) {
   const label =
-    observedDrainStatus === undefined ? "Full Release Validation state" : "Release Decision snapshot";
+    observedDrainStatus === undefined
+      ? "Full Release Validation state"
+      : "Release Decision snapshot";
   const lines = [`${label}: ${payload.state}`];
   lines.push(...releaseStateDetailLines(payload));
   if (
