@@ -63,12 +63,13 @@ suite.define(() => {
           expect(
             pairs.every((pair) => pair.top < 1 && pair.beside && pair.left === pairs[0]!.left),
           ).toBe(true);
-          if (listed !== "0")
+          if (listed !== "0") {
             await gateway.resolveDeferred("tools.effective", {
               agentId: "main",
               profile: "full",
               groups: [],
             });
+          }
         }
       },
     );

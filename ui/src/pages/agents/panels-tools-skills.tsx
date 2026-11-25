@@ -82,7 +82,7 @@ export function AgentTools(
       entry.tools.some((tool) => toToolAnchorId(tool.id) === anchorId),
     );
     if (!group) {
-      return;
+      return undefined;
     }
     return (event: Event) => {
       event.preventDefault();
