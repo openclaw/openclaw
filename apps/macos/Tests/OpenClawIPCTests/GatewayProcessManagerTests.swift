@@ -1386,6 +1386,7 @@ struct GatewayProcessManagerTests {
             let runtime = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
             let replacement = try #require(StaleGatewayServiceReplacement.replacing(
                 previous, with: runtime, allowUnconfigured: false))
+            #expect(replacement.serviceEntrypoint.hasSuffix("/runtime/build-one/lib/node_modules/openclaw/openclaw.mjs"))
             if operatorReplaced {
                 // The operator reassigns the service while this build seeds its runtime.
                 let plist = try #require(previous.serviceAuthority?.plist)

@@ -110,6 +110,18 @@ export async function readOwnGatewayServiceCommand(
   }
 }
 
+/**
+ * OpenClaw.app stops its previous build's service, migrates with this runtime, then reinstalls
+ * the service. Only that exact entrypoint stops restricting migration.
+ */
+async function isReplacedGatewayService(env: NodeJS.ProcessEnv, entrypointReal?: string) {
+  const replaced = env.OPENCLAW_REPLACING_GATEWAY_SERVICE_ENTRYPOINT?.trim();
+  if (!replaced || !entrypointReal || !path.isAbsolute(replaced)) {
+    return false;
+  }
+  return (await fs.realpath(replaced).catch(() => undefined)) === entrypointReal;
+}
+
 /** Unknown service installations retain normal CLI behavior; only proven older installs restrict migration. */
 export async function inspectCliGatewayServiceInstallation(
   env: NodeJS.ProcessEnv,
@@ -123,7 +135,8 @@ export async function inspectCliGatewayServiceInstallation(
     const drift = root ? await inspectGatewayServiceInstallationDrift(layout, root) : undefined;
     if (
       !drift?.serviceVersion ||
-      (compareOpenClawReleaseVersions(VERSION, drift.serviceVersion) ?? 0) <= 0
+      (compareOpenClawReleaseVersions(VERSION, drift.serviceVersion) ?? 0) <= 0 ||
+      (await isReplacedGatewayService(env, layout?.entrypointReal))
     ) {
       return undefined;
     }

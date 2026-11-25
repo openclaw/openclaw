@@ -157,3 +157,53 @@ it.each(["default", "home", "profile", "state", "argv", "windows", "windows-lowe
     });
   },
 );
+
+it("admits migration only for the exact older service its owner is replacing", async () => {
+  await withMockedPlatform("darwin", async () => {
+    const home = dirs.make("service-replacement-");
+    const env = { HOME: home, OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.replacement-test" };
+    const writeOlderPackage = async (name: string) => {
+      const root = path.join(home, name);
+      await fs.mkdir(root);
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        '{"name":"openclaw","version":"2026.7.1"}',
+      );
+      await fs.writeFile(path.join(root, "openclaw.mjs"), "");
+      return path.join(root, "openclaw.mjs");
+    };
+    const stale = await writeOlderPackage("stale-package");
+    const other = await writeOlderPackage("other-package");
+    const plist = resolveLaunchAgentPlistPath(env);
+    await fs.mkdir(path.dirname(plist), { recursive: true });
+    await fs.writeFile(
+      plist,
+      buildLaunchAgentPlist({
+        label: env.OPENCLAW_LAUNCHD_LABEL,
+        programArguments: [process.execPath, stale, "gateway"],
+        environment: { HOME: home },
+        stdoutPath: path.join(home, "stdout.log"),
+        stderrPath: path.join(home, "stderr.log"),
+      }),
+    );
+    for (const replacing of [undefined, other, stale]) {
+      const installation = await inspectCliGatewayServiceInstallation({
+        ...env,
+        OPENCLAW_REPLACING_GATEWAY_SERVICE_ENTRYPOINT: replacing,
+      });
+      withGatewayServiceInstallation({ installation }, () => {
+        const migrate = () =>
+          assertGatewayServiceSchemaMigrationAllowed(
+            path.join(home, ".openclaw", "state", "openclaw.sqlite"),
+            1,
+            2,
+          );
+        if (replacing === stale) {
+          expect(migrate).not.toThrow();
+        } else {
+          expect(migrate).toThrow("Refusing a forward database schema migration");
+        }
+      });
+    }
+  });
+});

@@ -10,15 +10,22 @@ struct StaleGatewayServiceReplacement {
     let stop: () async -> String?
     let restore: () async -> Void
     let install: () async -> String?
+    let canRestore: () async -> Bool
+    /// The stopped service stays installed until `install`; naming it keeps this build's CLI from
+    /// refusing migration of state that the older service no longer runs on.
+    let serviceEntrypoint: String
 
     /// Returns the install failure, if any. Credentials are ready then, so startup continues.
-    func run(prepareCredentials: () async throws -> Void) async throws -> String? {
+    /// `prepareCredentials` receives `serviceEntrypoint`.
+    func run(prepareCredentials: (String) async throws -> Void) async throws -> String? {
         if let error = await self.stop() { throw GatewayHostingError(message: error) }
         do {
-            try await prepareCredentials()
+            try await prepareCredentials(self.serviceEntrypoint)
         } catch {
-            // Only unmigrated state can return to the previous build; after migration its CLI refuses.
-            await self.restore()
+            // Doctor can commit the schema and then fail preparing identities or approvals.
+            if !(error is CLIInstaller.DoctorProcessesUnsettled), !Task.isCancelled, await self.canRestore() {
+                await self.restore()
+            }
             throw error
         }
         return await self.install()
@@ -81,7 +88,7 @@ struct StaleGatewayServiceReplacement {
         with runtime: BundledRuntime,
         allowUnconfigured: Bool) -> Self?
     {
-        guard let authority = previous.serviceAuthority else { return nil }
+        guard let authority = previous.serviceAuthority, let entrypoint = previous.prefix.last else { return nil }
         let checkCurrent: @MainActor @Sendable () async throws -> Void = {
             if let error = GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: previous) {
                 throw GatewayHostingError(message: error)
@@ -109,6 +116,10 @@ struct StaleGatewayServiceReplacement {
                         runtime: runtime, capturedServiceEnvironment: previous.environment),
                     expectedServiceAuthority: authority,
                     checkCurrent: checkCurrent)
-            })
+            },
+            canRestore: {
+                await Self.previousServiceAcceptsState(previous, entrypoint: entrypoint, authority: authority)
+            },
+            serviceEntrypoint: entrypoint)
     }
 }
