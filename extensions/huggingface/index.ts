@@ -37,9 +37,13 @@ export default defineSingleProviderPluginEntry({
         if (pluginConfig?.discovery?.enabled === false) {
           return null;
         }
-        const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderAuth(PROVIDER_ID, {
-          oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
-        });
+        // Keep the existing catalog account when an API key and OAuth profile coexist.
+        const keyAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
+        const { apiKey, discoveryApiKey, profileId } = keyAuth.apiKey
+          ? keyAuth
+          : ctx.resolveProviderAuth(PROVIDER_ID, {
+              oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
+            });
         if (!apiKey) {
           return null;
         }

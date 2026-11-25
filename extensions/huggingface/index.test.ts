@@ -63,6 +63,39 @@ describe("huggingface plugin", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { source: "environment", apiKey: "HF_TOKEN", discoveryApiKey: "test-env-token" },
+    {
+      source: "provider config",
+      apiKey: "test-config-token",
+      discoveryApiKey: "test-config-token",
+    },
+  ])("keeps the $source credential when an OAuth profile also exists", async (keyAuth) => {
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: [{ id: "test/catalog-model" }] }));
+    const context: ProviderCatalogContext = {
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => keyAuth,
+      resolveProviderAuth: (_provider, options) => ({
+        apiKey: options?.oauthMarker,
+        discoveryApiKey: "test-profile-token",
+        mode: "oauth",
+        source: "profile",
+        profileId: "huggingface:default",
+      }),
+    };
+
+    const result = await registerProvider()?.catalog?.run(context);
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const request = new Request(...fetch.mock.calls[0]!);
+    expect(request.url).toBe("https://router.huggingface.co/v1/models");
+    expect(request.headers.get("authorization")).toBe(`Bearer ${keyAuth.discoveryApiKey}`);
+    expect(result).toMatchObject({ provider: { apiKey: keyAuth.apiKey } });
+  });
+
   it("discovers models with an OAuth bearer while keeping the credential marker in config", async () => {
     const build = vi.spyOn(catalog, "buildHuggingfaceProvider").mockResolvedValue({
       baseUrl: "https://router.huggingface.co/v1",
