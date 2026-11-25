@@ -109,7 +109,7 @@ it.each([
   expect(r.workerRequests.length).toBeGreaterThan(0);
   expect(r).toMatchObject({
     providerRequests: [],
-    publicationCalls: [],
+    publicationCalls: [expect.stringContaining("api --method GET repos/openclaw/openclaw/pulls")],
     publication: { branchExists: false },
   });
   expect(r.failure).toContain(error);
