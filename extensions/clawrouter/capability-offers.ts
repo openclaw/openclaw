@@ -195,8 +195,9 @@ export async function fetchClawRouterCapabilityOffers(params: {
     defaultTimeoutMs: 5_000,
   });
   const { context } = params;
+  const catalogUrl = context.baseUrl.replace(/\/+$/u, "") + "/catalog";
   const { response, release, finalUrl } = await fetchWithTimeoutGuarded(
-    context.baseUrl.replace(/\/+$/u, "") + "/catalog",
+    catalogUrl,
     { method: "GET", headers: context.headers, signal: params.signal },
     remaining(),
     fetch,
@@ -221,20 +222,25 @@ export async function fetchClawRouterCapabilityOffers(params: {
       timeoutMs: remaining,
     });
     if (params.requireFreshProxyCatalog) {
+      if (finalUrl !== catalogUrl) {
+        throw new Error(
+          "ClawRouter redirected catalog discovery. Check models.providers.clawrouter.baseUrl and configure the trusted endpoint that serves /v1/catalog directly.",
+        );
+      }
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
+      if (scope?.authType !== "proxy_key" || !normalizeOptionalString(scope.credentialId)) {
+        throw new Error(
+          "ClawRouter returned a catalog without proxy-key scope. Configure a ClawRouter proxy key for this endpoint and retry.",
+        );
+      }
       const observedAt =
         typeof catalog?.observedAt === "string" ? Date.parse(catalog.observedAt) : Number.NaN;
       const age = Date.now() - observedAt;
-      if (
-        !Number.isFinite(age) ||
-        age < -5_000 ||
-        age > 60_000 ||
-        scope?.authType !== "proxy_key" ||
-        !normalizeOptionalString(scope.credentialId) ||
-        finalUrl !== context.baseUrl.replace(/\/+$/u, "") + "/catalog"
-      ) {
-        throw new Error("ClawRouter capability catalog has a stale or invalid proxy-key scope");
+      if (!Number.isFinite(age) || age < -5_000 || age > 60_000) {
+        throw new Error(
+          "ClawRouter returned a catalog without a current timestamp. Retry discovery and check the OpenClaw and ClawRouter clocks if it persists.",
+        );
       }
     }
     remaining();

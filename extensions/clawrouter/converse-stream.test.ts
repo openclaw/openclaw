@@ -345,6 +345,9 @@ it.each(["foreign", "profile", "format", "capability", "stale", "origin"])(
       }
       const result = await (await f.call()(f.model, context, { apiKey: KEY })).result();
       expect(result.stopReason).toBe("error");
+      if (failure === "stale") {
+        expect(result.errorMessage).toContain("check the OpenClaw and ClawRouter clocks");
+      }
       expect(f.requests).toHaveLength(0);
     });
   },

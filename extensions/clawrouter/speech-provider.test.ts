@@ -14,6 +14,7 @@ type Catalog = {
   model: string | null;
   observedAt?: string;
   authType?: string;
+  redirectCatalog?: boolean;
   path?: string;
   routeKind: "unified" | "native" | "manifest";
   eligible: boolean;
@@ -69,7 +70,11 @@ async function withFixture(
       await withServer(
         (req, res) => {
           void (async () => {
-            if (req.url === "/v1/catalog") {
+            if (req.url === "/v1/catalog" && catalog.redirectCatalog) {
+              res.writeHead(307, { location: "/v1/redirected-catalog" }).end();
+              return;
+            }
+            if (req.url === "/v1/catalog" || req.url === "/v1/redirected-catalog") {
               catalogRequests.push(req.headers.authorization ?? "");
               const route =
                 catalog.route ??
@@ -668,15 +673,31 @@ describe("ClawRouter native Gradium speech", () => {
   );
 
   it.each([
-    { observedAt: "2000-01-01T00:00:00Z" },
-    { authType: "access" },
+    [{ observedAt: "2000-01-01T00:00:00Z" }, "check the OpenClaw and ClawRouter clocks"],
+    [{ authType: "access" }, "Configure a ClawRouter proxy key"],
+    [{ redirectCatalog: true }, "Check models.providers.clawrouter.baseUrl"],
+  ] as const)(
+    "explains how to recover from a rejected catalog through TTS (%j)",
+    async (patch, hint) => {
+      await withFixture(async (fixture) => {
+        const cfg = selectGradium(fixture);
+        Object.assign(fixture.catalog, patch);
+        const result = await fixture.tts({ cfg });
+        expect(result.success).toBe(false);
+        expect(result.error).toContain(hint);
+        expect(fixture.requests).toHaveLength(0);
+      }, respondGradium);
+    },
+  );
+
+  it.each([
     { eligible: false },
     { providerId: "openai" as const },
     { model: "unqualified" },
     { requestFormat: "unknown.speech" },
     { route: "https://foreign.example/speech" },
     { path: "/foreign/speech" },
-  ])("denies stale or foreign catalog offers through TTS (%j)", async (patch) => {
+  ])("denies ineligible or foreign catalog offers through TTS (%j)", async (patch) => {
     await withFixture(async (fixture) => {
       const cfg = selectGradium(fixture);
       Object.assign(fixture.catalog, patch);
