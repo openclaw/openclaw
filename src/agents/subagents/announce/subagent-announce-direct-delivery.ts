@@ -38,6 +38,7 @@ import {
   resolveCommandReplyExpectation,
   resolveCompletionInputReplyExpectation,
 } from "../../reply-completion.js";
+import { readRetainedRequesterToolCaller } from "../../tools/gateway-caller-context.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -438,6 +439,7 @@ async function sendSubagentAnnounceDirectlyBound(
         throw new SourceOwnerChangedError();
       }
       directAnnounceResponse = await runAnnounceAgentCall({
+        agentToolCaller: readRetainedRequesterToolCaller(),
         agentParams: directAgentParams,
         subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,

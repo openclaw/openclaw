@@ -10,6 +10,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../cron-creator-authority-context.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import { SessionFollowupCompletion } from "../subagents/completion/session-followup-completion.js";
 import {
   consumeRequesterCronAuthorityAdmission,
@@ -44,13 +45,36 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
       signal: options?.signal,
       onAccepted: options?.onAccepted,
       assertDispatchCurrent: options?.sessionMutationCommitGuard,
+      agentToolCaller: options?.agentToolCaller,
     }),
-  captureOperatorToolGatewayContinuationContext: async () => ({
-    signal: new AbortController().signal,
-    assertCurrent: fixture.assertCustody,
-    release: fixture.release,
-    run: (work: () => unknown) => work(),
-  }),
+  captureOperatorToolGatewayContinuationContext: async (
+    _target?: unknown,
+    options?: { retainRequester?: true },
+  ) => {
+    const callers = await import("./gateway-caller-context.js");
+    const caller = callers.getGatewayToolCallerIdentity();
+    const requesterOrigin = options?.retainRequester ? caller?.requesterOrigin : undefined;
+    return {
+      signal: new AbortController().signal,
+      assertCurrent: fixture.assertCustody,
+      release: fixture.release,
+      requesterOrigin,
+      run: (work: () => unknown) => work(),
+      runWithRequester: async (work: () => Promise<unknown>) =>
+        caller && requesterOrigin
+          ? await callers.withGatewayToolCallerIdentity(
+              {
+                agentId: caller.agentId,
+                sessionKey: caller.sessionKey,
+                requesterOrigin,
+                personalToolIdentityScoped: true,
+                personalToolSelection: { requesterOrigin, assertCurrent: fixture.assertCustody },
+              },
+              work,
+            )
+          : await work(),
+    };
+  },
 }));
 vi.mock("../../plugins/runtime/gateway-request-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/runtime/gateway-request-scope.js")>()),
@@ -152,6 +176,7 @@ async function inRun<T>(
   runId: string,
   work: () => Promise<T>,
   scope?: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
+  requesterOrigin?: RequesterOrigin,
 ) {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const approvalAuthority = agentRuns.claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -160,6 +185,7 @@ async function inRun<T>(
     return await withGatewayToolCallerIdentity(
       {
         ...requester,
+        requesterOrigin,
         operationalRunInstance,
         approvalAuthority,
         receiptAuthority: () => {
@@ -184,6 +210,41 @@ afterEach(() => {
 });
 
 describe("child followup requester continuation", () => {
+  it("returns a one-way result to the channel requester who sent it", async () => {
+    const origin = {
+      sessionKey: SESSION,
+      messageProvider: "telegram",
+      accountId: "test",
+      senderId: "owner",
+    };
+    const { completion, runId, released } = await inRun(
+      "original",
+      () => prepareCompletion(),
+      undefined,
+      origin,
+    );
+    fixture.wait.mockResolvedValue(visibleReply("continued"));
+    fixture.callGateway.mockImplementation(async (rpc) => ({
+      runId: rpc.params.idempotencyKey,
+      status: "ok",
+      inputProcessingCompleted: true,
+    }));
+    await startSessionsSendReplyFlow({
+      ...replyDefaults,
+      completion,
+      callGateway: callAgentToolGatewayRequest,
+      runId,
+      reply: visibleReply("Child result"),
+    });
+    await released.promise;
+    expect(fixture.callGateway).toHaveBeenCalledOnce();
+    expect(fixture.callGateway.mock.calls[0]?.[0].agentToolCaller).toMatchObject({
+      agentId: "main",
+      sessionKey: SESSION,
+      requesterOrigin: origin,
+    });
+  });
+
   it("retains one timed-out inline result through busy parent admission and execution", async () => {
     vi.useFakeTimers();
     const { completion, runId, released } = await inRun("original", () => prepareCompletion());
