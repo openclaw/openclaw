@@ -44,7 +44,7 @@ it.each([
     for (const [name, source] of Object.entries(sources)) {
       fs.writeFileSync(path.join(root, name), source);
     }
-    const emptyFiles: Array<{ fileName: string; map: string | null }> = [];
+    const emptyFiles: Array<{ fileName: string; map: unknown; mapFileName: string | null }> = [];
     const beforeCleanup: Array<{ fileName: string; code: string; imports: string[] }> = [];
     let observedFile = "";
     let retainedFile = "";
@@ -81,7 +81,8 @@ it.each([
             emptyFiles.push(
               ...candidates.map((chunk) => ({
                 fileName: chunk.fileName,
-                map: chunk.sourcemapFileName,
+                map: chunk.map,
+                mapFileName: chunk.sourcemapFileName,
               })),
             );
             const target = candidates[0]!;
@@ -169,12 +170,13 @@ it.each([
         .flatMap((bundle) => bundle.chunks)
         .filter((chunk) => chunk.type === "chunk");
       expect(emptyFiles.length).toBeGreaterThan(0);
-      for (const { fileName, map } of emptyFiles) {
+      for (const { fileName, map, mapFileName } of emptyFiles) {
         const kept = fileName === retainedFile;
         expect(chunks.some((chunk) => chunk.fileName === fileName)).toBe(kept);
         expect(fs.existsSync(path.join(root, "dist", fileName))).toBe(kept);
-        expect(map).not.toBeNull();
-        expect(fs.existsSync(path.join(root, "dist", map!))).toBe(kept);
+        // Empty generated companions have no mapped source, even with hidden sourcemaps.
+        expect(map).toBeNull();
+        expect(mapFileName).toBeNull();
       }
       const observed = chunks.find((chunk) => chunk.fileName === observedFile)!;
       const original = beforeCleanup.find((chunk) => chunk.fileName === observedFile)!;
@@ -254,6 +256,154 @@ it.each([
     }
   },
 );
+
+it("removes an elided chunk's real sourcemap while preserving mapped entry positions", async () => {
+  const root = createTempDir("openclaw-empty-runtime-map-");
+  for (const [name, source] of Object.entries({
+    "package.json": '{"type":"module"}',
+    "left.ts": 'import "./shared.js"; export const left = 41;',
+    "right.ts": 'import "./shared.js"; export const right = 1;',
+    "shared.ts": 'globalThis[Symbol.for("elided-shared-effect")] = true;',
+  })) {
+    fs.writeFileSync(path.join(root, name), source);
+  }
+  let removedFile = "";
+  let removedMap = "";
+  const entries: Array<{
+    fileName: string;
+    code: string;
+    imports: string[];
+    spans: Array<{ start: number; end: number }>;
+    map: string;
+    mapFileName: string;
+    mapBytes: Buffer;
+  }> = [];
+  const { bundles } = await build({
+    config: false,
+    cwd: root,
+    entry: { left: "left.ts", right: "right.ts" },
+    outDir: "dist",
+    dts: false,
+    target: "node22",
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".js" }),
+    minify: { codegen: true, compress: false, mangle: { toplevel: false, keepNames: true } },
+    sourcemap: "hidden",
+    plugins: [
+      {
+        name: "elide-real-shared-chunk",
+        generateBundle(_options, bundle) {
+          const chunks = Object.values(bundle).filter((output) => output.type === "chunk");
+          const sharedChunks = chunks.filter((chunk) => !chunk.isEntry && !chunk.isDynamicEntry);
+          expect(sharedChunks).toHaveLength(1);
+          const shared = sharedChunks[0];
+          if (!shared) {
+            throw new Error("Expected a real shared non-entry chunk");
+          }
+          expect(shared.exports).toEqual([]);
+          expect(shared.imports).toEqual([]);
+          expect(shared.dynamicImports).toEqual([]);
+          expect(shared.code.trim()).not.toBe("export{};");
+          expect(shared.map).not.toBeNull();
+          if (shared.sourcemapFileName === null) {
+            throw new Error("Expected the shared chunk's real sourcemap filename");
+          }
+          removedFile = shared.fileName;
+          removedMap = shared.sourcemapFileName;
+          const sidecar = bundle[removedMap];
+          if (!sidecar || sidecar.type !== "asset") {
+            throw new Error("Expected the shared chunk's emitted sourcemap asset");
+          }
+          expect(sidecar.source.length).toBeGreaterThan(0);
+          for (const entry of chunks.filter((chunk) => chunk.isEntry && chunk.map !== null)) {
+            if (entry.sourcemapFileName === null) {
+              throw new Error("Expected a mapped entry's sourcemap filename");
+            }
+            const asset = bundle[entry.sourcemapFileName];
+            if (!asset || asset.type !== "asset") {
+              throw new Error("Expected a mapped entry's emitted sourcemap asset");
+            }
+            const spans: Array<{ start: number; end: number }> = [];
+            for (const node of this.parse(entry.code).body) {
+              if (
+                node.type === "ImportDeclaration" &&
+                node.specifiers.length === 0 &&
+                path.posix.join(path.posix.dirname(entry.fileName), node.source.value) ===
+                  removedFile
+              ) {
+                spans.push({ start: node.start, end: node.end });
+              }
+            }
+            expect(spans.length).toBeGreaterThan(0);
+            entries.push({
+              fileName: entry.fileName,
+              code: entry.code,
+              imports: [...entry.imports],
+              spans,
+              map: JSON.stringify(entry.map),
+              mapFileName: entry.sourcemapFileName,
+              mapBytes:
+                typeof asset.source === "string"
+                  ? Buffer.from(asset.source, "utf8")
+                  : Buffer.from(asset.source),
+            });
+          }
+          expect(entries.length).toBeGreaterThan(0);
+          // Model an earlier plugin eliding code; retire its genuine map with that chunk.
+          shared.code = "export{};";
+        },
+      },
+      createEmptyRuntimeChunksPlugin(),
+    ],
+    logLevel: "silent",
+  });
+  try {
+    const output = bundles.flatMap((bundle) => bundle.chunks);
+    for (const name of [removedFile, removedMap]) {
+      expect(output.some((item) => item.fileName === name)).toBe(false);
+      expect(fs.existsSync(path.join(root, "dist", name))).toBe(false);
+    }
+    for (const entry of entries) {
+      const after = output.find((item) => item.fileName === entry.fileName);
+      if (!after || after.type !== "chunk") {
+        throw new Error("Expected the mapped entry to survive cleanup");
+      }
+      expect(JSON.stringify(after.map)).toBe(entry.map);
+      expect(after.sourcemapFileName).toBe(entry.mapFileName);
+      const asset = output.find((item) => item.fileName === entry.mapFileName);
+      if (!asset || asset.type !== "asset") {
+        throw new Error("Expected the entry's original sourcemap asset");
+      }
+      expect(
+        typeof asset.source === "string"
+          ? Buffer.from(asset.source, "utf8")
+          : Buffer.from(asset.source),
+      ).toEqual(entry.mapBytes);
+      expect(fs.readFileSync(path.join(root, "dist", entry.mapFileName))).toEqual(entry.mapBytes);
+      expect(after.imports).toEqual(entry.imports.filter((name) => name !== removedFile));
+      expect(after.code.length).toBe(entry.code.length);
+      for (let index = 0; index < entry.code.length; index++) {
+        if (!entry.spans.some((span) => index >= span.start && index < span.end)) {
+          expect(after.code.charAt(index)).toBe(entry.code.charAt(index));
+        }
+      }
+    }
+    const result = execFileSync(
+      resolveTestNodeExecPath(),
+      [
+        "--input-type=module",
+        "-e",
+        'import { left } from "./dist/left.js"; import { right } from "./dist/right.js"; console.log(JSON.stringify([left, right, globalThis[Symbol.for("elided-shared-effect")] ?? null]));',
+      ],
+      { cwd: root, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
+    );
+    expect(JSON.parse(result)).toEqual([41, 1, null]);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
 
 it("leaves unaffected chunk imports untouched while removing an empty companion", () => {
   const generateBundle = createEmptyRuntimeChunksPlugin().generateBundle;
