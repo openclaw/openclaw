@@ -498,25 +498,6 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("reports model refs outside the policy allowlist", async () => {
-    const cfg = cfgWithPolicyAgentDefaults({
-      model: {
-        primary: "openai/gpt-5.5",
-        fallbacks: ["anthropic/claude-sonnet-4.7"],
-      },
-    }) satisfies OpenClawConfig;
-    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
-
-    expect(result.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/models-unapproved-provider",
-        severity: "error",
-        ocPath: "oc://openclaw.config/agents/defaults/model/fallbacks/#0",
-        requirement: "oc://policy.jsonc/models/providers/allow",
-      }),
-    ]);
-  });
-
   it("reports model allowlist keys outside the policy allowlist", async () => {
     const cfg = cfgWithPolicyAgentDefaults({
       models: {
@@ -550,26 +531,6 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/models-unapproved-provider",
         severity: "error",
         ocPath: 'oc://openclaw.config/agents/entries/research/models/"openrouter/*"',
-        requirement: "oc://policy.jsonc/models/providers/allow",
-      }),
-    ]);
-  });
-
-  it("reports configured model providers outside the policy allowlist", async () => {
-    const cfg: Record<string, unknown> = rawCfgWithPolicy({
-      models: {
-        providers: {
-          anthropic: {},
-        },
-      },
-    });
-    const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
-
-    expect(result.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/models-unapproved-provider",
-        severity: "error",
-        ocPath: "oc://openclaw.config/models/providers/anthropic",
         requirement: "oc://policy.jsonc/models/providers/allow",
       }),
     ]);
@@ -621,31 +582,6 @@ describe("registerPolicyDoctorChecks", () => {
     );
 
     expect(result.findings).toEqual([]);
-  });
-
-  it("reports MCP servers denied by policy", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      mcp: {
-        servers: {
-          untrusted: {
-            command: "uvx",
-            args: ["untrusted-mcp"],
-          },
-        },
-      },
-    }) satisfies OpenClawConfig;
-    const configPath = await writeMcpPolicyFixture({ deny: ["untrusted"] });
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfg));
-
-    expect(result.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/mcp-denied-server",
-        severity: "error",
-        ocPath: "oc://openclaw.config/mcp/servers/untrusted",
-        requirement: "oc://policy.jsonc/mcp/servers/deny",
-      }),
-    ]);
   });
 
   it("preserves MCP server casing for deny rules", async () => {

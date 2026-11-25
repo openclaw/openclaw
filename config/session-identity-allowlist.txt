@@ -311,7 +311,7 @@ src/agents/command/post-run.ts	9
 src/agents/command/session-store.ts	8
 src/agents/command/session.ts	8
 src/agents/command/transcript-persistence.ts	4
-src/agents/cron-creator-authority-context.ts	38
+src/agents/cron-creator-authority-context.ts	31
 src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	3
 src/agents/embedded-agent-runner/cli-backend-dispatch.ts	3
 src/agents/embedded-agent-runner/compact.queued-execution.ts	8

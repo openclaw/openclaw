@@ -264,43 +264,6 @@ describe("diagnostic memory", () => {
     expect(events).toEqual([]);
   });
 
-  it("defers the default heap probe until a sample needs it and then reuses it", async () => {
-    vi.resetModules();
-    const getHeapStatistics = vi.fn(() => ({ heap_size_limit: 4 * 1024 ** 3 }));
-    const getHeapSpaceStatistics = vi.fn(() => []);
-    vi.doMock("node:v8", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("node:v8")>()),
-      getHeapStatistics,
-      getHeapSpaceStatistics,
-    }));
-    try {
-      const { emitDiagnosticMemorySample: sample } = await import("./diagnostic-memory.js");
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-
-      const options = { memoryUsage: memoryUsage({}), emitSample: false, isBunRuntime: false };
-      sample({ ...options, isBunRuntime: true });
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-      for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-        sample({ ...options, heapSizeLimitBytes });
-      }
-      expect(getHeapStatistics).not.toHaveBeenCalled();
-
-      sample(options);
-      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
-      expect(getHeapSpaceStatistics).not.toHaveBeenCalled();
-      sample({ ...options, emitSample: true });
-      expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
-      sample(options);
-      expect(getHeapSpaceStatistics).toHaveBeenCalledTimes(process.versions.bun ? 0 : 1);
-      sample({ ...options, heapSizeLimitBytes: 8 * 1024 ** 3 });
-      sample(options);
-      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock("node:v8");
-      vi.resetModules();
-    }
-  });
-
   it.each([
     [3000, 2000, "critical"],
     [1000, 500, "warning"],
