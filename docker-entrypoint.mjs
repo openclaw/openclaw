@@ -76,6 +76,10 @@ function gatewayInvocation(program) {
 // them, so a new image or recreated container starts without the marker.
 const ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
 
+function doctorSignal(signal) {
+  return signal === "SIGHUP" || signal === "SIGQUIT" ? "SIGTERM" : signal;
+}
+
 function activationMarker(rootOptions) {
   const key = createHash("sha256")
     .update(JSON.stringify([root, rootOptions]))
@@ -100,7 +104,7 @@ async function activate() {
       const listener = () => {
         interrupted ??= signal;
         // Doctor's maintenance barriers own INT/TERM; HUP/QUIT must use that drain too.
-        child?.kill(signal === "SIGHUP" || signal === "SIGQUIT" ? "SIGTERM" : signal);
+        child?.kill(doctorSignal(signal));
       };
       process.on(signal, listener);
       listeners.set(signal, listener);
@@ -133,8 +137,15 @@ async function activate() {
         throw failure;
       }
       const signal = interrupted ?? outcome.signal;
+      if (
+        outcome.code &&
+        (!interrupted || outcome.code !== 128 + os.constants.signals[doctorSignal(interrupted)])
+      ) {
+        process.exitCode = outcome.code;
+        return;
+      }
       if (signal || outcome.code !== 0) {
-        process.exitCode = signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1);
+        process.exitCode = signal ? 128 + os.constants.signals[signal] : 1;
         return;
       }
     } finally {

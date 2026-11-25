@@ -22,7 +22,7 @@ if (args.includes('doctor')) {
     for (const signal of ['SIGTERM', 'SIGINT']) {
       process.on(signal, () => setImmediate(() => {
         fs.appendFileSync(process.env.RECORD, JSON.stringify({stopped:true, signal})+'\n');
-        process.exit(0);
+        process.exit(Number(process.env.DOCTOR_EXIT || 0));
       }));
     }
     setInterval(() => {}, 1000);
@@ -130,13 +130,16 @@ describe.skipIf(process.platform === "win32")("Docker image activation", () => {
   it.for([
     { signal: undefined, forwarded: undefined, status: 78 },
     { signal: "SIGTERM", forwarded: "SIGTERM", status: 143 },
+    { signal: "SIGTERM", forwarded: "SIGTERM", doctorExit: "1", status: 1 },
+    { signal: "SIGHUP", forwarded: "SIGTERM", doctorExit: "143", status: 129 },
     { signal: "SIGINT", forwarded: "SIGINT", status: 130 },
     { signal: "SIGHUP", forwarded: "SIGTERM", status: 129 },
     { signal: "SIGQUIT", forwarded: "SIGTERM", status: 131 },
-  ])("stops after Doctor exits $status", async ({ signal, forwarded, status }, { command }) => {
+  ])("stops after Doctor exits $status", async (row, { command }) => {
+    const { signal, forwarded, status, doctorExit } = row;
     const f = fixture(command);
     const env: Record<string, string> = signal
-      ? { INTERRUPT_DOCTOR: signal }
+      ? { INTERRUPT_DOCTOR: signal, DOCTOR_EXIT: doctorExit ?? "0" }
       : { DOCTOR_EXIT: "78" };
     expect((await f.run(["openclaw.mjs", "gateway"], env)).status).toBe(status);
     expect(f.read().map(({ args, ...event }) => args ?? event)).toEqual([

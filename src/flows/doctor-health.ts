@@ -168,7 +168,7 @@ async function runDoctorHealthFlowWithResult(
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
   const recordRepairRefusal = (ctx: DoctorHealthFlowContext): boolean => {
-    const refusal = startup.showDoctorRepairRefusal(ctx);
+    const refusal = startup.showDoctorRepairRefusal(ctx, effectiveRuntime);
     if (!refusal) {
       return false;
     }

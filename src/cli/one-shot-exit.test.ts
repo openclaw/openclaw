@@ -123,6 +123,32 @@ describe("one-shot CLI completion", () => {
     expect(process.exitCode).toBe(7);
   });
 
+  it.each(["before", "during"])("retains a reported failure %s signal cleanup", async (when) => {
+    const cleanup = createDeferred();
+    const release = registerSignalExitGate(cleanup.promise);
+    try {
+      await runCliWithExitFinalization({
+        run: async () => {
+          if (when === "before") {
+            requestExitAfterOneShotOutput(defaultRuntime, "reported-failure");
+          }
+          const drain = waitForSignalExitBarriers("SIGTERM");
+          if (when === "during") {
+            requestExitAfterOneShotOutput(defaultRuntime, "reported-failure");
+          }
+          cleanup.resolve();
+          await drain;
+          requestExitAfterOneShotOutput(defaultRuntime, 143);
+        },
+        onError: ignoreError,
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      cleanup.resolve();
+      release();
+    }
+  });
+
   it.each([
     { requested: 0, signal: "SIGTERM" as const, expected: 143 },
     { requested: "0", signal: "SIGINT" as const, expected: 130 },
