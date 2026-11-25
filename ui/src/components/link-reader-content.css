@@ -53,7 +53,7 @@
   color: var(--warn);
 }
 .lr-eyebrow {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -61,6 +61,36 @@
 .lr-identity time {
   flex: none;
   white-space: nowrap;
+}
+.lr-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--warn);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A notice outranks the reference: the reference keeps only the room left over, on one line. */
+.lr-identity--notice .lr-eyebrow {
+  flex-basis: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The actions hang in the row's 22px line, so they add no height to the header. */
+.lr-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin: -3px -6px -3px -2px;
+}
+.lr-actions .oc-icon-button {
+  color: var(--muted);
+  text-decoration: none;
+}
+.lr-actions .oc-icon-button:hover {
+  color: var(--text);
 }
 h1 {
   margin: 12px 0 14px;

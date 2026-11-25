@@ -19,6 +19,7 @@ import {
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref, safePreviewImage } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
+import { IconButton, iconButtonClass } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
@@ -242,6 +243,12 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  /** Fetches the item again; the header shows no refresh action without it. */
+  onRefresh?: () => void;
+  refreshing?: boolean;
+  refreshDisabled?: boolean;
+  /** Why the document may be out of date, such as a failed refresh. Replaces the date. */
+  notice?: string;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   /** The element that scrolls this document; the navigation follows its position. */
   scrollPort?: () => HTMLElement | undefined;
@@ -431,10 +438,13 @@ export function LinkReaderContent(props: {
     );
   }
 
+  // A refresh in flight is announced, not shown: the button already spins.
+  const notice = () => (props.refreshing ? undefined : props.notice);
+  const externalLabel = () => t("linkReader.openExternal", { provider: props.target.reader.label });
   return (
     <article class="lr-document">
       <header class="lr-document-header">
-        <div class="lr-identity">
+        <div class={["lr-identity", { "lr-identity--notice": Boolean(notice()) }]}>
           <Show when={props.detail.badge}>
             {(badge) => (
               <span class={["lr-state", `lr-state--${badge().tone}`]}>
@@ -444,7 +454,39 @@ export function LinkReaderContent(props: {
             )}
           </Show>
           <span class="lr-eyebrow">{props.detail.subtitle ?? props.target.reader.label}</span>
-          <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
+          <Show when={!notice()}>
+            <DateLabel value={props.detail.badge?.timestamp ?? props.detail.createdAt} />
+          </Show>
+          <span class={notice() ? "lr-notice" : "sr-only"} role="status" title={notice()}>
+            {props.refreshing ? t("linkReader.refreshingSaved") : notice()}
+          </span>
+          <span class="lr-actions">
+            <Show when={props.onRefresh}>
+              {(refresh) => (
+                <IconButton
+                  size={28}
+                  class="lr-refresh"
+                  label={t("linkReader.refresh")}
+                  icon={props.refreshing ? "loaderCircle" : "refresh"}
+                  busy={props.refreshing}
+                  disabled={props.refreshDisabled || props.refreshing}
+                  onClick={() => refresh()()}
+                />
+              )}
+            </Show>
+            <openclaw-tooltip prop:content={externalLabel()}>
+              <a
+                class={[iconButtonClass({ size: 28 }), "lr-external"]}
+                href={props.target.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-link-reader-external=""
+                aria-label={externalLabel()}
+              >
+                <Icon name="externalLink" />
+              </a>
+            </openclaw-tooltip>
+          </span>
         </div>
         <h1>{props.detail.title}</h1>
         <div class="lr-byline">

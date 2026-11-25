@@ -127,7 +127,8 @@ it("makes the overview readable before extras and retains visible content throug
       ).toBe(0);
       const top = await content.evaluate((node) => node.scrollTop);
       const document = await panel.locator(".lr-document").elementHandle();
-      await button("Refresh item").click();
+      // Refresh sits in the document header; a pointer click would scroll back to it first.
+      await button("Refresh item").dispatchEvent("click");
       await expect.poll(() => button("Refresh item").getAttribute("aria-busy")).toBe("true");
       expect(await content.evaluate((node) => node.scrollTop)).toBe(top);
       expect(await document!.evaluate((node) => node.isConnected)).toBe(true);

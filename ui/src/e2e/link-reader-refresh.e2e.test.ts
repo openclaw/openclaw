@@ -11,6 +11,9 @@ it("keeps the retained title readable through refresh failure and retry at every
   const overview: ControlUiLinkReaderDocument = {
     url,
     title: "Keep loaded reader controls reachable in constrained panes",
+    subtitle: "example/project #203950",
+    badge: { label: "Open", tone: "positive" },
+    createdAt: "2026-09-23T11:08:47Z",
     body: "Readable retained details.\n\n".repeat(40),
   };
   const artifacts = createControlUiE2eArtifactDir(
@@ -22,7 +25,7 @@ it("keeps the retained title readable through refresh failure and retry at every
     { methodResponses: { "forge.detail": overview } },
     async ({ page, gateway, panel, content }) => {
       const refresh = panel
-        .locator(".lr-toolbar")
+        .locator(".lr-document-header")
         .getByRole("button", { name: "Refresh item", exact: true });
       const heading = panel.getByRole("heading", { name: overview.title, exact: true });
       await heading.waitFor();
@@ -49,6 +52,13 @@ it("keeps the retained title readable through refresh failure and retry at every
               retryable: true,
             });
             await expect.poll(() => refresh.isEnabled()).toBe(true);
+            // The failure takes the date's place in the header; the title below stays put.
+            const notice = panel.locator(".lr-document-header .lr-notice");
+            expect(await notice.textContent()).toBe("Refresh unavailable. Try again.");
+            // The reference gives way before the notice does, even in a phone-width pane.
+            expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+              true,
+            );
           }
           const frame = await takeControlUiScreenshotFrame(page, panel, [heading], {
             animations: "disabled",
@@ -71,23 +81,13 @@ it("keeps the retained title readable through refresh failure and retry at every
             }),
           );
         }
-        if (width === 390) {
-          const requests = (await gateway.getRequests("forge.detail")).length;
-          const actions = panel.getByRole("button", { name: "Link reader actions", exact: true });
-          await actions.tap();
-          await page
-            .getByRole("menu", { name: "Link reader actions", exact: true })
-            .getByText("Refresh unavailable. Try again.", { exact: true })
-            .waitFor();
-          expect((await gateway.getRequests("forge.detail")).length).toBe(requests);
-          await actions.tap();
-        }
         await content.evaluate((node) => {
           node.scrollTop = 200;
         });
         const scrollTop = await content.evaluate((node) => node.scrollTop);
         const retry = await gateway.deferNext("forge.detail");
-        await refresh.click();
+        // Refresh sits in the document header; a pointer click would scroll back to it first.
+        await refresh.dispatchEvent("click");
         expect(
           (await gateway.waitForRequest("forge.detail", { after: retry })).params,
         ).toMatchObject({ url, refresh: true });
