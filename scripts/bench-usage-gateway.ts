@@ -1332,8 +1332,27 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
         );
         if (mode === "cold") {
           if (values["cold-backend-utc-switch"]) {
-            // Local on a UTC client and explicit UTC are the same calendar.
-            // Measure the first switch, not a repeat after both forms have warmed.
+            // A complete response can race a startup usage publication and leave a
+            // stale snapshot. Prove reuse of Local before timing the first UTC request.
+            let warmDispatches = dispatches.length;
+            let warm = response;
+            let warmHits = false;
+            const warmSignal = AbortSignal.timeout(15_000);
+            for (let probe = 0; probe < 4; probe += 1) {
+              warm = await requestSessionUsage(peer, query, {
+                projection: "overview",
+                signal: warmSignal,
+              });
+              const observed = await owner.snapshot();
+              warmHits =
+                !warm.partial &&
+                !observed.slice(warmDispatches).some(({ kind }) => kind === "usage-cost:overview");
+              warmDispatches = observed.length;
+              if (warmHits) {
+                break;
+              }
+            }
+            assert(warmHits, "Local Usage snapshot must be warm before switching to UTC");
             const switchBefore = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
             const switchStart = performance.now();
             const switched = await requestSessionUsage(
@@ -1346,9 +1365,9 @@ async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair
             sample.utcSwitch = {
               wallMs,
               gatewayCpu: measureGatewayCpuUsage(switchBefore, switchAfter),
-              dispatches: (await owner.snapshot()).slice(dispatches.length),
+              dispatches: (await owner.snapshot()).slice(warmDispatches),
             };
-            const { updatedAt: _a, ...local } = response;
+            const { updatedAt: _a, ...local } = warm;
             const { updatedAt: _b, ...utc } = switched;
             assert.deepEqual(utc, local, "Equivalent UTC modes return the same complete report");
           }

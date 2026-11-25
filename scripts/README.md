@@ -366,8 +366,8 @@ system's file cache or measure cold-storage I/O. Omitting `--cold-pairs` keeps t
 single-triple behavior; `--pairs` still controls only warm filter repetitions.
 
 Add `--cold-backend-utc-switch` to measure the first switch from Local on a UTC
-client to explicit UTC, after the full cold report becomes ready. It asserts
-that the reports agree except for `updatedAt` and records switch latency, CPU
+client to explicit UTC, after the full cold report becomes ready and an untimed
+re-read confirms it can be reused. It asserts that the reports agree except for `updatedAt` and records switch latency, CPU
 and worker dispatches, including snapshot reads, separately from cold readiness.
 
 For attribution, add `--diagnostic`. It runs only 1× at localhost and 100 ms RTT,
