@@ -332,7 +332,7 @@ export async function withWorktreeSources<T>(
             await acquireWorktreeRunLease(record.id, {
               env,
               source: { context, record },
-              ...(missing ? { allowMissingCheckout: true } : {}),
+              ...(missing ? { allowMissingCheckout: true, exclusive: true } : {}),
             }),
           );
           if (held.size % 8 === 0) {

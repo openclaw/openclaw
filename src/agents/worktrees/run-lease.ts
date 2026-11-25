@@ -283,7 +283,7 @@ export async function acquireWorktreeRunLease(
   opts: {
     env?: NodeJS.ProcessEnv;
     exclusive?: true;
-    /** Creation and receipt settlement can retain exclusive registry custody without a checkout. */
+    /** Creation and receipt settlement can retain registry custody without a checkout. */
     allowMissingCheckout?: true;
     source?: WorktreeRunSource;
   } = {},
@@ -350,7 +350,7 @@ async function acquireWorktreeRunLeaseInScope(
         startTime,
         now: Date.now(),
         observed,
-        ...(opts.exclusive || opts.allowMissingCheckout ? { exclusive: true } : {}),
+        ...(opts.exclusive ? { exclusive: true } : {}),
       },
       (kind) => {
         cleanup.admissionSettled = kind !== "unknown";

@@ -118,6 +118,21 @@ describe("worktree run lease", () => {
     );
   }
 
+  it("shares receipt-settlement custody with an active local run", async () => {
+    const activeRun = await acquire();
+    let receipt: Awaited<ReturnType<typeof acquire>> | undefined;
+    try {
+      receipt = await acquire({ allowMissingCheckout: true });
+      await expectCustody(true);
+      await receipt.release();
+      await expectCustody(true);
+    } finally {
+      await receipt?.release();
+      await activeRun.release();
+    }
+    await expectCustody(false);
+  });
+
   it("shares concurrent runs with SQL-free admission and refcounted Git custody", async () => {
     // A running Gateway already has an ordered cleanup group before its first worktree turn.
     const unregister = registerProcessExitCleanup(() => {});
