@@ -164,6 +164,11 @@
       "help": "Ends an active realtime call after neither side speaks for this long. Unset uses 30 seconds for outbound calls; inbound calls have no default speech-idle hangup.",
       "advanced": true
     },
+    "realtime.idleCheckIn": {
+      "label": "Realtime Speech Idle Check-In",
+      "help": "Before a speech-idle hangup, the assistant asks whether the caller is still there, then says goodbye before hanging up if the silence continues.",
+      "advanced": true
+    },
     "realtime.instructions": {
       "label": "Realtime Instructions",
       "advanced": true
@@ -820,6 +825,9 @@
           "idleHangupMs": {
             "type": "integer",
             "minimum": 1
+          },
+          "idleCheckIn": {
+            "type": "boolean"
           },
           "instructions": {
             "type": "string"

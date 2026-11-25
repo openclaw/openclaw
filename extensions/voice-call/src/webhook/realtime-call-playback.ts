@@ -5,6 +5,7 @@ import {
   type RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallRecord } from "../types.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
 import {
@@ -14,6 +15,7 @@ import {
   REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS,
   REALTIME_DISCONNECT_HANGUP_GRACE_MS,
 } from "./realtime-call-session-control.js";
+import { createIdleCheckIn } from "./realtime-idle-check-in.js";
 import type { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
@@ -28,7 +30,7 @@ export function createRealtimeCallPlayback(params: {
   /** True when the host, not the bridge's ready trigger, decides when the opening is spoken. */
   hostOwnsOpening: boolean;
   holdOpeningMaxMs?: number;
-  idleHangupMs?: number;
+  realtimeConfig: Pick<VoiceCallRealtimeConfig, "idleHangupMs" | "idleCheckIn">;
   getSession: () => RealtimeVoiceBridgeSession | undefined;
   isClosed: () => boolean;
   closeForInactivity: () => void;
@@ -62,6 +64,7 @@ export function createRealtimeCallPlayback(params: {
     onAudioSent: (audio) => {
       if (calculateMulawRms(audio) >= 0.035) {
         hostSpeech.noteAudibleOutput();
+        idleCheckIn?.noteAudibleOutput();
         activity.noteSpeech();
       }
     },
@@ -161,18 +164,46 @@ export function createRealtimeCallPlayback(params: {
     providerCallId: callSid,
   });
   const idleHangupMs =
-    params.idleHangupMs ?? (callRecord.direction === "outbound" ? 30_000 : undefined);
+    params.realtimeConfig.idleHangupMs ??
+    (callRecord.direction === "outbound" ? 30_000 : undefined);
+  const hangUpForInactivity = () => {
+    params.closeForInactivity();
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.close(1000, "Speech inactivity");
+    }
+  };
+  const idleCheckIn =
+    params.realtimeConfig.idleCheckIn && idleHangupMs
+      ? createIdleCheckIn({
+          callId,
+          providerCallId: callSid,
+          idleHangupMs,
+          audioPacer,
+          say: (instructions) => {
+            const session = params.getSession();
+            if (!session) {
+              throw new Error("No active realtime bridge for call");
+            }
+            session.triggerGreeting(instructions);
+          },
+          isClosed: params.isClosed,
+          restartIdle: () => activity.noteSpeech(),
+          hangUp: hangUpForInactivity,
+        })
+      : undefined;
   const activity = createRealtimeCallActivityController({
     idleHangupMs,
     isPaused: () => outboundGreeting.isBlocked() || hostSpeech.isActive(),
+    onCallerSpeech: () => idleCheckIn?.noteCallerSpeech(),
     onIdle: () => {
+      if (idleCheckIn) {
+        idleCheckIn.onIdle();
+        return;
+      }
       console.warn(
         `[voice-call] Realtime speech idle timeout callId=${callId} providerCallId=${callSid} timeoutMs=${idleHangupMs}`,
       );
-      params.closeForInactivity();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close(1000, "Speech inactivity");
-      }
+      hangUpForInactivity();
     },
     onMediaWarning: () => {
       console.warn(

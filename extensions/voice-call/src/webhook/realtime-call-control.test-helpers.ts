@@ -78,11 +78,13 @@ export function makeHandler(params: {
   createBridge: RealtimeVoiceProviderPlugin["createBridge"];
   endCall?: CallManager["endCall"];
   idleHangupMs?: number;
+  idleCheckIn?: boolean;
   nativeConsult?: boolean;
 }) {
   const config = {
     ...createRealtimeConfig(),
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
+    ...(params.idleCheckIn ? { idleCheckIn: true } : {}),
   };
   const provider = makeRealtimeProvider(params.createBridge, {
     capabilities: {

@@ -161,6 +161,41 @@ it("keeps the call alive while buffered assistant audio is still playing out", a
   await vi.advanceTimersByTimeAsync(2_000);
   expect(endCall).toHaveBeenCalledWith("call-1", { reason: "timeout" });
 });
+/** Loud 8 kHz mu-law model audio lasting `ms`; the pacer plays it out over that long. */
+const modelAudio = (ms: number) => Buffer.alloc(8 * ms, Buffer.from([0x00, 0x80]));
+async function silenceUntilGoodbye(providerCallId: string) {
+  const fixture = await connectCall(providerCallId, { idleHangupMs: 1_000, idleCheckIn: true });
+  fixture.request.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(fixture.triggerGreeting).toHaveBeenLastCalledWith(
+    expect.stringContaining("Line: Hello? Are you still there?"),
+  );
+  fixture.request.onAudio(modelAudio(1_000));
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(fixture.triggerGreeting).toHaveBeenLastCalledWith(
+    expect.stringContaining("Line: Looks like we got disconnected."),
+  );
+  expect(fixture.endCall).not.toHaveBeenCalled();
+  fixture.request.onAudio(modelAudio(2_000));
+  return fixture;
+}
+it("checks whether the caller is still there before hanging up for silence", async () => {
+  const { endCall } = await silenceUntilGoodbye("CA-check-in");
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(endCall).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
+});
+it("keeps the call when the caller speaks up over the idle goodbye", async () => {
+  const { endCall, request, triggerGreeting } = await silenceUntilGoodbye("CA-still-here");
+  await vi.advanceTimersByTimeAsync(1_000);
+  request.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+  await vi.advanceTimersByTimeAsync(2_500);
+  expect(endCall).not.toHaveBeenCalled();
+  expect(triggerGreeting).toHaveBeenLastCalledWith(
+    expect.stringContaining("Line: Hello? Are you still there?"),
+  );
+});
 it("keeps the call alive during sustained caller speech and ends after silence", async () => {
   const { ws, endCall } = await connectCall("CA-sustained-speech", { idleHangupMs: 1_000 });
   for (let index = 0; index < 5; index += 1) {
