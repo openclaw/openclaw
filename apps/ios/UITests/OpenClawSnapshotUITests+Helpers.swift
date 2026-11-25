@@ -694,7 +694,9 @@ extension OpenClawSnapshotUITests {
     /// Model sign-in is the picker's last row; at the medium detent it can sit below the fold.
     func pickerSignInRow(in app: XCUIApplication) -> XCUIElement {
         let signIn = app.buttons["chat-model-sign-in"]
-        if !signIn.waitForExistence(timeout: 2) {
+        let search = app.searchFields.firstMatch
+        // It may also rest under the floating search field, which would take the tap.
+        if !signIn.waitForExistence(timeout: 2) || (search.exists && signIn.frame.maxY > search.frame.minY) {
             self.expandModelPickerSheet(in: app)
         }
         XCTAssertTrue(signIn.waitForExistence(timeout: 3), app.debugDescription)
