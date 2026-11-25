@@ -16,6 +16,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import { createSessionCompanion } from "./session-companion.js";
+import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentInternalParams) => Promise<ReturnType<typeof completion>>>(),
@@ -215,7 +216,7 @@ async function invokeAsk(
   const respond = vi.fn();
   await sessionCompanionHandlers["sessions.companion.ask"]!({
     params: { sessionKey: question.sessionKey, ...params },
-    client: { connId },
+    client: { ...sharingPolicyClient({ scopes: [] }), connId },
     context: {
       sessionCompanion: companion,
       getRuntimeConfig: () => cfg,
