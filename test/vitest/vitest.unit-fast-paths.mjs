@@ -472,6 +472,7 @@ function classifyUnitFastTestFileContent(source) {
 const unitFastCandidatesByKey = new Map();
 
 function collectUnitFastCandidates(cwd, scope) {
+  cwd = path.resolve(cwd);
   const cacheKey = `${normalizeRepoPath(cwd)}\0${scope}`;
   const cached = unitFastCandidatesByKey.get(cacheKey);
   if (cached) {
@@ -558,6 +559,7 @@ function analyzeUnitFastTestFile(cwd, file) {
 }
 
 export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {}) {
+  cwd = path.resolve(cwd);
   const cacheKey = `${normalizeRepoPath(cwd)}\0${options.scope ?? "default"}`;
   const cached = unitFastAnalysisByKey.get(cacheKey);
   if (cached) {
@@ -575,7 +577,7 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
 const scopedUnitFastTestFilesByKey = new Map();
 
 export function getUnitFastTestFilesForIncludePatterns(includePatterns, options = {}) {
-  const cwd = options.cwd ?? process.cwd();
+  const cwd = path.resolve(options.cwd ?? process.cwd());
   const normalizedCwd = normalizeRepoPath(cwd);
   const dir = normalizeScopedDir(options.dir);
   const normalizedPatterns = includePatterns.map(normalizeRepoPath);
@@ -636,6 +638,7 @@ export function getUnitFastTestFiles(includePatterns, cwd = process.cwd()) {
 }
 
 function selectedUnitFastAnalysis(includePatterns, cwd) {
+  cwd = path.resolve(cwd);
   // Partial selections reuse scoped analysis without populating whole-lane membership caches.
   return includePatterns
     ? getUnitFastTestFilesForIncludePatterns(includePatterns, { cwd }).map((file) =>

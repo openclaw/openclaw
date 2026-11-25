@@ -63,8 +63,19 @@ describe("unit-fast invocation roots", () => {
         }
         for (const index of [0, 1, 0]) {
           process.chdir(roots[index]);
-          for (const [lane, getter] of getters.entries()) {
-            assert.deepEqual(getter(), expected[index][lane]);
+          for (const cwd of [undefined, ".", "./", "src/.."]) {
+            for (const [lane, getter] of getters.entries()) {
+              assert.deepEqual(getter(undefined, cwd), expected[index][lane]);
+              assert.deepEqual(getter(files, cwd), expected[index][lane]);
+            }
+            for (const patterns of [["src/**/*.test.ts"], ["!src/missing.test.ts"]]) {
+              assert.deepEqual(paths.getUnitFastTestFilesForIncludePatterns(patterns, { cwd }), expected[index][0]);
+            }
+            for (const scope of ["default", "broad"]) {
+              const candidates = scope === "broad" ? paths.collectBroadUnitFastTestCandidates : paths.collectUnitFastTestCandidates;
+              assert.deepEqual(candidates(cwd).filter((file) => files.includes(file)), files.slice(0, index === 0 ? 2 : 3));
+              assert.deepEqual(paths.collectUnitFastTestFileAnalysis(cwd, { scope }).filter((entry) => entry.unitFast).map((entry) => entry.file), expected[index][0]);
+            }
           }
         }
       } finally {
