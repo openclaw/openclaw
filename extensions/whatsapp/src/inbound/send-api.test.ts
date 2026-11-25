@@ -221,6 +221,10 @@ describe("createWebSendApi", () => {
       "voice-1",
       "voice-text-1",
     ]);
+    expect(res.receipt?.parts).toMatchObject([
+      { platformMessageId: "voice-1", kind: "media", index: 0 },
+      { platformMessageId: "voice-text-1", kind: "text", index: 1 },
+    ]);
     expectOutboundActivityOnce();
   });
 
