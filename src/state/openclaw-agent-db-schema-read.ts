@@ -37,6 +37,11 @@ export function assertSupportedAgentSchemaVersion(
   pathname: string,
   userVersion = readAgentDatabaseSchemaVersion(db),
 ): number {
+  // Writers stamp header and metadata atomically, with min_reader <= writer version.
+  // A supported header needs no floor read; canonical admission still validates metadata.
+  if (userVersion <= OPENCLAW_AGENT_SCHEMA_VERSION) {
+    return userVersion;
+  }
   let minReader = userVersion;
   try {
     const metadata = readExistingAgentSchemaMeta(db);
@@ -44,10 +49,7 @@ export function assertSupportedAgentSchemaVersion(
       (isPostgresSqlConnection(db) ? getPostgresPhysicalFacts(db)?.minReader : undefined) ??
       metadata?.minReader ??
       Math.max(metadata?.schemaVersion ?? 0, userVersion);
-  } catch (error) {
-    if (userVersion <= OPENCLAW_AGENT_SCHEMA_VERSION) {
-      throw error;
-    }
+  } catch {
     // A newer unreadable catalog cannot prove a lower reader floor.
   }
   if (minReader > OPENCLAW_AGENT_SCHEMA_VERSION) {
