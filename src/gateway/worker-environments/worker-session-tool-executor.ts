@@ -426,7 +426,6 @@ export function createWorkerSessionToolExecutor(
     const { toolCallId, ...args } = operation.request;
     return await tool.execute(toolCallId, {
       ...args,
-      expectsCompletionMessage: false,
       visible: true,
       worktree: true,
     });
