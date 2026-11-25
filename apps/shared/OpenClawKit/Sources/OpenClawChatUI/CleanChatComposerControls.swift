@@ -929,7 +929,7 @@ struct OpenClawChatMicButton: View {
                 .disabled(!self.isVoiceNoteRecordingEnabled(voiceNoteControl))
                 .accessibilityLabel("Record Voice Note")
                 .accessibilityIdentifier("chat-dictation-control")
-                .help("Record Voice Note")
+                .modifier(MacOnlyHelp(text: Text("Record Voice Note")))
             }
         } else if let dictationControl {
             Button(action: self.performDictationAction) {
@@ -1048,6 +1048,20 @@ struct OpenClawChatMicButton: View {
     }
 }
 
+/// `.help` is a tooltip on macOS but the accessibility hint on iPhone and iPad, where the mic's
+/// help only repeated its label ("Dictate message", then "Dictate").
+private struct MacOnlyHelp: ViewModifier {
+    let text: Text
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+        #else
+        content.help(self.text)
+        #endif
+    }
+}
+
 private struct UnifiedChatMicMetadata: ViewModifier {
     let control: OpenClawChatDictationControl
     let isPending: Bool
@@ -1057,7 +1071,7 @@ private struct UnifiedChatMicMetadata: ViewModifier {
             .accessibilityLabel(self.accessibilityLabel)
             .accessibilityValue(self.accessibilityValue)
             .accessibilityIdentifier("chat-dictation-control")
-            .help(self.helpText)
+            .modifier(MacOnlyHelp(text: self.helpText))
     }
 
     private var accessibilityLabel: Text {
