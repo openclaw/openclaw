@@ -70,10 +70,7 @@ import {
 } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  hasAutomationAdminDelegation,
-  type QueuedOperatorRecoverySource,
-} from "./operator-run-recovery-source.codec.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -233,11 +230,19 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   const sessionsWrite = operatorScopeSatisfied("operator.sessions.write", scopes);
   return Object.freeze({
     owner,
+    automations: owner
+      ? "manage"
+      : operatorScopeSatisfied("operator.cron", scopes)
+        ? "self"
+        : "none",
     skillAuthoring: sessionsWrite,
     questionReplace: sessionsWrite,
     commands: owner ? "all" : "none",
   });
 }
+
+/** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
+export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
 
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<
@@ -299,8 +304,6 @@ function intersectOperatorRunModelPolicy(
 type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
-  controlUiAdmin: boolean;
   release: () => void;
 };
 
@@ -630,14 +633,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return {
       authority,
       authenticatedUserProfile,
-      automationAdmin: Boolean(
-        gateway &&
-        hasAutomationAdminDelegation(gateway) &&
-        operatorScopeSatisfied("operator.admin", scopes),
-      ),
-      controlUiAdmin: Boolean(
-        gateway?.controlUiAdmin && operatorScopeSatisfied("operator.admin", scopes),
-      ),
       release: () => identity?.release(),
     };
   } catch (error) {

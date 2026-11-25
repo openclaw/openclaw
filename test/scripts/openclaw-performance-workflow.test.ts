@@ -947,9 +947,9 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "80d9aa6268515730f9880ea97add2a0d73f6fc7a";
+    const canonicalKovaRef = "5f1ac692af2058217c793aa06af9e28dbf46c1bd";
     const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
-    const trustedLiveKovaRef = "80d9aa6268515730f9880ea97add2a0d73f6fc7a";
+    const trustedLiveKovaRef = "5f1ac692af2058217c793aa06af9e28dbf46c1bd";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -1117,7 +1117,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "80d9aa6268515730f9880ea97add2a0d73f6fc7a",
+        kova_ref: "5f1ac692af2058217c793aa06af9e28dbf46c1bd",
         kova_config_contract: "canonical",
       });
     });
@@ -1334,9 +1334,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.48");
+    expect(workflow).toContain("OCM_VERSION: v0.3.10");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac",
+      "OCM_LINUX_X64_SHA256: 78700755a592aeaf74915ad31addff60fd4a606d767d38b7ddc90411444c3479",
     );
     expect(installRun).toContain(
       '"https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',

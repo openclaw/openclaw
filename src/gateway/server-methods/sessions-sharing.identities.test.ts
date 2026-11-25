@@ -135,10 +135,6 @@ it("admits current profiles and non-human creators, rejecting orphan human prove
     expect
       .soft((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members)
       .toEqual([]);
-    // Stored access levels are not enforced yet, so a leveled invite must not grant membership.
-    expect(
-      (await invoke("session.members.add", { identityId: member.id, access: "read" }))[0]?.[0],
-    ).toBe(false);
     for (const identityId of [owner.id, member.id, "agent", "system"]) {
       expect(await invoke("session.members.add", { identityId })).toEqual([
         [true, { ok: true, sessionKey, identityId }, undefined],

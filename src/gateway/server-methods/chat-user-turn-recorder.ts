@@ -331,7 +331,7 @@ export function createGatewayChatUserTurnController(params: {
                 }
               : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
-            ...(request.suppressCommandInterpretation
+            ...(request.suppressCommandInterpretation || request.participating
               ? { suppressCommandInterpretation: true }
               : {}),
             ...(request.p.deliver !== undefined || request.explicitOrigin
@@ -390,6 +390,7 @@ export function createGatewayChatUserTurnController(params: {
                     },
                     retained.map((mention) => ({
                       profileId: mention.profileId,
+                      access: mention.access,
                       token: text.slice(mention.start, mention.end),
                     })),
                   );

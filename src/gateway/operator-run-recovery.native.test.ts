@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
-import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   expectCurrent,
   restoreFixture,
@@ -21,8 +20,6 @@ describe("native UI operator recovery", () => {
       withRecovery(
         async (fixture) => {
           using restored = await restoreFixture(fixture);
-          expect(restored.automationAdmin).toBe(true);
-          expect(restored.controlUiAdmin).toBe(id === "openclaw-control-ui");
           expectCurrent(restored.authority);
           expect(
             (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
@@ -34,26 +31,4 @@ describe("native UI operator recovery", () => {
         { clientInfo: { id, mode: "ui" } },
       ),
   );
-  it("preserves legacy browser grants but does not upgrade legacy native sources", () =>
-    withRecovery(async (fixture) => {
-      if (fixture.snapshot.sourceIngress === "principal") {
-        throw new Error("Expected authenticated UI handshake snapshot");
-      }
-      const { automationAdmin: _admin, ...legacy } = fixture.snapshot;
-      const restore = (controlUiAdmin: boolean) =>
-        restoreGatewayOperatorSource({
-          snapshot: { ...legacy, controlUiAdmin },
-          context: fixture.context,
-          assertCurrent: () => {},
-        });
-      const browser = await restore(true);
-      const native = await restore(false);
-      try {
-        expect(browser.automationAdmin).toBe(true);
-        expect(native.automationAdmin).toBe(false);
-      } finally {
-        browser.release();
-        native.release();
-      }
-    }));
 });

@@ -17,7 +17,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { NODE_CACHE_DISABLED_INPUTS } from "../../scripts/lib/node-cache-disabled-control.mts";
-import { type WorkloadDefinition } from "../../scripts/lib/node-cache-workload-inputs.mts";
+import type { WorkloadDefinition } from "../../scripts/lib/node-cache-workload-inputs.mts";
 import {
   parseVitestExecutionReport,
   sha256,

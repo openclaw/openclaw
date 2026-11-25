@@ -1,5 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import {
+  chunkTextRanges,
   markdownToIRWithMeta,
   stripMarkdown,
   type MarkdownIR,
@@ -17,7 +18,55 @@ type FlexMessage = messagingApi.FlexMessage;
 type FlexComponent = messagingApi.FlexComponent;
 type FlexSpan = messagingApi.FlexSpan;
 
-type LineMessageSegment = { type: "text"; text: string } | { type: "flex"; message: FlexMessage };
+type LineTextPart = { text: string; table?: boolean };
+type LineTextSegment = { type: "text"; text: string; parts?: LineTextPart[] };
+type LineMessageSegment = LineTextSegment | { type: "flex"; message: FlexMessage };
+
+/** Prose uses LINE's Markdown chunker. A projected table needs contiguous, lossless slices. */
+export function chunkLineText(
+  segment: LineTextSegment,
+  limit: number,
+  chunkMarkdown: (text: string, limit: number) => string[],
+): Array<{ text: string; pushText?: string }> {
+  if (!segment.parts) {
+    return chunkMarkdown(segment.text, limit).map((text) => ({ text }));
+  }
+  const chunks: Array<{ text: string; pushText?: string }> = [];
+  let text = "";
+  let firstTable = Infinity;
+  let lastTable = 0;
+  const flush = () => {
+    // The raw push sender trims prose. Limit that trim to bytes outside the prepared table.
+    const start = Math.min(text.length - text.trimStart().length, firstTable);
+    const end = Math.max(text.trimEnd().length, lastTable);
+    const pushText = text.slice(start, end);
+    if (pushText) {
+      chunks.push(pushText === text.trim() ? { text } : { text, pushText });
+    }
+    text = "";
+    firstTable = Infinity;
+    lastTable = 0;
+  };
+  for (const part of segment.parts) {
+    const pieces = part.table
+      ? chunkTextRanges(part.text, { limit, mode: "preferred" }).map(({ start, end }) =>
+          part.text.slice(start, end),
+        )
+      : chunkMarkdown(part.text, limit);
+    for (const [index, piece] of pieces.entries()) {
+      if ((!part.table && index > 0) || (limit > 0 && text.length + piece.length > limit)) {
+        flush();
+      }
+      if (part.table) {
+        firstTable = Math.min(firstTable, text.length);
+        lastTable = text.length + piece.length;
+      }
+      text += piece;
+    }
+  }
+  flush();
+  return chunks;
+}
 
 const LINE_MARKDOWN_OPTIONS = {
   assistantTranscriptRoleHeaders: true,
@@ -40,6 +89,7 @@ function parseLineMarkdown(text: string, tableMode: "block" | "bullets" = "block
 
 type PlainTextInsertion =
   | { position: number; text: string }
+  | { position: number; tableText: string; preserveTableSpaces: boolean }
   | { position: number; message: FlexMessage };
 
 function rangesOverlap(
@@ -53,6 +103,24 @@ function rangesOverlap(
 function linkAddsHref(rawLabel: string, href: string): boolean {
   const label = rawLabel.trim();
   return Boolean(href && label && label !== href && `mailto:${label}` !== href);
+}
+
+function trimOutsideInlineCode(
+  text: string,
+  ir: MarkdownIR,
+  codeSpans: MarkdownStyleSpan[],
+): string {
+  const first = codeSpans[0];
+  const last = codeSpans.at(-1);
+  if (!first || !last) {
+    return text.trim();
+  }
+  // Underline tags disappear from the projection. Only whitespace outside code can be padding.
+  const before = ir.text.slice(0, first.start).replace(/<\/?u>/gi, "");
+  const after = ir.text.slice(last.end).replace(/<\/?u>/gi, "");
+  const start = Math.min(before.length, text.length - text.trimStart().length);
+  const end = text.length - Math.min(after.length, text.length - text.trimEnd().length);
+  return text.slice(start, end);
 }
 
 function projectPlainText(
@@ -109,7 +177,19 @@ function projectPlainText(
   );
 
   let output = "";
-  let segmentStart = 0;
+  let parts: LineTextPart[] = [];
+  const flushText = () => {
+    const tail = parts.length ? output.trimEnd() : output.trim();
+    if (parts.length && tail) {
+      parts.push({ text: tail });
+    }
+    const text = parts.length ? parts.map((part) => part.text).join("") : tail;
+    if (text) {
+      onSegment?.({ type: "text", text, ...(parts.some((part) => part.table) ? { parts } : {}) });
+    }
+    output = "";
+    parts = [];
+  };
   let cursor = 0;
   let insertionIndex = 0;
   const appendRange = (end: number) => {
@@ -122,13 +202,20 @@ function projectPlainText(
         output += ir.text.slice(cursor, insertion.position);
         if ("text" in insertion) {
           output += insertion.text;
-        } else if (onSegment) {
-          const precedingText = output.slice(segmentStart).trim();
-          if (precedingText) {
-            onSegment({ type: "text", text: precedingText });
+        } else if ("tableText" in insertion) {
+          // Trim surrounding layout without trimming the first or last cell of a table.
+          output += "\n\n";
+          const preceding = parts.length ? output : output.trimStart();
+          if (preceding) {
+            parts.push({ text: preceding });
           }
+          if (insertion.tableText) {
+            parts.push({ text: insertion.tableText, table: insertion.preserveTableSpaces });
+          }
+          output = "\n\n";
+        } else if (onSegment) {
+          flushText();
           onSegment({ type: "flex", message: insertion.message });
-          segmentStart = output.length;
         }
         cursor = insertion.position;
       }
@@ -150,12 +237,10 @@ function projectPlainText(
   }
   appendRange(ir.text.length);
   if (onSegment) {
-    const trailingText = output.slice(segmentStart).trim();
-    if (trailingText) {
-      onSegment({ type: "text", text: trailingText });
-    }
+    flushText();
+    return "";
   }
-  return output.trim();
+  return trimOutsideInlineCode(output, ir, inlineCodeSpans);
 }
 
 type RenderedCell = {
@@ -165,7 +250,7 @@ type RenderedCell = {
 };
 
 function renderTableCell(cell: MarkdownTableCell): RenderedCell {
-  if (!cell.text.trim()) {
+  if (!cell.text) {
     return { text: "-", hasMarkup: false };
   }
 
@@ -246,13 +331,13 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
     }
   }
 
-  const renderedText =
-    spans
-      .map((span) => span.text ?? "")
-      .join("")
-      .trim() || "-";
+  const renderedText = trimOutsideInlineCode(
+    spans.map((span) => span.text ?? "").join(""),
+    cell,
+    codeSpans,
+  );
   return {
-    text: renderedText,
+    text: renderedText || "-",
     ...(hasMarkup ? { contents: spans } : {}),
     hasMarkup,
   };
@@ -348,10 +433,20 @@ export function processLineMessage(text: string): LineMessageSegment[] {
   for (const table of tables) {
     const bubble = convertTableToFlexBubble(table);
     if (!bubble || !fitsLineFlexBubble(bubble)) {
+      const hasPaddedCode = (cell: MarkdownTableCell) =>
+        cell.styles.some(
+          ({ style, start, end }) =>
+            style === "code" && /^\s|\s$/u.test(cell.text.slice(start, end)),
+        );
       const markdownCell = (cell: MarkdownTableCell) =>
         projectPlainText(cell)
           .replace(/[\\|`*_[\]~<>&]/gu, "\\$&")
-          .replace(/\r?\n/gu, " ");
+          .replace(/\r?\n/gu, " ")
+          // Keep code-owned edges through the bullet parse. CommonMark leaves all-space spans intact.
+          .replace(
+            /^\s+|(?<=\S)\s+$/gu,
+            (edge) => "`" + (/[^ ]/u.test(edge) ? ` ${edge} ` : edge) + "`",
+          );
       const markdownRow = (cells: MarkdownTableCell[]) =>
         `| ${cells.map(markdownCell).join(" | ")} |`;
       const markdown = [
@@ -362,7 +457,10 @@ export function processLineMessage(text: string): LineMessageSegment[] {
 
       plainTextInsertions.push({
         position: table.placeholderOffset,
-        text: `\n\n${projectPlainText(parseLineMarkdown(markdown, "bullets").ir)}\n\n`,
+        tableText: projectPlainText(parseLineMarkdown(markdown, "bullets").ir),
+        preserveTableSpaces:
+          table.headerCells.some(hasPaddedCode) ||
+          table.rowCells.some((row) => row.some(hasPaddedCode)),
       });
       continue;
     }

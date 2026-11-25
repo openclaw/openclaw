@@ -15,7 +15,6 @@ function activateLoopbackRuntime(port: number): void {
   setActiveMcpLoopbackRuntime({
     port,
     ownerToken,
-    nonOwnerToken: "test-non-owner-token",
   });
 }
 

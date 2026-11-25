@@ -41,10 +41,25 @@ describe("web inbound helpers", () => {
       name: "Ada Lovelace",
     },
     {
+      label: "folded names and telephone numbers",
+      displayName: undefined,
+      card: [
+        "BEGIN:VCARD",
+        "VERSION:4.0",
+        "FN:Ada",
+        "  Lovelace",
+        "TEL;VALUE=uri:tel:+",
+        "\t15555550123",
+        "END:VCARD",
+        "",
+      ].join("\r\n"),
+      name: "Ada Lovelace",
+    },
+    {
       label: "escaped vCard names and telephone prefixes",
       displayName: undefined,
       card: vcard("Ada\\nLovelace\\, Countess\\; Byron", ["TeL: +15555550123 "]),
-      name: "Ada Lovelace, Countess Byron",
+      name: "Ada Lovelace, Countess; Byron",
     },
   ])("extracts WhatsApp contact cards with $label", ({ displayName, card, name }) => {
     const input = message({
@@ -59,6 +74,16 @@ describe("web inbound helpers", () => {
       total: 1,
       contacts: [{ name, phones: ["+15555550123"] }],
     });
+  });
+
+  it.each([
+    [String.raw`FN:Studio\\north\nDesk`, String.raw`Studio\north Desk`],
+    ["FN:A;B", "A;B"],
+    [String.raw`N:A\;B;C;;;`, "A;B C"],
+  ])("reads the shared contact name from %s", (field, name) => {
+    const card = ["BEGIN:VCARD", "VERSION:4.0", field, "END:VCARD"].join("\r\n");
+    const input = message({ contactMessage: { displayName: "", vcard: card } });
+    expect(extractContactContext(input)?.contacts).toEqual([{ name, phones: [] }]);
   });
 
   it.each([

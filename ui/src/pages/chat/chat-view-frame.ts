@@ -1,5 +1,6 @@
 import { createMemo, merge } from "solid-js";
 import type {
+  SessionsCatalogReadResult,
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
   SessionSharingRole,
@@ -86,6 +87,7 @@ export type ChatProps = Omit<
   ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
+    catalogPreviewImage?: SessionsCatalogReadResult["previewImage"];
     onOpenSidebar?: (content: SidebarContent) => SidebarOpenResult;
     onConversationFrameRef?: (element: HTMLElement) => void | (() => void);
     onFooterElementRef?: (element: HTMLElement) => void | (() => void);
@@ -366,7 +368,7 @@ export function createChatViewFrame(
     displayedPendingInputs ?? [],
   );
   const displayQueue = [
-    ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+    ...buildPendingInputQueueItems(inputDisplay.queuedInputs, pendingInputs?.cancelling),
     ...inputDisplay.queue,
   ];
   const historyLoadState = props.historyState

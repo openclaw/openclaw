@@ -51,8 +51,8 @@ const cases = [
 const allowlists = [
   ["no-operator-permission-read", "", ADMISSION_FILES, 59],
   ["no-turn-authority-derivation", "Turn-kind flag:", TURN_FLAG_FILES, 19],
-  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 33],
-  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 4],
+  ["no-turn-authority-derivation", "Owner status:", OWNER_PRODUCER_FILES, 28],
+  ["no-turn-authority-derivation", "Capability module:", CAPABILITY_PROVENANCE_FILES, 3],
 ] as const;
 
 it.each(allowlists)(

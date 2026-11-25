@@ -4,6 +4,7 @@ import type {
   PluginStateOperationTransaction,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { packetDigest, snapshotBytes, snapshotRevision } from "./src/packet-state.js";
+import type { BeamScreenshot } from "./src/screenshot.js";
 import {
   BEAM_MAX_GUEST_RECEIPTS,
   BEAM_RETENTION_MS,
@@ -14,6 +15,7 @@ import {
 import { persistBeamUpload, type BeamPublisher } from "./upload-operation-api.js";
 
 export type BeamPublishInput = {
+  image?: BeamScreenshot;
   upload: BeamUpload;
   packetText: string;
   digest: string;
@@ -25,7 +27,7 @@ export type BeamPublishInput = {
 
 export type BeamPublishHead = Pick<
   BeamStoredSession,
-  "beamId" | "revision" | "title" | "publisherProfileId"
+  "beamId" | "revision" | "title" | "publisherProfileId" | "presentationDigest"
 > & {
   publicationId: string;
   digest: string;
@@ -52,6 +54,7 @@ export type BeamReleaseResult = Pick<
 > & { digest: string };
 
 export type BeamPublicationOperations = {
+  archive: { input: { beamId: string }; output: boolean };
   publish: {
     input: BeamPublishInput;
     output:
@@ -70,6 +73,10 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   command,
   tx,
 ) => {
+  if (command.type === "archive") {
+    tx.delete(1, command.input.beamId);
+    return tx.delete(0, command.input.beamId);
+  }
   if (command.type === "release") {
     return releasePublication(command.input, tx);
   }
@@ -88,8 +95,10 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   ) {
     return "unavailable";
   }
-  const fingerprint = JSON.stringify([ifMatch, digest]);
-  const [prior] = tx.lookupMany<PublishReceipt>([{ store: 2, key: receiptKey }]);
+  const fingerprint = JSON.stringify(
+    input.image ? [ifMatch, digest, input.image.digest] : [ifMatch, digest],
+  );
+  const [prior] = tx.lookupMany<PublishReceipt>([{ store: 3, key: receiptKey }]);
   if (prior) {
     if (prior.fingerprint !== fingerprint) {
       return "request_identity_conflict";
@@ -122,7 +131,7 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
       : undefined;
   const now = Date.now();
   const expiries = guestKey
-    ? (tx.lookupMany<number[]>([{ store: 2, key: guestKey }])[0] ?? []).filter(
+    ? (tx.lookupMany<number[]>([{ store: 3, key: guestKey }])[0] ?? []).filter(
         (expiresAt) => expiresAt > now,
       )
     : [];
@@ -133,9 +142,15 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     };
   }
   let current = row;
-  const unchanged = currentDigest === digest && row?.publicationId !== undefined;
+  const unchanged =
+    currentDigest === digest &&
+    row?.publicationId !== undefined &&
+    input.image?.digest === row.presentationDigest;
   if (!unchanged) {
-    const written = persistBeamUpload(input, tx, { packetText: input.packetText });
+    const written = persistBeamUpload(input, tx, {
+      packetText: input.packetText,
+      presentationDigest: input.image?.digest,
+    });
     if (written === "publisher-full" || written === "catalog-full") {
       return "rate_limited";
     }
@@ -144,6 +159,12 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     }
     if (typeof written !== "object" || written.kind !== "published") {
       return "released";
+    }
+    // Publish the media and its owning snapshot together. An unsuccessful write leaves neither visible.
+    if (input.image) {
+      tx.set(2, upload.beamId, input.image);
+    } else if (row?.presentationDigest) {
+      tx.delete(2, upload.beamId);
     }
     [current] = tx.lookupMany<BeamStoredSession>([{ store: 0, key: upload.beamId }]);
   }
@@ -155,14 +176,15 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     publicationId: current.publicationId,
     ...(current.revision ? { revision: current.revision } : {}),
     title: current.title,
+    ...(current.presentationDigest ? { presentationDigest: current.presentationDigest } : {}),
     ...(current.publisherProfileId ? { publisherProfileId: current.publisherProfileId } : {}),
     digest,
     disposition: unchanged ? "unchanged" : "applied",
   };
   if (guestKey) {
-    tx.set(2, guestKey, [...expiries, now + BEAM_RETENTION_MS]);
+    tx.set(3, guestKey, [...expiries, now + BEAM_RETENTION_MS]);
   }
-  tx.set(2, receiptKey, {
+  tx.set(3, receiptKey, {
     fingerprint,
     result,
   } satisfies PublishReceipt);
@@ -219,7 +241,7 @@ function releasePublication(
     releaseReceipt: { requestId: input.requestId, revision: input.revision, digest },
   };
   // Both API versions must see one release, but only the snapshot store retains transcript bytes.
-  const { items: _items, packetText: _packet, ...ownership } = released;
+  const { items: _items, packetText: _packet, presentationDigest: _image, ...ownership } = released;
   tx.set(1, input.beamId, ownership);
   tx.set(
     0,

@@ -9,6 +9,7 @@ import {
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { teamsQuotedRawTable } from "./format.test-fixtures.js";
+import { setMSTeamsRuntime } from "./runtime.js";
 import {
   editMessageMSTeams,
   sendAdaptiveCardMSTeams,
@@ -16,7 +17,10 @@ import {
   sendPollMSTeams,
 } from "./send.js";
 import { createMSTeamsTestConfig } from "./setup.test-support.js";
+import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
+const tempDirs = useMSTeamsStateTempDirs();
 const serviceUrl = "https://smba.trafficmanager.net/amer";
 const conversationId = "19:channel@thread.tacv2";
 
@@ -195,6 +199,13 @@ beforeEach(() => {
 });
 
 describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread routing", (kind) => {
+  if (kind === "poll") {
+    beforeEach(() => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("msteams-thread-poll-"));
+      setMSTeamsRuntime(msteamsRuntimeStub);
+    });
+    afterEach(() => vi.unstubAllEnvs());
+  }
   it.each(
     attachmentRoutingCases.filter((_, index) => kind === "file" || index === 0 || index === 2),
   )(

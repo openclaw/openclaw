@@ -83,6 +83,7 @@ export const chatPendingInputsDismissHandlers: GatewayRequestHandlers = {
           signal?.throwIfAborted();
           sessionAccessAuthority.assertCurrent();
         },
+        { profileId: client?.authenticatedUserProfile?.profileId ?? "" },
       );
       if (outcome.kind === "stale") {
         staleTarget();

@@ -141,6 +141,33 @@ describe("msteams polls", () => {
     }
   });
 
+  it("preserves a first vote across publication and disposes only the rejected poll", async () => {
+    const store = createMSTeamsPollStoreState();
+    const conversationId = "fixture-room";
+    for (const id of ["accepted", "rejected"]) {
+      await store.createPoll(poll({ id, conversationId }), { pendingPublication: true });
+      expect(await store.recordVote({ pollId: id, voterId: "first", selections: ["0"] })).toBe(
+        true,
+      );
+    }
+    const firstVoteAt = (await store.getPoll("accepted"))?.updatedAt;
+    expect(firstVoteAt).toEqual(expect.any(String));
+    await store.setPollMessageId("accepted", "activity-id");
+    await store.discardPoll("rejected");
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+
+    const reopened = createMSTeamsPollStoreState();
+    expect(await reopened.getPoll("accepted")).toMatchObject({
+      conversationId,
+      messageId: "activity-id",
+      updatedAt: firstVoteAt,
+    });
+    expect(await storedVotes("accepted")).toEqual({ first: ["0"] });
+    expect(await reopened.getPoll("rejected")).toBeNull();
+    expect(await storedVotes("rejected")).toEqual({});
+  });
+
   it("serializes concurrent votes for the same poll", async () => {
     const store = createMSTeamsPollStoreState();
     await store.createPoll(poll({ id: "poll-race" }));
