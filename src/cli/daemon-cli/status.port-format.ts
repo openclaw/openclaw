@@ -2,7 +2,11 @@ import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import type { DaemonStatus } from "./status.gather.js";
 
-export function renderPortDiagnosticsForCli({ port }: DaemonStatus, rpcOk?: boolean): string[] {
+export function renderPortDiagnosticsForCli(
+  { port }: DaemonStatus,
+  rpcOk: boolean | undefined,
+  showProcessArguments: boolean,
+): string[] {
   if (!port || port.status === undefined || port.status === "free" || rpcOk === true) {
     return [];
   }
@@ -13,9 +17,10 @@ export function renderPortDiagnosticsForCli({ port }: DaemonStatus, rpcOk?: bool
       ...listener,
       user: listener.user ? terminalText`${listener.user}` : listener.user,
       command: listener.command ? terminalText`${listener.command}` : listener.command,
-      commandLine: listener.commandLine
-        ? terminalText`${listener.commandLine}`
-        : listener.commandLine,
+      commandLine:
+        showProcessArguments && listener.commandLine
+          ? terminalText`${listener.commandLine}`
+          : undefined,
       address: listener.address ? terminalText`${listener.address}` : listener.address,
     })),
     hints: port.hints.map((hint) => terminalText`${hint}`),

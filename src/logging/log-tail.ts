@@ -1,5 +1,5 @@
 import type { Stats } from "node:fs";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -86,19 +86,24 @@ async function resolveLogFile(file: string, rolling: boolean) {
   return sorted[0] ?? source;
 }
 
+type LogTarget = { file: string; rolling: boolean };
+type OpenLogFile = (file: string, target: LogTarget) => Promise<FileHandle>;
+
 export async function readConfiguredLogTail(
   params?: { cursor?: number; limit?: number; maxBytes?: number },
   filter?: (line: string) => boolean,
+  openFile?: OpenLogFile,
 ): Promise<LogTailPayload> {
   const target = await getResolvedLoggerFileTarget();
-  return readLogTail(target, params, resolveLogTailRedactOptions(), filter);
+  return readLogTail(target, params, resolveLogTailRedactOptions(), filter, openFile);
 }
 
 export async function readLogTail(
-  target: { file: string; rolling: boolean },
+  target: LogTarget,
   params: { cursor?: number; limit?: number; maxBytes?: number } | undefined,
   redaction: ReturnType<typeof resolveLogTailRedactOptions>,
   filter?: (line: string) => boolean,
+  openFile: OpenLogFile = (file) => fs.open(file, "r"),
 ): Promise<LogTailPayload> {
   const { file, stat } = await resolveLogFile(target.file, target.rolling);
   invalidateRedactionAnchor(file, stat);
@@ -155,7 +160,7 @@ export async function readLogTail(
     };
   }
 
-  const handle = await fs.open(file, "r").catch(missingPathToNull);
+  const handle = await openFile(file, target).catch(missingPathToNull);
   if (!handle) {
     // Rotation can remove the path after stat; retain the existing missing-file contract.
     return {

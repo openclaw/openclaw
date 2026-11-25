@@ -1524,13 +1524,15 @@ describe("gatherDaemonStatus", () => {
     expect(output.logs).not.toContain("Gateway process is running and owns the gateway port");
   });
 
-  it.each(["running", "stopped"] as const)(
-    "includes the last gateway error for a %s service",
-    async (runtimeStatus) => {
+  it.each([
+    ["running", true],
+    ["stopped", true],
+    ["stopped", false],
+  ] as const)(
+    "reports the last Gateway error for a %s service when enabled: %s",
+    async (runtimeStatus, showExcerpt) => {
       const running = runtimeStatus === "running";
-      const lastError = running
-        ? "parse/handle error: Error: ENOSPC: no space left on device, write"
-        : "Gateway ownership could not be verified. Run `openclaw gateway recover-lock` to inspect the holder.";
+      const lastError = "parse/handle error: Error: ENOSPC: no space left on device, write";
       serviceReadRuntime.mockResolvedValueOnce({ status: runtimeStatus });
       const portUsage: PortUsageTestSummary = {
         ...freePort(19001),
@@ -1545,20 +1547,17 @@ describe("gatherDaemonStatus", () => {
       });
       readLastGatewayErrorLine.mockResolvedValueOnce(lastError);
 
-      const status = await gatherStatus();
-
-      expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
-        expect.objectContaining(daemonEnvironment),
+      const status = await gatherStatus(showExcerpt ? {} : { includeLogExcerpt: false });
+      expect(readLastGatewayErrorLine.mock.calls).toEqual(
+        showExcerpt ? [[expect.objectContaining(daemonEnvironment)]] : [],
       );
       expect(status.port?.status).toBe(running ? "busy" : "free");
       expect(status.rpc?.ok).toBe(false);
-      expect(status.lastError).toBe(lastError);
+      expect(status.lastError).toBe(showExcerpt ? lastError : undefined);
       const output = capturePrintedDaemonStatus(status, { json: false }).errors;
       expect(output).toContain("Connectivity check: failed");
       expect(output).toContain("gateway closed (1000):");
-      expect(output).toContain(
-        `Recent Gateway log error (may be from an earlier run): ${lastError}`,
-      );
+      expect(output.includes(lastError)).toBe(showExcerpt);
     },
   );
 

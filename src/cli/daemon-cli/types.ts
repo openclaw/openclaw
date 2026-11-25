@@ -18,6 +18,7 @@ export type DaemonStatusOptions = {
 export type DaemonStatusPrintOptions = {
   json: boolean;
   deep?: boolean;
+  showProcessArguments?: boolean;
   runtime?: Pick<RuntimeEnv, "log" | "error">;
 };
 

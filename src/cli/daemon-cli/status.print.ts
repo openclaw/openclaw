@@ -56,6 +56,7 @@ import type { DaemonStatusPrintOptions } from "./types.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: DaemonStatusPrintOptions) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const showProcessArguments = opts.showProcessArguments !== false;
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
@@ -110,7 +111,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: DaemonStatusPrintO
   if (status.logFile) {
     printInfo("File logs:", displayPath(status.logFile));
   }
-  if (service.command?.programArguments?.length) {
+  if (showProcessArguments && service.command?.programArguments?.length) {
     printInfo(
       managerUnavailable ? "Recorded command:" : "Command:",
       terminalText`${service.command.programArguments.join(" ")}`,
@@ -414,9 +415,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: DaemonStatusPrintO
       const direction = ` ${connection.direction}`;
       const command = connection.command ? ` ${connection.command}` : "";
       const address = connection.address ? ` ${connection.address}` : "";
-      const commandLine = connection.commandLine
-        ? ` cmd=${displayPath(connection.commandLine)}`
-        : "";
+      const commandLine =
+        showProcessArguments && connection.commandLine
+          ? ` cmd=${displayPath(connection.commandLine)}`
+          : "";
       const connectionLine = terminalText`${pid}${ppid}${direction}${command}${address}${commandLine}`;
       runtime.log(`  ${infoText(connectionLine)}`);
     }
@@ -571,7 +573,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: DaemonStatusPrintO
     spacer();
   }
 
-  for (const line of renderPortDiagnosticsForCli(status, rpc?.ok)) {
+  for (const line of renderPortDiagnosticsForCli(status, rpc?.ok, showProcessArguments)) {
     printError(line);
   }
   if (status.lastError) {

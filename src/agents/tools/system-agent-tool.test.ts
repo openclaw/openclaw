@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSnapshot } from "../../config/mutate.test-support.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
-import {
-  isPersistentSystemAgentOperation,
-  redactSensitiveCommandText,
-} from "../../system-agent/operations.js";
+import { redactSensitiveCommandText } from "../../system-agent/operations.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
 import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
 import {
@@ -179,7 +176,6 @@ describe("openclaw tool", () => {
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
-    expect(isPersistentSystemAgentOperation(operation)).toBe(false);
     expect(proposalRef).toEqual({});
     expect(directiveRef).toEqual({});
   });

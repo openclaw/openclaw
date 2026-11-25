@@ -10,7 +10,7 @@ import { loadSkillsStatusReport } from "../cli/skills-cli.js";
 import { channelsStatusCommand } from "../commands/channels/status.js";
 import { modelsStatusCommand } from "../commands/models/list.status-command.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
+import { executeSystemAgentOperation } from "./operations.js";
 import { readSystemAgentInstallFile } from "./read-install-file.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
@@ -28,16 +28,13 @@ vi.mock("../cli/skills-cli.format.js", () => ({ formatSkillsCheck: vi.fn() }));
 vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: vi.fn() }));
 // mock-isolation: Fixture model output avoids auth stores and catalogs.
 vi.mock("../commands/models/list.status-command.js", () => ({ modelsStatusCommand: vi.fn() }));
-// mock-isolation: The install-file boundary has its own filesystem tests.
-vi.mock("./read-install-file.js", () => ({ readSystemAgentInstallFile: vi.fn() }));
+vi.mock("./read-install-file.js", { spy: true });
 
 const tempDirs = createTempDirTracker();
 const secret = "Authorization: Basic c2VjcmV0OnBhc3M=";
 const floodText = `\u001b[31mfirst\u001b[0m ${secret}\n${"lorem ".repeat(3_000)}\nUNBOUNDED_TAIL`;
 const writeFlood = (runtime: { log: (text: string) => void }) => {
-  runtime.log(`\u001b[31mfirst\u001b[0m ${secret}`);
-  runtime.log("lorem ".repeat(3_000));
-  runtime.log("UNBOUNDED_TAIL");
+  floodText.split("\n").forEach((line) => runtime.log(line));
 };
 
 beforeEach(() => {
@@ -68,11 +65,8 @@ describe("system agent diagnostic reads", () => {
     [{ kind: "gateway-status-deep" }],
     [{ kind: "skills-check" }],
   ] as const)("runs %j read-only with bounded, redacted, plain output", async (operation) => {
-    expect(isPersistentSystemAgentOperation(operation)).toBe(false);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    await expect(executeSystemAgentOperation(operation, runtime)).resolves.toEqual({
-      applied: false,
-    });
+    expect(await executeSystemAgentOperation(operation, runtime)).toEqual({ applied: false });
     const output = lines.join("\n");
     expect(output).toContain("first");
     expect(output).toContain("output limit reached");
@@ -94,7 +88,7 @@ describe("system agent diagnostic reads", () => {
     expect(vi.mocked(modelsStatusCommand).mock.calls[0]?.[0]).toEqual({});
   });
 
-  it("gathers deep Gateway status with a probe, no exec secret refs and no repair", async () => {
+  it("probes deep Gateway status without exec secret refs or log excerpts", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     await executeSystemAgentOperation({ kind: "gateway-status-deep" }, runtime);
     expect(gatherDaemonStatus).toHaveBeenCalledWith(
@@ -103,23 +97,24 @@ describe("system agent diagnostic reads", () => {
         deep: true,
         requireRpc: false,
         allowExecSecretRefs: false,
+        includeLogExcerpt: false,
       }),
     );
     expect(vi.mocked(printDaemonStatus).mock.calls[0]?.[1]).toMatchObject({
       json: false,
       deep: true,
+      showProcessArguments: false,
     });
   });
 
-  it("reads one install file through the install-file boundary", async () => {
-    vi.mocked(readSystemAgentInstallFile).mockResolvedValue("docs/index.md\nfile text");
+  it("labels file reads as local CLI profile output", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempDirs.make("setup-"), "config.json"));
+    vi.mocked(readSystemAgentInstallFile).mockResolvedValueOnce("file text");
     const { runtime, lines } = createSystemAgentTestRuntime();
-    await executeSystemAgentOperation(
-      { kind: "read-install-file", path: "docs/index.md" },
-      runtime,
-    );
-    expect(readSystemAgentInstallFile).toHaveBeenCalledWith("docs/index.md");
-    expect(lines).toEqual(["docs/index.md\nfile text"]);
+    await executeSystemAgentOperation({ kind: "read-install-file", path: "guide.md" }, runtime);
+    expect(readSystemAgentInstallFile).toHaveBeenCalledWith("guide.md");
+    expect(lines[0]).toMatch(/^Local CLI profile file.*openclaw logs.*\nfile text$/u);
   });
 
   it("answers skills_check on the CLI surface without creating a device identity", async () => {
@@ -139,39 +134,49 @@ describe("system agent diagnostic reads", () => {
 
   describe("logs", () => {
     async function seedLog(content: string) {
-      const dir = tempDirs.make("system-agent-logs-");
-      const file = path.join(dir, "openclaw-2026-01-22.log");
-      const config = path.join(dir, "openclaw.json");
-      await fs.writeFile(config, JSON.stringify({ logging: { redactSensitive: "tools" } }));
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+      const dir = tempDirs.make(".system-agent-logs-");
+      const file = path.join(dir, "gateway.log");
+      const config = path.join(tempDirs.make("system-agent-config-"), "openclaw.json");
+      await fs.writeFile(config, JSON.stringify({ logging: { redactSensitive: "off" } }));
       await fs.writeFile(file, content);
       setLoggerOverride({ file });
       vi.stubEnv("OPENCLAW_CONFIG_PATH", config);
+      return { dir, config, file };
     }
 
-    it("returns the redacted tail", async () => {
-      await seedLog(`${secret}\nsecond line\n`);
+    it("redacts local logs and refuses remote CLI and protected host reads", async () => {
+      const { config, dir, file } = await seedLog(`${secret}\nsecond line\n`);
       const { runtime, lines } = createSystemAgentTestRuntime();
       await executeSystemAgentOperation({ kind: "logs" }, runtime);
-      const output = lines.join("\n");
-      expect(output).toContain("second line");
-      expect(output).toContain("untrusted data");
-      expect(output).not.toContain("c2VjcmV0OnBhc3M=");
+      expect(lines[0]).toMatch(/^Local CLI profile log tail.*untrusted data.*second line/su);
+      expect(lines.join("")).not.toContain("c2VjcmV0OnBhc3M=");
+      await fs.writeFile(config, '{"gateway":{"mode":"remote"}}');
+      await executeSystemAgentOperation({ kind: "logs" }, runtime);
+      const privateLogDir = path.join(path.dirname(config), "logs");
+      await fs.symlink(dir, privateLogDir, "junction");
+      setLoggerOverride({ file: path.join(privateLogDir, path.basename(file)) });
+      const hosted = { deps: { setupSurface: "gateway" as const } };
+      const readHostLog = () => executeSystemAgentOperation({ kind: "logs" }, runtime, hosted);
+      const scopeError = "outside the diagnostics read scope";
+      await expect(readHostLog()).rejects.toThrow(scopeError);
+      setLoggerOverride({ file });
+      const sibling = path.join(dir, "notes.txt");
+      await fs.rename(file, sibling);
+      for (const link of [fs.symlink, fs.link]) {
+        await link(sibling, file);
+        await expect(readHostLog()).rejects.toThrow(scopeError);
+        await fs.unlink(file);
+      }
+      expect(lines.slice(1)).toEqual([expect.stringContaining("only read diagnostic files")]);
     });
 
     it("keeps only the newest 200 lines", async () => {
-      await seedLog(
-        Array.from(
-          { length: 250 },
-          (_, index) => `entry-${String(index + 1).padStart(4, "0")}\n`,
-        ).join(""),
-      );
+      await seedLog(Array.from({ length: 250 }, (_, index) => `entry-${index + 1}\n`).join(""));
       const { runtime, lines } = createSystemAgentTestRuntime();
       await executeSystemAgentOperation({ kind: "logs" }, runtime);
-      const output = lines.join("\n");
-      expect(output).toContain("entry-0250");
-      expect(output).toContain("entry-0051");
-      expect(output).not.toContain("entry-0050");
-      expect(output).toContain("older lines omitted");
+      expect(lines[0]).toMatch(/older lines omitted[\s\S]*\nentry-51\n[\s\S]*\nentry-250$/u);
+      expect(lines[0]).not.toContain("entry-50");
     });
   });
 });

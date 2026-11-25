@@ -184,6 +184,23 @@ describe("printDaemonStatus", () => {
     },
   );
 
+  it.each([undefined, false])("gates process arguments (%s)", (showArgs) => {
+    const privateText = "positional-private-text";
+    const listener = { pid: 42, command: "node", commandLine: `node ${privateText}` };
+    printDaemonStatus(
+      {
+        service: { ...service, command: { programArguments: ["node", privateText] } },
+        port: { ...emptyPort("busy"), listeners: [listener] },
+        connections: { port: 18789, established: [{ ...listener, direction: "client" }] },
+      },
+      { json: false, showProcessArguments: showArgs },
+    );
+    const rendered = [output(), output(runtime.error)].join("\n");
+    expect(rendered).toContain("pid=42 client node");
+    expect(rendered).toContain("pid 42:");
+    expect(rendered.split(privateText)).toHaveLength(showArgs === false ? 1 : 4);
+  });
+
   it("preserves Gateway metadata and input while redacting private definitions in JSON", () => {
     const server = { version: "2026.5.6", buildId: "build-2026.5.6", connId: "conn-1" };
     const extraService: ExtraGatewayService = {
