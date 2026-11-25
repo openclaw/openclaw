@@ -158,7 +158,6 @@ export function registerRequesterAutomationCustodyTests({
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
             isIncognito: false,
-            isReconnectResume: false,
             isSystemGenerated: false,
             turnKind: "main",
             isDirectExternalUser: true,

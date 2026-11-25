@@ -22,7 +22,7 @@ describe("chat gateway state contention", () => {
       });
       expect(state.chatRunError).toEqual({
         runId: "run-1",
-        summary: errorKind === "state_contention" ? diagnostic : "Error: " + diagnostic,
+        summary: diagnostic,
         ...(errorKind === "state_contention" ? { kind: errorKind } : {}),
       });
       expect(getChatSessionProjection(state).runs["run-1"]?.errorKind).toBe(errorKind);

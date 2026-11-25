@@ -12,11 +12,22 @@ it.each(["fulfilled", "rejected"])(
     };
     const generation = createDeferredCore<boolean>();
     const states: boolean[] = [];
-    const changed = () => states.push(sessionTitleRequests.get(target) !== undefined);
-    const request = sessionTitleRequests.run(target, () => generation.promise, changed);
+    const started = createDeferredCore();
+    const changed = () => states.push(sessionTitleRequests.isPending(target));
+    const request = sessionTitleRequests.run(
+      target,
+      (markStarted) => {
+        markStarted();
+        started.resolve();
+        return generation.promise;
+      },
+      changed,
+    );
     const duplicate = vi.fn();
     expect(sessionTitleRequests.run(target, duplicate, changed)).toBe(request);
     expect(duplicate).not.toHaveBeenCalled();
+    expect(sessionTitleRequests.isPending(target)).toBe(false);
+    await started.promise;
     expect(states).toEqual([true]);
     expect(
       sessionTitleRequests.get({ ...target, sessionId: "another-generation" }),

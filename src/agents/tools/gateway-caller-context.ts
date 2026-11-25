@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import {
   inheritSessionEventToolPolicy,
   narrowSessionEventSettings,
-} from "../../auto-reply/reply/session-event-policy.js";
+} from "../../auto-reply/reply/session-event-policy-inheritance.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -24,6 +24,7 @@ import {
   captureGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-context-binding.js";
+import { assertParticipationToolUser } from "../../security/dangerous-tools.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
 // Ambient trusted caller context for model-mediated Gateway tool calls.
@@ -259,6 +260,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
   if (!selection) {
     const participant =
       caller?.personalToolUser !== undefined ? resolveGatewayPersonalToolParticipant() : undefined;
+    assertParticipationToolUser(participant?.profileId, caller?.operatorAuthority);
     const selectedParticipant =
       participant?.profileId !== caller?.operatorAuthority?.profileId ? participant : undefined;
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;

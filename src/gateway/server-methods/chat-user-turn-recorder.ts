@@ -150,7 +150,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(admission.operatorAuthority?.grant.owner
+      ? { senderIsOwner: admission.operatorAuthority.grant.owner }
+      : {}),
     provenance:
       request.systemInputProvenance ??
       (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),

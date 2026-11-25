@@ -444,6 +444,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           const binding: ReturnType<EmbeddedRunToolAuthorityBinding> = {
             watchdogAttempt,
             personalToolParticipants,
+            operatorAuthority,
             operation: turn,
             ...(!turn ? { detached: true as const } : {}),
             source: operation ? "reply" : "attempt",

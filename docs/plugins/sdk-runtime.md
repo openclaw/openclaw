@@ -289,10 +289,19 @@ if (result.status === "refused") {
   a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
   model call. `read`, `ls` and `exec` are never added to that policy: the session
   must already allow them. Pass `[]` for a tool-free fork.
-- `exec` runs only when the anchored turn came from the owner. A fork never asks
-  for approval: a command the agent's exec approvals would ask about is denied,
-  and nothing is queued for approval. Allowlist entries and full-permission exec
-  apply as they do for the session's own turns.
+- Called from a Gateway method that declares
+  [`sessionAccess`](/plugins/sdk-runtime/gateway-and-nodes#session-resource-methods),
+  the fork runs as a run of the session that request admitted, so a caller
+  with only `operator.sessions.write` can fork their own session. `sessionKey`
+  must name that same session. Without `sessionAccess`, the fork needs the
+  caller's permission to run the agent.
+- A request for `exec` returns `{ status: "refused", reason: "tool_policy" }`
+  unless the anchored turn came from the owner. Through a `sessionAccess`
+  method with a signed-in caller, the anchored turn must also come from that
+  caller. When the turn may come from someone else, request only `read` and
+  `ls`. A fork never asks for approval: a command the agent's exec approvals
+  would ask about is denied, and nothing is queued for approval. Allowlist
+  entries and full-permission exec apply as they do for the session's own turns.
 - A manifest's `contracts.tools` may claim a core catalog id only when the
   catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
   `exec`, `read` or another core-built tool grants nothing.

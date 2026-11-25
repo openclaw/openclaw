@@ -44,6 +44,38 @@ unchanged registry state; final writers retain trust, approval, content, and rea
 checks. Pre-fanout budgeting cannot prevent later job/attempt growth exceeding final
 artifact limits: fail sealing, never truncate evidence.
 
+## Stable-qualified beta to final
+
+A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
+`2026.11.24` without first publishing an unsuffixed version to the beta selector:
+
+1. Complete a successful `stable` FRV on the beta candidate, with
+   `rerun_group=all`, soak enabled, and blocking performance. A `beta` profile
+   never qualifies stable, even if its selected jobs passed. The beta may have
+   used `reuse_evidence=false` to force fresh qualification.
+2. Prepare a descendant for the corresponding unsuffixed final version. The only
+   allowed changes are version alignment in root/plugin/SDK package manifests,
+   generated plugin catalog/reference versions, and that final release's canonical
+   changelog entry, index, and contribution record. Dependencies, product code,
+   qualification tooling, and unrelated release notes must remain unchanged.
+3. Admit and run FRV for the final candidate with evidence reuse enabled and the
+   same stable profile with `npm-stable-v1` final coverage, lane inputs, baselines, and package publication roster. The strict
+   verifier authenticates both admissions and the complete immutable Git delta
+   under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
+   fresh qualification. Beta-version waivers cannot excuse final-version jobs;
+   discovery declines such evidence before skipping fresh product checks.
+   Source admission may add the final-only Linux/Android outputs; these retain
+   their own publication gates and do not broaden reused product qualification.
+4. Retain the successful final parent and its original beta evidence root. Product
+   children retain their original run/attempt identities. Final npm, plugin npm,
+   and Docker artifacts are prepared and qualified afresh; beta publication
+   artifacts are not adopted or renamed. Publish using the final parent's evidence.
+
+This is qualification reuse, not an npm dist-tag rename or a waiver. It requires
+promotion-aware qualification/publisher tooling; it cannot relabel historical
+beta-profile evidence. Changes beyond the version-only cut require fresh product
+qualification. Platform signing and publication keep their own gates.
+
 ## Bounded publication recovery
 
 A nonempty plugin subset may consume authenticated all-publishable admission, retaining
@@ -108,12 +140,8 @@ The pinned release-tooling **Q** owns grant data in
 `scripts/lib/release-validation-waivers.json`. Trusted **P** owns the evaluator in
 `scripts/lib/release-validation-waivers.mjs`: it authenticates Q’s data and applies
 it to raw evidence, rather than using grants from P or the candidate **C**.
-Operator-approved entries require exact version, child role, job name, and short
-reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict the
-candidate and execution. Each entry also requires an `aggregates` array: use
-`[]` when no failed aggregate depends on the job, otherwise record each aggregate’s
-exact `jobName`, failed `stepName`, and accepted `causes`. Keep `exactCauses` or
-`logSha256` restrictions when present. The Q-pinned ledger is authoritative.
+Each operator-approved entry names the exact `targetVersion` and `childRole`,
+with a short `reason`. Add `targetSha` only to restrict a grant to one candidate.
 
 For an authorized grant, commit only the ledger change directly to the selected
 release-tooling Q branch, then pin its new full SHA in a fresh qualification
@@ -126,35 +154,21 @@ an empty ledger; actual grants belong only on the selected release Q branch.
 Missing or malformed Q ledgers, failed authentication, and transport errors remain
 blocking. There is no fallback to historical grants from main or another revision.
 
-For a newly approved job waiver, default to the exact release version, child
-role, and job across all future FRV runs, attempts, and candidates for that
-release. Omit `evidence` and `targetSha` restrictions unless the operator
-explicitly limits the approval. Reserve attempt-specific waivers for
-exceptionally high-risk cases where only the reviewed execution is accepted;
-record the risk and the explicit limit in the PR or handoff. A diagnostic run
-ID is evidence of the original failure, not a reason to restrict an ordinary
-waiver to that attempt. This default does not broaden existing grants or waive
-other jobs, versions, required execution, or evidence-integrity checks.
+Set `jobName` to waive one exact job, whether it passed, failed, was cancelled,
+was skipped, or never ran. Omit `jobName` to waive the entire child role and all
+its descendants: do not dispatch it, look up a run, or require a reuse receipt.
+An optional `step` narrows a named-job waiver to a non-successful terminal job
+whose first incomplete or failed step has exactly that name. A different,
+missing, or unobserved step does not match. A passing job does not record an
+exception just because a grant matches its name.
 
-A `testFailures` entry additionally requires the sole failed step and the complete
-ordered set of exact test/error signatures from the native test-evidence parser.
-The verifier reads the original leaf log and requires completed invocation
-evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly.
-
-An explicitly approved cancellation uses `cancelledStep` instead of
-`testFailures`. It matches only a completed job whose raw conclusion is
-`cancelled`; its only unsuccessful step must have that exact name and also be
-cancelled. It does not accept a different cancelled step, another failed step,
-a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
-cancellation. The original job conclusion remains visible as cancelled, not passed.
-
-Plain-output native extension batches in CI retain separate invocation streams and emit a
-completion receipt only after every planned invocation and its descendants settle.
-An ordinary test failure does not skip later planned batches. Historical logs
-without that framing remain incomplete; never synthesize receipts or infer missing
-signatures from a later replay. Blank lines between a native failure header and
-its error are accepted, but unrelated errors and inconsistent counts still block.
+Frozen v1 ledgers remain readable. A legacy named grant with empty
+`aggregates` and no other selectors remains failure-only. A historical
+aggregate-, run-, step-, or failure-signature-bound grant does not become a
+new unconditional approval. If recovery needs to excuse that work with the new
+policy, use a newly approved exact grant through the separate Q admission below.
+Historical composite hashes remain verified against their original job projection;
+step narrowing uses authenticated attempt evidence, not a rewritten receipt.
 
 Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
@@ -164,16 +178,16 @@ inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
 substitute for reevaluation: removing or narrowing a grant can make retained
 failures blocking again.
 
-Accepted receipts return before another child is dispatched; the required initial
-run cannot be skipped. Failed parents without final manifests can supply eligible
-child receipts, not be relabeled successful. The new parent must complete
-admission, collection, and final verification. Missing, expired, or incompatible
-evidence requires fresh work. A P-only change does not replace Q’s grants.
+Accepted receipts return before another unwaived child is dispatched. A waiver
+does not create a receipt or turn an old failed parent green. A new parent must
+complete admission, collection of required evidence, and final verification.
+Missing, expired, or incompatible unwaived evidence requires fresh work. A
+P-only change does not replace Q’s grants.
 
-State, manifests, and summaries retain raw failures and reasons. Grants neither
-skip tests nor mark passes; failed aggregates must contain only granted causes.
-Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
-ungranted failures block. Package, dispatch, seal, and provenance integrity remain
+State, manifests, and summaries retain raw outcomes and reasons. A failed gate
+blocks unless it is itself waived. Unwaived missing, cancelled, or failed required
+coverage blocks, as do timed-out, incomplete, or mismatched evidence. Package,
+dispatch, seal, and provenance integrity remain
 mandatory. Publication still requires a successful FRV parent under its admitted
 Q/P tuple; a publisher cannot add grants or swap Q after qualification.
 
@@ -219,8 +233,8 @@ original publication selection. Fresh qualification is a separate, explicit oper
 Use a separately admitted policy Q only when an authorized operator approved new
 waivers for the original candidate. It must be a signed direct child of the
 original Q that modifies only the waiver ledger, preserves existing entries, and
-appends grants bound to the original candidate, version, and selected receipt attempts.
-It cannot change coverage or excuse missing receipts.
+appends grants bound to the original candidate, version, and admitted child roles.
+It cannot change unwaived coverage. A whole-child grant does not require a receipt.
 
 1. Generate the exact admission request without dispatching anything:
 
@@ -243,9 +257,9 @@ It cannot change coverage or excuse missing receipts.
    ```
 
 Recovery and publisher verification both authenticate the separate admission and
-reevaluate the original raw jobs and aggregate logs against exactly that ledger.
+reevaluate the original raw jobs against exactly that ledger.
 Child attempts, workflow provenance, artifacts, and the failed original run
-remain unchanged. A missing, changed, or unwaived receipt still blocks recovery.
+remain unchanged. Missing or changed required receipts still block recovery.
 
 ## Workflow files
 

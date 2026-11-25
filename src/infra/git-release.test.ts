@@ -638,7 +638,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
     it.each(["openclaw", "lib/node_modules/openclaw"])(
       "keeps the service on the release launcher for %s",
       async (relativeSlot) => {
-        const { prefix } = await setup();
+        const { stateDir, prefix } = await setup();
         const slot = path.join(prefix, relativeSlot);
         const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -651,7 +651,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await fs.writeFile(launcher, "");
         const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
         const service = await resolveGatewayProgramArguments({
-          cliEntrypoint: entry,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          cliEntrypoint: { planned: entry },
           runtime: "node",
           runtimePath: process.execPath,
           port: 18789,
@@ -702,6 +703,88 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       });
 
       expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
+    });
+
+    // A Git conversion keeps the service `gateway install` wrote for the checkout; the
+    // checkout's entry forwards to the launcher, and Doctor runs from the release.
+    it.each([
+      ["forwards dist/index.js to this launcher", "owned"],
+      ["forwards openclaw.mjs to this launcher", "owned"],
+      ["is a linked worktree forwarding to this launcher", "owned"],
+      ["has no forwarding marker", "foreign"],
+      ["forwards to a missing launcher", "foreign"],
+      ["forwards to another state directory's launcher", "foreign"],
+      ["lacks the forwarder module", "foreign"],
+      ["is a package, not a checkout", "foreign"],
+    ] as const)("classifies a checkout service whose tree %s as %s", async (layout, kind) => {
+      const { inspectManagedGatewayServiceBeforeUpdate } =
+        await import("../cli/update-cli/update-command-service-plan.js");
+      const { summarizeGatewayServiceLayout } = await import("../daemon/service-layout.js");
+      const { stateDir, prefix } = await setup();
+      await publishFixture(prefix, "2.0.0", "", false);
+      await writeGitReleaseLauncher(prefix);
+      const other = await setup();
+      await publishFixture(other.prefix, "3.0.0", "", false);
+      await writeGitReleaseLauncher(other.prefix);
+      const checkout = path.join(stateDir, "checkout");
+      const linked = layout === "is a linked worktree forwarding to this launcher";
+      await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+      if (linked) {
+        await fs.writeFile(path.join(checkout, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+      } else if (layout !== "is a package, not a checkout") {
+        await fs.mkdir(path.join(checkout, ".git"));
+      }
+      await fs.writeFile(
+        path.join(checkout, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      await fs.writeFile(path.join(checkout, "dist", "index.js"), "");
+      await fs.writeFile(path.join(checkout, "openclaw.mjs"), "");
+      if (layout !== "lacks the forwarder module") {
+        await fs.writeFile(path.join(checkout, "release-launcher-forward.mjs"), "");
+      }
+      if (layout !== "has no forwarding marker") {
+        const launcher =
+          layout === "forwards to a missing launcher"
+            ? path.join(stateDir, "gone", "openclaw-launcher.mjs")
+            : path.join(
+                layout === "forwards to another state directory's launcher" ? other.prefix : prefix,
+                "openclaw-launcher.mjs",
+              );
+        // `markForwarding` keeps a main checkout's marker in `.git`, and other trees' at the root.
+        const marker =
+          linked || layout === "is a package, not a checkout"
+            ? path.join(checkout, ".openclaw-launcher")
+            : path.join(checkout, ".git", "openclaw-launcher");
+        await fs.writeFile(marker, `${launcher}\n`);
+      }
+      const entry = path.join(
+        checkout,
+        layout === "forwards openclaw.mjs to this launcher" ? "openclaw.mjs" : "dist/index.js",
+      );
+      const command = { programArguments: [process.execPath, entry, "gateway", "--port", "1"] };
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        // Doctor's root: the package root of the release the CLI was forwarded to.
+        root: await fs.realpath(gitReleaseSlot(prefix)),
+        state: {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: true,
+          env: {},
+          command,
+          runtime: { status: "running", systemd: { managerUid: 1001 } },
+        },
+      });
+
+      expect(verdict).toEqual(
+        kind === "owned"
+          ? expect.objectContaining({ kind, refreshDefinition: false })
+          : { kind: "foreign" },
+      );
+      // `gateway status` compares this version with the CLI's to report drift.
+      expect((await summarizeGatewayServiceLayout(command))?.packageVersion).toBe(
+        kind === "owned" ? "2.0.0" : layout.includes("another state") ? "3.0.0" : "1.0.0",
+      );
     });
 
     it("runs a Windows checkout from releases behind an absolute junction link", async () => {

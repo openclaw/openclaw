@@ -908,11 +908,8 @@ it("admits registered PR-base source for its authorized guest and finishes after
         };
         const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
         try {
-          // Another guest fails the publication requester; an admin passes it but is not the owner.
-          await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
-          await expect(prepare(adminClient)).rejects.toThrow(
-            "Only the person who started this conversation",
-          );
+          // Another guest fails the publication requester.
+          await expect(prepare(otherClient)).rejects.toThrow("not authorized to publish");
           expect(allocate).not.toHaveBeenCalled();
           unbound();
 

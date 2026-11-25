@@ -56,6 +56,10 @@ export function normalizeChatHumanMentions(
   const normalized: HumanMention[] = [];
   let previousEnd = 0;
   for (const mention of mentions) {
+    if (mention.access !== undefined) {
+      // Invitation levels are not enforced yet; refuse rather than invite with full membership.
+      return { ok: false, error: "Mention invitation levels are not supported." };
+    }
     const token = text.slice(mention.start, mention.end);
     if (
       mention.start < previousEnd ||

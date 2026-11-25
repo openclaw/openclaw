@@ -707,7 +707,7 @@ function isCatalogDictionary(
   );
 }
 
-function validateCatalog(
+export function validateAppleCatalog(
   pathName: string,
   catalog: Catalog,
   activeKeys?: ReadonlySet<string>,
@@ -807,28 +807,21 @@ async function syncIosInfoPlist(write: boolean): Promise<number> {
   return checked;
 }
 
-async function syncAppleCatalog(
+export function assertAppleCatalogCurrent(
   catalogName: string,
-  buildCatalog: typeof buildIosCatalog,
-  write: boolean,
+  actual: string,
+  expectedCatalog: Catalog,
   reportObsolete?: (message: string) => void,
-): Promise<AppleCatalogBuild> {
-  const build = await readAppleCatalogBuild(catalogName, buildCatalog);
-  const catalogPath = path.join(ROOT, catalogName);
-  const expected = serializeAppleCatalog(build.catalog);
-  const actual = await readFile(catalogPath, "utf8");
+): void {
+  const expected = serializeAppleCatalog(expectedCatalog);
   if (actual === expected) {
-    return build;
-  }
-  if (write) {
-    await writeFile(catalogPath, expected, "utf8");
-    return build;
+    return;
   }
   if (reportObsolete) {
     const catalog = JSON.parse(actual) as Catalog;
     const strings = catalog.strings;
     if (isCatalogDictionary(strings) && actual === serializeAppleCatalog(catalog)) {
-      const active = build.catalog.strings ?? {};
+      const active = expectedCatalog.strings ?? {};
       const obsolete = Object.keys(strings).filter((key) => !Object.hasOwn(active, key));
       // Ignore only complete obsolete rows; active values, metadata and formatting stay exact.
       const filtered = {
@@ -838,13 +831,33 @@ async function syncAppleCatalog(
         ),
       };
       if (obsolete.length > 0 && serializeAppleCatalog(filtered) === expected) {
-        validateCatalog(catalogName, catalog, new Set(Object.keys(active)));
+        validateAppleCatalog(catalogName, catalog, new Set(Object.keys(active)));
         reportObsolete(`Apple obsolete catalog rows: ${catalogName} (keys=${obsolete.length})`);
-        return build;
+        return;
       }
     }
   }
   throw new Error(`Apple catalog ${catalogName} is stale; run native-app-i18n.ts sync --write`);
+}
+
+async function syncAppleCatalog(
+  catalogName: string,
+  buildCatalog: typeof buildIosCatalog,
+  write: boolean,
+  reportObsolete?: (message: string) => void,
+): Promise<AppleCatalogBuild> {
+  const build = await readAppleCatalogBuild(catalogName, buildCatalog);
+  const catalogPath = path.join(ROOT, catalogName);
+  const actual = await readFile(catalogPath, "utf8");
+  if (write) {
+    const expected = serializeAppleCatalog(build.catalog);
+    if (actual !== expected) {
+      await writeFile(catalogPath, expected, "utf8");
+    }
+  } else {
+    assertAppleCatalogCurrent(catalogName, actual, build.catalog, reportObsolete);
+  }
+  return build;
 }
 
 /**
@@ -887,7 +900,7 @@ export async function verifyAppleAppI18n() {
   }
 
   const macosBuild = await readAppleCatalogBuild(MACOS_CATALOG_PATH, buildMacosCatalog);
-  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
+  const macosKeys = validateAppleCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
 
   process.stdout.write(`apple-app-i18n: sourceMacosKeys=${macosKeys}\n`);
 }
@@ -900,8 +913,8 @@ export async function checkAppleAppI18n(
     syncAppleCatalog(IOS_CATALOG_PATH, buildIosCatalog, false, options.reportObsolete),
     syncAppleCatalog(MACOS_CATALOG_PATH, buildMacosCatalog, false, options.reportObsolete),
   ]);
-  const iosKeys = validateCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
-  const macosKeys = validateCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
+  const iosKeys = validateAppleCatalog(IOS_CATALOG_PATH, iosBuild.catalog);
+  const macosKeys = validateAppleCatalog(MACOS_CATALOG_PATH, macosBuild.catalog);
   const infoPlistFiles = await syncIosInfoPlist(false);
 
   process.stdout.write(
