@@ -92,6 +92,7 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   {
     requireMentionInBotThreads: z.boolean().optional(),
     slug: z.string().optional(),
+    doctorPausedGuildIds: z.record(z.string(), z.array(z.string().regex(/^\d+$/))).optional(),
     ignoreOtherMentions: z.boolean().optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all", "allowlist"],

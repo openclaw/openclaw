@@ -26,6 +26,7 @@ export function makeDoctorPrompts() {
     confirmAggressiveAutoFix: vi.fn().mockResolvedValue(true),
     confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
     select: vi.fn().mockResolvedValue("node"),
+    requestRepairText: vi.fn(async () => undefined),
     selectRuntimeRepair: vi.fn(async (_params, fallback) => fallback),
     shouldRepair: false,
     shouldForce: false,

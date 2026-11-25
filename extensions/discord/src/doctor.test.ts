@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   collectDiscordMissingEnvTokenWarnings,
   collectDiscordNumericIdWarnings,
@@ -109,6 +109,68 @@ describe("discord doctor", () => {
       discord?.accounts?.invalid?.voice?.realtime?.wakeNames,
       discord?.accounts?.empty?.voice?.realtime?.wakeNames,
     ]).toEqual([["Claw", "Claw Bot", "Open Claw"], ["Work Bot"], ["Only Three"], undefined]);
+  });
+
+  it("rekeys complete guild rules in their authored scope and retains conflicting destinations", async () => {
+    const rule = {
+      users: ["123"],
+      roles: ["234"],
+      tools: { deny: ["exec"] },
+      channels: { "*": { requireMention: true } },
+    };
+    const cfg = discordConfig({
+      guilds: { ops: rule, "456": {}, "*": {} },
+      accounts: { work: { guilds: { support: rule, "789": { requireMention: true } } } },
+    });
+    const rename = vi.fn().mockResolvedValueOnce("567").mockResolvedValueOnce("789");
+    const result = await discordDoctor.repairConfig?.({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+      requestText: rename,
+    });
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(result?.config.channels?.discord).toEqual({
+      guilds: { "567": rule, "456": {}, "*": {} },
+      accounts: cfg.channels?.discord?.accounts,
+    });
+    expect(result?.warnings?.join("\n")).toContain("already has a rule");
+    expect(cfg.channels?.discord?.guilds?.ops).toEqual(rule);
+  });
+
+  it("persists account-specific pauses through serialized config until the name rule is rekeyed", async () => {
+    const { discordPausedGuildIds } = await import("./guild-pause.js");
+    const guilds = await import("./guilds.js");
+    const directory = vi.spyOn(guilds, "listGuilds").mockResolvedValue([
+      { id: "123", name: "Ops", slug: "ops" },
+      { id: "456", name: "OPS", slug: "ops" },
+      { id: "789", name: "Elsewhere", slug: "elsewhere" },
+    ]);
+    try {
+      const cfg = discordConfig({
+        accounts: { work: { token: "fixture", guilds: { ops: { roles: ["11"] }, "789": {} } } },
+      });
+      const result = await discordDoctor.repairConfig?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      });
+      const serialized = JSON.stringify(result?.config);
+      const persisted: OpenClawConfig = JSON.parse(serialized);
+      const entries = persisted.channels?.discord?.accounts?.work?.guilds;
+      expect(discordPausedGuildIds(entries, "work")).toEqual(new Set(["123", "456"]));
+      expect(discordPausedGuildIds(entries, "other")).toEqual(new Set());
+      const migrated = await discordDoctor.repairConfig?.({
+        cfg: persisted,
+        doctorFixCommand: "openclaw doctor --fix",
+        requestText: async () => "123",
+      });
+      const repaired = migrated?.config.channels?.discord?.accounts?.work?.guilds;
+      expect(repaired).toEqual({ "123": { roles: ["11"] }, "789": {} });
+      expect(discordPausedGuildIds(repaired, "work").size).toBe(0);
+      expect(directory).toHaveBeenCalledTimes(1);
+    } finally {
+      directory.mockRestore();
+    }
   });
 
   it("repairs numeric ids across Discord scopes without changing string entries", () => {

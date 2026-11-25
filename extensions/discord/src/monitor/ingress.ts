@@ -100,6 +100,7 @@ function isDiscordAuthenticationFailure(error: unknown): boolean {
 }
 
 export function createDiscordIngressMonitor(params: {
+  isGuildPaused?: (id: string) => boolean;
   accountId: string;
   botUserId?: string;
   client: Client;
@@ -154,6 +155,9 @@ export function createDiscordIngressMonitor(params: {
     },
     // Gateway mapping is intentionally delayed until after the durable claim.
     deliver: async (rawMessage, lifecycle) => {
+      if (rawMessage.guild_id && params.isGuildPaused?.(rawMessage.guild_id)) {
+        return;
+      }
       const event = createMessageDispatchData(params.client, rawMessage);
       return await params.dispatch(event, lifecycle);
     },

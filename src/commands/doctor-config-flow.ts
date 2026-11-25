@@ -68,7 +68,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   reportFindings?: notes.DoctorFindingReporter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
-  const { shouldRepair, nonInteractive } = resolveDoctorRepairMode(params.options);
+  const mode = resolveDoctorRepairMode(params.options);
+  const { shouldRepair, nonInteractive } = mode;
+  const interactive = mode.canPrompt && !mode.updateInProgress;
   const preflight = await runDoctorConfigPreflight({
     retiredStateAdmitted: params.retiredStateAdmitted,
     stateSchemaPreparation: params.stateSchemaPreparation,
@@ -446,14 +448,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         cfg: state.candidate,
         env: process.env,
         shouldRepair,
+        unattendedSourceHash:
+          shouldRepair || interactive ? undefined : (snapshot.hash ?? undefined),
       }),
     );
-    notes.emitDoctorNotes({
-      note,
-      changeNotes: channelDoctorSequence.changeNotes,
-      infoNotes: channelDoctorSequence.infoNotes,
-      warningNotes: channelDoctorSequence.warningNotes,
-    });
+    notes.emitDoctorNotes({ note, ...channelDoctorSequence });
     channelWorkObserved =
       channelDoctorSequence.changeNotes.length > 0 || channelDoctorSequence.warningNotes.length > 0;
 
@@ -513,6 +512,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          requestText: interactive ? prompter?.requestRepairText : undefined,
           modelReplacements: params.options.modelReplacements,
           reportFindings: params.reportFindings,
           env: process.env,

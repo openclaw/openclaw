@@ -1,6 +1,8 @@
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { discordPausedGuildIds } from "../guild-pause.js";
 import type { Guild } from "../internal/discord.js";
 import {
   allowListMatches,
@@ -54,6 +56,18 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
         admissionAllowFrom: resolveDiscordVoiceAccess(policy).admissionAllowFrom,
       }
     : initialParams;
+  if (
+    discordPausedGuildIds(
+      params.discordConfig.guilds,
+      params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+    ).has(params.guildId)
+  ) {
+    return {
+      ok: false,
+      message:
+        "Discord server access is paused. Resolve the server name in config or run openclaw doctor --fix interactively.",
+    };
+  }
   const groupPolicy =
     params.groupPolicy ??
     resolveOpenProviderRuntimeGroupPolicy({

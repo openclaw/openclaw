@@ -37,6 +37,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
+  mergeDiscordAccountConfig,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -48,6 +49,7 @@ import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
 } from "../exec-approvals.js";
+import { discordPausedGuildIds } from "../guild-pause.js";
 import type {
   BaseMessageInteractiveComponent,
   DiscordCommand,
@@ -139,6 +141,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     cfg,
     accountId: opts.accountId,
   });
+  let pauseConfig: OpenClawConfig | undefined;
+  let pausedIds = new Set<string>();
+  const isGuildPaused = (id: string) => {
+    const current = readConfig();
+    if (current !== pauseConfig) {
+      pausedIds = discordPausedGuildIds(
+        mergeDiscordAccountConfig(current, account.accountId).guilds,
+        account.accountId,
+      );
+      pauseConfig = current;
+    }
+    return pausedIds.has(id);
+  };
   const token =
     normalizeDiscordToken(opts.token ?? undefined, "channels.discord.token") ?? account.token;
   if (!token) {
@@ -513,6 +528,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       gatewaySupervisor: createdGatewaySupervisor,
       autoPresenceController: createdAutoPresenceController,
     } = await createDiscordMonitorClient({
+      isGuildPaused,
       scheduler,
       accountId: account.accountId,
       applicationId,
@@ -580,6 +596,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
+      isGuildPaused,
       ...monitorOptions,
       token,
       buildContext: pluginChannelRuntime?.inbound.buildContext,

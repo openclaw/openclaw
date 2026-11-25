@@ -59,6 +59,11 @@ const discordDoctor: ChannelDoctorAdapter = {
     (await loadDiscordDoctorModule()).discordDoctor.collectPreviewWarnings?.(params) ?? [],
   collectMutableAllowlistWarnings: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.collectMutableAllowlistWarnings?.(params) ?? [],
+  runConfigSequence: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.runConfigSequence?.(params) ?? {
+      changeNotes: [],
+      warningNotes: [],
+    },
   repairConfig: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.repairConfig?.(params) ?? {
       config: params.cfg,

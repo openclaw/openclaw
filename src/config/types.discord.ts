@@ -59,6 +59,8 @@ export type DiscordGuildEntry = Pick<
   | "roles"
 > & {
   slug?: string;
+  /** IDs paused by Doctor, by bot account, while this rule is keyed by server name. */
+  doctorPausedGuildIds?: Record<string, string[]>;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
   presenceEvents?: {

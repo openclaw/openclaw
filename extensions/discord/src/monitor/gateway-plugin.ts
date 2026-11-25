@@ -127,6 +127,7 @@ export function resolveDiscordGatewayIntents(params?: ResolveDiscordGatewayInten
 }
 
 export function createDiscordGatewayPlugin(params: {
+  isGuildPaused?: (id: string) => boolean;
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
 }): discordGateway.GatewayPlugin {
@@ -181,7 +182,7 @@ export function createDiscordGatewayPlugin(params: {
     private gatewayInfoUsedFallback = false;
 
     constructor() {
-      super({ intents });
+      super({ intents, isGuildPaused: params.isGuildPaused });
     }
 
     override registerClient(client: DiscordGatewayClient) {
