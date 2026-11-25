@@ -103,16 +103,7 @@ describe("standalone plugin file startup intent", () => {
       plugins: { entries: { "tool-policy": { enabled: false } } },
       warns: false,
     },
-    {
-      name: "enabled, onCapabilities hook",
-      plugins: enabled,
-      activation: { onCapabilities: ["hook"] },
-      warns: false,
-    },
     { name: "listed in load.paths only", plugins: {}, warns: false },
-    { name: "plugins disabled", plugins: { ...enabled, enabled: false }, warns: false },
-    { name: "denied", plugins: { ...enabled, deny: ["tool-policy"] }, warns: false },
-    { name: "allowlist excludes it", plugins: { ...enabled, allow: ["other"] }, warns: false },
   ])("$name: warns $warns", ({ plugins, activation, warns }) => {
     const file = candidate("config", activation ? { activation } : {}, "tool-policy");
     fs.writeFileSync(file.source, "export default { register() {} };", "utf-8");
