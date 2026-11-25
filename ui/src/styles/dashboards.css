@@ -318,6 +318,12 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
+.dashboards-group__heading > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dashboards-group__heading > openclaw-session-owner-chip {
   display: inline-flex;
 }
