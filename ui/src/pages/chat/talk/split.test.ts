@@ -26,6 +26,7 @@ const tracks: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
 const audios: FakeAudio[] = [];
 const states: ChatRealtimeState[] = [];
 let speechStarted = createDeferred();
+const createSpeechObjectUrl = vi.fn(() => "blob:synthetic-speech");
 const sessionKey = "agent:local:main";
 const transcript = "Tell me something local";
 const config = (provider?: string) => ({
@@ -74,6 +75,7 @@ class FakeAudio extends EventTarget {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  createSpeechObjectUrl.mockClear();
   speechStarted = createDeferred();
   processors.length = tracks.length = audios.length = 0;
   vi.stubGlobal("localStorage", createStorageMock());
@@ -91,7 +93,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "URL",
     class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:synthetic-speech");
+      static override createObjectURL = createSpeechObjectUrl;
       static override revokeObjectURL = vi.fn();
     },
   );
@@ -435,7 +437,7 @@ it("Stop aborts the pending split Talk speech request and discards late audio", 
   expect(signal.aborted).toBe(true);
   release.resolve();
   await vi.advanceTimersByTimeAsync(0);
-  expect(URL.createObjectURL).not.toHaveBeenCalled();
+  expect(createSpeechObjectUrl).not.toHaveBeenCalled();
   expect(tracks).toHaveLength(1);
 });
 
