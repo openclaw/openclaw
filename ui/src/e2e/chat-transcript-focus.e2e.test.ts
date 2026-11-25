@@ -1,13 +1,40 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it, vi } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { textMessage } from "./chat-flow-fixtures.test-support.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Transcript focused row placement",
   startServerBeforeBrowser: true,
 });
+async function openTranscript(page: Page, count: number) {
+  const messages = Array.from({ length: count }, (_, index) =>
+    textMessage(
+      index % 2 === 0 ? "assistant" : "user",
+      `focus retention message ${index + 1}\n${"transcript detail line\n".repeat(3)}`,
+      { __openclaw: { seq: index + 1 }, timestamp: Date.now() + index },
+    ),
+  );
+  await installMockGateway(page, {
+    featureMethods: ["chat.metadata", "chat.startup"],
+    methodResponses: {
+      "chat.startup": {
+        messages,
+        hasMore: false,
+        totalMessages: messages.length,
+        sessionId: "focus-retention",
+        thinkingLevel: null,
+      },
+    },
+  });
+
+  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.getByText(new RegExp(`^focus retention message ${count}\\n`)).waitFor();
+  return page.locator(".chat-thread");
+}
+
 async function focusRow(action: Locator) {
   await action.focus();
   const key = await action.evaluate(
@@ -17,31 +44,60 @@ async function focusRow(action: Locator) {
   return key;
 }
 suite.define(() => {
+  it.each(["reduce", "no-preference"] as const)(
+    "continues keyboard scrolling after returning to latest (%s motion)",
+    async (reducedMotion) => {
+      await suite.withPage(
+        { reducedMotion, viewport: { width: 1280, height: 720 } },
+        async ({ page }) => {
+          const thread = await openTranscript(page, 36);
+          const latest = page.getByRole("button", { name: "Scroll to latest", exact: true });
+          const scrollTop = () => thread.evaluate((element) => element.scrollTop);
+          const showLatest = async () => {
+            await thread.focus();
+            await page.keyboard.press("PageUp");
+            await latest.waitFor();
+            await waitForChatScrollIdle(page);
+          };
+          await waitForChatScrollIdle(page);
+          for (const activation of ["mouse", "Enter", "Space"] as const) {
+            await showLatest();
+            if (activation === "mouse") {
+              await latest.click();
+            } else {
+              await latest.focus();
+              await page.keyboard.press(activation);
+            }
+            await latest.waitFor({ state: "hidden" });
+            await page.getByText(/^focus retention message 36\n/).waitFor();
+            await waitForChatScrollIdle(page);
+            expect(await thread.evaluate((element) => element === document.activeElement)).toBe(
+              true,
+            );
+            const atLatest = await scrollTop();
+            await page.keyboard.press("ArrowUp");
+            await expect.poll(scrollTop).toBeLessThan(atLatest);
+          }
+
+          await showLatest();
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          await composer.fill("Keep this draft");
+          // Activation without moving focus must leave the editor in control.
+          await latest.evaluate((button: HTMLButtonElement) => button.click());
+          await latest.waitFor({ state: "hidden" });
+          await waitForChatScrollIdle(page);
+          expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          expect(await composer.inputValue()).toBe("Keep this draft");
+        },
+      );
+    },
+  );
+
   it("keeps a focused message action mounted while its row scrolls out of view", async () => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
-    const messages = Array.from({ length: 200 }, (_, index) =>
-      textMessage(
-        index % 2 === 0 ? "assistant" : "user",
-        `focus retention message ${index + 1}\n${"transcript detail line\n".repeat(3)}`,
-        { __openclaw: { seq: index + 1 }, timestamp: Date.now() + index },
-      ),
-    );
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup"],
-      methodResponses: {
-        "chat.startup": {
-          messages,
-          hasMore: false,
-          totalMessages: messages.length,
-          sessionId: "focus-retention",
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText(/^focus retention message 200\n/).waitFor();
-    const thread = page.locator(".chat-thread");
+    const thread = await openTranscript(page, 200);
     const actions = thread.locator("button.chat-reply-btn");
     const scrollTo = async (edge: "first" | "last", dispatch = false) => {
       await thread.evaluate((element, atStart) => {
