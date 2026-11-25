@@ -32,7 +32,7 @@ const { getOpenClawAgentMigrationSchema } =
   await import("../../src/state/openclaw-agent-schema-history.js");
 const { seedVersion } = await import("../../src/state/schema-migration.test-support.js");
 const { normalizeSqliteText } = await import("../../src/state/openclaw-state-db-schema-repair.js");
-const { createOpenClawDatabaseMaintenanceScope } =
+const { createOpenClawDatabaseMaintenanceScope, runOutsideOpenClawDatabaseMaintenanceScope } =
   await import("../../src/state/openclaw-state-db-async-lifecycle.js");
 const original = {
   ...integrity,
@@ -189,7 +189,9 @@ async function migrate(bulk: FixtureStep | undefined, baseline: number, schemaSq
       ({ observation } = await withAgentDatabaseMaintenanceLease(options, async (maintenance) => {
         const scope = createOpenClawDatabaseMaintenanceScope({
           schemaMaintenance: true,
-          assertOwnerCurrent: () => maintenance.assertOwned(),
+          // The lease's own storage retains its independent custody, like Doctor's root lock.
+          assertOwnerCurrent: () =>
+            runOutsideOpenClawDatabaseMaintenanceScope(() => maintenance.assertOwned()),
         });
         try {
           return await scope.run(() =>
