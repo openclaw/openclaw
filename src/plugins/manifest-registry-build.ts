@@ -13,6 +13,7 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
   discoverOpenClawPlugins,
@@ -80,19 +81,6 @@ function rejectCaseFoldedIdCollisions(
   return records.filter((record) => !rejected.has(record));
 }
 
-// Plugins that policy keeps inactive get no metadata advice they could act on.
-function isInactiveByPolicy(
-  policyId: string,
-  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>,
-): boolean {
-  return (
-    normalized?.enabled === false ||
-    normalized?.entries[policyId]?.enabled === false ||
-    normalized?.deny.includes(policyId) === true ||
-    Boolean(normalized?.allow.length && !normalized.allow.includes(policyId))
-  );
-}
-
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -101,7 +89,14 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  if (isInactiveByPolicy(normalizePluginPolicyId(params.record.id), params.normalized)) {
+  const policyId = normalizePluginPolicyId(params.record.id);
+  const configuredEntry = params.normalized?.entries[policyId];
+  if (
+    params.normalized?.enabled === false ||
+    configuredEntry?.enabled === false ||
+    params.normalized?.deny.includes(policyId) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
+  ) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -132,19 +127,24 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
   explicitConfiguredFileSources: ReadonlySet<string>;
-  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
+  normalized: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
-  const { record, normalized } = params;
-  const policyId = normalizePluginPolicyId(record.id);
+  const { record } = params;
   if (
     record.origin !== "config" ||
     Object.values(record.activation ?? {}).some((v) =>
       Array.isArray(v) ? v.length > 0 : v !== undefined,
     ) ||
-    !params.explicitConfiguredFileSources.has(path.resolve(record.source)) ||
-    isInactiveByPolicy(policyId, normalized) ||
-    (normalized?.entries[policyId]?.enabled !== true && !normalized?.allow.includes(policyId))
+    !params.explicitConfiguredFileSources.has(path.resolve(record.source))
   ) {
+    return;
+  }
+  const state = resolveEffectivePluginActivationState({
+    id: record.id,
+    origin: record.origin,
+    config: params.normalized,
+  });
+  if (!state.enabled || !state.explicitlyEnabled) {
     return;
   }
   params.diagnostics.push({
@@ -152,7 +152,7 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
     pluginId: sanitizeForLog(record.id),
     source: sanitizeForLog(record.manifestPath),
     message:
-      "standalone plugin file has a manifest that declares no activation, so it starts with the Gateway only when its config activates it (registering hooks does not); set activation.onStartup to true to keep starting it with the Gateway, or false to keep it lazy",
+      "OpenClaw starts this plugin with the Gateway only when your config activates it, because its manifest doesn't set activation. Set activation.onStartup to true to start it with the Gateway, or to false to leave it out of startup.",
   });
 }
 
