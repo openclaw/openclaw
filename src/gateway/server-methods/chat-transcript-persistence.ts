@@ -38,11 +38,7 @@ import {
   abortedPartialPersistenceError,
   type AbortedPartialSnapshot,
 } from "./chat-aborted-partial.js";
-import {
-  findMatchingAssistantCaptions,
-  normalizeAssistantMediaCaption,
-  retainCaptionUsageLine,
-} from "./chat-assistant-caption.js";
+import { appendCaptionUsage, findAssistantCaptionBlocks } from "./chat-assistant-caption.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -168,7 +164,9 @@ export function buildAssistantDisplayRewrite(params: {
       : [],
   );
   const authoredText = extractAssistantPhaseText(params.message);
-  const joinedCaption = authoredText ? normalizeAssistantMediaCaption(authoredText) : undefined;
+  const joinedCaption = authoredText
+    ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
+    : undefined;
   // A row mirroring one native CLI message owns only that message; earlier
   // narration in the delivered caption is already shown by its own native rows.
   const nativeMirror = Boolean(
@@ -176,11 +174,16 @@ export function buildAssistantDisplayRewrite(params: {
   );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
-  const usageLine = params.responseUsageLine;
-  const matchingCaptions =
+  const captions =
     params.mediaBySource?.size && joinedCaption
-      ? findMatchingAssistantCaptions(prepared.content, joinedCaption, nativeMirror, usageLine)
-      : [];
+      ? findAssistantCaptionBlocks({
+          content: prepared.content,
+          caption: joinedCaption,
+          nativeMirror,
+          usageLine: params.responseUsageLine,
+        })
+      : { blocks: [], usage: "" };
+  const matchingCaptions = captions.blocks;
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
   let inCommentary = false;
@@ -267,7 +270,7 @@ export function buildAssistantDisplayRewrite(params: {
       content.push({ ...block, text: "" });
     }
   }
-  retainCaptionUsageLine(content, matchingCaptions, usageLine);
+  appendCaptionUsage(content, captions.usage);
   for (const block of prepared.content) {
     if (
       block.type === "text" &&
