@@ -105,6 +105,26 @@ or caller routing headers are preserved regardless of header name casing.
   </Tab>
 </Tabs>
 
+## Browser sign-in
+
+Instead of an API key, OpenClaw can sign in to an OpenCode Console workspace in
+your browser. OpenClaw signs in as its own Console client, so this sign-in is
+separate from the OpenCode Console CLI's.
+
+```bash
+openclaw models auth login --provider opencode --method oauth
+openclaw models auth login --provider opencode-go --method oauth
+```
+
+Open the link OpenClaw prints, confirm the code, and pick a workspace. The Zen
+and Go catalogs sign in separately: Console refresh tokens are single-use, so
+each provider keeps its own sign-in. Sign in to Go only when the workspace has a
+Go subscription.
+
+Tokens refresh automatically. You can also choose **OpenCode Console (browser
+sign-in)** or **OpenCode Go (browser sign-in)** during `openclaw onboard`, with
+`/login` in chat, or from the Models page.
+
 ## Config example
 
 ```json5

@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   action,
   createMemo,
@@ -13,6 +14,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -89,33 +91,43 @@ export type VoiceWakeEditorState =
   | { kind: "unavailable" }
   | { kind: "ready"; text: string; phase: "saved" | "pending" | "saving" };
 
-function VoiceWakeWriteStatus(props: {
-  saving: boolean;
-  readWriteResult: () => void;
-  onRetry: () => void;
+function VoiceWakeSection(props: {
+  notice?: JSX.Element;
+  status?: string | null;
+  control?: JSX.Element;
 }) {
-  const savedLabel = () => {
+  return (
+    <SettingsSection title={t("configPage.deviceTalk.triggerWords")} notice={props.notice}>
+      <SettingsRow
+        title={
+          <span class="row">
+            {t("configPage.deviceTalk.triggerWords")}
+            <span class="settings-row__value" role="status">
+              {props.status}
+            </span>
+          </span>
+        }
+        description={t("configPage.deviceTalk.triggerWordsHint")}
+        stacked
+        control={props.control}
+      />
+    </SettingsSection>
+  );
+}
+
+function VoiceWakeWriteFailure(props: { readWriteResult: () => void; onRetry: () => void }) {
+  const outcome = () => {
     props.readWriteResult();
-    return t("configPage.deviceTalk.saved");
+    return null;
   };
   return (
     <Errored fallback={voiceControlErrorFallback(() => props.onRetry())}>
-      <Loading
-        fallback={
-          <span class="muted" role="status">
-            {t("common.saving")}
-          </span>
-        }
-      >
-        <span class="muted" role="status">
-          {props.saving ? t("common.saving") : savedLabel()}
-        </span>
-      </Loading>
+      <Loading>{outcome()}</Loading>
     </Errored>
   );
 }
 
-function VoiceWakeControls(props: {
+function VoiceWakeReady(props: {
   state: VoiceWakeEditorState;
   saving: boolean;
   readWriteResult: () => void;
@@ -124,33 +136,46 @@ function VoiceWakeControls(props: {
 }) {
   const ready = () => props.state.kind === "ready";
   const text = createMemo(() => (props.state.kind === "ready" ? props.state.text : ""));
-  // An empty draft still resets only the status boundary, preserving the editor.
+  // An empty draft still resets only the failure boundary, preserving the editor.
   const statusDraft = createMemo(() => ({ text: text() }));
+  const status = () => {
+    if (props.saving) {
+      return t("common.saving");
+    }
+    // A failed write stays pending; its notice replaces this label.
+    return props.state.kind === "ready" && props.state.phase === "saved"
+      ? t("configPage.deviceTalk.saved")
+      : null;
+  };
   return (
-    <>
-      {ready() && (
-        <textarea
-          class="settings-input"
-          aria-label={t("configPage.deviceTalk.triggerWords")}
-          rows={4}
-          value={text()}
-          onInput={(event) => props.onInput(event.currentTarget.value)}
-        />
-      )}
-      {props.state.kind === "unavailable" ? (
-        <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
-      ) : (
-        <Show when={statusDraft()} keyed>
-          {(_draft) => (
-            <VoiceWakeWriteStatus
-              saving={props.saving}
-              readWriteResult={props.readWriteResult}
-              onRetry={props.onRetry}
-            />
-          )}
-        </Show>
-      )}
-    </>
+    <VoiceWakeSection
+      status={ready() ? status() : null}
+      notice={
+        ready() && (
+          <Show when={statusDraft()} keyed>
+            {(_draft) => (
+              <VoiceWakeWriteFailure
+                readWriteResult={props.readWriteResult}
+                onRetry={props.onRetry}
+              />
+            )}
+          </Show>
+        )
+      }
+      control={
+        ready() ? (
+          <textarea
+            class="settings-input"
+            aria-label={t("configPage.deviceTalk.triggerWords")}
+            rows={4}
+            value={text()}
+            onInput={(event) => props.onInput(event.currentTarget.value)}
+          />
+        ) : (
+          <span class="muted">{t("configPage.deviceTalk.triggerWordsUnavailable")}</span>
+        )
+      }
+    />
   );
 }
 
@@ -164,34 +189,34 @@ export function VoiceWakeEditor(props: {
 }) {
   // Only an admitted read re-arms loading; reconnecting a retained draft keeps the editor.
   const scope = createMemo(() => props.scope);
+  const failure = voiceControlErrorFallback(() => props.onRetry());
   return (
-    <SettingsSection title={t("configPage.deviceTalk.triggerWords")}>
-      <SettingsRow
-        title={t("configPage.deviceTalk.triggerWords")}
-        description={t("configPage.deviceTalk.triggerWordsHint")}
-        stacked
-        control={
-          <Errored fallback={voiceControlErrorFallback(() => props.onRetry())}>
-            <Loading
-              on={scope()}
-              fallback={
-                <span class="muted" role="status">
-                  {t("common.loading")}
-                </span>
-              }
-            >
-              <VoiceWakeControls
-                state={props.readState()}
-                saving={props.saving}
-                readWriteResult={props.readWriteResult}
-                onInput={props.onInput}
-                onRetry={props.onRetry}
+    <Errored fallback={(error, reset) => <VoiceWakeSection notice={failure(error, reset)} />}>
+      <Loading
+        on={scope()}
+        fallback={
+          <VoiceWakeSection
+            control={
+              <textarea
+                class="settings-input"
+                aria-label={t("configPage.deviceTalk.triggerWords")}
+                aria-busy="true"
+                rows={4}
+                disabled
               />
-            </Loading>
-          </Errored>
+            }
+          />
         }
-      />
-    </SettingsSection>
+      >
+        <VoiceWakeReady
+          state={props.readState()}
+          saving={props.saving}
+          readWriteResult={props.readWriteResult}
+          onInput={props.onInput}
+          onRetry={props.onRetry}
+        />
+      </Loading>
+    </Errored>
   );
 }
 
@@ -314,7 +339,7 @@ function DeviceVoiceSettings(props: {
         />
       )}
       {locale()?.error && (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {locale()!.error}
           <button
             class="btn btn--sm"
@@ -333,7 +358,7 @@ function DeviceVoiceSettings(props: {
           >
             {t("common.retry")}
           </button>
-        </div>
+        </InlineAlert>
       )}
       {microphone() && (
         <SettingsRow

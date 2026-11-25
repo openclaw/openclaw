@@ -68,15 +68,16 @@
             "thinkingLevelMap": {
               "off": null,
               "minimal": null,
-              "low": "low",
+              "low": null,
               "medium": null,
-              "high": "high",
-              "xhigh": "max",
+              "high": null,
+              "xhigh": null,
               "max": "max"
             },
             "input": [
               "text",
-              "image"
+              "image",
+              "video"
             ],
             "contextWindow": 1048576,
             "maxTokens": 1048576,
@@ -87,19 +88,94 @@
               "cacheWrite": 3
             },
             "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": [
-                "low",
-                "high",
                 "max"
               ],
+              "defaultThinkingLevel": "max",
+              "thinkingRequired": true,
               "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "kimi-k3.1-pro",
+            "name": "Kimi K3.1 Pro",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": null,
+              "xhigh": null,
+              "max": "max"
+            },
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "max"
+              ],
+              "defaultThinkingLevel": "max",
+              "thinkingRequired": true
+            }
+          },
+          {
+            "id": "kimi-k3.1-pro-highspeed",
+            "name": "Kimi K3.1 Pro Highspeed",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": null,
+              "medium": null,
+              "high": null,
+              "xhigh": null,
+              "max": "max"
+            },
+            "input": [
+              "text",
+              "image",
+              "video"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "max"
+              ],
+              "defaultThinkingLevel": "max",
+              "thinkingRequired": true
             }
           },
           {
             "id": "kimi-k2.7-code",
             "name": "Kimi K2.7 Code",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "medium": null,
+              "high": null
+            },
+            "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
+              "defaultThinkingLevel": "low",
+              "thinkingRequired": true,
+              "thinkingLevelLabels": {
+                "low": "on"
+              }
+            },
             "input": [
               "text",
               "image"
@@ -117,6 +193,20 @@
             "id": "kimi-k2.7-code-highspeed",
             "name": "Kimi K2.7 Code HighSpeed",
             "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "medium": null,
+              "high": null
+            },
+            "compat": {
+              "requiresReasoningContentOnAssistantMessages": true,
+              "defaultThinkingLevel": "low",
+              "thinkingRequired": true,
+              "thinkingLevelLabels": {
+                "low": "on"
+              }
+            },
             "input": [
               "text",
               "image"

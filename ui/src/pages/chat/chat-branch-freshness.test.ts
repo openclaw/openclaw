@@ -98,14 +98,13 @@ describe("chat branch freshness", () => {
     });
     vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
     vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
-    const state = {
-      ...host,
+    const state = Object.assign(host, {
       chatBranches: branches ?? [],
       chatBranchesSessionKey: branches ? host.sessionKey : null,
       chatBranchesConnectionEpoch: branches ? host.connectionEpoch : null,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
-    } as unknown as ChatPageHost;
+    }) as unknown as ChatPageHost;
     return { request, state };
   }
 

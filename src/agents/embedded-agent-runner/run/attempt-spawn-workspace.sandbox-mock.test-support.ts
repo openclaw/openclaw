@@ -1,23 +1,13 @@
-type SandboxRuntime = typeof import("../../sandbox/runtime-status.js");
+import { vi } from "vitest";
 
-export const resolveSandboxRuntimeStatus: SandboxRuntime["resolveSandboxRuntimeStatus"] = () => ({
-  agentId: "main",
-  sessionKey: "agent:main:main",
-  classificationAgentId: "main",
-  classificationSessionKey: "agent:main:main",
-  mainSessionKey: "agent:main:main",
-  mode: "off",
-  sandboxed: false,
-  sandboxRequired: false,
-  toolPolicy: {
-    allow: [],
-    deny: [],
-    sources: {
-      allow: { source: "default", key: "" },
-      deny: { source: "default", key: "" },
-    },
-  },
-});
+type SandboxRuntime = typeof import("../../sandbox/runtime-status.js");
+const { resolvePreparedSandboxRuntimeStatus } = await vi.importActual<SandboxRuntime>(
+  "../../sandbox/runtime-status.js",
+);
+
+export const resolveSandboxRuntimeStatus: SandboxRuntime["resolveSandboxRuntimeStatus"] = (
+  params,
+) => resolvePreparedSandboxRuntimeStatus({ ...params, preparedSessionEntry: null });
 
 export const withSandboxRuntimeStatusInWorker: SandboxRuntime["withSandboxRuntimeStatusInWorker"] =
   async (params, _source, consume) => await consume(resolveSandboxRuntimeStatus(params));

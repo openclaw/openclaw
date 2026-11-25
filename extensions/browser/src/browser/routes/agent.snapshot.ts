@@ -23,7 +23,7 @@ import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
-  assertBrowserNavigationAllowed,
+  assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -36,6 +36,7 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
+import { resolveProfileHeadless } from "../server-context.availability.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   getPreviousSnapshotKeys,
@@ -145,7 +146,7 @@ export function registerBrowserAgentSnapshotRoutes(
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-          await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+          await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
@@ -346,12 +347,12 @@ export function registerBrowserAgentSnapshotRoutes(
             type,
             timeoutMs,
             signal,
+            headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
           };
           capture = labels
             ? await pw.screenshotWithLabelsViaPlaywright({ ...screenshotOptions, refs: snap?.refs })
             : await pw.takeScreenshotViaPlaywright(screenshotOptions);
         } else {
-          const profileRuntime = ctx.state().profiles.get(profileCtx.profile.name);
           capture = {
             buffer: await captureScreenshot({
               wsUrl: tab.wsUrl ?? "",
@@ -360,9 +361,7 @@ export function registerBrowserAgentSnapshotRoutes(
               format: type,
               quality: type === "jpeg" ? 85 : undefined,
               timeoutMs,
-              headless:
-                profileRuntime?.running?.headless ??
-                (await profileRuntime?.externalBrowserMode?.headless),
+              headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
             }),
           };
         }
@@ -663,6 +662,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 type: "png",
                 timeoutMs: plan.timeoutMs,
                 signal,
+                headless: await resolveProfileHeadless(ctx.state(), profileCtx.profile.name),
               });
               image = await saveBrowserScreenshot(labeled, "png");
             }

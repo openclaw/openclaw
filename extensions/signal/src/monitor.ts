@@ -10,6 +10,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -176,7 +177,9 @@ export async function deliverReplies(
         account,
         maxBytes,
         accountId,
-        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(mediaUrl
+          ? { mediaUrl, mediaAccess: resolveOutboundMediaAccessForConfig(params.cfg) }
+          : {}),
         ...(replyToId
           ? {
               replyToId,

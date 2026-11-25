@@ -1,18 +1,32 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { Errored, Loading, lazy, onSettled } from "solid-js";
 import { LazyViewError } from "../components/solid/lazy-view-error.tsx";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { yieldAfterLayout } from "../lib/layout-frame.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import type { OpenClawShellProps } from "./app-host.tsx";
+import { bootComposerElement, finishBootFrame } from "./boot-composer.ts";
 import {
+  cancelStaleChunkRecovery,
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
-
-const LazyShell = lazy(() => import("./app-host.tsx"), { export: "OpenClawShell" });
 
 type ShellLoaderProps = OpenClawShellProps & { fallback: SolidJSX.Element };
 
 /** Sign-in and standalone documents never acquire the workspace shell's graph. */
 export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
+  const LazyShell = lazy(
+    async () => {
+      const shell = await import("./app-host.tsx");
+      if (!props.runtime.warmBoot) {
+        await yieldAfterLayout();
+      }
+      return { OpenClawShell: shell.OpenClawShell };
+    },
+    { export: "OpenClawShell" },
+  );
   return (
     <Errored fallback={(error, reset) => <ShellLoadError error={error()} reset={reset} />}>
       <Loading fallback={props.fallback}>
@@ -29,8 +43,17 @@ export function ShellLoader(props: ShellLoaderProps): SolidJSX.Element {
 
 function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.Element {
   let active = true;
-  onSettled(() => () => {
-    active = false;
+  onSettled(() => {
+    finishBootFrame();
+    if (isStaleChunkImportError(props.error)) {
+      void scheduleStaleChunkReload({ canReload: () => active });
+    }
+    return () => {
+      active = false;
+      if (isStaleChunkImportError(props.error)) {
+        cancelStaleChunkRecovery();
+      }
+    };
   });
   const retry = async () => {
     const stale = isStaleChunkImportError(props.error);
@@ -40,15 +63,32 @@ function ShellLoadError(props: { error: unknown; reset: () => void }): SolidJSX.
       props.reset();
     }
   };
+  const failure = () => (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      subtitle={
+        bootComposerElement() && isStaleChunkImportError(props.error)
+          ? t("lazyView.bootDraftRecovery")
+          : undefined
+      }
+      onRetry={() => {
+        void retry();
+      }}
+    />
+  );
   return (
     <openclaw-route-fragment style={{ display: "contents" }}>
-      <LazyViewError
-        error={props.error}
-        stale={isStaleChunkImportError(props.error)}
-        onRetry={() => {
-          void retry();
-        }}
-      />
+      {bootComposerElement() ? (
+        <ConnectingSplash
+          status={t(
+            isStaleChunkImportError(props.error) ? "lazyView.staleTitle" : "lazyView.errorTitle",
+          )}
+          renderContent={failure}
+        />
+      ) : (
+        failure()
+      )}
     </openclaw-route-fragment>
   );
 }

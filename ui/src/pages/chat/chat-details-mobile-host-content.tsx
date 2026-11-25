@@ -1,5 +1,8 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
@@ -27,7 +30,11 @@ import {
   createProcessesPresentation,
   isProcessesPresentationReady,
 } from "./components/chat-processes-presentation.ts";
-import { chatPullRequestId, retainedPublication } from "./components/chat-pull-requests.ts";
+import {
+  chatPullRequestId,
+  publicationPullRequest,
+  retainedPublication,
+} from "./components/chat-pull-requests.ts";
 import { syncSessionPanelInputs, useSessionPanel } from "./components/chat-session-panel.tsx";
 import { createChatSessionSharingMobileAdapter } from "./components/chat-session-sharing-mobile-adapter.tsx";
 import type { PreparedChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
@@ -226,12 +233,12 @@ function MobileHostContent(
     const owner = capturePresentation();
     return {
       ...recovery(),
-      pullRequests: owner.details.pullRequests ?? [],
-      onOpen: (request: NonNullable<ChatDetailsProps["pullRequests"]>[number]) => {
+      pullRequests: owner.details.displayPullRequests ?? owner.details.pullRequests ?? [],
+      onOpen: (request: ControlUiSessionPullRequest) => {
         if (
           owner.current() &&
           (owner.destination.page?.details?.kind ?? "root") === origin &&
-          owner.details.pullRequests?.includes(request)
+          (owner.details.displayPullRequests ?? owner.details.pullRequests)?.includes(request)
         ) {
           open({ kind: "pull-request", id: chatPullRequestId(request) }, request.title);
         }
@@ -365,9 +372,12 @@ function MobileHostContent(
         },
         onOpenSubagents: () => props.details.onOpenSubagents?.(),
       },
-      publicationEntry: publicationVisible()
-        ? { label: t("chat.activityPills.publication.review") }
-        : undefined,
+      // A publication whose PR is listed continues as that PR's row.
+      publicationEntry:
+        publicationVisible() &&
+        !publicationPullRequest(props.details.githubPublication, props.details.pullRequests ?? [])
+          ? { label: t("chat.activityPills.publication.review") }
+          : undefined,
     },
   }));
   const pages = createMemo<ChatDetailsMobilePage[]>(() => {
@@ -467,15 +477,16 @@ function MobileHostContent(
         selected?.kind === "pull-request-checks" ||
         selected?.kind === "pull-request-monitoring"
       ) {
-        const pullRequest = details.pullRequests?.find(
-          (request) => chatPullRequestId(request) === selected.id,
+        const pullRequests = details.displayPullRequests ?? details.pullRequests;
+        const pullRequest = pullRequests?.find(
+          (request): request is ControlUiSessionPullRequest & { taskOnly?: true } =>
+            request.state !== undefined && chatPullRequestId(request) === selected.id,
         );
+        const checkoutRequest = pullRequest?.taskOnly ? undefined : pullRequest;
         const currentRequest = () =>
-          owner.current() &&
-          pullRequest !== undefined &&
-          details.pullRequests?.includes(pullRequest);
+          owner.current() && pullRequest !== undefined && pullRequests?.includes(pullRequest);
         const openCi = (kind: "pull-request-checks" | "pull-request-monitoring", title: string) => {
-          if (currentRequest() && selected.kind === "pull-request") {
+          if (checkoutRequest && currentRequest() && selected.kind === "pull-request") {
             open({ kind, id: selected.id }, title);
           }
         };
@@ -484,9 +495,12 @@ function MobileHostContent(
           content: {
             ...recovery(),
             pullRequest,
-            onOpenChecks: () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle")),
-            onOpenMonitoring: () =>
-              openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring")),
+            onOpenChecks: checkoutRequest
+              ? () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle"))
+              : undefined,
+            onOpenMonitoring: checkoutRequest
+              ? () => openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring"))
+              : undefined,
             onDismiss: (request) => {
               if (
                 !currentRequest() ||
@@ -495,6 +509,10 @@ function MobileHostContent(
                 !details.onDismissPullRequest
               ) {
                 return;
+              }
+              // The receipt would otherwise reappear as this PR's pill.
+              if (publicationPullRequest(details.githubPublication, [request])) {
+                void details.githubPublication?.onNewAction?.();
               }
               details.onDismissPullRequest(request);
               if (props.host === owner.host && owner.host.destination === owner.destination) {
@@ -506,7 +524,7 @@ function MobileHostContent(
         });
         const ci = {
           ...recovery(),
-          pullRequest,
+          pullRequest: checkoutRequest,
           gateway: details.pullRequestsGateway,
           sessionKey: scopedSessionArtifactKey(
             details.sessionKey,

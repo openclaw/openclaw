@@ -40,8 +40,37 @@ export const setupInferenceLog = createSubsystemLogger("system-agent/setup-infer
  * A failing candidate must never leave config pointing at a broken model.
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
+/**
+ * A remote API answering a one-word, tool-free prompt either replies well inside this
+ * or is not usable for chat; the setup dialog waits on it, so don't hold it for 90 s.
+ * Local servers, CLI runners and native harnesses keep the full budget for startup.
+ */
+export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
+/**
+ * The tool-free check fits small windows, but a first real turn also sends the system prompt
+ * and tool schemas (measured 11.8K to 18.5K tokens). Same floor guided Ollama and LM Studio
+ * discovery apply (#112028).
+ */
+const SETUP_INFERENCE_MIN_CONTEXT_TOKENS = 16_384;
 
-export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do not use tools.";
+/**
+ * Shortfall of a primary model chosen in setup. Automatic setup refuses it; a manual pick only
+ * warns, since #112028 keeps smaller models available through manual selection. Utility models
+ * run a reduced prompt and keep their own minimums.
+ */
+export function resolveSetupContextShortfall(
+  route: { modelLabel: string; modelTarget?: "utility" },
+  contextTokens: number | undefined,
+): string | undefined {
+  if (
+    route.modelTarget === "utility" ||
+    contextTokens === undefined ||
+    contextTokens >= SETUP_INFERENCE_MIN_CONTEXT_TOKENS
+  ) {
+    return undefined;
+  }
+  return `${route.modelLabel} has an effective context window of ${contextTokens} tokens. A first OpenClaw turn usually needs at least ${SETUP_INFERENCE_MIN_CONTEXT_TOKENS} for the system prompt and tool definitions, so messages may fail with a context overflow. Raise the model's context limit (the server's context size, and contextWindow or contextTokens in its model settings), or choose a larger model.`;
+}
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 const SAVED_AUTH_SETUP_KIND_PREFIX = "saved-auth:";
@@ -116,6 +145,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
+      /** The summary first; later lines are notices (audit or context-window warnings). */
       lines: string[];
       modelName?: string;
       gatewayRestartRequired?: true;
@@ -151,6 +181,8 @@ export type VerifySetupInferenceResult =
       modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
+      /** Verified, but the effective context window is likely too small for a first turn. */
+      warning?: string;
     }
   | {
       ok: false;
@@ -361,11 +393,30 @@ export function describeSetupInferenceError(
       };
 }
 
-export function validateSetupInferenceOwnerEvidence(params: {
-  runner: "cli" | "embedded";
-  configuredHarnessId?: string;
-  auth: AgentExecutionAuthBinding;
-}): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
+/**
+ * Activation evidence: the context shortfall (refused in automatic setup, a warning otherwise),
+ * then a runtime owner OpenClaw can reuse.
+ */
+export function validateSetupInferenceEvidence(
+  route: {
+    runner: "cli" | "embedded";
+    agentHarnessRuntimeOverride?: string;
+    modelLabel: string;
+    modelTarget?: "utility";
+  },
+  verification: { auth: AgentExecutionAuthBinding; contextTokens?: number },
+  options: { automaticSetup?: true } = {},
+): { failure?: Extract<ActivateSetupInferenceResult, { ok: false }>; warning?: string } {
+  const shortfall = resolveSetupContextShortfall(route, verification.contextTokens);
+  if (shortfall && options.automaticSetup) {
+    return { failure: { ok: false, status: "unavailable", error: shortfall } };
+  }
+  const params = {
+    runner: route.runner,
+    configuredHarnessId:
+      route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
+    auth: verification.auth,
+  };
   let reason: string | undefined;
   if (
     !params.auth.authFingerprint &&
@@ -399,13 +450,11 @@ export function validateSetupInferenceOwnerEvidence(params: {
       reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return reason
-    ? {
-        ok: false,
-        status: "unknown",
-        error: `Inference succeeded, but ${reason}. No default model was changed.`,
-      }
-    : undefined;
+  if (reason) {
+    const error = `Inference succeeded, but ${reason}. No default model was changed.`;
+    return { failure: { ok: false, status: "unknown", error } };
+  }
+  return shortfall ? { warning: shortfall } : {};
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */

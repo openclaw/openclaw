@@ -22,6 +22,7 @@ import {
   getModelCompletionTransport,
   getModelLlmRuntime,
 } from "../llm/model-runtime-binding.js";
+import { getModelTransportContext } from "../llm/model-transport-context.js";
 import { completeSimple } from "../llm/stream.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "../llm/types.js";
 import {
@@ -91,7 +92,8 @@ export async function completeWithPreparedSimpleCompletionModel(
 
 async function completePreparedModel(params: PreparedCompletionParams): Promise<AssistantMessage> {
   // Direct SDK calls prepare transport hooks before entering the stream facade.
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   params.assertCurrent?.();
   assertProviderAuthAuthority(params.auth);
   params.options?.signal?.throwIfAborted();
@@ -158,6 +160,8 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       trace: getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
       nextCallId: () => callId,
       suppressPluginHooks: true,
+      // Keep admission priority, not the caller's request or wait-status identity.
+      priority: getModelTransportContext()?.priority,
     },
     options: completionOptions,
     createObserver: (capturePromptStats, captureByteStats) =>
@@ -172,11 +176,13 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
     if (strictReasoningTags) {
       reasoningTagTextPolicy.markStrict(lifecycle.propagatedOptions);
     }
-    const result = await completeSimple(
-      completionModel,
-      params.context,
-      lifecycle.propagatedOptions,
-      params.assertCurrent,
+    const result = await lifecycle.runInTransportContext(() =>
+      completeSimple(
+        completionModel,
+        params.context,
+        lifecycle.propagatedOptions,
+        params.assertCurrent,
+      ),
     );
     lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, result);
     lifecycle.emitCompleted();

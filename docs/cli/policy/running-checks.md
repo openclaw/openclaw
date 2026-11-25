@@ -60,6 +60,9 @@ For routing checks, every baseline check id must remain with the same route
 and expected agent. A checked policy may add checks or narrow `matchedBy`, but
 removing a check, changing its route or agent, or widening its accepted match
 kinds is weaker.
+Explicit `--baseline` and `--policy` paths preserve filename whitespace. Quote
+paths containing spaces so the comparison reads the intended file.
+
 When the checked policy path comes from the plugin configuration and is
 relative, `--agent <id>` selects the workspace used to resolve it. Absolute
 policy paths do not depend on an agent workspace.

@@ -1,6 +1,9 @@
 import type { ChildProcess } from "node:child_process";
+import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireWorkspaceResultGit } from "../gateway/worker-environments/workspace-result-git.js";
@@ -12,10 +15,12 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { executeGitCommand, executeGitCommandBuffered } from "../infra/git-exec.js";
+import { createMainThreadStallMonitor } from "../infra/main-thread-stall.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
+import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
 import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import {
@@ -27,6 +32,40 @@ import {
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
 describe("spawnAndWait", () => {
+  it("attributes native launch stalls without profiling or counting child lifetime", async () => {
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    const nativeSpawn = childProcess.spawn;
+    const delayedSpawn = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
+      now += 1_500;
+      return nativeSpawn(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" }, (launch) => {
+        now += 5_000;
+        const result = launch();
+        now += 5_000;
+        return result;
+      });
+      now += 5_000;
+      expect((await once(child, "close"))[0]).toBe(0);
+      expect(monitor.drain().stalls).toEqual([
+        {
+          task: "process:spawn:native",
+          startedAt: 5_000,
+          endedAt: 6_500,
+          elapsedMs: 1_500,
+          taskMs: 1_500,
+        },
+      ]);
+    } finally {
+      delayedSpawn.mockRestore();
+      syncBuiltinESMExports();
+      monitor.stop();
+    }
+  });
+
   it("rejects ENOENT from a real missing executable", async () => {
     await withTempDir("openclaw-spawn-missing-", async (dir) => {
       await expect(
@@ -85,7 +124,10 @@ describe("child-process spawn diagnostics", () => {
     await Promise.all([
       executeGitCommand(process.cwd(), ["--version"], { operation: "project.clone" }),
       executeGitCommandBuffered(process.cwd(), ["--version"], { operation: "publication" }),
-      executeGitCommand(process.cwd(), ["--version"], { lowerPriority: true }),
+      executeGitCommand(process.cwd(), ["--version"], {
+        lowerPriority: true,
+        idleIoPriority: true,
+      }),
       once(spawnProcess("git", ["--version"], { stdio: "ignore" }), "close"),
       requireWorkspaceResultGit(process.cwd(), ["--version"]),
       withGitProcessOperation("workspace.result-cleanup", () =>
@@ -149,6 +191,60 @@ describe("child-process spawn diagnostics", () => {
       try {
         await host.ready();
         await runWithSpawnBroker(host, checkSuccessfulSpawns);
+      } finally {
+        await host.close();
+      }
+    },
+  );
+
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
+    "separates fallback classes for the same caller without recording command content",
+    async () => {
+      const host = createSpawnBrokerHost();
+      try {
+        await host.ready();
+        const options: CommandSpawnOptions[] = [
+          {},
+          { ipc: true },
+          { cleanup: false },
+          { stdin: 0 },
+          { stdio: ["ignore", 1, "ignore"] },
+          { stdio: "inherit" },
+        ];
+        await withChildProcessOperation("agent.exec", async () => {
+          for (const option of options) {
+            await runWithSpawnBroker(host, () =>
+              spawnCommand([process.execPath, "-e", "/* private argv */"], option),
+            );
+          }
+          await runWithSpawnBroker(undefined, () => spawnCommand([process.execPath, "-e", ""]));
+          const native = runWithSpawnBroker(host, () =>
+            spawnProcess(process.execPath, ["-e", ""], { stdio: ["ignore", "inherit", "ignore"] }),
+          );
+          expect((await once(native, "close"))[0]).toBe(0);
+        });
+        now = 60_000;
+        emitChildProcessSpawnSample();
+        expect(events).toEqual(
+          [
+            "broker",
+            "native.ipc",
+            "native.independent",
+            "native.descriptor",
+            "native.inherit",
+            "native.no-broker",
+            "native.stdio",
+          ].map((transport) =>
+            expect.objectContaining({
+              family: "node",
+              operation: "agent.exec",
+              transport,
+              thread: isMainThread ? "main" : "worker",
+              count: transport === "native.descriptor" ? 2 : 1,
+            }),
+          ),
+        );
+        expect(JSON.stringify(events)).not.toContain("private");
       } finally {
         await host.close();
       }
@@ -300,28 +396,35 @@ describe("child-process spawn diagnostics", () => {
     expect(JSON.stringify(events)).not.toContain("private");
   });
 
-  it("attributes owner-prepared OOM shims to their logical targets", () => {
-    for (const [command, args] of [
-      ["git", ["status"]],
-      ["node", ["-e", "private code"]],
-    ] as const) {
-      const prepared = prepareOomScoreAdjustedSpawn(command, args, {
-        platform: "linux",
-        env: {},
-        shellAvailable: () => true,
-      });
-      const child = new EventEmitter() as ChildProcess;
-      recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
-      child.emit("spawn");
-    }
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
-      expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private");
-  });
+  it.each([
+    ["git", ["status"]],
+    ["ionice", ["-c", "3", "nice", "-n", "10", "git", "status"]],
+    ["taskpolicy", ["-b", "nice", "-n", "10", "git", "status"]],
+  ] as const)(
+    "attributes owner-prepared OOM shims around %s to their logical targets",
+    (gitCommand, gitArgs) => {
+      for (const [command, args] of [
+        [gitCommand, gitArgs],
+        ["node", ["-e", "private code"]],
+      ] as const) {
+        const prepared = prepareOomScoreAdjustedSpawn(command, args, {
+          platform: "linux",
+          env: {},
+          shellAvailable: () => true,
+        });
+        const child = new EventEmitter() as ChildProcess;
+        recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
+        child.emit("spawn");
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "git", operation: "unscoped.status", count: 1 }),
+        expect.objectContaining({ family: "node", operation: "unscoped.runtime", count: 1 }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    },
+  );
 
   it.each([
     [

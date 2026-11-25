@@ -35,6 +35,7 @@ import {
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
 } from "./schtasks-runtime.js";
+import { recoverForegroundGatewayForService } from "./service-foreground-recovery.js";
 import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { captureGatewayServiceRebind } from "./service-rebind.js";
@@ -445,9 +446,9 @@ function withGatewayServiceMutationGuards(
         commitDaemonRuntimePin(scope, { expected }, null);
       },
     ),
-    start: guardGatewayServiceMutation(kind, `start the ${kind} service`, true, service.start),
+    start: guardGatewayServiceMutation(kind, `start the ${kind} service`, false, service.start),
     stop: guardGatewayServiceMutation(kind, `stop the ${kind} service`, false, async (args) => {
-      const stalled = kind === "gateway" ? captureStalledGatewayStartup(args.env) : undefined;
+      const stalled = kind === "gateway" ? await captureStalledGatewayStartup(args.env) : undefined;
       await service.stop(args);
       if (stalled) {
         await stopStalledGatewayStartup(stalled, args.assertCurrent);
@@ -456,8 +457,15 @@ function withGatewayServiceMutationGuards(
     restart: guardGatewayServiceMutation(
       kind,
       `restart the ${kind} service`,
-      true,
-      service.restart,
+      false,
+      async (args) => {
+        if (kind === "gateway" && args.preserveDefinition) {
+          await recoverForegroundGatewayForService(service, args);
+        }
+        await args.prepareRestart?.();
+        args.assertCurrent?.();
+        return await service.restart(args);
+      },
     ),
   };
 }

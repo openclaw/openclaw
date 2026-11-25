@@ -86,6 +86,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
   let terminalRecovery = false;
   let acceptedSteeredInboundAudio = false;
   let sourceReplyDelivered = false;
+  const sourceReplyListeners = new Set<() => void>();
   // A recorded yield ends the turn's work before settlement records it as the result.
   const ended = () => state.result !== null || state.phase === "yielded";
   const settledResult = (): ReplyOperationResult =>
@@ -295,9 +296,10 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     isCurrent: () => installed && !ownerSettled,
     readPhase: () =>
       ownerSettled ? "settled" : ended() ? "terminal" : state.abortFrozen ? "finishing" : "active",
+    readBackend: () => getAttachedBackend(operation),
     requestStop: (effect) => expireOwner(effect, false),
     expireCleanup: (effect) => expireOwner(effect, true),
-    onWarning: (decision) =>
+    onBlocked: (decision) =>
       diag.warn(
         `reply watchdog: sessionKey=${currentSessionKey} action=${decision.action} reason=${decision.reason}`,
       ),
@@ -467,7 +469,14 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       sourceReplyDelivered = false;
     },
     markSourceReplyDelivered() {
-      sourceReplyDelivered = true;
+      if (!sourceReplyDelivered) {
+        sourceReplyDelivered = true;
+        sourceReplyListeners.forEach((listener) => listener());
+      }
+    },
+    onSourceReplyDelivered(listener) {
+      sourceReplyListeners.add(listener);
+      return () => sourceReplyListeners.delete(listener);
     },
     bindToolAuthoritySnapshot: toolAuthority.bindToolAuthoritySnapshot,
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
@@ -540,7 +549,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         mailboxClaim?.mailbox.owner ?? getSessionControllerEntry(update.sessionKey, target);
       backendReady.resolve();
       backendReady = createDeferredCore();
-      backendReadyByOperation.set(operation, backendReady.promise);
+      backendReadyByOperation.set(operation, backendReady);
       currentSessionKey = update.sessionKey;
       owner = nextOwner;
       adoptReplyOperationController(operation, previousOwner, owner, target, mailboxClaim);
@@ -581,7 +590,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         backendReady.resolve();
         if (!ended() && !state.abortFrozen && !state.cleared) {
           backendReady = createDeferredCore();
-          backendReadyByOperation.set(operation, backendReady.promise);
+          backendReadyByOperation.set(operation, backendReady);
         }
         attachment.backend = undefined;
         if (!("handle" in attachment) && attachment.projectSessionActive === undefined) {
@@ -630,7 +639,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       }
     },
     abort: (reason) => abortIfAbortable(() => reason ?? createAgentRunDirectAbortError()),
-    abortByUser: () => abortIfAbortable(createAgentRunDirectAbortError),
+    abortByUser: () => abortIfAbortable(() => createAgentRunDirectAbortError(true)),
     abortForRestart: () => abortIfAbortable(createAgentRunRestartAbortError),
     abortForStall() {
       if (!isReplyOperationAbortable(operation)) {
@@ -694,7 +703,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     }
   });
 
-  backendReadyByOperation.set(operation, backendReady.promise);
+  backendReadyByOperation.set(operation, backendReady);
   installReplyOperationAdmission(operation, admitted, params.mailboxClaim);
   installed = true;
   watchdog.start();

@@ -2,11 +2,6 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -25,7 +20,6 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
   captureSessionQueuedInputsForRestart,
-  readSessionPendingInputContext,
   readSessionQueuedInputPage,
 } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
@@ -34,40 +28,6 @@ import {
   createPendingHistoryFixture,
 } from "./session-pending-input.test-support.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
-
-function pauseFirstPendingHistorySnapshot() {
-  const ready = createDeferred();
-  const release = createDeferred();
-  const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
-  let paused = false;
-  const spy = vi
-    .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
-    .mockImplementation(
-      <T>(
-        options: Parameters<typeof readHistory>[0],
-        operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
-        lane?: Parameters<typeof readHistory>[2],
-      ) =>
-        readHistory(
-          options,
-          (owner) =>
-            operation({
-              ...owner,
-              readPendingInputHistory: async (...args) => {
-                const snapshot = await owner.readPendingInputHistory(...args);
-                if (!paused) {
-                  paused = true;
-                  ready.resolve();
-                  await release.promise;
-                }
-                return snapshot;
-              },
-            }),
-          lane,
-        ),
-    );
-  return { ready, release, spy };
-}
 
 it("skips covered empty history and reads a newly staged input after its owner commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -131,7 +91,7 @@ it("skips covered empty history and reads a newly staged input after its owner c
       });
     } finally {
       history.mockRestore();
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
       await actor.release();
     }
@@ -197,17 +157,13 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
       expect(page.items[0]?.message.content === content).toBe(true);
       expect(page.total).toBe(2);
       expect(page.nextBefore).toBeDefined();
-      expect(await readSessionPendingInputContext(scope)).toEqual({
-        items: page.items,
-        nextBefore: page.nextBefore,
-      });
       const older = await listSessionPendingInputs(scope, { before: page.nextBefore });
       expect(older.items.map((input) => input.id)).toEqual([receipts[0]?.inputId]);
       expect(older.items[0]?.message.content === content).toBe(true);
       expect(older.nextBefore).toBeUndefined();
     } finally {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
       await Promise.all(receipts.map(async (receipt) => receipt.settled?.()));
     }
@@ -251,12 +207,13 @@ it.each(["context", "id"] as const)(
       );
       try {
         inputId = receipt.inputId;
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
         expect(read().rows).toEqual([]);
-        expect(await readSessionPendingInputContext(scope)).toEqual({ items: [] });
+        expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+        expect(await readSessionPendingInput(scope, inputId)).toBeUndefined();
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         await receipt.settled?.();
       }
     });
@@ -296,20 +253,27 @@ it("reads pending history and exact messages without caller-thread data SQL", as
     if (!stale) {
       throw new Error("Expected stale fixture");
     }
-    stale.finish("interrupted");
+    stale.finish("interrupted", "failed");
     await stale.settled?.();
     // A persisted pre-restart row has no process-local custody.
     database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+      .prepare(
+        "UPDATE session_pending_inputs SET state = 'queued', end_cause = NULL WHERE input_id = ?",
+      )
       .run(stale.inputId);
     aborted = true;
     const hostSql = observeHostDataSql();
     try {
       expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ id: receipt.inputId, state: "queued" }],
+        total: 2,
+        items: [
+          { id: receipt.inputId, state: "queued" },
+          { id: stale.inputId, state: "queued" },
+        ],
       });
-      expect(await readSessionPendingInput(scope, stale.inputId)).toBeUndefined();
+      expect(await readSessionPendingInput(scope, stale.inputId)).toMatchObject({
+        state: "queued",
+      });
       expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
         id: receipt.inputId,
         state: "queued",
@@ -317,7 +281,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
     expect(await readSessionPendingInput(scope, receipt.inputId)).toMatchObject({
@@ -326,7 +290,7 @@ it("reads pending history and exact messages without caller-thread data SQL", as
   });
 });
 
-it("resumes only the live FIFO inputs captured at graceful shutdown, leaving crash rows inert", async () => {
+it("reads all unowned durable FIFO inputs after a crash or graceful shutdown", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { scope, database } = createPendingHistoryFixture("graceful-input-queue");
     const crashed = expectDefined(
@@ -336,81 +300,43 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
       ),
       "Expected accepted input",
     );
-    crashed.finish("interrupted");
+    crashed.finish("interrupted", "failed");
     await crashed.settled?.();
-    // A crash leaves durable text without process-local custody.
+    // A crash retains the accepted row; unavailable source capture leaves no origin.
     database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
+      .prepare(
+        "UPDATE session_pending_inputs SET state = 'queued', end_cause = NULL, lifecycle_generation = 'previous-process', origin_source_json = NULL WHERE input_id = ?",
+      )
       .run(crashed.inputId);
     const receipts = [];
     for (const runId of ["first", "second"]) {
       receipts.push(
         expectDefined(
-          await stageSessionPendingInput(
-            scope,
-            createUserPendingInput(runId, runId, `${runId}:user`),
-          ),
+          await stageSessionPendingInput(scope, {
+            ...createUserPendingInput(runId, runId, `${runId}:user`),
+            recoverySource: { kind: "unavailable" },
+          }),
           "Expected accepted input",
         ),
       );
     }
     const captured = await captureSessionQueuedInputsForRestart(scope);
     expect(captured.queuedInputIds).toEqual(receipts.map((receipt) => receipt.inputId));
+    expect((await readSessionQueuedInputPage(scope)).rows.map((row) => row.input_id)).toEqual([
+      crashed.inputId,
+    ]);
     captured.preserve();
     for (const receipt of receipts) {
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
-    expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-    const page = await readSessionQueuedInputPage(scope, {
-      queuedInputIds: captured.queuedInputIds,
-    });
+    expect(await listSessionPendingInputs(scope)).toMatchObject({ total: 3 });
+    const page = await readSessionQueuedInputPage(scope);
     expect(page.rows.toReversed().map((row) => ({ runId: row.run_id, state: row.state }))).toEqual([
+      { runId: "old-crash", state: "queued" },
       { runId: "first", state: "queued" },
       { runId: "second", state: "queued" },
     ]);
-    expect(await readSessionQueuedInputPage(scope, { queuedInputIds: [] })).toEqual({
-      rows: [],
-      total: 0,
-    });
-  });
-});
-
-it("keeps concurrent history readers free of orphaned input without mutating it", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { scope, database } = createPendingHistoryFixture("concurrent-pending-history");
-    const receipt = expectDefined(
-      await stageSessionPendingInput(
-        scope,
-        createUserPendingInput("orphaned", "Saved update", "orphaned:user"),
-      ),
-      "Expected accepted input",
-    );
-    receipt.finish("interrupted");
-    await receipt.settled?.();
-    database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
-      .run(receipt.inputId);
-    const { ready: snapshotReady, release, spy } = pauseFirstPendingHistorySnapshot();
-    const first = listSessionPendingInputs(scope);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(snapshotReady.promise, first, "History skipped its reader"),
-        signal,
-      );
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        items: [],
-      });
-      release.resolve();
-      await expect(first).resolves.toMatchObject({
-        items: [],
-      });
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first]);
-      spy.mockRestore();
-    }
+    expect(page.rows.every((row) => row.origin_source_json == null)).toBe(true);
   });
 });

@@ -40,8 +40,7 @@ vi.mock("./doctor-heartbeat-outcome-migration.js", async (importOriginal) => ({
   hasPendingHeartbeatOutcomes: mocks.hasPendingHeartbeatOutcomes,
 }));
 
-const { hasUnpreparedSchemas, prepareDoctorMigrationBackups } =
-  await import("./doctor-heartbeat-migration-backup.js");
+const { prepareDoctorMigrationBackups } = await import("./doctor-heartbeat-migration-backup.js");
 
 const agentPath = "/state/agents/main/agent/openclaw-agent.sqlite";
 const otherAgentPath = "/state/agents/ops/agent/openclaw-agent.sqlite";
@@ -58,27 +57,6 @@ function schemasWith(
 ): DoctorDatabasePreflight {
   return { incompatible: [], indeterminate: [], pendingMigrations, ...extra };
 }
-
-describe("hasUnpreparedSchemas", () => {
-  it("keeps stores the version phase did not migrate pending", () => {
-    expect(
-      hasUnpreparedSchemas(schemasWith([pending(agentPath), pending(otherAgentPath)]), [
-        { path: agentPath },
-      ]),
-    ).toBe(true);
-  });
-
-  it("keeps refused and unreadable stores pending", () => {
-    expect(
-      hasUnpreparedSchemas(
-        schemasWith([], {
-          indeterminate: [{ kind: "agent", path: otherAgentPath, reason: "unreadable" }],
-        }),
-        [],
-      ),
-    ).toBe(true);
-  });
-});
 
 describe("prepareDoctorMigrationBackups", () => {
   const runtime = { log: vi.fn() };
@@ -101,6 +79,36 @@ describe("prepareDoctorMigrationBackups", () => {
       runtime,
       measure,
     });
+
+  it("keeps stores the version phase did not migrate pending", async () => {
+    mocks.prepareDoctorDatabaseMigrations.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      versionMigrations: [pending(agentPath)],
+    });
+
+    await run(schemasWith([pending(agentPath), pending(otherAgentPath)]));
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.backupDoctorMigrationDatabases).toHaveBeenCalledOnce();
+  });
+
+  it("keeps unreadable stores pending", async () => {
+    mocks.prepareDoctorDatabaseMigrations.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      versionMigrations: [],
+    });
+
+    await run(
+      schemasWith([], {
+        indeterminate: [{ kind: "agent", path: otherAgentPath, reason: "unreadable" }],
+      }),
+    );
+
+    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+    expect(mocks.backupDoctorMigrationDatabases).toHaveBeenCalledOnce();
+  });
 
   it("keeps the full rollback group when the version phase did not run", async () => {
     mocks.prepareDoctorDatabaseMigrations.mockResolvedValue({ changes: [], warnings: [] });

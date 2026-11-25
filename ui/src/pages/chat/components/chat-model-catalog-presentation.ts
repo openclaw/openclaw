@@ -1,5 +1,7 @@
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import type { ChatModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import type { ChatComposerSnapshot } from "../session-message-cache.ts";
 
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
   "google-gemini-cli": "google",
@@ -96,4 +98,28 @@ export function resolveChatModelPickerLabel(
     ...(entry.runtimeChoices ?? []).map((choice) => choice.agentRuntime.id),
   ]);
   return runtimeIds.has("openclaw") && runtimeIds.has("codex") ? `${label} codex` : label;
+}
+
+/** The saved composer remains readable while the live catalog is being admitted. */
+export function resolveChatModelSnapshot(
+  saved: ChatComposerSnapshot | undefined,
+  sessionKey: string,
+) {
+  const catalogState: ChatModelCatalogState = { hasSnapshot: true, status: "offline" };
+  return saved
+    ? {
+        catalog: [saved],
+        catalogState,
+        thinkingSession: { ...saved, model: saved.id, modelProvider: saved.provider },
+        session: {
+          key: sessionKey,
+          kind: "direct" as const,
+          updatedAt: 0,
+          model: saved.id,
+          modelProvider: saved.provider,
+          modelOverrideSource: "user" as const,
+          ...saved.contextWindowDisplay,
+        },
+      }
+    : undefined;
 }

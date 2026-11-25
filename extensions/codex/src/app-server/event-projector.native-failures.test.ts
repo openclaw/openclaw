@@ -59,7 +59,7 @@ it("records patch results without rebuilding their input diffs", async () => {
     params,
     "thread-1",
     "turn-1",
-    new CodexToolProgressProjection(params),
+    new CodexToolProgressProjection(params, vi.fn()),
     () => 1,
   );
   let diffReads = 0;
@@ -108,7 +108,7 @@ it("settles native trajectory bookkeeping without serializing unused output", as
     params,
     "thread-1",
     "turn-1",
-    new CodexToolProgressProjection(params),
+    new CodexToolProgressProjection(params, vi.fn()),
     () => 1,
   );
   let outputReads = 0;

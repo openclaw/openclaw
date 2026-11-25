@@ -194,7 +194,7 @@ struct TailscaleIntegrationSection: View {
     @ViewBuilder
     private var accessURLRow: some View {
         if let host = self.tailscaleService.tailscaleHostname {
-            LabeledContent("Dashboard URL") {
+            LabeledContent("Web app URL") {
                 if let url = Self.dashboardURL(host: host) {
                     Link(url.absoluteString, destination: url)
                         .font(.callout.monospaced())
@@ -205,7 +205,7 @@ struct TailscaleIntegrationSection: View {
                 }
             }
         } else if !self.tailscaleService.isRunning {
-            LabeledContent("Dashboard URL") {
+            LabeledContent("Web app URL") {
                 Text("Start Tailscale to get your tailnet hostname.")
                     .foregroundStyle(.secondary)
             }
@@ -291,7 +291,11 @@ struct TailscaleIntegrationSection: View {
         }
 
         if settings.mode == .off {
-            gateway.removeValue(forKey: "auth")
+            // Only the Tailscale identity allowance belongs to this control; the shared token,
+            // password, and trusted-proxy settings keep authenticating every other client.
+            var auth = gateway["auth"] as? [String: Any] ?? [:]
+            auth.removeValue(forKey: "allowTailscale")
+            gateway["auth"] = auth.isEmpty ? nil : auth
         } else {
             var auth = gateway["auth"] as? [String: Any] ?? [:]
             if settings.mode == .serve, !settings.requireCredentialsForServe {
@@ -353,7 +357,7 @@ struct TailscaleIntegrationSection: View {
     }
 
     @MainActor
-    private static func saveTailscaleSettings(
+    static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
         connectionMode: AppState.ConnectionMode) async -> GatewayTailscaleApplyResult
     {

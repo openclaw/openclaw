@@ -82,22 +82,33 @@ it("serves authorized incognito descriptions, events, and active-branch history"
           { agentId: "main", sessionKey: key, sessionId },
           { expectedSessionId: sessionId, messages },
         );
+      const payload = {
+        sessionKey: key,
+        session: expect.objectContaining({ sessionId, incognito: true }),
+      };
       await append([
         transcriptMessage("root", null, "user"),
         transcriptMessage("abandoned", "root"),
         transcriptMessage("active", "root"),
       ]);
+      // Seed writes may coalesce into a reset; observe it before publishing one message.
+      await expect
+        .poll(() => events)
+        .toContainEqual(
+          expect.objectContaining({
+            event: "sessions.changed",
+            payload: expect.objectContaining({ ...payload, phase: "message" }),
+          }),
+        );
       const history = await client.request<{
         sessionId: string;
         sessionInfo?: SessionIdentity & { modelProvider: string; model: string };
         messages: Array<{ role: string; content: unknown }>;
       }>("chat.history", { agentId: "main", sessionKey: key, limit: 10 });
       await append([transcriptMessage("published", "active")]);
-      const payload = expect.objectContaining({
-        sessionKey: key,
-        session: expect.objectContaining({ sessionId, incognito: true }),
-      });
-      const expectedEvents = eventNames.map((event) => expect.objectContaining({ event, payload }));
+      const expectedEvents = eventNames.map((event) =>
+        expect.objectContaining({ event, payload: expect.objectContaining(payload) }),
+      );
       await expect.poll(() => events).toEqual(expect.arrayContaining(expectedEvents));
       const roster = await client.request<{ sessions: Array<{ key: string }> }>(
         "sessions.list",

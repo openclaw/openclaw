@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { GATEWAY_RESTART_RESUME_TEXT } from "openclaw/plugin-sdk/qa-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import type { Page } from "playwright";
@@ -11,10 +12,12 @@ import {
   authenticateControlUi,
   captureControlUi,
   controlUiPageOptions,
+  historyMessages,
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
 import {
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
 } from "./suite-runtime-agent-session.ts";
@@ -44,6 +47,18 @@ function readResult(text: string): Record<string, unknown> {
     throw new Error("Automation tool returned no object result");
   }
   return value;
+}
+
+function userMessageText({ content }: Record<string, unknown>): string {
+  return typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+          .filter(isRecord)
+          .filter((block) => block.type === "text" && typeof block.text === "string")
+          .map((block) => block.text)
+          .join("\n")
+      : "";
 }
 
 function managementArgs(action: AutomationAction, jobId: string) {
@@ -123,11 +138,21 @@ function startGateway(
 }
 
 function withChat(gateway: QaGatewayChild, sessionKey: string, run: (page: Page) => Promise<void>) {
-  return suite.withPage(controlUiPageOptions(suite.artifactDir), async ({ page }) => {
-    await authenticateControlUi(page, gateway);
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await run(page);
-  });
+  return suite.withPage(
+    controlUiPageOptions(suite.artifactDir),
+    async ({ page }) => {
+      await authenticateControlUi(page, gateway);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await run(page);
+    },
+    async ({ page }) => {
+      const video = page.video();
+      if (video) {
+        await page.close();
+        await video.saveAs(path.join(suite.artifactDir, `${randomUUID()}.webm`));
+      }
+    },
+  );
 }
 
 const withAutomationGateway =
@@ -204,6 +229,17 @@ suite.define(() => {
           return transcript.userMessageCount === 1;
         }, 30_000).toBe(true);
         expect(provider.results.has(marker)).toBe(false);
+        const beforeHistory = historyMessages(
+          await gateway.call("chat.history", { sessionKey, limit: 30 }),
+        ).filter(isRecord);
+        const originalMessage = beforeHistory.find(
+          (message) => message.role === "user" && userMessageText(message) === prompt,
+        );
+        expect(originalMessage).toBeDefined();
+        const originalMetadata = isRecord(originalMessage?.["__openclaw"])
+          ? originalMessage["__openclaw"]
+          : undefined;
+        expect(originalMetadata?.id).toEqual(expect.any(String));
         const before = (await readRawQaSessionStore({ gateway }))[sessionKey];
         if (!before?.sessionId) {
           throw new Error("Original Control UI admission has no persisted session");
@@ -236,34 +272,54 @@ suite.define(() => {
           return {
             sessionId: after?.sessionId,
             status: after?.status,
+            createdActor: after?.createdActor,
           };
         }, 30_000).toEqual({
           sessionId: before.sessionId,
           status: "done",
+          createdActor: before.createdActor,
         });
         const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
         if (!isRecord(history) || !Array.isArray(history.messages)) {
           throw new Error("Resumed session returned no history");
         }
-        const userInputs = history.messages
+        const userMessages = history.messages
           .filter(isRecord)
-          .filter(({ role }) => role === "user")
-          .map(({ content }) =>
-            typeof content === "string"
-              ? content
-              : Array.isArray(content)
-                ? content
-                    .filter(isRecord)
-                    .filter((block) => block.type === "text" && typeof block.text === "string")
-                    .map((block) => block.text)
-                    .join("\n")
-                : "",
+          .filter(({ role }) => role === "user");
+        const originalMessages = userMessages.filter(
+          (message) => userMessageText(message) === prompt,
+        );
+        expect(originalMessages).toHaveLength(1);
+        expect(originalMessages[0]?.["__openclaw"]).toMatchObject({
+          id: originalMetadata?.id,
+        });
+        expect(originalMessages[0]?.provenance).toMatchObject({ kind: "external_user" });
+        const userInputs = userMessages.map(userMessageText);
+        const resumeText = GATEWAY_RESTART_RESUME_TEXT;
+        expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(0);
+        const { events } = await readQaSessionTranscriptEvents({ gateway }, sessionKey);
+        const restartInputs = events
+          .flatMap((event) => (isRecord(event) && isRecord(event.message) ? [event.message] : []))
+          .filter(
+            (message) => message.role === "user" && userMessageText(message).includes(resumeText),
           );
-        expect(userInputs.filter((text) => text === prompt)).toHaveLength(1);
-        const resumeText =
-          "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
-        expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(1);
+        expect(restartInputs).toHaveLength(1);
+        expect(restartInputs[0]?.provenance).toMatchObject({
+          kind: "internal_system",
+          sourceTool: "restart",
+        });
+        expect(
+          await gateway.call("cron.list", { sessionKey, includeDisabled: true }),
+        ).toMatchObject({
+          jobs: [expect.objectContaining({ id: created.id, enabled: false })],
+        });
+        await page.reload();
+        await page.getByText(prompt, { exact: true }).waitFor();
         await waitForReply(page, marker);
+        await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
+          state: "hidden",
+        });
+        await page.getByText(prompt, { exact: true }).scrollIntoViewIfNeeded();
         await screenshot(page, "resume-created-disabled-automation");
       });
     }),
@@ -282,25 +338,36 @@ suite.define(() => {
           senderId,
           text: `${text} [automation-proof:${marker}]`,
         });
-      provider.requests.set(
-        "create",
+      provider.requests.set("create", [
+        { action: "plan", names: [automationName] },
         disabledJob(automationName, "Complete this synthetic reminder."),
-      );
+      ]);
       await send("100001", "create", "Create a disabled hourly reminder.");
       await transport.waitForOutbound({ textIncludes: "create:", timeoutMs: 60_000 });
       const created = readResult(provider.results.get("create") ?? "null");
       expect(created).toMatchObject({
         id: expect.any(String),
         name: automationName,
+        enabled: false,
         owner: { sessionKey: expect.stringContaining(":telegram:") },
         scheduledToolPolicy: { mode: "account" },
         payload: { kind: "agentTurn", toolsAllow: ["*"] },
       });
-      if (!isRecord(created.payload)) {
-        throw new Error("Created automation has no payload");
+      if (
+        !isRecord(created.payload) ||
+        !isRecord(created.owner) ||
+        typeof created.owner.sessionKey !== "string"
+      ) {
+        throw new Error("Created automation has no payload or owner session");
       }
       const creatorPayload = created.payload;
       const jobId = String(created.id);
+      expect(
+        await gateway.call("cron.list", {
+          sessionKey: created.owner.sessionKey,
+          includeDisabled: true,
+        }),
+      ).toMatchObject({ jobs: [expect.objectContaining({ id: jobId, enabled: false })] });
       const updatedJob = {
         id: jobId,
         name: "Reminder updated from Control UI",
@@ -389,7 +456,7 @@ suite.define(() => {
           }
           await waitForReply(page, marker);
           // Persisted replies can precede the browser's terminal event.
-          await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor({
             state: "hidden",
           });
           await screenshot(page, `${marker}-result`);

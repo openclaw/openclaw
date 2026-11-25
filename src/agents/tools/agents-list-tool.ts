@@ -97,20 +97,22 @@ export function createAgentsListTool(opts?: {
         const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
         // Publish the resolved identity (aliases are routing-only) so the model
         // field matches the agentRuntime derived from the same resolvedModel.
-        const model = `${resolvedModel.provider}/${resolvedModel.model}`;
-        const agentRuntime = resolveModelAgentRuntimeMetadata({
-          cfg,
-          agentId: id,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-        });
-        return {
+        const entry: AgentListEntry = {
           id,
           name: configuredNameMap.get(id),
           configured: configuredIds.includes(id),
-          model,
-          agentRuntime,
         };
+        // An agent without a configured model lists no model or runtime.
+        if (resolvedModel) {
+          entry.model = `${resolvedModel.provider}/${resolvedModel.model}`;
+          entry.agentRuntime = resolveModelAgentRuntimeMetadata({
+            cfg,
+            agentId: id,
+            provider: resolvedModel.provider,
+            model: resolvedModel.model,
+          });
+        }
+        return entry;
       });
 
       return jsonResult({

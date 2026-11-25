@@ -1,5 +1,7 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
-import type { ProcessExtinctionResult } from "../process/supervisor/types.js";
+import type { ProcessExtinctionResult, RunExit } from "../process/supervisor/types.js";
+import type { CronStreamOwnerParams } from "./cron-stream-owner-types.js";
 
 export function assertCronStreamExtinction(outcome: ProcessExtinctionResult): void {
   if (outcome?.status === "uncertain") {
@@ -35,4 +37,43 @@ export async function stopCronStreamRun(run: ManagedRun, timeoutMs: number): Pro
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** Join supervised completion without letting an observer failure escape its owner. */
+export async function observeCronStreamRun(params: {
+  run: ManagedRun;
+  now: () => number;
+  logger: Pick<CronStreamOwnerParams["logger"], "warn">;
+  jobId: string;
+  endOutput: () => void;
+  onExit: (exit: RunExit) => Promise<void>;
+}): Promise<void> {
+  const { run } = params;
+  await run
+    .wait()
+    .then(
+      (exit) => {
+        params.endOutput();
+        return params.onExit(exit);
+      },
+      (error: unknown) => {
+        params.logger.warn(
+          { jobId: params.jobId, err: formatErrorMessage(error) },
+          "cron-stream: supervised wait failed",
+        );
+        return params.onExit({
+          reason: "spawn-error",
+          exitCode: null,
+          exitSignal: null,
+          durationMs: Math.max(0, params.now() - run.startedAtMs),
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      },
+    )
+    .catch(() => {
+      // The serialized owner already records exit handling failures.
+    });
 }

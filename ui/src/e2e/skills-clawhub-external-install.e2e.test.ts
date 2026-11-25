@@ -71,7 +71,7 @@ suite.define(() => {
       await gateway.waitForRequest("skills.search", { match: { query: "pdf" } });
       const row = page.locator(".plugin-catalog-card", { hasText: installRef });
       await row.getByText("Not scanned by ClawHub", { exact: true }).waitFor();
-      const install = row.getByRole("button", { name: "Install Pdf", exact: true });
+      const install = row.getByRole("button", { name: "Add Pdf", exact: true });
 
       await gateway.deferNext("skills.install");
       await install.click();
@@ -88,6 +88,6 @@ suite.define(() => {
 
       await row.getByRole("img", { name: "Ready", exact: true }).waitFor();
       expect(await row.count()).toBe(1);
-      expect(await row.getByRole("button", { name: /^Install / }).count()).toBe(0);
+      expect(await row.getByRole("button", { name: /^Add / }).count()).toBe(0);
     }));
 });

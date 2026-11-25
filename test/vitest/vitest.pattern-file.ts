@@ -4,7 +4,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns, resolveNonBrowserTestPattern } from "./vitest.include-patterns.ts";
+import {
+  isPlainRepoRelativePath,
+  narrowIncludePatterns,
+  resolveNonBrowserTestPattern,
+} from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
@@ -235,10 +239,14 @@ export function matchesVitestCliSelection(
     include;
   const relativeFile = path.posix.relative(scopedDir, file);
   const absoluteFile = normalizeVitestPath(path.resolve(repoRoot, file));
+  // Unscoped exact inventory membership needs no glob compilation. Keep wildcard paths
+  // on the matcher and still apply exclusions and CLI filters below.
+  const includedLiteral = !scopedDir && isPlainRepoRelativePath(file) && patterns.includes(file);
   if (
-    !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
-      matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
-    ) ||
+    (!includedLiteral &&
+      !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
+        matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+      )) ||
     collectVitestExcludePatterns(args).some((pattern) =>
       matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     )

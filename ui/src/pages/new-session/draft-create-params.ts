@@ -5,6 +5,15 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { DraftSessionCreateSelection } from "./create-params.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 
+/** The registered project this draft would create its session in, if any. */
+export function selectedDraftProjectId(
+  place: Pick<DraftPlaceState, "hostedEnvironment" | "browser">,
+): string | undefined {
+  return place.hostedEnvironment
+    ? undefined
+    : (place.browser.remoteProject?.projectId ?? place.browser.projectId) || undefined;
+}
+
 export function buildSelectedSessionCreateParams(
   place: DraftPlaceState,
   params: DraftSessionCreateSelection,
@@ -19,9 +28,7 @@ export function buildSelectedSessionCreateParams(
     thinkingLevel: place.modelControl.thinkingLevel,
     fastMode: place.modelControl.fastMode,
     cyberAccessProgram: place.modelControl.accessProgramForSubmission(),
-    projectId: place.hostedEnvironment
-      ? undefined
-      : (place.browser.remoteProject?.projectId ?? place.browser.projectId),
+    projectId: selectedDraftProjectId(place),
     projectGitUrl: place.hostedEnvironment ? undefined : place.browser.remoteProject?.cloneUrl,
     repository: place.remoteRepository,
     deviceFolder: place.deviceFolder,

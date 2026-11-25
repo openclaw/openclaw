@@ -8,7 +8,7 @@ import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
-import { assertSafeSqliteRuntime, requireNodeSqlite } from "./sqlite-native-runtime.js";
+import { requireNodeSqlite } from "./sqlite-native-runtime.js";
 import { registerSqliteReaderConnection } from "./sqlite-reader-lifecycle.js";
 import { trackSqliteSchema } from "./sqlite-schema-facts.js";
 
@@ -53,6 +53,17 @@ function resolveSqliteFileUriPath(pathname: string, platform: NodeJS.Platform): 
   return pathToFileURL(path.resolve(pathname)).href;
 }
 
+/**
+ * Read a WAL database without writing its shared-memory index: no reader mark, no
+ * index rebuild. SQLite reads the WAL itself when no live writer keeps the index valid.
+ */
+export function resolveReadOnlyShmSqliteFileUri(
+  pathname: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return `${resolveSqliteFileUriPath(pathname, platform)}?mode=ro&readonly_shm=1`;
+}
+
 /** Open an existing writable database without SQLite's create-if-missing flag. */
 export function resolveExistingSqliteFileUri(
   pathname: string,
@@ -73,6 +84,7 @@ export function resolveImmutableSqliteFileUri(
 export function openNodeSqliteDatabase(
   location: string,
   options?: NodeSqliteDatabaseOptions,
+  expectedAdmissionIdentity?: string,
 ): import("node:sqlite").DatabaseSync {
   const sqlite = requireNodeSqlite();
   // Callers may pass file: URIs or already-namespaced paths from specialized
@@ -82,6 +94,13 @@ export function openNodeSqliteDatabase(
     options?.open === false
       ? undefined
       : prepareSqliteDatabaseAdmission(resolvedLocation, { create: options?.readOnly !== true });
+  if (
+    options?.open !== false &&
+    expectedAdmissionIdentity !== undefined &&
+    identity !== expectedAdmissionIdentity
+  ) {
+    throw new Error("SQLite staging database changed before native open");
+  }
   const database = new sqlite.DatabaseSync(resolvedLocation, options ?? {});
   if (database.isOpen) {
     try {
@@ -95,6 +114,9 @@ export function openNodeSqliteDatabase(
     const reopenedIdentity = prepareSqliteDatabaseAdmission(resolvedLocation, {
       create: options?.readOnly !== true,
     });
+    if (expectedAdmissionIdentity !== undefined && reopenedIdentity !== expectedAdmissionIdentity) {
+      throw new Error("SQLite staging database changed before native open");
+    }
     sqlite.DatabaseSync.prototype.open.call(database);
     try {
       bindSqliteDatabaseAdmission(database, reopenedIdentity);
@@ -109,7 +131,6 @@ export function openNodeSqliteDatabase(
     {
       DatabaseSync: sqlite.DatabaseSync,
       StatementSync: sqlite.StatementSync,
-      iteratorBehavior: assertSafeSqliteRuntime(sqlite),
     },
     options?.readOnly !== true,
   );

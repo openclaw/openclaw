@@ -16,15 +16,7 @@ import {
   setLoggerOverride,
 } from "../../../../src/logging/logger.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
-
-function artifactBase(argv: readonly string[]): string {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
+import { parseQaArtifactBase } from "./script-options.js";
 
 function rotatedPath(file: string): string {
   const ext = path.extname(file);
@@ -98,7 +90,7 @@ export async function runLoggingFileBoundary(outputRoot: string) {
 
 async function main() {
   const repoRoot = process.cwd();
-  const outputRoot = artifactBase(process.argv.slice(2));
+  const outputRoot = parseQaArtifactBase(process.argv.slice(2));
   const startedAt = Date.now();
   const writer = createQaScriptEvidenceWriter({
     artifactBase: outputRoot,

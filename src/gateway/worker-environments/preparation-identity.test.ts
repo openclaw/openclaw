@@ -3,6 +3,7 @@ import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import {
   readWorkerPreparation,
   readWorkerProjectPreparation,
+  workerPreparationSourceKey,
 } from "./preparation-identity.schema.js";
 import type { WorkerLocalProjectSnapshot } from "./workspace-git-base.js";
 
@@ -62,9 +63,23 @@ it("keeps empty runtime preparation separate from project content", () => {
   rejects({ runtimePreparation: { ...empty, recipe: { source: "none", inputs: {}, env: {} } } });
 });
 
-it("shares identity across linked source paths, JSON field order and plugin order", () => {
+it("separates image capacity from empty workspaces in both claim and cache identities", () => {
+  const empty = createWorkerPreparationIdentity(runtime);
+  const image = createWorkerPreparationIdentity({ ...runtime, imageReserve: true });
+  expect(image.key).not.toBe(empty.key);
+  expect(image.cacheKey).not.toBe(empty.cacheKey);
+  const profile = { runtimePreparation: { ...image, source: "image" } };
+  expect(readWorkerPreparation(profile)).toEqual(profile.runtimePreparation);
+  expect(workerPreparationSourceKey(profile)).toBe("image");
+  expect(() => readWorkerPreparation({ ...profile, project: input.project })).toThrow(
+    "runtime preparation identity is invalid",
+  );
+});
+
+it("shares identity across commits, linked source paths, JSON field order and plugin order", () => {
   const equivalent = structuredClone(input);
   equivalent.project.root = "/source/second-worktree";
+  equivalent.project.baseCommit = "1".repeat(40);
   equivalent.profileSnapshot = {
     executionMode: "worker-turn",
     settings: { disk: 20, region: "test" },
@@ -91,7 +106,7 @@ it("uses the provider disk fingerprint independently of lease and runtime policy
   const target = { ...input.target, profileKey: "7".repeat(64) };
   const disk = createWorkerPreparationIdentity({ ...input, target });
   // These digests pin warm-image compatibility across updates.
-  expect(disk.key).toBe("cbdf7035128e74fcf4571c1d9c8f5a0b11e1c8e00bd516556c755bd5b495c559");
+  expect(disk.key).toBe("aaa07c84ff4a0d870e0f013e52a89470c99b56145d6bd1ab90b5781d69f7db4f");
   expect(disk.cacheKey).toBe("5aa1bd824e0e251412000829f6a7932ef884b12223a29d19611c17a769abc474");
   const changed = createWorkerPreparationIdentity({
     ...input,
@@ -119,7 +134,6 @@ it.each<[string, InputChange, boolean?]>([
   ["namespace", { namespace: "gateway-two" }],
   ["provider", { providerId: "another-provider" }],
   ["profile id", { profileId: "another-profile" }, false],
-  ["commit", { project: { baseCommit: "1".repeat(40) } }, false],
   ["recipe", { setupRecipe: "2".repeat(40) }],
   ["profile", { profileSnapshot: { settings: { region: "elsewhere" } } }],
   ["project", { project: { key: "9".repeat(64) } }],

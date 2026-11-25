@@ -29,12 +29,10 @@ import type {
   AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
-  StreamFn,
   ThinkingLevel,
-  ToolExecutionMode,
 } from "../../runtime/index.js";
 import type { BashResult } from "../bash-executor.js";
-import type { CompactionPreparation, CompactionResult } from "../compaction/compaction.js";
+import type { CompactionResult } from "../compaction/compaction.js";
 import type { EventBus } from "../event-bus.js";
 import type { ExecOptions, ExecResult } from "../exec.js";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.js";
@@ -44,7 +42,6 @@ import type { ModelRegistry } from "../model-registry.js";
 import type { ProviderConfig } from "../provider-config.js";
 import type {
   BranchSummaryEntry,
-  CompactionEntry,
   ReadonlySessionManager,
   SessionEntry,
   SessionManager,
@@ -68,6 +65,7 @@ import type {
   ReadToolInput,
   WriteToolInput,
 } from "../tools/tool-contracts.js";
+import type { SessionBeforeCompactEvent, SessionCompactEvent } from "./compaction-events.types.js";
 
 export type { ProviderConfig, OAuthLoginCallbacks } from "../provider-config.js";
 export type {
@@ -76,7 +74,7 @@ export type {
   OAuthPrompt,
   OAuthSelectOption,
   OAuthSelectPrompt,
-} from "../../../plugin-sdk/provider-oauth-runtime.js";
+} from "../../../llm/utils/oauth/types.js";
 
 interface ExtensionUIDialogOptions {
   /** AbortSignal to programmatically dismiss the dialog. */
@@ -412,6 +410,8 @@ export interface ToolDefinition<
   | "outputSchema"
   | "prepareArguments"
   | "async"
+  | "interruptible"
+  | "executionMode"
 > {
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
@@ -419,7 +419,6 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
-  executionMode?: ToolExecutionMode;
 
   execute(
     toolCallId: string,
@@ -478,26 +477,6 @@ interface SessionBeforeForkEvent {
   type: "session_before_fork";
   entryId: string;
   position: "before" | "at";
-}
-
-/** Fired before context compaction (can be cancelled or customized) */
-interface SessionBeforeCompactEvent {
-  type: "session_before_compact";
-  preparation: CompactionPreparation;
-  branchEntries: SessionEntry[];
-  customInstructions?: string;
-  signal: AbortSignal;
-  /** Prepared reasoning level for extension-owned summarization. */
-  thinkingLevel?: ThinkingLevel;
-  /** Prepared provider stream for extension-owned summarization. */
-  streamFn?: StreamFn;
-}
-
-/** Fired after context compaction */
-interface SessionCompactEvent {
-  type: "session_compact";
-  compactionEntry: CompactionEntry;
-  fromExtension: boolean;
 }
 
 /** Fired before an extension runtime is torn down due to quit, reload, or session replacement. */

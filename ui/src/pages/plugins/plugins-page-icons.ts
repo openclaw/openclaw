@@ -13,6 +13,7 @@ export function createPluginsPageIcons(host: {
   onInstalledUrlsChange: (urls: Record<string, string>) => void;
   onCatalogUrlsChange: (urls: Record<string, string>) => void;
   onChange?: () => void;
+  onRenderedChange: () => void;
 }) {
   let authCandidates: string[] = [];
   const tiles = new Set<() => string>();
@@ -50,6 +51,7 @@ export function createPluginsPageIcons(host: {
       >,
       rendered: ReadonlySet<string>,
       detail?: PluginDiscoveryDetailResult | null,
+      previewIcon?: string,
     ): void {
       // Both inventories follow the same rendered sorting, filtering, and collapse policy.
       installed.sync(result, rendered);
@@ -60,7 +62,7 @@ export function createPluginsPageIcons(host: {
           ...discovery.trending,
           ...(detail ? [detail.plugin] : []),
         ],
-        detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
+        [previewIcon, detail?.detail.author?.imageUrl].filter((url) => url !== undefined),
         rendered,
       );
     },
@@ -71,7 +73,7 @@ export function createPluginsPageIcons(host: {
     rendered: () => new Set(Array.from(tiles, (readId) => readId()).filter(Boolean)),
     register(this: void, readId: () => string) {
       tiles.add(readId);
-      host.onChange?.();
+      host.onRenderedChange();
       return () => tiles.delete(readId);
     },
   };

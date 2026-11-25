@@ -4,7 +4,7 @@ import { readAllTemplateMcpServerRefsInDatabase } from "./mcp-records.js";
 import {
   readTemplateInstallRecordsInDatabase,
   readTemplatePackageRefsInDatabase,
-} from "./provenance-read.kernel.js";
+} from "./provenance-read.worker.js";
 import { readAllTemplateWorkspaceFilesInDatabase } from "./workspace-state.js";
 
 /** Return persisted Template ownership facts before any asynchronous resource inspection. */

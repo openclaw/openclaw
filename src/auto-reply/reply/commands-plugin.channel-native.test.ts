@@ -9,11 +9,12 @@ import type * as EmbeddedAgent from "../../agents/embedded-agent.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
-  enqueueSwarmRun,
+  closeSwarmScheduler,
   isSwarmRunActive,
   listSwarmRunReservationIds,
   releaseSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -25,12 +26,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
+import { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
@@ -107,8 +114,9 @@ async function withChannelCommandPlugin(
 ) {
   const channelId = options.channelId ?? "discord";
   await withAdminIngress(
-    async ({ cfg, state, admins, context, gateway }) => {
+    async ({ cfg, state, admins, context, gateway, resolveGatewayContext }) => {
       const bridge = Symbol.for(`openclaw.channel-command-native-test.${randomUUID()}`);
+      gateway.resolveGatewayContext = resolveGatewayContext;
       const storePath = path.join(state.sessionsDir("main"), "sessions.json");
       const sessionKey = `agent:main:${channelId}:channel:maintainers`;
       const messages = async (role: "user" | "assistant") => {
@@ -200,7 +208,7 @@ async function withChannelCommandPlugin(
           gateway,
           createDirectChatContext({
             getRuntimeConfig: () => cfg,
-            resolveGatewayContext: () => gateway,
+            resolveGatewayContext,
             validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
             getGatewayMethodRegistry: () => createRequestGatewayMethodRegistry(),
             trackExecution: trackAsyncWork,
@@ -213,6 +221,22 @@ async function withChannelCommandPlugin(
       );
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
+      await using gatewayResources = new AsyncDisposableStack();
+      if (options.nativeChildren) {
+        const runtime = createGatewayInstanceRuntime({
+          getContext: () => gateway,
+          getMethodRegistry: () => createRequestGatewayMethodRegistry(),
+          isDispatchAvailable: () => true,
+        });
+        gateway.lifecycleRuntime = runtime.lifecycle;
+        gatewayResources.defer(() => runtime.close());
+      }
+      const scheduler = new GatewayScheduler();
+      gatewayResources.defer(() => scheduler.stop());
+      const sdkHost = new LegacyPluginSdkResourceHost();
+      gatewayResources.defer(() => sdkHost.close());
+      sdkHost.bindScheduler(scheduler);
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkHost);
       let registry: PluginRegistry | undefined;
       const blockers: string[] = [];
       try {
@@ -251,7 +275,7 @@ async function withChannelCommandPlugin(
           });
           // Match startChannel's resolver without inheriting a request-local client.
           await withPluginRuntimeGatewayContextResolver(
-            () => gateway,
+            resolveGatewayContext,
             () =>
               withReplyDispatcher({
                 dispatcher,
@@ -336,6 +360,7 @@ async function withChannelCommandPlugin(
           },
         });
       } finally {
+        await closeSwarmScheduler(resolveGatewayContext);
         for (const blocker of blockers.splice(0)) {
           releaseSwarmRun(blocker);
         }
@@ -423,7 +448,7 @@ describe("plugin command native capabilities through channel ingress", () => {
           subagents: true,
           userInputs: ["/review-panel"],
         });
-        return { continueAgent: true };
+        return { continueAgent: true, suppressReply: true };
       });
       let continuation:
         | { runId?: string; receiptSessionId?: string; inputsAtRun: unknown[] }
@@ -448,20 +473,14 @@ describe("plugin command native capabilities through channel ingress", () => {
     });
   });
 
-  it("rechecks the channel operator on every native call and fences the revoked turn", async () => {
+  it("finishes an admitted command after its requester is demoted", async () => {
     await withChannelCommandPlugin(async ({ handler, send, demoteAdmin }) => {
-      let failure: unknown;
-      handler.mockImplementationOnce(async (ctx) => {
-        const native = expectDefined(ctx.runtimeContext?.subagents, "channel command capability");
+      handler.mockImplementationOnce(async () => {
         demoteAdmin();
-        failure = await native.spawn({ requestId: "after-demotion", task: "Review" }).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-        return { text: "demoted" };
+        return { text: "completed" };
       });
-      expect(await send("/review-panel")).toEqual([]);
-      expect(failure).toEqual(new Error("Channel operator authority changed; send a new request."));
+      expect(await send("/review-panel")).toEqual(["completed"]);
+      expect(readProbe(await send("/review-panel"))).toMatchObject({ subagents: false });
     });
   });
 
@@ -506,9 +525,7 @@ describe("plugin command native capabilities through channel ingress", () => {
   });
 });
 
-describe("channel requester revocation of native children", () => {
-  const revocation = new Error("Channel operator authority changed; send a new request.");
-
+describe("queued native child custody", () => {
   async function queueChild(fixture: Fixture) {
     const capacity = fixture.holdChildCapacity();
     let accepted: { runId: string; childSessionKey: string } | undefined;
@@ -528,31 +545,20 @@ describe("channel requester revocation of native children", () => {
     return { child, capacity };
   }
 
-  async function expectRefused(child: { runId: string; childSessionKey: string }) {
-    await vi.waitFor(
-      () => expect(subagentRuns.get(child.runId)?.execution.status).toBe("terminal"),
-      { timeout: 10_000 },
-    );
-    expect(listSwarmRunReservationIds()).not.toContain(child.runId);
-    expect(subagentRuns.get(child.runId)).toMatchObject({
-      execution: { outcome: { status: "error", error: revocation.message } },
-      endedReason: "subagent-error",
-      completion: { resultText: revocation.message },
-      collectorCompletion: { status: "failed" },
-    });
+  function expectWaiting(child: { runId: string }) {
+    expect(subagentRuns.get(child.runId)?.execution.status).toBe("queued");
+    expect(listSwarmRunReservationIds()).toContain(child.runId);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   }
 
   it.each(["demotion", "role removal", "identity unlink"] as const)(
-    "fails a queued child on %s without waiting for capacity",
+    "keeps queued custody after %s until a launch slot is available",
     async (change) => {
       await withChannelCommandPlugin(
         async (fixture) => {
           const { child, capacity } = await queueChild(fixture);
           await fixture.changeAuthority(change);
-          await expectRefused(child);
-          // The lane is still full: revocation, not a launch attempt, settled the child.
-          expect(listSwarmRunReservationIds()).toEqual([expect.stringMatching(/^capacity-/u)]);
+          expectWaiting(child);
           capacity.release();
         },
         { nativeChildren: true },
@@ -560,16 +566,14 @@ describe("channel requester revocation of native children", () => {
     },
   );
 
-  it("refuses a queued child at its launch check when no revocation is published", async () => {
+  it("keeps a queued child waiting after an unannounced role change", async () => {
     await withChannelCommandPlugin(
       async (fixture) => {
         const { child, capacity } = await queueChild(fixture);
         fixture.narrowAdminRoleUnannounced();
-        // Nothing announced the change, so the child is still waiting for its slot.
-        await delay(50);
         capacity.expectQueued(child.runId);
+        expectWaiting(child);
         capacity.release();
-        await expectRefused(child);
       },
       { nativeChildren: true },
     );
@@ -586,9 +590,9 @@ describe("channel requester revocation of native children", () => {
         await delay(50);
         capacity.expectQueued(child.runId);
         expect(subagentRuns.get(child.runId)?.execution.status).toBe("queued");
-        // The subscription stays live for the sender's own later change.
+        // Permission publications do not settle a queued owner's custody.
         await fixture.changeAuthority("demotion");
-        await expectRefused(child);
+        expectWaiting(child);
         capacity.release();
       },
       { nativeChildren: true },

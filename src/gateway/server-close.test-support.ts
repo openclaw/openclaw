@@ -20,11 +20,6 @@ type GatewayCloseFixtureMocks = Pick<
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 
 /** Read the captured first close-effect call without changing its mock behavior. */
-export function firstMockCall<T extends readonly unknown[]>(mock: {
-  mock: { calls: readonly T[] };
-}) {
-  return mock.mock.calls[0];
-}
 
 export function createGatewayCloseTestHandlerFactory({
   prepareGatewayClose,
@@ -34,7 +29,7 @@ export function createGatewayCloseTestHandlerFactory({
     completeGatewayClose(params, await prepareGatewayClose(params, opts));
 }
 
-export function createTestChatRunState() {
+function createTestChatRunState() {
   const state = createChatRunState();
   const clear = state.clear;
   state.clear = vi.fn(() => clear());

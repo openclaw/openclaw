@@ -34,18 +34,29 @@ Node execution still checks the target policy before dispatch: caller
 requires approval even when the caller requests `full` / `off`.
 </Note>
 
+## Who can review session approvals
+
+A noncreator collaborator whose resolved Gateway role has
+`sessions.others: "invited"` and who holds a session membership can list or resolve
+only approvals raised by their own profile's turns, while the session remains
+readable. This restriction does not apply to creators, administrators, role-wide
+`view`, `suggest`, or `write` teammates, or legacy device-based approvers. Existing
+approval scopes and reviewer/device bindings still govern every caller.
+
+The Gateway records the initiating profile from authenticated turn authority,
+not tool arguments or an approval request payload. Older or unattributed
+approvals do not qualify as an invitee's own requests; their visibility to other
+callers is unchanged. The restriction covers exec, plugin, and system-agent
+requests, generic lookup and history, session events and replay, and approval
+notifications. Server-authenticated channel routes retain their separate
+reviewer custody checks; an invitation never lets an agent approve its own action.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:
 
 - **Gateway host** -> `openclaw` process on the gateway machine.
 - **Node host** -> node runner (macOS companion app or headless node host).
-
-The `claude-cli` backend also checks native Bash commands against the agent's
-exec allowlist when `ask: "on-miss"`. This authorizes command arguments while
-Claude Code owns execution. It does not provide OpenClaw sandboxing. See
-[Native Bash and the exec allowlist](/gateway/cli-backends#native-bash-and-the-exec-allowlist)
-for matching, prompting, and binding restrictions.
 
 ### Trust model
 
@@ -131,7 +142,11 @@ engine anchor and contains no approval policy. The row keeps the JSON document
 shown below as its authoritative value.
 
 The macOS app reads and edits this policy through bounded operations in the
-local OpenClaw CLI on both engines. The CLI routes to the running shared-state
+local OpenClaw CLI on both engines. Packaged apps use their matching bundled CLI,
+including on remote-only Macs that have never prepared a local Gateway runtime.
+An older CLI on `PATH` does not replace this private approval operation. The
+selected profile, state directory, and explicit config path still select the
+local policy owner. The CLI routes to the running shared-state
 owner, or acquires exclusive offline custody when no owner is running. It never
 falls back to opening the shared database from Swift. Saving a policy requires
 the last observed hash; a stale save fails and must be reloaded. Gateway and
@@ -143,8 +158,9 @@ allowed do not deny it; execution does not require an unchanged policy hash.
 
 An unavailable owner or PostgreSQL database denies native execution with an
 `Exec policy unavailable` diagnostic. Inspect `openclaw gateway status` and the
-selected database, or update the app and CLI if the required operation is
-missing. Stopping the Gateway permits offline policy operations only when the
+selected database, or update the app if its bundled operation is missing.
+Unbundled development builds need a matching local CLI. Stopping the Gateway
+permits offline policy operations only when the
 selected database remains reachable. A policy snapshot shown in the UI is for
 display; it cannot authorize execution.
 
@@ -178,8 +194,16 @@ Legacy allowlist entries may contain `null` for `lastUsedAt` or
 `lastUsedCommand`. Doctor treats those two usage fields as absent during
 import, including when the config still needs repair. This does not relax
 validation of the current policy: other malformed fields or conflicting legacy
-policies remain preserved for operator recovery, and exec approvals stay
-blocked until the legacy file is resolved. After repair, verify with
+policies remain preserved for operator recovery. The Gateway and node host start
+degraded with canonical SQLite approvals still authoritative; they never import
+conflicting policy or socket credentials. Without canonical policy, exec approvals
+remain unavailable until migration succeeds. Status and Doctor report the retained
+startup warning, including the possibility that an older node host or external
+writer is still changing the legacy file. Stop those writers and reconcile the
+retained file with the intended policy, preserving SQLite policy, then run
+`openclaw doctor --fix` against the same state directory. Legacy-only valid policy
+still imports automatically at startup, and byte-identical legacy copies are removed
+by the migration owner. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
 Example shared policy (socket credentials are held by the local client owner):
@@ -365,7 +389,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off and strict inline eval is disabled, ordinary path aliases and inline scripts do not require approval binding. Restrictive policy and later policy changes remain enforced.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate on top of the configured host exec policy. Exec has no script-preflight rejection layer in any mode. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off and strict inline eval is disabled, ordinary path aliases and inline scripts do not require approval binding. Restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
@@ -621,6 +645,10 @@ operation without prompting while the grant is valid. The approval card says
 so up front: automation approvals carry a scope line describing exactly what
 Always allow will mint.
 
+Card and ledger previews truncate sanitized text without splitting UTF-16 surrogate pairs.
+Those display limits do not shorten the command, working directory, or
+environment used to bind and match a grant.
+
 ### What a grant covers, and when it stops
 
 A grant is rejected and a normal prompt is required when the job is deleted or its
@@ -704,7 +732,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

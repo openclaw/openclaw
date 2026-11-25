@@ -104,16 +104,22 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
+    openclawIdService,
     listStartupChannelGatewayMethods,
     workerEnvironmentStartup,
     activateRuntimeSecrets,
   } = runtime;
   runtime.registerGatewayLifetimeSidecars({
+    name: "computer-and-desktop-sessions",
     preparePluginReload: gatewayComputerService.preparePluginReload,
     stop: async () => {
       await gatewayComputerService.close();
       await desktopSessionRegistry.stopAll();
     },
+  });
+  runtime.registerGatewayLifetimeSidecars({
+    name: "openclaw-id",
+    stop: () => openclawIdService.stop(),
   });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
@@ -129,7 +135,7 @@ export async function startGatewayCoreRuntime(input: {
         )
       : undefined;
   if (secretEgressProxy) {
-    runtime.registerGatewayLifetimeSidecars(secretEgressProxy);
+    runtime.registerGatewayLifetimeSidecars({ name: "secret-egress-proxy", ...secretEgressProxy });
   }
   const sendNodeSessionEvent: (...args: Parameters<typeof nodeSendToSession>) => void = (
     sessionKey,
@@ -160,6 +166,7 @@ export async function startGatewayCoreRuntime(input: {
             nodeRegistry,
             swapDiscovery: kernel.swapDiscovery,
             pluginRegistry: pluginRuntime.registry,
+            getPluginMetadataSnapshot: () => runtime.pluginMetadataSnapshot,
             broadcast,
             maintenance: {
               nodeSendToAllSubscribed,
@@ -243,6 +250,7 @@ export async function startGatewayCoreRuntime(input: {
     >
   >();
   const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
+    getSessionRowProjection: runtime.getSessionRowProjection,
     clients,
     sessionMessageSubscribers,
     broadcastToConnIds,
@@ -317,6 +325,7 @@ export async function startGatewayCoreRuntime(input: {
     beginCloseApprovalObservers();
   }
   runtime.registerGatewayLifetimeSidecars({
+    name: "operator-interactions",
     stop: async () => {
       requestLifetime.removeEventListener("abort", beginCloseApprovalObservers);
       await stopOperatorInteractions();
@@ -418,7 +427,7 @@ export async function startGatewayCoreRuntime(input: {
     ]);
     const nextHandlerKeys = new Set(Object.keys(loaded.pluginRegistry.gatewayHandlers));
     return {
-      publish: () => {
+      publish: (retirePrevious?: () => Promise<void>) => {
         adoptPluginHttpRouteHandoffs(pluginRuntime.registry, loaded.pluginRegistry);
         // Startup and reload share one synchronous handoff, so another Gateway cannot
         // select and retire this candidate between activation and owner publication.
@@ -430,7 +439,7 @@ export async function startGatewayCoreRuntime(input: {
           pluginRuntime.registry,
           trackActivationCleanup,
         );
-        pluginRuntime.publish(loaded.pluginRegistry);
+        pluginRuntime.publish(loaded.pluginRegistry, retirePrevious);
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
         for (const key of attachedPluginGatewayHandlerKeys) {
           delete attachedGatewayExtraHandlers[key];

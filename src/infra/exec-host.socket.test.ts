@@ -218,6 +218,45 @@ describe.runIf(process.platform !== "win32")("exec host real UDS boundary", () =
     },
   );
 
+  it.each([1_048_576, 1_048_577])("bounds the full signed request at %s bytes", async (bytes) => {
+    await withExecPeer(async ({ socketPath, onRequest }) => {
+      const request = { command: ["/bin/echo", ""] };
+      const overhead = Buffer.byteLength(
+        JSON.stringify({
+          type: "exec",
+          id: crypto.randomUUID(),
+          nonce: "0".repeat(32),
+          ts: Date.now(),
+          hmac: "0".repeat(64),
+          requestJson: JSON.stringify(request),
+        }),
+      );
+      request.command[1] = "x".repeat(bytes - overhead);
+      let received = false;
+      onRequest(async (socket, actual, id) => {
+        received = true;
+        expect(actual).toEqual(request);
+        socket.end(`${JSON.stringify({ type: "exec-res", id, ...success })}\n`);
+      });
+      const result = await requestExecHostViaSocket({
+        socketPath,
+        token,
+        request,
+        timeoutMs: 1_000,
+      });
+      if (bytes === 1_048_576) {
+        expect(result).toEqual(success);
+        expect(received).toBe(true);
+      } else {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code: "INVALID_REQUEST", reason: "too-large" },
+        });
+        expect(received).toBe(false);
+      }
+    });
+  });
+
   it.each(["close", "malformed matching response", "timeout"] as const)(
     "characterizes the outcome after a signed request starts a child and then %s",
     async (fault) => {

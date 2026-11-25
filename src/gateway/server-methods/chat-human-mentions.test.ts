@@ -1,0 +1,41 @@
+import { expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isHumanAddressedChatMessage, normalizeChatHumanMentions } from "./chat-human-mentions.js";
+
+const cfg = { agents: { entries: { main: { identity: { name: "Robo" } } } } } as OpenClawConfig;
+
+it.each([
+  "Please make previews. cc @Bob",
+  "Can you review this with @Bob?",
+  "cc @Bob: please make previews",
+])("keeps the agent turn for an incidental mention: %s", (text) => {
+  const start = text.indexOf("@Bob");
+  expect(
+    isHumanAddressedChatMessage({
+      cfg,
+      agentId: "main",
+      text,
+      mentions: [{ profileId: "bob", start, end: start + 4 }],
+    }),
+  ).toBe(false);
+});
+
+it.each([
+  ["@Bob some of the stickers are cool", "bob", 4, true],
+  ["@Bob look at this. Robo, put them on one sheet.", "bob", 4, false],
+  ["@robo-bot nice work", "robo-bot", 9, true],
+] as const)("detects whether %j is addressed only to people", (text, profileId, end, expected) => {
+  expect(
+    isHumanAddressedChatMessage({
+      cfg,
+      agentId: "main",
+      text,
+      mentions: [{ profileId, start: 0, end }],
+    }),
+  ).toBe(expected);
+});
+
+it("refuses mention invitation levels until they are enforced", () => {
+  const mentions = [{ profileId: "bob", access: "read" as const, start: 0, end: 4 }];
+  expect(normalizeChatHumanMentions("@Bob hi", mentions, "@Bob hi").ok).toBe(false);
+});

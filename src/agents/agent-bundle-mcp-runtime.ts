@@ -4,6 +4,9 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
+import { monotonicDeadlineAfter, monotonicNow } from "../shared/monotonic-time.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
+import { rememberListedMcpCatalog } from "./agent-bundle-mcp-manager-catalog.js";
 import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
@@ -12,17 +15,14 @@ import {
 import type { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { loadBundleMcpRuntimeModules } from "./agent-bundle-mcp-runtime-modules.js";
 import { createSessionMcpRuntimeParts } from "./agent-bundle-mcp-runtime-parts.js";
-import type {
-  BundleMcpSession,
-  CreateSessionMcpRuntime,
-  ServerMcpRuntime,
+import {
+  projectBundleMcpCatalogFailure,
+  type BundleMcpSession,
+  type CreateSessionMcpRuntime,
+  type McpServerBackoffState,
+  type ServerMcpRuntime,
 } from "./agent-bundle-mcp-runtime-shared.js";
-import type {
-  McpRequestOptions,
-  McpToolCatalog,
-  McpToolCatalogDiagnostic,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { McpRequestOptions, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   getCatalogListTimeoutMs,
   listAllMcpTools,
@@ -54,23 +54,6 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
 const BUNDLE_MCP_FAILURE_COOLDOWN_MS = 60_000;
 const BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS = 5_000;
-
-type McpServerBackoffState = {
-  session: BundleMcpSession;
-  failures: number;
-  retryAfterMs?: number;
-};
-
-function projectBundleMcpCatalogFailure(
-  catalog: McpToolCatalog | undefined,
-  diagnostic: McpToolCatalogDiagnostic,
-): McpToolCatalog {
-  return {
-    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
-    generatedAt: Date.now(),
-    diagnostics: [diagnostic],
-  };
-}
 
 export function createSessionMcpRuntime(
   params: Parameters<CreateSessionMcpRuntime>[0],
@@ -111,7 +94,16 @@ function createServerMcpRuntime(
   let catalog: McpToolCatalog | null = null;
   // Transport health cannot revoke advertised schemas; only a successful list
   // or retirement of this configuration owner replaces them.
-  let lastListedCatalog: McpToolCatalog | undefined;
+  // Native capability-bound views retain their own discovery contract.
+  const listedCatalogs = nativeContext ? undefined : params.lastListedCatalogByServerIdentity;
+  const catalogIdentity = stableStringify([
+    params.agentDir,
+    params.requesterScope,
+    configFingerprint,
+    loaded.pluginIdsByServer?.[serverName],
+  ]);
+  let lastListedCatalog = listedCatalogs?.get(catalogIdentity);
+  let awaitSessionRecovery = Boolean(lastListedCatalog);
   let catalogRetryAfterMs: number | undefined;
   let catalogInFlight: Promise<McpToolCatalog> | undefined;
   const invalidateCatalog = () => {
@@ -128,18 +120,17 @@ function createServerMcpRuntime(
         launchSummary: server.launchSummary,
         message,
       });
-      catalogRetryAfterMs = Date.now();
+      catalogRetryAfterMs = monotonicNow();
     }
   };
   const catalogRetryIsDue = (): boolean =>
-    catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
+    catalogRetryAfterMs !== undefined && monotonicNow() >= catalogRetryAfterMs;
   let currentSession: BundleMcpSession | undefined;
   const nativeContextKey = nativeContext
     ? stableStringify({ capabilities: nativeContext.capabilities, roots: nativeContext.roots })
     : undefined;
   let nativeViewCount = 0;
   const nativeChildren = new Set<ServerMcpRuntime>();
-  let awaitSessionRecovery = false;
   let disposal: Promise<void> | undefined;
   let cleanupFailed = false;
   const pendingDisposals = new Set<Promise<void>>();
@@ -171,8 +162,7 @@ function createServerMcpRuntime(
     if (currentSession !== session || session.retiring) {
       return undefined;
     }
-    const previous = serverBackoff;
-    const failures = (previous?.session === session ? previous.failures : 0) + 1;
+    const failures = (serverBackoff?.session === session ? serverBackoff.failures : 0) + 1;
     const nextBackoff: McpServerBackoffState = { session, failures };
     if (failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
       nextBackoff.retryAfterMs = nowMs + BUNDLE_MCP_FAILURE_COOLDOWN_MS;
@@ -216,7 +206,7 @@ function createServerMcpRuntime(
   ): Promise<T> => {
     const requestSignal = getSessionMcpRequestSignal();
     const tracksFailureBackoff = options?.failureBackoff !== "ignore";
-    const nowMs = Date.now();
+    const nowMs = monotonicNow();
     const backoff = serverBackoff;
     if (
       tracksFailureBackoff &&
@@ -225,7 +215,7 @@ function createServerMcpRuntime(
       nowMs < backoff.retryAfterMs
     ) {
       throw new Error(
-        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(backoff.retryAfterMs).toISOString()}`,
+        `bundle-mcp server "${serverName}" is paused after repeated tool failures; retry after ${new Date(Date.now() - nowMs + backoff.retryAfterMs).toISOString()}`,
       );
     }
     if (backoff && backoff.session !== session) {
@@ -252,7 +242,7 @@ function createServerMcpRuntime(
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
-        const failures = recordServerToolFailure(session, nowMs);
+        const failures = recordServerToolFailure(session, monotonicNow());
         if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
@@ -379,9 +369,9 @@ function createServerMcpRuntime(
         const createdSession: BundleMcpSession = {
           serverName,
           client,
-          ...(mcpAppsEnabled && !nativeContext
-            ? { withElicitation: bindMcpClientElicitation(client) }
-            : {}),
+          ...(nativeContext
+            ? {}
+            : { withElicitation: bindMcpClientElicitation(client, mcpAppsEnabled) }),
           transport: transport.transport,
           transportType: transport.transportType,
           requestTimeoutMs: transport.requestTimeoutMs,
@@ -579,6 +569,7 @@ function createServerMcpRuntime(
         const message = redactMcpDiagnosticError(error);
         if (error instanceof McpStartupBackoffError && error.authorizationRequired) {
           lastListedCatalog = undefined;
+          listedCatalogs?.delete(catalogIdentity);
         }
         startupRetryAfterMs =
           error instanceof McpStartupBackoffError ? error.retryAfterMs : undefined;
@@ -614,9 +605,10 @@ function createServerMcpRuntime(
       if (!nextCatalog.diagnostics?.length) {
         lastListedCatalog = nextCatalog;
         awaitSessionRecovery = false;
+        rememberListedMcpCatalog(listedCatalogs, catalogIdentity, nextCatalog);
       }
       catalogRetryAfterMs = nextCatalog.diagnostics?.length
-        ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
+        ? (startupRetryAfterMs ?? monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS))
         : undefined;
       return nextCatalog;
     } finally {
@@ -636,6 +628,7 @@ function createServerMcpRuntime(
       if (backoff) {
         if (backoff.authorizationRequired) {
           lastListedCatalog = undefined;
+          listedCatalogs?.delete(catalogIdentity);
         }
         catalog = projectBundleMcpCatalogFailure(lastListedCatalog, {
           serverName,
@@ -650,25 +643,28 @@ function createServerMcpRuntime(
     if (catalog && !catalogRetryIsDue()) {
       return catalog;
     }
-    if (!catalog) {
-      const retryExitedProcess = currentSession?.transportType === "stdio";
-      const loadedCatalog = await loadCatalog(discoveryContext);
-      // Recover a previously healthy process once; HTTP list failures retain their diagnostic.
-      return retryExitedProcess &&
+    if (!catalog && !lastListedCatalog) {
+      return loadCatalog(discoveryContext);
+    }
+
+    const staleCatalog = (catalog ??= lastListedCatalog!);
+    const retryExitedProcess = currentSession?.transportType === "stdio";
+    catalogRetryAfterMs = undefined;
+    // Recover a previously healthy process once, outside send preparation.
+    void loadCatalog(discoveryContext)
+      .then((loadedCatalog) =>
+        retryExitedProcess &&
         loadedCatalog.diagnostics?.length &&
         lastListedCatalog &&
         !currentSession
-        ? loadCatalog(discoveryContext)
-        : loadedCatalog;
-    }
-
-    const staleCatalog = catalog;
-    catalogRetryAfterMs = undefined;
-    void loadCatalog(discoveryContext).catch(() => {
-      if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
-        catalogRetryAfterMs = Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS;
-      }
-    });
+          ? loadCatalog(discoveryContext)
+          : loadedCatalog,
+      )
+      .catch(() => {
+        if (!retiredCatalog && catalog === staleCatalog && catalogRetryAfterMs === undefined) {
+          catalogRetryAfterMs = monotonicDeadlineAfter(BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS);
+        }
+      });
     return staleCatalog;
   };
   const getActiveSession = async (requestedServer: string) => {
@@ -778,7 +774,7 @@ function createServerMcpRuntime(
                 // call, including one shared allowance for pending human input.
                 timeout:
                   session.requestTimeoutMs +
-                  (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+                  (mcpAppsEnabled && session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
                 signal,
               },
             ),

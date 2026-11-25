@@ -760,7 +760,7 @@ describe("google gemini cli backend auth bridge", () => {
         },
       } as never);
       await expect(preparation).rejects.not.toBeInstanceOf(CliBackendAuthProfilePreparationError);
-      await expect(preparation).rejects.toThrow(/Google AI Studio API-key profile/);
+      await expect(preparation).rejects.toThrow(/Gemini API key profile/);
     });
   });
 
@@ -776,7 +776,7 @@ describe("google gemini cli backend auth bridge", () => {
       } as never);
       await expect(preparation).rejects.toBeInstanceOf(CliBackendAuthProfilePreparationError);
       await expect(preparation).rejects.toThrow(
-        /Open Models settings and connect Google with an AI Studio API key/,
+        /Open Models settings and connect Google with a Gemini API key/,
       );
     });
   });
@@ -798,7 +798,7 @@ describe("google gemini cli backend auth bridge", () => {
       } as never);
       await expect(preparation).rejects.toBeInstanceOf(CliBackendAuthProfilePreparationError);
       await expect(preparation).rejects.toThrow(
-        /OAuth profile is incomplete and cannot be repaired by OpenClaw.*AI Studio API key/,
+        /OAuth profile is incomplete and cannot be repaired by OpenClaw.*Gemini API key/,
       );
     });
   });

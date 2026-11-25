@@ -1,10 +1,17 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type {
+  ChatHistoryPage,
+  ChatHistoryPageParams,
+} from "../../config/sessions/session-history-types.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
+import { SerializedJsonArray } from "../serialized-json.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -23,8 +30,65 @@ import {
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
+import { readChatHistoryPage, type ChatHistoryMessageProjector } from "./chat-history-pages.js";
+import {
+  respondChatHistoryReadError,
+  respondChatHistoryUnavailable,
+  type ChatHistoryMethod,
+} from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+/** Prepare the admitted RPC page, keeping worker-encoded messages opaque for publication. */
+export async function readChatHistoryRequestPage(
+  params: ChatHistoryPageParams,
+  request: Pick<GatewayRequestHandlerOptions, "respond" | "signal"> & {
+    cfg: OpenClawConfig;
+    method: ChatHistoryMethod;
+    deltaCursor?: string;
+    projectMentions: ChatHistoryMessageProjector;
+  },
+) {
+  const { cfg, method, respond, signal, deltaCursor, projectMentions } = request;
+  let historyPage: ChatHistoryPage;
+  try {
+    historyPage =
+      deltaCursor !== undefined
+        ? { messages: [] }
+        : await measureDiagnosticsTimelineSpan(
+            `gateway.${method}.history_page`,
+            () => readChatHistoryPage(params, signal, projectMentions),
+            {
+              config: cfg,
+              phase: method,
+              attributes: {
+                limit: params.max,
+                hasMessageId: Boolean(params.messageId),
+                hasOffset: params.offset !== undefined,
+              },
+            },
+          );
+  } catch (error) {
+    respondChatHistoryReadError(method, respond, error);
+    return undefined;
+  }
+  const { encodedResponse, encodedMessagesDeflate, messageModelIndex } = historyPage;
+  if (!encodedResponse) {
+    return { historyPage, responsePage: prepareChatHistoryResponsePage(historyPage, params) };
+  }
+  if (encodedMessagesDeflate) {
+    registerDeflatedSegment(encodedResponse.messages, encodedMessagesDeflate);
+  }
+  return {
+    historyPage,
+    responsePage: {
+      ...encodedResponse,
+      messages: new SerializedJsonArray(encodedResponse.messages, messageModelIndex),
+      activity: encodedResponse.activity
+        ? new SerializedJsonArray(encodedResponse.activity)
+        : undefined,
+    },
+  };
+}
 
 /** Select and revalidate history metadata through its prepared row and sharing owners. */
 export async function prepareChatHistorySessionRead({
@@ -170,7 +234,7 @@ export async function prepareChatHistorySessionRead({
   };
   if (requestedSessionId && !(await readTranscriptOwner())) {
     if (retainedSessionId) {
-      unavailable("retained transcript is no longer available");
+      unavailable("retained chat history is no longer available");
     } else {
       respond(
         false,
@@ -279,67 +343,78 @@ export async function prepareChatHistorySessionRead({
         sharing: NonNullable<ReturnType<typeof readCurrentSharing>>;
         publish: () => void;
       }) {
-        const facts = await prepareSessionMutationFacts({
-          cfg: context.getRuntimeConfig(),
-          sessionKey: canonicalKey,
-          agentId: sessionAgentId,
-          allowMissing: true,
-        });
-        try {
-          if (!(await publication.verify())) {
-            unavailable("retained transcript changed while reading history");
+        // A queued successor may rotate the current row while sharing preparation or retained binding checks await.
+        // Reacquire sharing once and repeat every transcript and authority check.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          let releaseFacts: (() => void) | undefined;
+          try {
+            const facts = await prepareSessionMutationFacts({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: canonicalKey,
+              agentId: sessionAgentId,
+              allowMissing: true,
+            });
+            releaseFacts = facts.release;
+            if (!(await publication.verify())) {
+              unavailable("retained chat history changed while reading");
+              return;
+            }
+            signal?.throwIfAborted();
+            const currentConfig = context.getRuntimeConfig();
+            const current = facts.readCurrent(currentConfig);
+            const target = current.target;
+            if (
+              (entry && !target) ||
+              (target &&
+                (target.agentId !== sessionAgentId ||
+                  target.canonicalKey !== canonicalKey ||
+                  current.sourcePath !== selectedSession.sourcePath)) ||
+              (publication.requireCurrentSession && target?.entry.sessionId !== retainedSessionId)
+            ) {
+              unavailable("retained session changed while reading history");
+              return;
+            }
+            const sharing = authorizeSharingFacts(
+              { entry: target?.entry, canonicalKey, agentId: sessionAgentId, storePath },
+              prepareProjectedSessionSharing({
+                cfg: rowProjection.getPolicyConfig(),
+                client: client ?? null,
+                isMember: (candidate, identityId) =>
+                  Boolean(
+                    target &&
+                    candidate.agentId === target.agentId &&
+                    candidate.canonicalKey === target.canonicalKey &&
+                    candidate.storePath === target.storePath &&
+                    current.membership.has(identityId),
+                  ),
+              }),
+            );
+            if (!sharing) {
+              return;
+            }
+            const visibility = target ? resolveSessionVisibility(target.entry) : undefined;
+            const sharingRole = target ? sharing.roleForTarget(target) : undefined;
+            if (
+              visibility !== publication.sharing.visibility ||
+              sharingRole !== publication.sharing.sharingRole
+            ) {
+              unavailable("session access changed while reading history");
+              return;
+            }
+            // Retained facts and current caller policy authorize the final synchronous publication.
+            const result = publication.publish();
+            if (isPromiseLike(result)) {
+              void Promise.resolve(result).catch(() => {});
+              throw new Error("Retained history publication must remain synchronous");
+            }
             return;
+          } catch (error) {
+            if (!(error instanceof SessionMutationFactsUnavailableError) || attempt === 1) {
+              throw error;
+            }
+          } finally {
+            releaseFacts?.();
           }
-          signal?.throwIfAborted();
-          const currentConfig = context.getRuntimeConfig();
-          const current = facts.readCurrent(currentConfig);
-          const target = current.target;
-          if (
-            (entry && !target) ||
-            (target &&
-              (target.agentId !== sessionAgentId ||
-                target.canonicalKey !== canonicalKey ||
-                current.sourcePath !== selectedSession.sourcePath)) ||
-            (publication.requireCurrentSession && target?.entry.sessionId !== retainedSessionId)
-          ) {
-            unavailable("retained session changed while reading history");
-            return;
-          }
-          const sharing = authorizeSharingFacts(
-            { entry: target?.entry, canonicalKey, agentId: sessionAgentId, storePath },
-            prepareProjectedSessionSharing({
-              cfg: rowProjection.getPolicyConfig(),
-              client: client ?? null,
-              isMember: (candidate, identityId) =>
-                Boolean(
-                  target &&
-                  candidate.agentId === target.agentId &&
-                  candidate.canonicalKey === target.canonicalKey &&
-                  candidate.storePath === target.storePath &&
-                  current.membership.has(identityId),
-                ),
-            }),
-          );
-          if (!sharing) {
-            return;
-          }
-          const visibility = target ? resolveSessionVisibility(target.entry) : undefined;
-          const sharingRole = target ? sharing.roleForTarget(target) : undefined;
-          if (
-            visibility !== publication.sharing.visibility ||
-            sharingRole !== publication.sharing.sharingRole
-          ) {
-            unavailable("session access changed while reading history");
-            return;
-          }
-          // Retained facts and current caller policy authorize the final synchronous publication.
-          const result = publication.publish();
-          if (isPromiseLike(result)) {
-            void Promise.resolve(result).catch(() => {});
-            throw new Error("Retained history publication must remain synchronous");
-          }
-        } finally {
-          facts.release();
         }
       },
       release: () => excluded?.release(),

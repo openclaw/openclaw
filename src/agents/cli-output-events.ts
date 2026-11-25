@@ -154,6 +154,7 @@ export function projectCliBackendEvent(params: {
       text: state.customThinkingText,
       delta: event.text,
       isReasoningSnapshot: true,
+      modelProgress: true,
     });
     return;
   }
@@ -222,6 +223,7 @@ export function projectCliTaggedReasoning(params: {
         text,
         delta: delta.text,
         isReasoningSnapshot: true,
+        modelProgress: true,
       });
     }
   }
@@ -483,7 +485,7 @@ export function dispatchClaudeCliThinking(params: {
     const onThinkingProgress = params.onThinkingProgress;
     if (progressTokensDelta !== undefined && onThinkingProgress) {
       tracker.progressTokens += progressTokensDelta;
-      onThinkingProgress({ progressTokens: tracker.progressTokens });
+      onThinkingProgress({ progressTokens: tracker.progressTokens, modelProgress: true });
       return;
     }
     // signature_delta carries opaque continuation material; the Claude CLI owns
@@ -503,7 +505,12 @@ export function dispatchClaudeCliThinking(params: {
     tracker.emittedText = appendToAggregate
       ? `${tracker.emittedText}${thinking}`
       : assembleThinkingTextByIndex(tracker.streamedByIndex);
-    onThinkingDelta({ text: tracker.emittedText, delta: thinking, isReasoningSnapshot: true });
+    onThinkingDelta({
+      text: tracker.emittedText,
+      delta: thinking,
+      isReasoningSnapshot: true,
+      modelProgress: true,
+    });
     return;
   }
 
@@ -515,12 +522,23 @@ export function dispatchClaudeCliThinking(params: {
     const content = Array.isArray(params.parsed.message.content)
       ? params.parsed.message.content
       : [];
-    for (const [index, block] of content.entries()) {
+    // Claude Code replays each finished block as a one-block record before that
+    // block's content_block_stop, so the open stream block identifies it; its
+    // position in the record is always 0.
+    const openBlockIndex = content.length === 1 ? tracker.currentSyntheticBlockIndex : undefined;
+    for (const [position, block] of content.entries()) {
+      const index = openBlockIndex ?? position;
       // redacted_thinking blocks are opaque provider material with no text lane.
       if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
         continue;
       }
       if (!params.onThinkingDelta) {
+        continue;
+      }
+      const previous = tracker.streamedByIndex.get(index) ?? "";
+      // Treat prefix snapshots defensively as replays: keep the fuller display so
+      // replaying it afterward cannot manufacture new progress.
+      if (previous.startsWith(block.thinking)) {
         continue;
       }
       tracker.streamedByIndex.set(index, block.thinking);
@@ -530,7 +548,12 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       tracker.emittedText = text;
-      params.onThinkingDelta({ text, delta: block.thinking, isReasoningSnapshot: true });
+      params.onThinkingDelta({
+        text,
+        delta: block.thinking,
+        isReasoningSnapshot: true,
+        modelProgress: true,
+      });
     }
   }
 }

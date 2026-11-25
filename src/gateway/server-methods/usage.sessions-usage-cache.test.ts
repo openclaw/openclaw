@@ -3,12 +3,15 @@ import { DEFAULT_WORKER_PENDING_BYTES } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { publishSessionCostUsageUpdated } from "../../infra/session-cost-usage-events.js";
 import { compactUsageOverviewFamilies } from "../../infra/session-cost-usage-overview-load.js";
-import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import { workerTaskPoolEntrypoints } from "../../infra/worker-task-pool-runtime.test-support.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
@@ -16,12 +19,17 @@ import type {
   PoolFixtureResult,
 } from "../../infra/worker-task-pool.test-support.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -107,39 +115,168 @@ describe("sessions.usage result cache and owner attribution", () => {
     );
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.useRealTimers().restoreAllMocks());
 
-  it("keeps process-local incognito metadata in broad usage results", async () => {
-    await withOpenClawTestState({ label: "usage-incognito" }, async (state) => {
-      const key = "agent:main:dashboard:incognito-usage";
-      const sessionId = "private-usage";
-      const storePath = resolveIncognitoOpenClawAgentSqlitePath({
-        agentId: "main",
-        env: state.env,
-      });
-      await replaceSessionEntry(
-        { agentId: "main", env: state.env, sessionKey: key, storePath },
-        { sessionId, incognito: true, updatedAt: 1_000, label: "Private usage" },
+  it.each(["detail", "overview"] as const)(
+    "%s usage follows invited membership and drops a revoked source",
+    async (projectionKind) => {
+      await withOpenClawTestState(
+        { label: "usage-invited", prepareProfileCatalog: true },
+        async (state) => {
+          const owner = ensureProfileForEmail("usage-owner@invited.test");
+          const member = ensureProfileForEmail("usage-member@invited.test");
+          const outsider = ensureProfileForEmail("usage-outsider@invited.test");
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+          const runtimeConfig = usageRoleConfig(config, "invited");
+          await state.writeConfig(runtimeConfig);
+          const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+          const sessionIds = ["invited-shared", "invited-unshared"];
+          const keys = sessionIds.map((id) => "agent:main:dashboard:" + id);
+          for (const [index, sessionKey] of keys.entries()) {
+            await replaceSessionEntry(
+              { agentId: "main", env: state.env, sessionKey, storePath },
+              ownedRow(sessionIds[index]!, 1_000 - index, owner.id, { visibility: "shared" }),
+            );
+          }
+          mocks.discoverAllSessions.mockResolvedValue(
+            sessionIds.map((sessionId, index) => ({
+              sessionId,
+              sessionFile: "sqlite:main:" + sessionId + ":" + storePath,
+              mtime: 1_000 - index,
+            })),
+          );
+          mocks.loadSessionCostSummariesFromCache.mockImplementation(
+            async ({ sessions }: { sessions: Array<{ sessionId: string }> }) =>
+              freshUsageBatch(
+                sessions.map((session) =>
+                  usageTotals(session.sessionId === sessionIds[0] ? 11 : 23),
+                ),
+              ),
+          );
+          const projection = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getConfig: () => runtimeConfig,
+          });
+          const context = bindSessionRowProjection(
+            { getRuntimeConfig: () => runtimeConfig },
+            () => projection,
+          );
+          const clients = new Map(
+            [member, outsider].map((profile) => [profile.id, usageClient(profile.id)]),
+          );
+          const list = async (profileId: string) => {
+            const [ok, payload, error] = usageReply(
+              await invokeUsage(
+                "sessions.usage",
+                {
+                  range: "all",
+                  agentId: "main",
+                  ...(projectionKind === "overview" ? { projection: projectionKind } : {}),
+                },
+                runtimeConfig,
+                { client: clients.get(profileId), context },
+              ),
+            );
+            expect(ok, JSON.stringify(error)).toBe(true);
+            const result = payload as SessionsUsageResult;
+            return {
+              keys: result.sessions.map((session) => session.key),
+              tokens: result.totals.totalTokens,
+            };
+          };
+          try {
+            const scope = { agentId: "main", sessionKey: keys[0]!, storePath, env: state.env };
+            await addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
+            expect(await list(member.id)).toEqual({ keys: [keys[0]], tokens: 11 });
+            expect(await list(outsider.id)).toEqual({ keys: [], tokens: 0 });
+            expect(await removeSessionMember(scope, member.id)).not.toBeNull();
+            expect(await list(member.id)).toEqual({ keys: [], tokens: 0 });
+          } finally {
+            projection.dispose();
+          }
+        },
       );
-      mocks.discoverAllSessions.mockResolvedValueOnce([
-        { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}`, mtime: 1_000 },
-      ]);
-      mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce(
-        freshUsageBatch([{ ...createEmptyCostUsageTotals(), totalTokens: 13 }]),
-      );
+    },
+  );
 
-      const result: SessionsUsageResult = await runSessionsUsage({
-        range: "all",
-        agentId: "main",
-      });
-      expect(result).toMatchObject({
-        sessions: [{ key, sessionId, label: "Private usage", usage: { totalTokens: 13 } }],
-        totals: { totalTokens: 13 },
-      });
-    });
-  });
+  it.each(["system", "none", "invited"] as const)(
+    "keeps mixed durable and process-local usage within %s authority",
+    async (cap) => {
+      await withOpenClawTestState(
+        { label: "usage-incognito", prepareProfileCatalog: true },
+        async (state) => {
+          const viewer = ensureProfileForEmail("usage-viewer@example.test");
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+          const runtimeConfig = usageRoleConfig(config, cap === "system" ? "none" : cap);
+          await state.writeConfig(runtimeConfig);
+          const key = "agent:main:dashboard:incognito-usage";
+          const sessionId = "private-usage";
+          const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+            agentId: "main",
+            env: state.env,
+          });
+          await replaceSessionEntry(
+            { agentId: "main", env: state.env, sessionKey: key, storePath },
+            ownedRow(sessionId, 1_000, viewer.id, { incognito: true, label: "Private usage" }),
+          );
+          const durableKey = "agent:main:durable-usage";
+          const durablePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+          await replaceSessionEntry(
+            { agentId: "main", env: state.env, sessionKey: durableKey, storePath: durablePath },
+            ownedRow("durable-usage", 999, viewer.id),
+          );
+          mocks.discoverAllSessions.mockResolvedValueOnce([
+            { sessionId, sessionFile: `sqlite:main:${sessionId}:${storePath}`, mtime: 1_000 },
+            {
+              sessionId: "durable-usage",
+              sessionFile: `sqlite:main:durable-usage:${durablePath}`,
+              mtime: 999,
+            },
+          ]);
+          mocks.loadSessionCostSummariesFromCache.mockImplementationOnce(
+            async ({ sessions }: { sessions: Array<{ sessionId: string }> }) =>
+              freshUsageBatch(
+                sessions.map((session) => usageTotals(session.sessionId === sessionId ? 13 : 17)),
+              ),
+          );
+          const projection = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getConfig: () => runtimeConfig,
+          });
+          try {
+            const [ok, payload, error] = usageReply(
+              await invokeUsage(
+                "sessions.usage",
+                { range: "all", agentId: "main" },
+                runtimeConfig,
+                {
+                  client: usageClient(cap === "system" ? undefined : viewer.id),
+                  context: bindSessionRowProjection(
+                    { getRuntimeConfig: () => runtimeConfig },
+                    () => projection,
+                  ),
+                },
+              ),
+            );
+            expect(ok, JSON.stringify(error)).toBe(true);
+            const result = payload as SessionsUsageResult;
+            expect(result.sessions.map((session) => session.key)).toEqual(
+              cap === "system" ? [key, durableKey] : [durableKey],
+            );
+            expect(result.totals.totalTokens).toBe(cap === "system" ? 30 : 17);
+            if (cap === "system") {
+              expect(result.sessions[0]).toMatchObject({
+                label: "Private usage",
+                usage: { totalTokens: 13 },
+              });
+            }
+          } finally {
+            projection.dispose();
+          }
+        },
+      );
+    },
+  );
 
   it.each(["cold", "stale"])(
     "does not give a %s lower-cache snapshot the 30s freshness TTL",
@@ -178,42 +315,51 @@ describe("sessions.usage result cache and owner attribution", () => {
     },
   );
 
-  it("shares population facts across pages and filters until an owner publishes new usage", async () => {
-    const entries = Array.from({ length: 60 }, (_, index) => ({
-      sessionId: `page-${index + 1}`,
-      updatedAt: index + 1,
-    }));
-    const tokens = Object.fromEntries(entries.map((entry, index) => [entry.sessionId, index + 1]));
-    const query = fixture(entries, tokens);
-    const first = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
-    const second = await query({
-      projection: "overview",
-      sort: "tokens",
-      sortDirection: "desc",
-      offset: 50,
-    });
-    expect(first.sessions).toHaveLength(50);
-    expect(first.sessions[0]?.sessionId).toBe("page-60");
-    expect(second.sessions.map((row) => row.sessionId)).toEqual(
-      Array.from({ length: 10 }, (_, index) => `page-${10 - index}`),
+  it("retains partial usage until the owner publishes complete totals", async () => {
+    const query = fixture(
+      [
+        { sessionId: "known", updatedAt: 2, model: "Alpha" },
+        { sessionId: "pending", updatedAt: 1, model: "Beta" },
+      ],
+      { known: 17, pending: 23 },
     );
-    const filtered = await query({ projection: "overview", query: "minTokens:55" });
-    expect(filtered.sessions).toHaveLength(6);
-    expect(filtered.totals.totalTokens).toBe(345);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
-    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValueOnce({
+      summaries: [usageTotals(17), null],
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 1,
+        pendingFiles: 1,
+        staleFiles: 0,
+      },
+    });
+    const partial = await query({ projection: "overview", limit: 2 });
+    expect(partial.partial?.reason).toBe("summarizing");
+    expect(partial.totals.totalTokens).toBe(17);
+    expect(partial.sessions.map((row) => row.sessionId)).toEqual(["known", "pending"]);
+    expect(partial.sessions[1]).toMatchObject({ usage: null, computing: true });
 
-    tokens["page-1"] = 100;
+    publishSessionCostUsageUpdated("main");
+    const complete = await query({ projection: "overview", limit: 2 });
+    expect(complete.partial).toBeUndefined();
+    expect(complete.totals.totalTokens).toBe(40);
+    expect(complete.sessions.map((row) => row.usage?.totalTokens)).toEqual([17, 23]);
+  });
+
+  it("refreshes a fresh overview after its owner publishes new usage", async () => {
+    const tokens = { first: 1, second: 2 };
+    const query = fixture(
+      [
+        { sessionId: "first", updatedAt: 1 },
+        { sessionId: "second", updatedAt: 2 },
+      ],
+      tokens,
+    );
+    expect((await query({ projection: "overview" })).totals.totalTokens).toBe(3);
+    tokens.first = 100;
     publishSessionCostUsageUpdated("main");
     const updated = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
-    expect(updated.sessions[0]).toMatchObject({ sessionId: "page-1", usage: { totalTokens: 100 } });
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
-
-    // Context predicates hydrate a different source snapshot, unlike usage-only filters.
-    expect((await query({ projection: "overview", query: "has:context" })).sessions).toEqual([]);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
-    expect((await query({ projection: "overview" })).sessions).toHaveLength(50);
-    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
+    expect(updated.totals.totalTokens).toBe(102);
+    expect(updated.sessions[0]).toMatchObject({ sessionId: "first", usage: { totalTokens: 100 } });
   });
 });
 
@@ -290,59 +436,6 @@ function ownedRow(
 describe("usage creator attribution", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("filters before the row cap, attributes retained instances, and keeps daily categories in scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const ada = ensureProfileForEmail("ada@example.test");
-      const bob = ensureProfileForEmail("bob@example.test");
-      setDisplayName(ada.id, "Ada");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const query = fixture(
-        [
-          ownedRow("ada", 30, ada.id, { usageFamilySessionIds: ["ada-old"] }),
-          ownedRow("bob", 40, bob.id),
-        ],
-        { "ada-old": 20, ada: 10, bob: 30, orphan: 40 },
-      );
-      const all = await query();
-      expect(all).toMatchObject({ sessions: [{ sessionId: "bob" }], totals: { totalTokens: 100 } });
-      const adaGroup = expectDefined(
-        all.aggregates.byCreator?.find((creator) => creator.actor?.label === "Ada"),
-        "Ada creator",
-      );
-      expect(adaGroup).toMatchObject({
-        sessionCount: 2,
-        totals: { totalTokens: 30 },
-        daily: [{ date: "2026-08-01", input: 30, totalTokens: 30 }],
-        sessionActivity: [{ dates: ["2026-08-01"], sessionCount: 2 }],
-      });
-      expect(all.aggregates.costDaily).toMatchObject([
-        { date: "2026-08-01", input: 100, totalTokens: 100, inputCost: 1, totalCost: 1 },
-      ]);
-      const selected = await query({ creatorKey: adaGroup.key });
-      expect(selected).toMatchObject({
-        totals: { totalTokens: 30 },
-        sessions: [{ sessionId: "ada", creatorKey: adaGroup.key, createdActor: { label: "Ada" } }],
-      });
-      expect(selected.creatorOptions).toEqual(all.creatorOptions);
-      expect(selected.aggregates.costDaily).toMatchObject([
-        { input: 30, totalTokens: 30, totalCost: expect.closeTo(0.3) },
-      ]);
-      expect(
-        mocks.loadSessionCostSummariesFromCache.mock.lastCall?.[0].sessions.map(
-          (session: { sessionId: string }) => session.sessionId,
-        ),
-      ).toEqual(["ada", "ada-old"]);
-      const bobGroup = expectDefined(
-        all.aggregates.byCreator?.find((creator) => creator.actor?.id === bob.id),
-        "Bob creator",
-      );
-      expect((await query({ creatorKey: bobGroup.key })).totals.totalTokens).toBe(30);
-      expect((await query()).totals.totalTokens).toBe(100);
-      expect(await query({ creatorKey: adaGroup.key })).toEqual(selected);
-      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
-    });
-  });
-
   it("canonicalizes profile merges without conflating channel senders or mutable owners", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const ada = ensureProfileForEmail("ada@example.test");
@@ -391,8 +484,8 @@ describe("usage creator attribution", () => {
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const query = fixture(
         [
-          ownedRow("ada", 1, ada.id, { visibility: "shared" }),
-          ownedRow("bob", 2, bob.id, { visibility: "shared" }),
+          ownedRow("ada", 1, ada.id, { visibility: "shared", model: "Alpha" }),
+          ownedRow("bob", 2, bob.id, { visibility: "shared", model: "Alpha" }),
         ],
         { ada: 10, bob: 20 },
       );
@@ -409,8 +502,9 @@ describe("usage creator attribution", () => {
         [bob.id, ["agent:main:bob"], 20],
       ] as const) {
         const viewer = usageClient(profileId);
-        const result = await query({ limit: 20 }, viewer, roleConfig);
-        expect(await query({ limit: 20 }, viewer, roleConfig)).toEqual(result);
+        const overview = { projection: "overview", query: "model:Alpha" };
+        const result = await query(overview, viewer, roleConfig);
+        expect(await query(overview, viewer, roleConfig)).toEqual(result);
         expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
         expect(result.totals.totalTokens).toBe(tokens);
       }

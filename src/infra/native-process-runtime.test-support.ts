@@ -5,6 +5,7 @@ const entrypoint = createTestEntrypoint(import.meta.url, "infra");
 
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
+  acpClient: entrypoint("../acp/client", "acp/client.js"),
   backupDatabaseDiscovery: runtimeProcessEntrypoints.backupDatabaseDiscovery,
   databaseBackup: runtimeProcessEntrypoints.databaseBackup,
   updatePostgresState: runtimeProcessEntrypoints.updatePostgresState,
@@ -12,6 +13,7 @@ export const nativeProcessTestEntrypoints = {
   diagnosticsTimeline: entrypoint("diagnostics-timeline"),
   fsSafeCore: entrypoint("fs-safe"),
   fsSafeEnv: entrypoint("fs-safe-env"),
+  configEnvVars: entrypoint("../config/config-env-vars", "config/config-env-vars.js"),
   memoryFsUtils: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../packages/memory-host-sdk/src/host/fs-utils",

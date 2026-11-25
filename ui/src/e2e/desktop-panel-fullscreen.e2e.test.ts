@@ -62,7 +62,7 @@ async function openDesktopPanel(page: Page) {
   });
   await page
     .locator("openclaw-command-palette")
-    .getByRole("textbox", { name: "Search or start a task…" })
+    .getByRole("textbox", { name: "Search…" })
     .waitFor();
   await page.getByRole("option", { name: "Desktop", exact: true }).click();
   const panel = page.locator("openclaw-desktop-panel");
@@ -317,7 +317,7 @@ suite.define(() => {
         .filter({
           hasText:
             mode === "denied"
-              ? "Could not change fullscreen mode: Fullscreen permission denied"
+              ? "Couldn’t change fullscreen mode. Try again. Fullscreen permission denied"
               : "Fullscreen is unavailable in this browser",
         })
         .waitFor();

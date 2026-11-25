@@ -24,14 +24,15 @@ import type {
 } from "./deferred-plugin-session-import-schema.js";
 import {
   DEFERRED_PLUGIN_SESSION_IMPORT_RECEIPT_KIND,
+  databaseIdentity,
   resolveDeferredPluginSessionSourceKey,
   readDeferredPluginSessionImportBindingReceipt,
   readDeferredPluginSessionImportReceipt,
 } from "./deferred-plugin-session-source-read.js";
-import { databaseIdentity, sameSourceContent } from "./deferred-plugin-session-verification.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
+  sameSourceContent,
   statMigrationPath,
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";

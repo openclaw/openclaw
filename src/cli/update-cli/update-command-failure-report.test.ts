@@ -13,7 +13,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunResult } from "../../infra/update-run-result.js";
-import { updateGitCheckout } from "../../infra/update-runner-git.js";
+import { updateGitRelease } from "../../infra/update-runner-git-release.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
@@ -169,7 +169,7 @@ it.each([
   const { root, env } = checkout();
   execFileSync("git", ["init", "--quiet", root]);
   const result = completeUpdateCommandRun(
-    await updateGitCheckout({
+    await updateGitRelease({
       gitRoot: root,
       runCommand: runCommandWithTimeout,
       defaultCommandEnv: env,
@@ -181,9 +181,6 @@ it.each([
         validateCandidate: async () => {},
         beforeGitMutation: async () => {
           throw new Error("Failed admission must not mutate the checkout");
-        },
-        runGitDoctor: async () => {
-          throw new Error("Failed admission must not run Doctor");
         },
       },
     }),

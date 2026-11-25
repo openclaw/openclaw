@@ -33,7 +33,6 @@ import {
 } from "../../secrets/store/secret-store.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -189,7 +188,7 @@ export function createSecretsHandlers(params: {
       client: GatewayClient | null,
     ) => Promise<unknown>,
   ) => {
-    const { params: requestParams, respond, client, context } = options;
+    const { params: requestParams, respond, client } = options;
     const requestAuthority = readGatewayRequestMutationAuthority(options);
     let assertOwner: (() => void) | undefined;
     try {
@@ -200,10 +199,10 @@ export function createSecretsHandlers(params: {
       respond(false, undefined, localStateOwnerChangedError(error));
       return Promise.resolve();
     }
-    const authority = createAgentRuntimeAuthorityGuard(client, context, respond, () => {
+    const assertCurrent = () => {
       requestAuthority.assertCurrent();
       assertOwner?.();
-    });
+    };
     let mutationResult: unknown;
     const attempt = async () => {
       if (action === "delete") {
@@ -212,22 +211,17 @@ export function createSecretsHandlers(params: {
           params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
         }
       }
-      if (!authority.ensureActive()) {
-        return false;
-      }
+      assertCurrent();
       holdGatewayPolicyResponse(respond);
-      mutationResult = await mutate(requestParams, authority.commitGuard, client);
-      return true;
+      mutationResult = await mutate(requestParams, assertCurrent, client);
     };
     return (async () => {
       const method = `secrets.store.${action}`;
       let committed = false;
       try {
-        if (!(await attempt())) {
-          return;
-        }
+        await attempt();
         committed = true;
-        authority.commitGuard?.();
+        assertCurrent();
         const result = {
           ok: true as const,
           ...(await params.storeWriteService.reloadReference(names)),

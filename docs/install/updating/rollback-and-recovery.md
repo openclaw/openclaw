@@ -1,5 +1,5 @@
 ---
-summary: "Downgrading, automatic schema-neutral rollback, verified pre-update backups, and triage when an update leaves you stuck"
+summary: "Protected release rollback, legacy recovery limits, verified pre-update backups, and triage after a failed update"
 read_when:
   - Something broke after an update and you need to go back
   - You want to know when `openclaw update` can roll back automatically
@@ -23,6 +23,46 @@ runtime, and the service installation when inspected. An unresolved service path
 means it could not be verified, not that no Gateway is running. Older installed
 updaters keep their original messages for the first upgrade hop.
 
+## Protected release rollback
+
+Prepared-release updates of Git, npm, pnpm, and Bun installs migrate private
+state and agent copies before publishing them. PostgreSQL stores selected for
+protection use a private server-side copy; the original application schema and
+rows stay unchanged. Required SQLite inputs remain private too, including
+mixed-engine installations.
+
+Preparation uses the [copy-time policy](/install/updating) to select protection.
+Larger PostgreSQL stores keep the existing in-place migration path, without
+automatic data rollback. Update output and the saved report name that limitation.
+Back up those stores before updating.
+
+If a protected candidate fails, the launcher restores the previous release, local
+migration originals, and PostgreSQL anchors. Those anchors select the original
+namespaces; no PostgreSQL restore runs during rollback. Writes made only during
+the failed trial are discarded. Recovery is confirmed by the previous Gateway's
+readiness, not by restoring files alone. An unavailable PostgreSQL server can
+still leave the Gateway unavailable.
+
+For stores selected for protection, there is no portable-export or in-place
+fallback after a failed copy. If the copy cannot be prepared, including after a
+revoked `CREATE` grant, startup refuses through the existing exit 78 and names the
+obstruction. Correct that cause before retrying. `--no-restart` delays copying
+until the next actual start.
+
+Each protected schema-changing PostgreSQL update changes the affected namespace
+name and lengthens the restart. Allow server space for both copies, indexes, WAL,
+temporary work, and retained generations. Paired namespace/anchor retention and
+warning-only cleanup are described in the
+[PostgreSQL operator guide](/gateway/postgresql#updates-and-schema-migrations).
+These recovery generations are not a full-state or off-server backup.
+
+This protection cannot repair an installation already stranded by an earlier
+unprotected migration. Use a known-good build compatible with the current schema,
+or restore a verified matched pre-migration backup with its matching release
+while writers are stopped. Verify the installation selected by the managed
+service; replacing a global package alone is not proof. Never lower version
+markers or drop namespaces to force an older build to start.
+
 ## Downgrade
 
 Verify the upgrade and your session history before retiring recovery originals
@@ -30,6 +70,14 @@ with `openclaw update cleanup`. Downgrading the package does not reverse config
 or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
+
+When an older Gateway service refuses newer-written config, run the newer
+OpenClaw binary or reinstall the service from that newer installation. Service
+startup ignores `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`, including
+values set in systemd's environment or unit drop-ins. For an intentional
+downgrade, restore the verified pre-update backup with its matching release as
+described below. The override is for intentional CLI recovery actions; it does
+not reverse migrations or bypass database compatibility checks.
 
 <Warning>
 Fresh shared-state databases created after tenant-container management was retired
@@ -46,14 +94,26 @@ runs required Doctor migrations, and verifies the activated Gateway. A raw
 `npm i -g` replacement does not retain the previous package or run this recovery
 workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
 
-The updater retains the previous package during activation and keeps it when
-failed recovery cannot prove a working installation. Migration recovery originals
-and original-state update captures remain until explicit
+Legacy in-place updaters retain the previous package during activation and keep
+it when failed recovery cannot prove a working installation. On that path, a verified healthy update
+retires its own migration recovery originals and original-state update capture;
+other copies remain until a later update or explicit
 [update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
+
+A verified update that cannot remove an obsolete package backup still succeeds
+with a warning that names the backup it could not remove. This includes the npm
+link to a dev checkout that a switch to a package moved aside, when the
+filesystem refuses to remove that unchanged link; see
+[replacing the package directory](/cli/update/how-updates-run#replacing-the-package-directory)
+for how to remove that link safely. A backup link that was replaced or cannot be
+read, and a backup directory that another writer replaced, still fail the
+update. See [status and history](/cli/update/status-and-history) for the
+warning.
+
 If a launcher backup cannot be restored, the update error names the affected
 launcher and the retained backup path.
 
@@ -152,14 +212,17 @@ openclaw update cleanup --dry-run
 
 ### Full-state recovery requires a backup
 
-Package updates keep pre-migration SQLite snapshots alongside the package
-backup until verified successful activation removes restorable snapshots with that backup.
+Legacy in-place package updates keep pre-migration SQLite snapshots alongside
+the package backup until verified successful activation removes restorable snapshots with that backup.
 Snapshots whose source write generations could not be sealed remain available
 for manual recovery even after successful activation. Rollback, failed or
 unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
-retained path. Older snapshot directories are not automatically removed: their
-ownership and successful outcome cannot be proven from existing receipts.
+retained path. A retained snapshot directory is removed by
+[update cleanup](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes),
+automatically after a later update is verified successful, when update history
+records that directory for an update that finished before the verified one
+started. Snapshot directories that no listed update recorded are not removed.
 Doctor reports older npm snapshot directories with their size and removal command.
 Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.
@@ -195,7 +258,9 @@ Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
-and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
+and displaced files. A `<database>.migrated-<runId>.receipt.json` beside them records
+which files the rollback moved; the next verified successful update deletes them (see
+[what automatic cleanup deletes](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes)). See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
 
 Database restoration preserves current update history, including failure details
@@ -216,6 +281,9 @@ reported locations for a compatible recovery implementation or an independent
 verified backup. An interrupted or refused restore is not a successful rollback.
 
 ### Automatic schema-neutral rollback
+
+This section describes legacy in-place updaters, not the protected release trial
+above. Their capture/restore and generation checks remain separate.
 
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
@@ -263,12 +331,17 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
-Once the updater verifies that the target Gateway is serving, later optional
-recognized maintenance failures, such as a late restart-health report or removing
-an old CLI wrapper, remain warnings and do not trigger rollback or turn the update
-into a failure. Authority refusals, data-at-risk failures, and unclassified errors
-still block successful completion. This does not rewrite an earlier failed
-attempt when a later status check finds the Gateway healthy.
+Once the updater verifies that the target Gateway is serving, a late
+restart-health report remains a warning and does not trigger rollback or turn the
+update into a failure. An old CLI wrapper that cannot be removed after a switch
+from a Git checkout to a package install is also a warning, whether or not the
+Gateway restarted: the package install is kept, and the wrapper keeps starting
+the old checkout wherever it comes first on `PATH` until you remove it. The
+warning names the path it could not remove or inspect. A wrapper that a system package owns still fails the
+update and rolls the package install back. Authority refusals, data-at-risk
+failures, and unclassified errors still block successful completion. This does
+not rewrite an earlier failed attempt when a later status check finds the
+Gateway healthy.
 
 A verified rollback names the version serving after recovery, including when
 an additional repair was needed. If the restored service fails its health check,
@@ -424,6 +497,7 @@ repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
+- If `openclaw` cannot start after an update was interrupted on an `install-cli.sh` prefix or the durable service copy, and `lib/node_modules/openclaw` is missing, rename the leftover `lib/node_modules/.openclaw.release-link-*` link onto `lib/node_modules/openclaw`. It names the unchanged previous release. See [release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).

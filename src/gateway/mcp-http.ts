@@ -3,9 +3,9 @@ import { createServer as createHttpServer, type ServerResponse } from "node:http
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
+import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
-import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -24,7 +24,6 @@ import { logDebug, logWarn } from "../logger.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -38,6 +37,10 @@ import {
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
 import {
+  resolveInMcpGrantRequestScope,
+  runInMcpGrantRequestScope,
+} from "./mcp-http.grant-generation.js";
+import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   getActiveMcpLoopbackRuntime,
   markMcpLoopbackRequestClassified,
@@ -50,7 +53,7 @@ import {
   setActiveMcpLoopbackRuntime,
   updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
-import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
+import { jsonRpcError, jsonRpcResult, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   logMcpLoopbackTraffic,
   resolveMcpCliCaptureKey,
@@ -251,16 +254,15 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           { retain: true },
         );
         async function handlePreparedRequest() {
-          // A completion grant is current only while its requester lineage verifies. The
-          // child entry can go away while preparation, hooks or approvals await, so the
-          // dispatch authorization and the tools' source-effect guard both re-check it.
+          // A completion grant is current only while its grant row and requester lineage
+          // verify. Each tool call checks both at dispatch; a started call finishes, and
+          // Stop reaches it through the grant's abort signal.
           const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
-          const isGrantAndLineageCurrent = () =>
-            (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
           const authorizeToolCall = () =>
             !work.isClosing &&
             getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-            isGrantAndLineageCurrent();
+            (boundClientGrant?.isCurrent() ?? true) &&
+            lineage.isCurrent();
           const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
             ? await readResolvedSessionEntryInWorker({ cfg, sessionKey: requestContext.sessionKey })
             : undefined;
@@ -287,12 +289,42 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             return;
           }
           const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
+          const createCallerIdentity = (
+            agentId: string | undefined,
+            phase: "construction" | "execution",
+          ) => {
+            const callerIdentity = boundClientGrant
+              ? createAdmittedGatewayToolCallerIdentity({
+                  admittedRunContext: boundClientGrant.admittedRunContext,
+                  receiptAdmission: lineage.admission,
+                  approvalSignals: boundClientGrant.abortSignal && [boundClientGrant.abortSignal],
+                  // Management binding needs the admitted identity, not execution's issuer.
+                  mintCronRequesterGrant:
+                    phase === "execution" ? boundClientGrant.mintCronRequesterGrant : undefined,
+                  agentId,
+                  sessionKey: requestContext.sessionKey,
+                  requesterOrigin: requestContext.requesterOrigin,
+                  turnSourceChannel: requestContext.messageProvider,
+                  turnSourceLocal:
+                    !requestContext.messageProvider &&
+                    requestContext.cronCreatorCallerOrigin?.kind === "local"
+                      ? true
+                      : undefined,
+                  turnSourceTo: requestContext.currentChannelId,
+                  turnSourceAccountId: requestContext.accountId,
+                  turnSourceThreadId: requestContext.currentThreadTs,
+                })
+              : undefined;
+            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
+            return callerIdentity;
+          };
           // Tools capture their creator at construction, not the later HTTP execution scope.
           let scopedTools: Awaited<ReturnType<typeof toolCache.resolve>>;
           try {
-            scopedTools = await withAgentQuestionAnswerAuthority(
-              boundClientGrant?.questionAnswerAuthority,
-              () =>
+            const resolveTools = () =>
+              withAgentQuestionAnswerAuthority(boundClientGrant?.questionAnswerAuthority, () =>
                 toolCache.resolve({
                   context: requestContext,
                   admittedRunContext: boundClientGrant?.admittedRunContext,
@@ -318,7 +350,28 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     ? { bundledTools: boundClientGrant.bundledTools }
                     : {}),
                 }),
-            );
+              );
+            const withManagementScope = boundClientGrant?.withCronManagementToolConstruction;
+            if (boundClientGrant && withManagementScope) {
+              const agentId = resolveSessionAgentIds({
+                config: boundClientGrant.toolPolicyConfig,
+                sessionKey: requestContext.sessionKey,
+                agentId: requestContext.agentId,
+              }).sessionAgentId;
+              const constructAsCaller = () =>
+                withGatewayToolCallerIdentity(createCallerIdentity(agentId, "construction"), () =>
+                  withManagementScope(resolveTools),
+                );
+              scopedTools = await (boundClientGrant.requestScope
+                ? resolveInMcpGrantRequestScope(
+                    boundClientGrant.requestScope,
+                    constructAsCaller,
+                    requestAbort.signal,
+                  )
+                : constructAsCaller());
+            } else {
+              scopedTools = await resolveTools();
+            }
           } catch (error) {
             requestAbort.signal.throwIfAborted();
             if (boundClientGrant && !boundClientGrant.isCurrent()) {
@@ -379,6 +432,17 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               }
               continue;
             }
+            if (message.method === "tools/call" && requestContext.toolCallsRefused) {
+              if (shouldSendJsonRpcResponse(message)) {
+                responses.push(
+                  jsonRpcResult(readJsonRpcRequestId(message), {
+                    content: [{ type: "text", text: "Tools are not callable during compaction." }],
+                    isError: true,
+                  }),
+                );
+              }
+              continue;
+            }
             const cliCaptureHandle = cliCaptureHandles[messageIndex];
             let response: object | null;
             try {
@@ -395,16 +459,14 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     sessionKey: requestContext.sessionKey,
                     sessionId: requestContext.sessionId,
                     runId: requestContext.runId,
+                    ...(requestContext.requester ? { requester: requestContext.requester } : {}),
+                    ...(requestContext.trigger ? { trigger: requestContext.trigger } : {}),
                     approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
                     channelId: requestContext.currentChannelId,
                     turnSourceChannel: requestContext.messageProvider,
                     turnSourceTo: requestContext.currentChannelId,
                     turnSourceAccountId: requestContext.accountId,
                     turnSourceThreadId: requestContext.currentThreadTs,
-                    loopDetection: resolveToolLoopDetectionConfig({
-                      cfg,
-                      agentId: scopedTools.agentId,
-                    }),
                   },
                   signal,
                   authorizeToolCall,
@@ -425,38 +487,20 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                       }
                     : undefined,
                 });
-              const callerIdentity = boundClientGrant
-                ? createAdmittedGatewayToolCallerIdentity({
-                    admittedRunContext: boundClientGrant.admittedRunContext,
-                    receiptAuthority: isGrantAndLineageCurrent,
-                    receiptAdmission: lineage.admission,
-                    cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
-                    mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
-                    agentId: scopedTools.agentId,
-                    sessionKey: requestContext.sessionKey,
-                    requesterOrigin: requestContext.requesterOrigin,
-                    turnSourceChannel: requestContext.messageProvider,
-                    turnSourceLocal:
-                      !requestContext.messageProvider &&
-                      requestContext.cronCreatorCallerOrigin?.kind === "local"
-                        ? true
-                        : undefined,
-                    turnSourceTo: requestContext.currentChannelId,
-                    turnSourceAccountId: requestContext.accountId,
-                    turnSourceThreadId: requestContext.currentThreadTs,
-                  })
-                : undefined;
-              if (callerIdentity && boundClientGrant?.personalToolParticipants) {
-                callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
-              }
+              const callerIdentity = createCallerIdentity(scopedTools.agentId, "execution");
               // The grant's caller supplies the permission ceiling and live connection check.
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>
                 withGatewayToolCallerIdentity(callerIdentity, () =>
-                  runWithTrackedCancellation(requestAbort.signal, handleRequest),
+                  runWithTrackedCancellation(
+                    // Runtime shutdown must reach a cooperating tool while it still holds the
+                    // response open; the request signal alone waits for the socket to close.
+                    AbortSignal.any([requestAbort.signal, work.signal]),
+                    handleRequest,
+                  ),
                 );
               response = await (runRequestScope
-                ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
+                ? runInMcpGrantRequestScope(runRequestScope, handleAsCaller)
                 : handleAsCaller());
             } finally {
               markMcpLoopbackToolCallFinished(cliCaptureHandle);
@@ -581,6 +625,9 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     // Stop admitting this runtime's child grants before draining accepted
     // requests. A delayed old-server close cannot revoke a successor runtime.
     cleanup();
+    // Abort in-flight request work as soon as shutdown starts; do not wait on
+    // the socket layer to finish draining before signaling cancellation.
+    work.beginClose();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));

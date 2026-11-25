@@ -218,12 +218,14 @@ describe("scheduled occurrence admission", () => {
     await executeJobCore(state, makeCronJob({ payload: payloadFor("agentTurn") }));
     const occurrence = seen[0]?.occurrence as ScheduledOccurrence;
     expect(
-      occurrence.mint({
-        cfg: {},
-        agentId: "main",
-        runId: "run",
-        runSessionKey: "agent:main:cron:job",
-      }).result,
+      (
+        await occurrence.mint({
+          cfg: {},
+          agentId: "main",
+          runId: "run",
+          runSessionKey: "agent:main:cron:job",
+        })
+      ).result,
     ).toEqual({ status: "fail", error: "occurrence admission is not configured" });
   });
 });

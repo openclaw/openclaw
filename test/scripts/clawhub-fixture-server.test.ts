@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
 import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -13,6 +13,7 @@ const servers: ChildProcess[] = [];
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.unstubAllEnvs();
     // Keep startup records and artifacts alive until every fixture process has exited.
     await Promise.all(servers.splice(0).map(stopServer));
     cleanup();
@@ -145,6 +146,11 @@ function runFixtureAssertion(cwd: string, ...args: string[]) {
 }
 
 describe("ClawHub fixture server", () => {
+  beforeEach(() => {
+    // Fixture traffic stays on loopback even when the host has an outbound proxy.
+    vi.stubEnv("no_proxy", "127.0.0.1");
+  });
+
   it("serves an accepted install audit for the kitchen-sink-plugin profile", async ({ signal }) => {
     const { baseUrl } = await startFixtureServer("kitchen-sink-plugin", signal);
     const packageName = "@openclaw/kitchen-sink";
@@ -283,18 +289,19 @@ describe("ClawHub fixture server", () => {
     expectFailure(assertPending("discord"), "whatsapp plugin install record missing");
     expect(assertRequests("complete").status).toBe(1);
     const whatsappPath = `/api/v1/packages/${encodeURIComponent("@openclaw/whatsapp")}`;
-    const versionPath = `${whatsappPath}/versions/${version}`;
+    const detail = await fetchJson(baseUrl, whatsappPath);
+    const versionPath = `${whatsappPath}/versions/${detail.package.tags.alpha}`;
     const completeRequestPaths = [
       whatsappPath,
       `${versionPath}/artifact`,
       `${versionPath}/security`,
       `${versionPath}/artifact/download`,
+      `${whatsappPath}/detail`,
     ];
-    const detail = await fetchJson(baseUrl, whatsappPath);
     expect(detail.package).toMatchObject({
       latestVersion: version,
       runtimeId: "whatsapp",
-      tags: { beta: version, latest: version },
+      tags: { alpha: version, beta: version, latest: version },
     });
     const artifact = await fetchJson(baseUrl, `${versionPath}/artifact`);
     expect(artifact.artifact).toMatchObject({ artifactKind: "npm-pack", artifactSha256: sha256 });
@@ -313,6 +320,7 @@ describe("ClawHub fixture server", () => {
     const download = await fetch(`${baseUrl}${versionPath}/artifact/download`);
     expect(download.headers.get("x-clawhub-artifact-sha256")).toBe(sha256);
     expect(Buffer.from(await download.arrayBuffer())).toEqual(archive);
+    expect((await fetch(`${baseUrl}${whatsappPath}/detail`)).status).toBe(404);
     expect((await fetchJson(baseUrl, "/__fixture__/requests")).requests).toEqual(
       completeRequestPaths.map((requestPath) => `GET ${requestPath}`),
     );
@@ -323,9 +331,9 @@ describe("ClawHub fixture server", () => {
     );
     expectFailure(noRequests(), "unexpected ClawHub fixture requests");
     const requestSequence = async (url = baseUrl) => {
-      for (const requestPath of completeRequestPaths) {
+      for (const [index, requestPath] of completeRequestPaths.entries()) {
         const response = await fetch(`${url}${requestPath}`);
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(index === completeRequestPaths.length - 1 ? 404 : 200);
         await response.arrayBuffer();
       }
     };
@@ -341,7 +349,7 @@ describe("ClawHub fixture server", () => {
     expect(partial.status).toBe(1);
 
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fforeign`)).status).toBe(404);
-    for (const requestPath of completeRequestPaths.slice(1, 3)) {
+    for (const requestPath of completeRequestPaths.slice(1, 4)) {
       expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
     }
     expectFailure(assertRequests("complete", 2), "unexpected ClawHub fixture requests");

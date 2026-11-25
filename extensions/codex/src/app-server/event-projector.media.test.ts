@@ -45,24 +45,20 @@ function nativeImage(id: string, result?: string, savedPath?: string) {
     ...(savedPath ? { savedPath } : {}),
   };
 }
-function codexImage(id: string) {
-  return nativeImage(id, tinyPngBase64, `${codexImages}/${id}.png`);
-}
-function readImages(urls: string[] = []) {
-  return Promise.all(
+const codexImage = (id: string) => nativeImage(id, tinyPngBase64, `${codexImages}/${id}.png`);
+const readImages = (urls: string[] = []) =>
+  Promise.all(
     urls.map(async (url) => ({ url, base64: (await fs.readFile(url)).toString("base64") })),
   );
-}
 function rawImage(id: string, result = tinyPngBase64) {
   return { type: "image_generation_call", id, status: "completed", result };
 }
-function assistantEvent(id: string, text: string, raw = false) {
-  return forCurrentTurn(raw ? "rawResponseItem/completed" : "item/completed", {
+const assistantEvent = (id: string, text: string, raw = false) =>
+  forCurrentTurn(raw ? "rawResponseItem/completed" : "item/completed", {
     item: raw
       ? { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] }
       : { type: "agentMessage", id, text },
   });
-}
 function expectUndeliverableImage(events: Events) {
   const result = events.result();
   expect(result.toolMediaUrls).toBeUndefined();
@@ -123,15 +119,13 @@ function receipt(partialDelivery = false) {
 function messageResult(details: unknown): AgentToolResult<unknown> {
   return { content: [{ type: "text", text: "Sent." }], details };
 }
-function internalReply(mediaUrl: unknown) {
-  return {
-    deliveryStatus: "sent",
-    sourceReplySink: "internal-ui",
-    sourceReply: { text: "Attached.", mediaUrls: [mediaUrl] },
-  };
-}
+const internalReply = (mediaUrl: unknown) => ({
+  deliveryStatus: "sent",
+  sourceReplySink: "internal-ui",
+  sourceReply: { text: "Attached.", mediaUrls: [mediaUrl] },
+});
 
-async function createRemoteGeneratedMediaDelivery(
+async function createRemoteMediaDelivery(
   send: (args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
 ) {
   const params = await createParams();
@@ -145,8 +139,15 @@ async function createRemoteGeneratedMediaDelivery(
     ["generated-first", sources.first, tinyPngBase64],
     ["generated-second", sources.second, SECOND_PNG_BASE64],
   ] as const) {
-    await events.completed(nativeImage(id, result, savedPath));
+    await events.completed({ type: "imageView", id, path: savedPath });
+    await events.raw({
+      type: "function_call_output",
+      id,
+      call_id: id,
+      output: [{ type: "input_image", image_url: `data:image/png;base64,${result}` }],
+    });
   }
+  expect(events.result().replayMetadata?.hadPotentialSideEffects).toBe(false);
   const { bridge, execute } = createMessageBridge(send, {
     workspaceDir: params.workspaceDir,
     remoteWorkspaceRoot,
@@ -271,11 +272,10 @@ describe("CodexAppServerEventProjector media projection", () => {
   );
 
   it("preserves generated media and route-specific identity after sending first to chat-source", async () => {
-    const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
-      async () =>
-        messageResult({
-          messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" },
-        }),
+    const { events, bridge, execute, sources } = await createRemoteMediaDelivery(async () =>
+      messageResult({
+        messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" },
+      }),
     );
     const sent = await sendMedia(bridge, sources.first, "chat-source");
     expect(sent.success).toBe(true);
@@ -321,13 +321,12 @@ describe("CodexAppServerEventProjector media projection", () => {
           details: internalReply(pathToFileURL(event.args.mediaUrl).href),
         };
       });
-      const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
-        async (args) =>
-          messageResult({
-            status: "ok",
-            ...internalReply(args.mediaUrl),
-            messageDelivery: { ...receipt(), sourceReplyDelivered: true },
-          }),
+      const { events, bridge, execute, sources } = await createRemoteMediaDelivery(async (args) =>
+        messageResult({
+          status: "ok",
+          ...internalReply(args.mediaUrl),
+          messageDelivery: { ...receipt(), sourceReplyDelivered: true },
+        }),
       );
       const sent = await sendMedia(bridge, sources.first);
       expect(sent.success).toBe(presentation !== "error");

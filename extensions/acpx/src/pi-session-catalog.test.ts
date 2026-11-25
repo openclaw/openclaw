@@ -60,10 +60,13 @@ const header = (id = "pi-session", version = 3) =>
   piSessionHeader({ id, version, timestamp: "2026-07-13T10:00:00Z" });
 
 function usePiCandidateCacheClock(): () => void {
-  let now = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  let wallClock = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   return () => {
     now += 32_001;
+    wallClock -= 60_000;
   };
 }
 
@@ -226,7 +229,7 @@ describe("Pi session catalog", () => {
         const file = path.join(directory, `session-${String(index)}.jsonl`);
         const entries = [
           header(`pi-session-${String(index)}`),
-          sessionInfo(`info-${String(index)}`, `Pi history ${String(index)}`),
+          sessionInfo(`info-${String(index)}`, `Cafe\u0301 history ${String(index)}`),
         ];
         await fs.writeFile(file, piJsonl(entries));
         await fs.utimes(file, baseTime + index, baseTime + index);
@@ -240,7 +243,7 @@ describe("Pi session catalog", () => {
     expect(second.sessions).toHaveLength(5);
     expect(second.nextCursor).toBeUndefined();
     await expect(
-      listLocalPiSessionPage({ limit: 20, searchTerm: "Pi history 0" }),
+      listLocalPiSessionPage({ limit: 20, searchTerm: "CAFÉ history 0" }),
     ).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "pi-session-0" })],
     });
@@ -309,6 +312,33 @@ describe("Pi session catalog", () => {
     }
   });
 
+  it("pins the selected Pi file and refuses renamed stores or duplicate native IDs", async () => {
+    const directory = await createPiStore();
+    const source = (await listLocalPiSessionPage({}, true)).sessions[0]?.sourceHomeId;
+    expect(source).toMatch(/^[0-9a-f]{64}$/);
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).resolves.toMatchObject({
+      threadId: "pi-session",
+    });
+    const expire = usePiCandidateCacheClock();
+    await fs.copyFile(
+      path.join(directory, "session.jsonl"),
+      path.join(directory, "duplicate.jsonl"),
+    );
+    expire();
+    await expect(
+      listLocalPiSessionPage({}, true, {
+        hostId: "gateway",
+        threadId: transcriptRequest.threadId,
+        sourceHomeId: source,
+      }),
+    ).resolves.toEqual({ sessions: [] });
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow("ambiguous");
+    await createPiStore();
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow(
+      "selection changed",
+    );
+  });
+
   it("opens validated local Pi sessions with the upstream terminal resume contract", async () => {
     await createPiStore();
     const binDirectory = await installFakePi();
@@ -316,7 +346,11 @@ describe("Pi session catalog", () => {
     const { provider, commands } = captureCatalog();
 
     await expect(provider!.list({ hostIds: ["gateway"] })).resolves.toEqual(
-      containingSessions({ threadId: "pi-session", canOpenTerminal: true }),
+      containingSessions({
+        threadId: "pi-session",
+        canOpenTerminal: true,
+        exportPolicy: { origin: "native-local", automatic: true, stableHostThreadIdentity: true },
+      }),
     );
     await expect(provider!.openTerminal!(localRequest)).resolves.toEqual({
       kind: "local",
@@ -382,6 +416,7 @@ describe("Pi session catalog", () => {
         sessions: [
           {
             threadId: "pi-remote",
+            exportPolicy: { origin: "native-local", automatic: true },
             cwd: "/remote/workspace",
             status: "stored",
             archived: false,
@@ -410,7 +445,12 @@ describe("Pi session catalog", () => {
         listNodes: requestListNodes,
       }),
     ).resolves.toEqual(
-      containingSessions({ threadId: "pi-remote", canContinue: false, canOpenTerminal: true }),
+      containingSessions({
+        threadId: "pi-remote",
+        canContinue: false,
+        canOpenTerminal: true,
+        exportPolicy: { origin: "federated", automatic: false },
+      }),
     );
     expect(requestListNodes).toHaveBeenCalledOnce();
     expect(runtimeListNodes).not.toHaveBeenCalled();

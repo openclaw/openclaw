@@ -71,14 +71,14 @@ describe("MCP App one-shot approvals", () => {
     await expect(requestMcpAppToolApproval(f.params)).rejects.toThrow("denied");
     expect(f.manager.consumeAllowOnce).not.toHaveBeenCalled();
   });
-  it("rejects requester revocation during review", async () => {
+  it("rejects run closure during review", async () => {
     const f = fixture();
     mocks.deliver.mockImplementation(async () => {
       f.assertCurrent.mockImplementation(() => {
-        throw new Error("revoked");
+        throw new Error("run ended");
       });
     });
-    await expect(requestMcpAppToolApproval(f.params)).rejects.toThrow("revoked");
+    await expect(requestMcpAppToolApproval(f.params)).rejects.toThrow("run ended");
     expect(f.manager.consumeAllowOnce).not.toHaveBeenCalled();
   });
   it("rejects a consumed or stale approval without granting tool execution", async () => {

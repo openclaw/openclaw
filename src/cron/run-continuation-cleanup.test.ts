@@ -16,6 +16,7 @@ import {
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import { SessionDeliveryDeadLetteredError } from "../infra/session-delivery-queue.records.js";
+import { enqueueUnclaimedSessionDeliveryFixture } from "../infra/session-delivery-queue.test-helpers.js";
 import * as lifecycle from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -30,7 +31,7 @@ type QueueContext = ReturnType<typeof captureOpenClawStateWorkerContext>;
 const writers = ["ordinary", "claimed"] as const;
 const enqueue = async (context: QueueContext, writer: (typeof writers)[number]) =>
   writer === "ordinary"
-    ? queue.enqueueSessionDelivery(payload, context)
+    ? enqueueUnclaimedSessionDeliveryFixture(payload, context)
     : (await queue.enqueueClaimedSessionDelivery(payload, 1_000, context)).id;
 
 async function seedContinuation() {
@@ -69,7 +70,7 @@ function createCorrelatedRun() {
     requesterAgentId: "main",
     expectsCompletionMessage: true,
     completion: { required: true, resultText: "done", capturedAt: now },
-    delivery: { status: "pending", disposition: "retryable" },
+    delivery: { status: "pending" },
     createdAt: now - 1,
     endedAt: now,
     outcome: { status: "ok" },
@@ -238,7 +239,11 @@ it("refuses correlated announcement publication when its source retires during s
       expect.soft(await queue.loadPendingSessionDeliveries(context)).toEqual([]);
       expect.soft(subagentRuns.get(run.runId)).toEqual(sourceBefore);
       expect.soft(readSubagentRun(database, run.runId)).toEqual(persistedBefore);
-      expect(outcome).toMatchObject({ delivered: false, disposition: "permanent_failure" });
+      expect(outcome).toMatchObject({
+        delivered: false,
+        path: "none",
+        reason: "completion_handoff_unavailable",
+      });
     } finally {
       admission.resume();
       await publication;

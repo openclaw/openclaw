@@ -248,7 +248,7 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.attachments()).toEqual([fixture.attachment, retainedFile]);
     expect(getChatAttachmentDataUrl(fixture.attachment)).toBe(originalPayload);
     await waitForSolid(() =>
-      expect(fixture.toast.querySelector(".app-toast__message")?.textContent).toBe(
+      expect(fixture.toast.querySelector(".app-toast__body")?.textContent).toBe(
         "File too large. Try a smaller file.",
       ),
     );

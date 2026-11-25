@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
-import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
+import type { createGatewayUpdateCheck } from "../infra/update-startup-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -88,7 +88,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     },
   });
 
-  const stop = () => {
+  const stopGatewayUpdateCheck = () => {
     stopped = true;
     return (stopPromise ??= (async () => {
       // Fence immediately; a lazy factory that finishes later stops its own
@@ -120,7 +120,7 @@ export function createDeferredGatewayUpdateCheck(params: {
       }
       ownerReady = (async () => {
         try {
-          owner = (await import("../infra/update-startup.js")).createGatewayUpdateCheck({
+          owner = (await import("../infra/update-startup-scheduler.js")).createGatewayUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
             applyRemoteCatalogUpdate: (signal) =>
@@ -165,5 +165,5 @@ export function createDeferredGatewayUpdateCheck(params: {
     });
   };
 
-  return { start, stop };
+  return { start, stop: stopGatewayUpdateCheck };
 }

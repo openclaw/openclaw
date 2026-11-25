@@ -14,9 +14,6 @@ openclaw-agent-row-chip {
 }
 
 .agent-row-chip__avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   flex: 0 0 18px;
   width: 18px;
   height: 18px;

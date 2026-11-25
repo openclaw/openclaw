@@ -1,12 +1,13 @@
 import {
   captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import {
-  AUTOMATIC_RECOVERY_CLEANUP_STEP,
   automaticRecoveryCleanupWarning,
   canAutomaticallyCleanUpdateRecovery,
+  hasSettledAutomaticRecoveryCleanup,
 } from "../infra/update-automatic-cleanup-result.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRunAsync as getUpdateRun } from "../infra/update-run-reader.js";
@@ -25,6 +26,7 @@ export async function finalizeRestartUpdateRun(
   payload: RestartSentinelPayload,
   pendingExpired = false,
   context: DeliveryQueueStateContext = captureDeliveryQueueStateContext(),
+  continuation: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ) {
   const options = { env: context.workerContext.environment };
   const updateRunId = payload.stats?.runId;
@@ -124,6 +126,23 @@ export async function finalizeRestartUpdateRun(
       !orchestratorOwnsVerification &&
       (pendingExpired || !isPendingControlPlaneUpdateRestartSentinel(payload))
     ) {
+      if (
+        !pendingExpired &&
+        payload.status === "ok" &&
+        updateRun.verification.versionMatch !== false
+      ) {
+        const { commitRestartPluginCohort } = await import("./server-restart-plugin-cohort.js");
+        await commitRestartPluginCohort(updateRun.runId, {
+          // The database projection omits the command's HOME, scratch and config selectors.
+          env: resolveDeliveryQueueStateEnv(undefined, context),
+          signal: continuation.signal,
+          assertCurrent: () => {
+            continuation.signal?.throwIfAborted();
+            continuation.assertCurrent?.();
+            context.workerContext.admission.assertCurrent();
+          },
+        });
+      }
       updateRun = await finishUpdateRun(
         updateRun.runId,
         {
@@ -152,9 +171,7 @@ export async function finalizeRestartUpdateRun(
     !pendingExpired &&
     updateRun &&
     canAutomaticallyCleanUpdateRecovery(updateRun) &&
-    !updateRun.steps.some(
-      (step) => step.step === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.status === "completed",
-    )
+    !hasSettledAutomaticRecoveryCleanup(updateRun)
   ) {
     let cleanup: UpdateStepResult | undefined;
     try {

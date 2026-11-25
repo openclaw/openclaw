@@ -120,7 +120,6 @@ async function replacementFixture(options?: {
     agentId: "main",
     payload: { text: "Saved final answer" },
     info: { kind: "final" },
-    retryAmbiguousFinalText: true,
     ctxPayload: {
       CommandAuthorized: true,
       CommandTurn: { kind: "normal", source: "message", authorized: false },

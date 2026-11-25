@@ -167,3 +167,36 @@ describe("serialized Gateway response arrays", () => {
     );
   });
 });
+
+it("falls back for absent or malformed worker row indexes without skipping projection", () => {
+  const rows = [{ model: "hidden" }, { model: "hidden" }];
+  const json = JSON.stringify(rows);
+  const start = 1;
+  const end = 1 + JSON.stringify(rows[0]).length;
+  const bytes = Buffer.from(`prefix${json}suffix`).subarray(6, -6);
+  const valid = { byteLength: bytes.length, rowCount: 2, ranges: [start, end] };
+  for (const index of [
+    undefined,
+    { ...valid, byteLength: bytes.length + 1 },
+    { ...valid, rowCount: -1 },
+    { ...valid, rowCount: 0 },
+    { ...valid, rowCount: 0.5 },
+    { ...valid, rowCount: bytes.length + 1 },
+    ...[
+      [start],
+      [0, end],
+      [start, bytes.length],
+      [end, start],
+      [start, end, end, end + 1],
+      [start + 0.5, end],
+      [start + 1, end],
+    ].map((ranges) => ({ byteLength: valid.byteLength, rowCount: valid.rowCount, ranges })),
+  ]) {
+    const carrier = new SerializedJsonArray(bytes, index);
+    using materialize = vi.spyOn(carrier, "materialize");
+    const projected = carrier.mapIndexedRows(() => ({}));
+    expect(JSON.stringify({ messages: projected })).toBe('{"messages":[{},{}]}');
+    expect(materialize).toHaveBeenCalledOnce();
+    expect(Buffer.from(bytes).toString()).toBe(json);
+  }
+});

@@ -28,12 +28,14 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
+import { replyCallbackCustody } from "../../auto-reply/reply/reply-callback-custody.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -99,6 +101,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../legacy-sdk-reply-dispatch.js";
 import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
 import {
   getPluginInstanceOwner,
@@ -114,10 +117,6 @@ import type { PluginRuntime } from "./types.js";
 const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
   (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
-);
-const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
-  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
 );
 const loadChannelTurnLifecycle = createLazyRuntimeModule(
   () => import("../../channels/turn/lifecycle.js"),
@@ -141,7 +140,8 @@ function bindChannelCallbacks<T extends object>(callbacks: T, consumer: PluginIn
       }),
   });
 }
-type ChannelDeliveryCustody = { deferred: boolean };
+type ChannelDeliveryCustody = { retain: () => () => void };
+
 function bindChannelDelivery<
   T extends {
     delivery: object;
@@ -149,38 +149,23 @@ function bindChannelDelivery<
     turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   },
 >(params: T, consumer?: PluginInstanceConsumer, custody?: ChannelDeliveryCustody): T {
-  let replyOptions = params.replyOptions;
+  let replyOptions: InternalGetReplyOptions | undefined = params.replyOptions;
   let adoption: TurnAdoptionLifecycle | undefined;
-  if (consumer && custody && replyOptions?.onQueuedFollowupReplyBatch) {
-    // Queued source delivery outlives dispatch; the queue owns its final release.
-    const source = params.turnAdoptionLifecycle ?? replyOptions.turnAdoptionLifecycle;
-    adoption = {
-      ...source,
-      onAdopted: source?.onAdopted ?? (() => {}),
-      onDeferred: () => {
-        const accepted = source?.onDeferred?.();
-        if (accepted !== false) {
-          custody.deferred = true;
-        }
-        return accepted;
-      },
-      onSettled: async () => {
-        try {
-          await source?.onSettled?.();
-        } finally {
-          if (custody.deferred) {
-            consumer.release();
-          }
-        }
-      },
+  const source = params.turnAdoptionLifecycle ?? replyOptions?.turnAdoptionLifecycle;
+  if (consumer && custody) {
+    adoption = source && bindChannelCallbacks(source, consumer);
+    replyOptions = {
+      // Restore same-owner data before copying a prewrapped options object.
+      ...(replyOptions ? bindChannelCallbacks(replyOptions, consumer) : {}),
+      [replyCallbackCustody]: custody,
+      ...(adoption ? { turnAdoptionLifecycle: adoption } : {}),
     };
-    replyOptions = { ...replyOptions, turnAdoptionLifecycle: adoption };
   }
   return consumer
     ? {
         ...params,
         delivery: consumer.wrap(params.delivery),
-        ...(adoption ? { turnAdoptionLifecycle: bindChannelCallbacks(adoption, consumer) } : {}),
+        ...(adoption ? { turnAdoptionLifecycle: adoption } : {}),
         ...(replyOptions ? { replyOptions: bindChannelCallbacks(replyOptions, consumer) } : {}),
       }
     : params;
@@ -200,13 +185,23 @@ async function withChannelDeliveryCustody<T, R>(
     undefined,
     generation?.plugins.includes(owner.record) ? generation : owner.registry,
   );
-  const custody: ChannelDeliveryCustody = { deferred: false };
+  let references = 1;
+  const release = () => {
+    if (--references === 0) {
+      consumer?.release();
+    }
+  };
+  const custody: ChannelDeliveryCustody | undefined = consumer && {
+    retain: () =>
+      consumer.run(() => {
+        references++;
+        return release;
+      }),
+  };
   try {
     return await dispatch(params, consumer, custody);
   } finally {
-    if (!custody.deferred) {
-      consumer?.release();
-    }
+    release();
   }
 }
 const dispatchAssembledChannelTurn: PluginRuntime["channel"]["inbound"]["dispatchReply"] = (
@@ -230,7 +225,7 @@ const runChannelTurnCore = createLazyRuntimeMethod(
 ) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
   withChannelDeliveryCustody(params, (turn, consumer, custody) => {
-    if (!consumer) {
+    if (!consumer || !custody) {
       return runChannelTurnCore(publicChannelTurnParams(turn));
     }
     const adapter = bindChannelCallbacks(turn.adapter, consumer);
@@ -239,17 +234,27 @@ const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
       const instance = getPluginValueInstance(consumer.wrap(() => undefined))!;
       // SAFETY: Exact-owner restoration preserves the adapter's resolved turn contract.
       const original = (getPluginOriginalValue(resolved, instance) ?? resolved) as typeof resolved;
-      return "delivery" in original ? bindChannelDelivery(original, consumer, custody) : original;
+      if (!("delivery" in original)) {
+        return original;
+      }
+      if (turn.turnAdoptionLifecycle) {
+        // Core assembly selects this top-level lifecycle, not the resolved turn's.
+        // Prepared dispatch closures keep their original exact lifecycle identity.
+        preparedTurn.turnAdoptionLifecycle = bindChannelCallbacks(
+          turn.turnAdoptionLifecycle,
+          consumer,
+        );
+      }
+      return bindChannelDelivery(original, consumer, custody);
     };
-    return runChannelTurnCore(
-      publicChannelTurnParams({
-        ...turn,
-        adapter: new Proxy(adapter, {
-          get: (target, key) =>
-            key === "resolveTurn" ? resolveTurn : Reflect.get(target, key, target),
-        }),
+    const preparedTurn = publicChannelTurnParams({
+      ...turn,
+      adapter: new Proxy(adapter, {
+        get: (target, key) =>
+          key === "resolveTurn" ? resolveTurn : Reflect.get(target, key, target),
       }),
-    );
+    });
+    return runChannelTurnCore(preparedTurn);
     // SAFETY: Forwarding async overloads unchanged preserves raw-event and dispatch-result generics.
   })) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 
@@ -314,8 +319,7 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: (params) =>
-        dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
+      dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,

@@ -11,13 +11,18 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
   createConfigMutationRunner,
   type ConfigMutationOwner,
 } from "../config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
+
+registerEnglishCatalog(registerSkillsBrowserEnglish);
 
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
@@ -86,6 +91,7 @@ export type SkillsState = {
   clawhubDetailRef: string | null;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
+    ref: string;
     kind: "success" | "error";
     text: string;
   } | null;
@@ -231,6 +237,7 @@ export async function loadSkills(
   state: SkillsState,
   options?: {
     clearMessages?: boolean;
+    reportRead?: Promise<SkillStatusReport | undefined>;
     operation?: Exclude<SkillOperation, null>;
   },
 ) {
@@ -261,14 +268,12 @@ export async function loadSkills(
   state.skillsLoading = true;
   state.skillsError = null;
   try {
-    const res = await loadSkillStatusReport(client, agentId);
+    const res = await (options?.reportRead ?? loadSkillStatusReport(client, agentId));
     if (!isCurrent()) {
       return;
     }
     if (res && Array.isArray(res.skills)) {
-      state.skillsReport = res;
-      pruneSkillCardState(state, res);
-      void loadClawHubSecurityVerdicts(state, res);
+      acceptSkillsReport(state, res);
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -286,6 +291,26 @@ export async function loadSkills(
       error: isCurrent() ? state.skillsError : null,
     });
   }
+}
+
+function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+  state.skillsReport = report;
+  const result = state.clawhubInstallMessage;
+  if (
+    result?.kind === "success" &&
+    !report.skills.some(
+      ({ clawhub }) =>
+        isValidClawHubLink(clawhub) &&
+        (clawhub.requestedReference === result.ref ||
+          clawhub.slug === result.ref ||
+          `@${clawhub.ownerHandle}/${clawhub.slug}` === result.ref),
+    )
+  ) {
+    // A later inventory can disprove an earlier successful install, including after removal.
+    state.clawhubInstallMessage = null;
+  }
+  pruneSkillCardState(state, report);
+  void loadClawHubSecurityVerdicts(state, report);
 }
 
 /**
@@ -444,7 +469,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   retireSkillsRead(state.clawhubVerdictsRead);
@@ -537,7 +562,11 @@ async function runSkillMutation(
     if (operation.kind === "skill") {
       setSkillMessage(state, operation.skillKey, message);
     } else {
-      state.clawhubInstallMessage = { kind: message.kind, text: message.message };
+      state.clawhubInstallMessage = {
+        ref: operation.ref,
+        kind: message.kind,
+        text: message.message,
+      };
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -550,6 +579,7 @@ async function runSkillMutation(
     } else {
       const trustDetails = getClawHubTrustDetailsFromError(err);
       state.clawhubInstallMessage = {
+        ref: operation.ref,
         kind: "error",
         text: formatClawHubInstallMessage(message, trustDetails?.warning),
       };
@@ -572,7 +602,7 @@ export async function updateSkillEnabled(
     state,
     skillKey,
     { enabled },
-    enabled ? "Skill enabled" : "Skill disabled",
+    i18n.t(enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled"),
     canDispatch,
   );
 }
@@ -583,6 +613,7 @@ async function runSkillConfigUpdate(
   patch: { enabled: boolean } | { apiKey: string },
   message: string,
   canDispatch: () => boolean,
+  dispatchError = "Access changed before the skill update started.",
 ) {
   await runSkillMutation(state, { kind: "skill", skillKey }, async (client) => {
     const configPatch = { skillKey, ...patch };
@@ -592,15 +623,17 @@ async function runSkillConfigUpdate(
       state.runtimeConfig,
       client,
       (current) => current.request("skills.update", configPatch),
-      { canDispatch, dispatchError: "Access changed before the skill update started." },
+      { canDispatch, dispatchError },
     );
     return { kind: "success", message: refreshError ? `${message}\n${refreshError}` : message };
   });
 }
 
+/** `replaceable` says whether the stored key may be typed over; undefined until it is known. */
 export async function saveSkillApiKey(
   state: SkillsState,
   skillKey: string,
+  replaceable: () => boolean | undefined,
   canDispatch: () => boolean = () => true,
 ) {
   // Blank skills.update API keys clear credentials; this UI only replaces them.
@@ -608,12 +641,25 @@ export async function saveSkillApiKey(
   if (!apiKey) {
     return;
   }
+  const current = replaceable();
+  if (current !== true) {
+    setSkillMessage(state, skillKey, {
+      kind: "error",
+      message:
+        current === undefined
+          ? "API key not saved — the configuration hasn't loaded yet. Reopen the skill and try again."
+          : `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in Settings Raw mode or openclaw.json.`,
+    });
+    return;
+  }
   await runSkillConfigUpdate(
     state,
     skillKey,
     { apiKey },
     `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
-    canDispatch,
+    // Rechecked right before dispatch: a flushed Settings draft may have stored a reference.
+    () => canDispatch() && replaceable() === true,
+    "API key not saved — access or the stored key changed while saving. Reopen the skill to see how the key is stored; change a SecretRef or environment key in Settings Raw mode.",
   );
 }
 
@@ -683,7 +729,7 @@ export async function installFromClawHub(state: SkillsState, ref: string, versio
     return {
       kind: "success",
       message: formatClawHubInstallMessage(
-        formatUiExternalText(result?.message, `Installed ${ref}`),
+        formatUiExternalText(result?.message, i18n.t("skillsPage.installedRef", { ref })),
         result?.warning ? formatUiExternalText(result.warning) : undefined,
       ),
     };

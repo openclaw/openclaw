@@ -20,6 +20,7 @@ it.each([
         anchor,
         mutationRevision: 0,
         advisoryLockKey: 0n,
+        releaseIdleTransport: vi.fn(),
         isOpen: true,
         isTransaction: false,
         prepare: vi.fn(),

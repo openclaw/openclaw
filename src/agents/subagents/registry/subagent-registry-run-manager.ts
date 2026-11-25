@@ -4,7 +4,6 @@ import {
 } from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
@@ -449,25 +448,24 @@ class SubagentRunManager extends SubagentLaunchManager {
           }
           log.warn(message, { err, runId: entry.runId, childSessionKey: entry.childSessionKey });
         };
-        await runWithGatewayIndependentRootWorkAdmission(async () => {
-          await Promise.all([
-            persistSubagentSessionTiming(entry, {
-              session: sessions.get(entry.runId),
-              isCurrentGeneration: ownsSessionEffects,
-              assertCommitAllowed: () => {
-                assertCurrent();
-                if (!ownsSessionEffects()) {
-                  throw new Error("killed subagent session owner retired before timing commit");
-                }
-              },
-            }).catch((err: unknown) =>
-              warnCleanupFailure("failed to persist killed subagent session timing", err),
-            ),
-            shouldRemoveSubagentAttachments(entry)
-              ? safeRemoveAttachmentsDir(entry)
-              : Promise.resolve(),
-          ]);
-        }, "subagents:session-finalize").catch((err: unknown) =>
+        // The termination caller joins this cleanup, including after shutdown closes admission.
+        await Promise.all([
+          persistSubagentSessionTiming(entry, {
+            session: sessions.get(entry.runId),
+            isCurrentGeneration: ownsSessionEffects,
+            assertCommitAllowed: () => {
+              assertCurrent();
+              if (!ownsSessionEffects()) {
+                throw new Error("killed subagent session owner retired before timing commit");
+              }
+            },
+          }).catch((err: unknown) =>
+            warnCleanupFailure("failed to persist killed subagent session timing", err),
+          ),
+          shouldRemoveSubagentAttachments(entry)
+            ? safeRemoveAttachmentsDir(entry)
+            : Promise.resolve(),
+        ]).catch((err: unknown) =>
           warnCleanupFailure("failed to run killed subagent cleanup tail", err),
         );
         await this.options.completeCleanupBookkeeping({

@@ -20,6 +20,9 @@ import {
 } from "../config/runtime-snapshot.js";
 import {
   createGitHubReadIdentity,
+  clearNativeGitHubTokenCache,
+  readNativeGitHubConfiguration,
+  refreshNativeGitHubConfiguration,
   readCachedNativeGitHubToken,
   readNativeGitHubToken,
 } from "./github-read-identity.js";
@@ -36,6 +39,7 @@ const account = (id = 101, login = "native-user") => Response.json({ id, login, 
 
 beforeEach(() => {
   run.mockReset();
+  clearNativeGitHubTokenCache();
   vi.stubEnv("GH_TOKEN", undefined);
   vi.stubEnv("GITHUB_TOKEN", undefined);
 });
@@ -95,6 +99,28 @@ const assertActive =
       throw new Error(reason);
     }
   };
+
+it("publishes only authoritative process-native configuration and retires an invalidated sample", async () => {
+  run
+    .mockResolvedValueOnce(commandResult("", 1))
+    .mockResolvedValueOnce(commandResult('{"hosts":{}}'));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unconfigured");
+  expect(readNativeGitHubConfiguration("other.example.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("", 1));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+  run.mockResolvedValue(commandResult("synthetic-native-token"));
+  await refreshNativeGitHubConfiguration();
+  expect(readNativeGitHubConfiguration("github.com")).toBe("configured");
+  const gate = createDeferredCore<ReturnType<typeof commandResult>>();
+  run.mockReturnValueOnce(gate.promise);
+  const sampling = refreshNativeGitHubConfiguration();
+  clearNativeGitHubTokenCache();
+  gate.resolve(commandResult("synthetic-native-token"));
+  await sampling;
+  expect(readNativeGitHubConfiguration("github.com")).toBe("unknown");
+});
 
 describe("native GitHub identity absence", () => {
   const launchFailure = (code = "ENOENT") => ({
@@ -326,9 +352,39 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "other.ghe.example.test"])(
+    "keeps publication token extraction bound to its verified issuer (ambient host: %s)",
+    async (ambientHost) => {
+      const host = "ghe.example.test";
+      const config = { gateway: { github: { host, apiBaseUrl: `https://${host}/api/v3` } } };
+      setRuntimeConfigSnapshot(config);
+      run.mockImplementation(async () => commandResult("native-enterprise-publication"));
+      const publication = await prepareGitHubPublicationIdentity(
+        readOptions({
+          config,
+          env: {
+            GH_HOST: ambientHost,
+            GH_TOKEN: undefined,
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN: undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+          },
+        }),
+      );
+      expect(run.mock.calls[0]?.[0]).toEqual(["gh", "auth", "token", "--hostname", host]);
+      expect(fetch).toHaveBeenCalledWith(`https://${host}/api/v3/user`, expect.anything());
+      await expect(readNativeGitHubToken(publication.env, true, publication.host)).resolves.toBe(
+        "native-enterprise-publication",
+      );
+      expect(run).toHaveBeenCalledOnce();
+      expect(publication.env.GH_HOST).toBe(host);
+    },
+  );
+
   it("caches native reads for 60 seconds but reads publication tokens live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     let token = "native-before-ttl";
     run.mockImplementation(async () => commandResult(token));
     const options = readOptions();

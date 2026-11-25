@@ -37,6 +37,7 @@ function wireAssistant(...calls: [id: string, name: string, args?: string][]) {
       id,
       type: "function",
       function: { name, ...(args === undefined ? {} : { arguments: args }) },
+      provider_specific_fields: { thought_signature: "SIG-TRANSPORT-BY-ID" },
     })),
   };
 }
@@ -204,7 +205,7 @@ it.each(["SIG-READ", undefined])("pairs reused Gemini tool-call ids: %s", async 
     expect(messages[0]).toMatchObject({
       tool_calls: [{ id: "call_0", thought_signature: signature }],
     });
-    expect(messages[0]).not.toHaveProperty("tool_calls.0.extra_content");
+    expect(JSON.stringify(messages)).not.toContain("provider_specific_fields");
   } else {
     expectTextHistory(messages, "read", "read result");
   }

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { type Command, Option } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -44,35 +45,83 @@ async function runDatabasePreflight(
   }
 }
 
+async function inspectDatabaseOwnership(databasePath: string) {
+  const [{ readConfigSnapshotBeforeEngineSelection }, errors, { resolveDatabaseFamilyEngines }] =
+    await Promise.all([
+      import("../../commands/config-preflight-snapshot.js"),
+      import("../../config/io.invalid-config.js"),
+      import("../../infra/database-engine/registry.js"),
+    ]);
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
+    isolateEnv: false,
+  });
+  const readFailed = errors.isConfigReadFailure(snapshot);
+  if (readFailed || snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")) {
+    const { readBackupEngine } = await import("../../infra/database-engine/physical-store.js");
+    // An intact native store can still report its claim during config recovery.
+    if (!existsSync(databasePath) || readBackupEngine(databasePath).engine !== "sqlite") {
+      throw readFailed
+        ? errors.createConfigReadError(snapshot)
+        : errors.createInvalidConfigError(
+            snapshot.path,
+            errors.formatInvalidConfigDetails(snapshot.issues),
+          );
+    }
+  } else if (resolveDatabaseFamilyEngines(snapshot.config).state === "postgres") {
+    const [
+      { resolveDatabaseEngineSelection },
+      { withDatabaseEngineSelection },
+      { executeExistingOpenClawStateRead },
+    ] = await Promise.all([
+      import("../../infra/database-engine/config.js"),
+      import("../../infra/database-engine/context.js"),
+      import("../../state/openclaw-state-db-readonly.js"),
+    ]);
+    const selection = await resolveDatabaseEngineSelection(snapshot.config);
+    const postgresPath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const read = await withDatabaseEngineSelection(selection, () =>
+      executeExistingOpenClawStateRead(
+        { path: postgresPath },
+        { type: "stateBootstrap.ownership", input: { pathname: postgresPath } },
+      ),
+    );
+    return { databasePath: postgresPath, ownership: read?.ownership ?? null };
+  }
+  const { inspectOpenClawStateOwnershipAtPath } =
+    await import("../../state/openclaw-state-ownership.js");
+  return { databasePath, ownership: inspectOpenClawStateOwnershipAtPath(databasePath) };
+}
+
 async function runDatabaseOwnership(
   options: DatabaseOutputOptions & { manager?: string },
 ): Promise<void> {
   try {
-    const databasePath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
+    const initialPath = path.resolve(resolveOpenClawStateSqlitePath(process.env));
     const managerId = options.manager;
-    const ownership =
-      managerId !== undefined
-        ? await (
-            await import("../local-state-owner.js")
-          ).runWithLocalStateOwner({
-            method: "database.ownership.claim",
-            params: { manager: managerId },
-            target: databasePath,
-            onForeignOwner: async () => {
-              throw new Error(
-                "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
-              );
-            },
-            runLocal: async ({ env, assertCurrent }) => {
-              const { claimOpenClawStateOwnership } =
-                await import("../../state/openclaw-state-ownership-operations.js");
-              assertCurrent();
-              return claimOpenClawStateOwnership(managerId, { path: databasePath, env });
-            },
-          })
-        : (
-            await import("../../state/openclaw-state-ownership.js")
-          ).inspectOpenClawStateOwnershipAtPath(databasePath);
+    const { databasePath, ownership } =
+      managerId === undefined
+        ? await inspectDatabaseOwnership(initialPath)
+        : {
+            databasePath: initialPath,
+            ownership: await (
+              await import("../local-state-owner.js")
+            ).runWithLocalStateOwner({
+              method: "database.ownership.claim",
+              params: { manager: managerId },
+              target: initialPath,
+              onForeignOwner: async () => {
+                throw new Error(
+                  "Cannot claim shared-state ownership while a Gateway or embedded agent is running. Stop the Gateway through the external supervisor and stop any embedded agents, then retry the ownership claim.",
+                );
+              },
+              runLocal: async ({ env, assertCurrent }) => {
+                const { claimOpenClawStateOwnership } =
+                  await import("../../state/openclaw-state-ownership-operations.js");
+                assertCurrent();
+                return claimOpenClawStateOwnership(managerId, { path: initialPath, env });
+              },
+            }),
+          };
     const status = ownership
       ? { status: "external" as const, ownership }
       : { status: "unowned" as const };
@@ -95,6 +144,109 @@ export function registerDatabaseCommand(program: Command): void {
     .command("database")
     .description("Inspect database compatibility, manage ownership, and port database stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
+
+  database
+    .command("prepare-state")
+    .description("Initialize an exact PostgreSQL shared-state target or validate its readiness")
+    .requiredOption("--expected-store-id <uuid>", "exact store ID from the existing state anchor")
+    .requiredOption("--expected-namespace <namespace>", "exact configured state namespace")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { prepareDatabaseState } = await import("../../commands/database-prepare-state.js");
+        const result = await prepareDatabaseState(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Shared state: ${result.status} (${result.namespace}).\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  const migrationCapture = database
+    .command("migration-capture")
+    .description("Preserve exact offline or externally quiesced SQLite state for migration");
+  migrationCapture
+    .command("capabilities")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(() =>
+      writeRuntimeJson(defaultRuntime, {
+        schema: "openclaw.database-migration-capture.capabilities.v1",
+        protocol: 1,
+        sourceEngine: "sqlite",
+        profile: "exact-sqlite-migration",
+        restoreTarget: "empty-staging-only",
+        logicalPaths: "same-state-and-config-roots",
+        externallyQuiesced: true,
+      }),
+    );
+  migrationCapture
+    .command("create")
+    .option(
+      "--base-archive <archive>",
+      "fresh verified filesystem archive for the same stopped source (offline capture)",
+    )
+    .option(
+      "--externally-quiesced",
+      "capture from an existing host-held Gateway suspension without stopping it",
+      false,
+    )
+    .option("--request-id <id>", "request ID of the existing non-drain suspension")
+    .option("--suspension-id <id>", "existing ready suspension ID")
+    .requiredOption(
+      "--output <directory>",
+      "new private capture directory outside the source roots",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { createDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await createDatabaseMigrationCapture(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(defaultRuntime, `Exact migration capture: ${result.manifestPath}\n`);
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+  migrationCapture
+    .command("restore")
+    .argument("<capture>", "completed exact migration capture directory")
+    .requiredOption("--target <directory>", "empty private staging directory outside live state")
+    .requiredOption(
+      "--manifest-sha256 <digest>",
+      "manifest digest returned by the exact capture producer",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (capture, options) => {
+      try {
+        const { restoreDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await restoreDatabaseMigrationCapture(defaultRuntime, {
+          capture,
+          target: options.target,
+          manifestSha256: options.manifestSha256,
+        });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Exact migration restored to staging: ${result.targetPath}\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
 
   database
     .command("port")
@@ -189,6 +341,30 @@ export function registerDatabaseCommand(program: Command): void {
               );
             }
           }
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
+    .command("restore-session-dependencies")
+    .description("Restore selected session skill and repository dependencies while offline")
+    .requiredOption("--input <directory>", "sealed dependency bundle directory")
+    .requiredOption("--sha256 <digest>", "SHA-256 of the selected request.json")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { restoreSessionDependencies } =
+          await import("../../commands/database-restore-session-dependencies.js");
+        const result = await restoreSessionDependencies(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            "Selected session dependencies restored; current credentials and permissions were preserved.\n",
+          );
         }
       } catch (error) {
         writeDatabaseError(error, options.json === true);

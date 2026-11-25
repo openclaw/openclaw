@@ -9,6 +9,29 @@ const LOCAL_TOOL_REQUIREMENTS = ["ls", "read", "write", "edit", "exec"] as const
 // Native settings can enable these tools outside OpenClaw's control. Admission
 // must cover the reachable tool set, including provider-conditional tools.
 const NATIVE_TOOL_REQUIREMENTS = {
+  // Audited xai-org/grok-build@2bdd1d6a: crates/codegen/xai-grok-agent/src/{config,builder}.rs.
+  // Include alternate presets and conditional tools, not only the default model's tools.
+  "grok-build": [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "apply_patch",
+    "process",
+    "web_fetch",
+    "web_search",
+    "x_search",
+    "sessions_spawn",
+    "sessions_send",
+    "subagents",
+    "memory_search",
+    "memory_get",
+    "skills_read",
+    "view_image",
+    "pdf",
+    "ask_user",
+    "automations",
+    "update_goal",
+    "image_generate",
+    "video_generate",
+  ],
   opencode: [
     ...LOCAL_TOOL_REQUIREMENTS,
     "apply_patch",
@@ -64,6 +87,23 @@ const NATIVE_TOOL_REQUIREMENTS = {
     "memory_get",
     "view_image",
     "ask_user",
+  ],
+  // Qoder CLI 1.1.81: createToolRegistry and the qoder-tools built-in plugin,
+  // https://unpkg.com/@qoder-ai/qodercli@1.1.81/bundle/qodercli.js
+  qoder: [
+    ...LOCAL_TOOL_REQUIREMENTS,
+    "process",
+    "sessions_spawn",
+    "sessions_send",
+    "sessions_list",
+    "subagents",
+    "web_fetch",
+    "web_search",
+    "view_image",
+    "ask_user",
+    "automations",
+    "image_generate",
+    "video_generate",
   ],
 } as const;
 

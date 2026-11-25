@@ -10,8 +10,9 @@ import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
 
 /** Assertions stay on the real dispatcher -> registered harness -> host binding path. */
-export function createSourceTurnDispatchAssertions() {
-  const originalSourceTurnId = "synthetic-original-source";
+export function createSourceTurnDispatchAssertions(
+  originalSourceTurnId = "synthetic-original-source",
+) {
   return {
     stamp(params: object) {
       setChannelSourceTurnId(params, originalSourceTurnId);

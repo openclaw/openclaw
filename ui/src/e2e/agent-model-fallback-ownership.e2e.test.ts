@@ -1,12 +1,16 @@
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { openAgentFallbackChain } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent model fallback ownership",
@@ -44,6 +48,14 @@ suite.define(() => {
         },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.files.list",
+          "agents.files.get",
+          "agents.list",
+          "config.get",
+          "models.list",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
@@ -95,17 +107,12 @@ suite.define(() => {
         );
       }
 
-      await expectText(page.locator(".workspace-link")).toContain(writerWorkspace);
-      const modelDescription = page
-        .locator(".settings-kv dt")
-        .filter({ hasText: "Primary Model" })
-        .locator("xpath=following-sibling::dd[1]");
-      const displayedModel = expectedFallbacks.length
-        ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
-        : primaryModel;
-      await expectText(modelDescription).toContain(displayedModel);
+      await page.getByText(writerWorkspace, { exact: true }).waitFor();
+      const editor = page.locator("openclaw-agents-page");
+      const primaryTrigger = editor.getByRole("button", { name: /^Model:/ });
+      await expectText(primaryTrigger).toContain(primaryModel);
 
-      const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
+      const fallbacks = await openAgentFallbackChain(editor);
       await fallbacks.waitFor({ timeout: 10_000 });
       await expect
         .poll(() =>

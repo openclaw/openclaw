@@ -8,6 +8,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
 } from "../../../plugins/types.js";
+import { createApprovalClient } from "../../server-methods/approval-request.test-support.js";
 import { callGatewayHandler as callGatewayHandlerOnce } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
@@ -52,6 +53,12 @@ function expectCatalog(result: unknown, kind: string, catalog: Record<string, un
   expect(result).toMatchObject({ ok: true, response: { [kind]: catalog } });
 }
 
+// Readiness timing is under test; the saved sign-ins it names are read from an empty store.
+vi.mock("../../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreForRuntimeAsync: async () => ({ version: 1, profiles: {} }),
+}));
+
 vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
   listSpeechProviders: registry.listSpeechProviders,
@@ -78,18 +85,16 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
     registry.transcription.find((provider) => provider.id === id),
 }));
 
-// Existing catalog contract cases consume the documented warming retry before inspecting rows.
-async function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
+const client = createApprovalClient({
+  connId: "catalog-reader",
+  clientId: "cli",
+  scopes: ["operator.read"],
+});
+
+// Each read uses a new Gateway context, so it is the first read for its catalog key.
+function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
   const context = { getRuntimeConfig: () => cfg };
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context });
-  const result = await read();
-  if (
-    asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
-  ) {
-    return result;
-  }
-  await vi.advanceTimersByTimeAsync(0);
-  return read();
+  return callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context, client });
 }
 
 afterEach(() => vi.useRealTimers());
@@ -207,27 +212,55 @@ it("single-flights cold discovery and isolates owner/model snapshots", async () 
   const readiness = createDeferred<boolean>();
   const readAvailability = vi.fn(() => readiness.promise);
   registry.realtime = [realtimeProvider(readAvailability, "slow")];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-  expectWarming(await read());
-  await vi.advanceTimersByTimeAsync(6_000);
-  const waiting = await Promise.all(Array.from({ length: 20 }, read));
-  expect(waiting.every((result) => !result.ok)).toBe(true);
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
+  // Concurrent first reads wait for one build and answer with its snapshot.
+  const firstReads = Promise.all(Array.from({ length: 20 }, read));
+  await vi.advanceTimersByTimeAsync(0);
   expect(readAvailability).toHaveBeenCalledTimes(1);
   readiness.resolve(true);
-  await vi.advanceTimersByTimeAsync(0);
-  expectCatalog(await read(), "realtime", {
+  const results = await firstReads;
+  expectCatalog(results[0], "realtime", {
     ready: true,
     providers: [{ id: "slow", configured: true }],
   });
+  expect(results.every((result) => result.response === results[0]?.response)).toBe(true);
   expect(readAvailability).toHaveBeenCalledTimes(1);
   const otherOwner = { getRuntimeConfig: () => cfg };
   expect(
-    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: otherOwner }),
-  ).toMatchObject({ ok: false });
+    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: otherOwner, client }),
+  ).toMatchObject({ ok: true });
   expect(
-    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", { model: "other" }, { context }),
-  ).toMatchObject({ ok: false });
+    await callGatewayHandlerOnce(
+      talkHandlers,
+      "talk.catalog",
+      { model: "other" },
+      { context, client },
+    ),
+  ).toMatchObject({ ok: true });
+  expect(readAvailability).toHaveBeenCalledTimes(3);
+});
+
+it("answers warming when the first build passes its deadline", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const cfg: OpenClawConfig = {
+    plugins: { enabled: false },
+    talk: { realtime: { provider: "slow" } },
+  };
+  const context = { getRuntimeConfig: () => cfg };
+  const readiness = createDeferred<boolean>();
+  const readAvailability = vi.fn(() => readiness.promise);
+  registry.realtime = [realtimeProvider(readAvailability, "slow")];
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
+  const firstRead = read();
+  await vi.advanceTimersByTimeAsync(5_000);
+  expectWarming(await firstRead);
+  // Past the deadline, reads answer at once while the build keeps its single flight.
+  expectWarming(await read());
+  expect(readAvailability).toHaveBeenCalledTimes(1);
+  readiness.resolve(true);
   await vi.advanceTimersByTimeAsync(0);
+  expectCatalog(await read(), "realtime", { providers: [{ id: "slow", configured: true }] });
+  expect(readAvailability).toHaveBeenCalledTimes(1);
 });
 
 it("serves the last catalog during one slow refresh and publishes its late success", async () => {
@@ -237,9 +270,7 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   const pending = createDeferred<boolean>();
   const readiness = vi.fn(async () => true);
   registry.providers = [speechProvider(readiness, "slow")];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-  expectWarming(await read());
-  await vi.advanceTimersByTimeAsync(0);
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
   const first = await read();
   expectCatalog(first, "speech", { providers: [{ configured: true }] });
   readiness.mockReturnValue(pending.promise);
@@ -256,7 +287,7 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   expect(readiness).toHaveBeenCalledTimes(2);
 });
 
-it("retries failed cold discovery before the client's warming window expires", async () => {
+it("retries failed cold discovery after its backoff", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg };
@@ -264,12 +295,9 @@ it("retries failed cold discovery before the client's warming window expires", a
     throw new Error("temporary discovery failure");
   });
   registry.providers = [speechProvider(async () => true)];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-  expect((await read()).ok).toBe(false);
-  await vi.advanceTimersByTimeAsync(0);
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
+  expectWarming(await read());
   await vi.advanceTimersByTimeAsync(1_000);
-  expect((await read()).ok).toBe(false);
-  await vi.advanceTimersByTimeAsync(0);
   expectCatalog(await read(), "speech", { providers: [{ configured: true }] });
 });
 
@@ -297,9 +325,8 @@ it.each(["speech", "realtime", "transcription"] as const)(
         registry.transcription.push({ ...provider, createSession: unexpectedSession });
       }
     }
-    const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-    expect((await read()).ok).toBe(false);
-    await nextTurn();
+    const read = () =>
+      callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
     const expectedRows = (configured: boolean) => ({
       providers: [
         { id: "healthy", configured: true },

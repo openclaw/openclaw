@@ -25,13 +25,16 @@ import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcr
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
-import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
+import { isCachedPluginRegistryLoad, isPluginRegistryLoadInFlight } from "./loader-cache.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import {
   loadOpenClawPluginsCore,
   loadOpenClawPluginsSteps,
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
+import { maybeThrowOnPluginLoadError } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   createPluginCache,
@@ -72,6 +75,7 @@ export function resolveRuntimePluginRegistry(
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
+    acquirePluginRegistryForInspection,
     resolveRuntimePluginRegistry,
     isPluginRegistryLoadInFlight,
   }),
@@ -192,11 +196,55 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   return loadOpenClawPluginsCore(options, loaderBindings);
 }
 
+// Yielding loads can overlap, and a second same-key load would trip reentry detection. A
+// same-key caller joins the pending load instead and receives the registry it would otherwise
+// read from the cache once that load finished, checked against its own error policy.
+type PendingCachedLoad = { promise: Promise<PluginRegistry>; strict: boolean };
+const pendingCachedLoads = new WeakMap<object, Map<string, PendingCachedLoad>>();
+
 /** Keep network callbacks responsive without publishing a partially registered generation. */
 export async function loadOpenClawPluginsAsync(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  return runPluginLoadStepsAsync(loadOpenClawPluginsSteps(options, loaderBindings));
+  const load = () => runPluginLoadStepsAsync(loadOpenClawPluginsSteps(options, loaderBindings));
+  if (options.activate !== false || !isCachedPluginRegistryLoad(options)) {
+    return load();
+  }
+  const { cacheState, cacheKey } = resolvePluginLoadCacheContext(options);
+  let pending = pendingCachedLoads.get(cacheState);
+  if (!pending) {
+    pending = new Map();
+    pendingCachedLoads.set(cacheState, pending);
+  }
+  const strict = options.throwOnLoadError === true;
+  for (let joined = pending.get(cacheKey); joined; joined = pending.get(cacheKey)) {
+    if (!joined.strict) {
+      // A lenient load returns every diagnostic, as a cache hit would; apply this caller's policy.
+      const registry = await joined.promise;
+      maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
+      return registry;
+    }
+    if (strict) {
+      return joined.promise;
+    }
+    // A strict load discards a failed registry, so a lenient caller loads its own once it settles.
+    try {
+      return await joined.promise;
+    } catch {
+      if (pending.get(cacheKey) === joined) {
+        pending.delete(cacheKey);
+      }
+    }
+  }
+  const entry: PendingCachedLoad = { promise: load(), strict };
+  pending.set(cacheKey, entry);
+  try {
+    return await entry.promise;
+  } finally {
+    if (pending.get(cacheKey) === entry) {
+      pending.delete(cacheKey);
+    }
+  }
 }
 
 async function runPluginLoadStepsAsync(
@@ -239,20 +287,23 @@ export async function loadAndActivateRootPluginRegistry(
 export async function acquirePluginRegistryForInspection(
   options: Omit<PluginLoadOptions, "activate" | "cache"> = {},
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    runPluginLoadStepsAsync(
-      loadOpenClawPluginsSteps(
-        { ...options, activate: false, cache: false },
-        loaderBindings,
-        undefined,
-        resources,
+  return acquireRegistryResources(
+    (resources) =>
+      runPluginLoadStepsAsync(
+        loadOpenClawPluginsSteps(
+          { ...options, activate: false, cache: false },
+          loaderBindings,
+          undefined,
+          resources,
+        ),
       ),
-    ),
+    options,
   );
 }
 
 async function acquireRegistryResources(
   load: (resources: PluginRegistryInspectionResources) => PluginRegistry | Promise<PluginRegistry>,
+  options: Pick<PluginLoadOptions, "metadataSnapshot" | "env">,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
   const cache = createPluginCache();
   const resources = new PluginRegistryInspectionResources(async (registry, rollbackInstances) => {
@@ -297,7 +348,14 @@ async function acquireRegistryResources(
   });
   try {
     inheritPluginNativeAdmissions(getPluginCache(), cache);
-    const registry = await withPluginCache(cache, () => load(resources));
+    const loadRegistry = () => load(resources);
+    // Compose the supplied generation before entering the private registration cache.
+    const registry = await (options.metadataSnapshot
+      ? withPluginMetadataSnapshotScope(options.metadataSnapshot, loadRegistry, {
+          cache,
+          env: options.env,
+        })
+      : withPluginCache(cache, loadRegistry));
     // An inline closure shares the retirement callback's context, including the cache.
     return { registry, release: resources.release.bind(resources) };
   } catch (error) {
@@ -336,8 +394,12 @@ export function acquirePluginRegistryWithInternalOverrides(
   options: PluginLoadOptions & { cache: false; activate: false },
   overrides: ScopedRuntimeOverrides,
 ): Promise<{ registry: PluginRegistry; release: () => Promise<void> }> {
-  return acquireRegistryResources((resources) =>
-    runPluginLoadStepsAsync(loadRegistryWithInternalOverridesSteps(options, overrides, resources)),
+  return acquireRegistryResources(
+    (resources) =>
+      runPluginLoadStepsAsync(
+        loadRegistryWithInternalOverridesSteps(options, overrides, resources),
+      ),
+    options,
   );
 }
 

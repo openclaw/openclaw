@@ -43,10 +43,13 @@ const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
+  let originalExitCode: NodeJS.Process["exitCode"];
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
     resolveCommitHashMock.mockReturnValue("abc1234");
     vi.stubEnv("OPENCLAW_SUPPRESS_HELP_BANNER", undefined);
   });
@@ -54,6 +57,7 @@ describe("configureProgramHelp", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     process.argv = originalArgv;
+    process.exitCode = originalExitCode;
     vi.unstubAllEnvs();
   });
 
@@ -169,8 +173,8 @@ describe("configureProgramHelp", () => {
     it("renders plugins using the supplied isolated config and env", async () => {
       const config = { agents: { defaults: { workspace: "/tmp/openclaw-root-help-workspace" } } };
       const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-root-help-state" };
-      await outputRootHelp({ config, env, pluginSdkResolution: "src" });
-      expect(pluginDescriptors).toHaveBeenCalledWith(config, env, { pluginSdkResolution: "src" });
+      await outputRootHelp({ config, env });
+      expect(pluginDescriptors).toHaveBeenCalledWith(config, env);
       expect(text).toContain("matrix *");
       expect(text).toContain("Hint: commands suffixed with * have subcommands");
       expect(text).toContain("models *");

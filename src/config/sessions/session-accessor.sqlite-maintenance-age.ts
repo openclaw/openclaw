@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
@@ -12,6 +13,7 @@ import { hasCanonicalSessionValidationProjection } from "./session-canonical-key
 import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
 import {
   shouldPreserveMaintenanceEntry,
+  shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -28,6 +30,23 @@ export type SessionEntryMaintenanceAgeFact = {
   next: { at: number };
   recheckAt: number;
 };
+/** The scheduling owner can retain its deadline while acknowledged activity stays below capacity. */
+export function canDeferMaintenance(
+  fact: SessionEntryMaintenanceAgeFact,
+  maintenance: ResolvedSessionMaintenanceConfig,
+  noCandidates: boolean | undefined,
+): boolean {
+  return (
+    fact.entryCount !== undefined &&
+    isDeepStrictEqual(fact.maintenance, maintenance) &&
+    (noCandidates === true ||
+      !shouldRunSessionEntryMaintenance({
+        entryCount: fact.entryCount,
+        maxEntries: maintenance.maxEntries,
+      }))
+  );
+}
+
 type SessionEntryMaintenanceAgeCapture = { fact?: SessionEntryMaintenanceAgeFact };
 type MaintenanceActivity = Pick<
   SessionEntry,
@@ -314,6 +333,19 @@ function nextAgeAt(timestamp: number, age: number | null | undefined, plannedAt:
   return at > plannedAt ? at : Infinity;
 }
 
+function activityUpdatedAtBefore(
+  nextAt: number,
+  age: number | null | undefined,
+): number | undefined {
+  // Activity includes updatedAt. Keep the full read when subtraction cannot preserve
+  // exact millisecond boundaries, including disabled ages and overflowing deadlines.
+  if (age == null || age <= 0 || !Number.isSafeInteger(age) || !Number.isSafeInteger(nextAt)) {
+    return undefined;
+  }
+  const maximum = nextAt - age - 1;
+  return Number.isSafeInteger(maximum) ? maximum : undefined;
+}
+
 function readActivityAt(row: {
   updated_at: number;
   last_activity_at: number | null;
@@ -351,26 +383,36 @@ export function recordSessionEntryMaintenanceAgeFact(
       }
     }
   }
-  // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
-  // Older maintenance readers have no pending projection and keep their full row path.
-  const dashboardRows = hasCanonicalSessionValidationProjection(database)
-    ? queries.dashboards(undefined)
-    : queries.activity(undefined);
-  for (const row of dashboardRows) {
-    if (
-      !isDashboardKey(row.session_key) ||
-      shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
-    ) {
-      continue;
+  const dashboardAge = maintenance.archiveDashboardAfterMs;
+  if (dashboardAge != null && dashboardAge > 0) {
+    // Certified keys support indexed namespaces; pending aliases retain the canonical decoder.
+    // Older maintenance readers have no pending projection and keep their full row path.
+    const dashboardMaximum = activityUpdatedAtBefore(next.at, dashboardAge);
+    const dashboardRows = hasCanonicalSessionValidationProjection(database)
+      ? dashboardMaximum === undefined
+        ? queries.dashboards(undefined)
+        : queries.dashboardsBefore(dashboardMaximum)
+      : dashboardMaximum === undefined
+        ? queries.activity(undefined)
+        : queries.activityBefore(dashboardMaximum);
+    for (const row of dashboardRows) {
+      if (
+        !isDashboardKey(row.session_key) ||
+        shouldPreserveMaintenanceEntry({ key: row.session_key, entry: undefined })
+      ) {
+        continue;
+      }
+      next.at = Math.min(next.at, nextAgeAt(readActivityAt(row), dashboardAge, plannedAt));
     }
-    next.at = Math.min(
-      next.at,
-      nextAgeAt(readActivityAt(row), maintenance.archiveDashboardAfterMs, plannedAt),
-    );
   }
   const recentAge = maintenance.preserveRecentMs;
   if (recentAge != null && recentAge > 0) {
-    for (const row of queries.activity(undefined)) {
+    const recentMaximum = activityUpdatedAtBefore(next.at, recentAge);
+    const recentRows =
+      recentMaximum === undefined
+        ? queries.activity(undefined)
+        : queries.activityBefore(recentMaximum);
+    for (const row of recentRows) {
       // Activity includes updatedAt, so later indexed rows cannot improve this finite bound.
       if (row.updated_at + recentAge + 1 >= next.at) {
         break;

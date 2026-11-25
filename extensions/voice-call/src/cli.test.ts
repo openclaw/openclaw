@@ -94,9 +94,7 @@ describe("voice-call CLI status fallback", () => {
   });
 
   function withBriefPath<T>(run: (file: string) => Promise<T>) {
-    return withTempDir("openclaw-voice-call-brief-", async (dir) =>
-      run(path.join(dir, "brief.json")),
-    );
+    return withTempDir("voice-brief-", (dir) => run(path.join(dir, "brief.json")));
   }
 
   function buildProgram(
@@ -433,7 +431,7 @@ describe("voice-call CLI status fallback", () => {
     "accepts a 16000-character Unicode %s brief",
     async (kind) => {
       await withBriefPath(async (file) => {
-        const brief = { task: "Arrange a visit", context: "é".repeat(4000) };
+        const brief = { task: "Arrange a visit 日本語 �", context: "é".repeat(4000) };
         const json = JSON.stringify(brief);
         fs.writeFileSync(file, " ".repeat(16000 - json.length) + json);
         const input = kind === "regular" ? file : `${file}.link`;
@@ -441,18 +439,19 @@ describe("voice-call CLI status fallback", () => {
           fs.symlinkSync(file, input);
         }
         callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
-        expect(await capture(briefArgs(input), { ringTimeoutMs: 1000 })).toEqual({
-          callId: "call-1",
-        });
+        await run(briefArgs(input), { ringTimeoutMs: 1000 });
         expect(callGatewayFromCliMock.mock.calls[0]?.[2]).toMatchObject({ brief });
       });
     },
   );
 
-  it("retains the character limit for brief files", async () => {
+  it.each([
+    [" ".repeat(16001), "Brief input is too large"],
+    [Buffer.from('{"task":"caf\xff"}', "latin1"), /Brief file.*UTF-8/],
+  ])("rejects an invalid brief file before call creation", async (bytes, error) => {
     await withBriefPath(async (file) => {
-      fs.writeFileSync(file, " ".repeat(16001));
-      await expect(run(briefArgs(file))).rejects.toThrow("Brief input is too large");
+      fs.writeFileSync(file, bytes);
+      await expect(run(briefArgs(file))).rejects.toThrow(error);
       expect(callGatewayFromCliMock).not.toHaveBeenCalled();
     });
   });

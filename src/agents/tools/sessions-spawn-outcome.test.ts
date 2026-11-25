@@ -16,7 +16,8 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildPayloads } from "../embedded-agent-runner/run/payloads.test-helpers.js";
-import { isToolResultError, registerTrustedToolNoStartError } from "../tool-result-error.js";
+import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "../tool-effect-receipt.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "../tool-search-transcript.js";
 import { createToolTerminalObserver } from "../tool-terminal-outcome.js";
 import * as inProcessGateway from "./in-process-gateway.js";
@@ -25,7 +26,10 @@ import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 const report = "Seven blue boxes remain. Thursday delivery is confirmed.";
 const backendId = "spawn-effects-fixture";
 const config: OpenClawConfig = {
-  agents: { defaults: { subagents: { allowAgents: ["main"] } }, entries: { main: {} } },
+  agents: {
+    defaults: { subagents: { allowAgents: ["main"] } },
+    entries: { main: { model: "openai/gpt-4.1" } },
+  },
 };
 const task = { task: "Prepare report", visible: true };
 const child = {

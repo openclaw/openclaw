@@ -2,16 +2,21 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import {
   isWorkerGatewayToolFrameWithinBudget,
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WorkerToolSurfaceSchema,
-  type WorkerGatewayToolResult,
+  type WorkerGatewayToolInvokeResult,
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { formatToolArgumentErrors } from "../../../packages/llm-core/src/validation.js";
 import { getAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
-import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.js";
+import { consumeMcpCodeModeGuestResult } from "../../agents/mcp-content.js";
+import { projectAgentToolDefinition } from "../../agents/prepared-tool-definition.js";
+import { readToolExecutionRefusal } from "../../agents/tool-effect-receipt.js";
+import { buildRunGrantedToolDirectory } from "../../agents/tool-search.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -20,6 +25,7 @@ import type {
   WorkerGatewayToolSink,
 } from "./worker-gateway-tool-contract.js";
 import {
+  boundWorkerMcpRefusal,
   boundWorkerToolResult as bounded,
   workerSessionToolErrorResult,
 } from "./worker-session-tool-result.js";
@@ -55,7 +61,7 @@ export function createWorkerGatewayToolRuntime(params: {
       controller: AbortController;
       signal: AbortSignal;
       sinks: Set<WorkerGatewayToolSink>;
-      result: Promise<WorkerGatewayToolResult>;
+      result: Promise<WorkerGatewayToolInvokeResult>;
     }
   >();
   let sequential: Promise<unknown> = Promise.resolve();
@@ -103,7 +109,12 @@ export function createWorkerGatewayToolRuntime(params: {
             tools: tools.map((tool, index) => {
               const location = getAgentToolExecutionLocation(tool);
               const plugin = getPluginToolMeta(tool);
-              const id = String(index);
+              // Local MCP handles also cross the node supervisor. Keep them distinct
+              // across turns on a retained worker even when catalog indices repeat.
+              const id =
+                location.kind === "placement" && plugin?.mcp?.node
+                  ? `${generation}:${index}`
+                  : String(index);
               handles.set(id, tool);
               return {
                 id,
@@ -169,6 +180,10 @@ export function createWorkerGatewayToolRuntime(params: {
               parameters,
             })),
             toolSchemaDirectoryPrompt: projected.toolSchemaDirectoryPrompt,
+            // Render before cleanup disposes the catalog.
+            runGrantedToolDirectory: projected.toolSchemaDirectoryPrompt
+              ? buildRunGrantedToolDirectory(runtime.toolSearchCatalogRef)
+              : undefined,
           };
         } finally {
           runtime.cleanup();
@@ -176,7 +191,7 @@ export function createWorkerGatewayToolRuntime(params: {
       }
       return modelTools;
     },
-    async invoke(_identity, request, sink, connectionSignal) {
+    async invoke(identity, request, sink, connectionSignal) {
       // Admission issues handles; cancellation must see the call before its first yield.
       assertCurrent();
       const tool = issuedTools?.get(request.toolId);
@@ -185,7 +200,11 @@ export function createWorkerGatewayToolRuntime(params: {
         throw new Error("Worker tool handle is unavailable");
       }
       if (!Value.Check(tool.parameters, request.arguments)) {
-        throw new Error("Worker tool arguments are invalid");
+        const errors = formatToolArgumentErrors(
+          Value.Errors(tool.parameters, request.arguments),
+          request.arguments,
+        );
+        throw new Error(`Worker tool arguments are invalid:\n${errors}`);
       }
       const digest = JSON.stringify([request.toolId, request.arguments]);
       const prior = calls.get(request.toolCallId);
@@ -211,9 +230,17 @@ export function createWorkerGatewayToolRuntime(params: {
       let seq = 0;
       const execute = async () => {
         assertCurrent(callSignal);
+        const includeMcp =
+          getPluginToolMeta(tool)?.mcp &&
+          identity.protocolFeatures.includes(WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE);
+        let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+        let refusal: ReturnType<typeof readToolExecutionRefusal>;
         try {
-          return bounded(
-            await tool.execute(request.toolCallId, request.arguments, callSignal, (update) => {
+          result = await tool.execute(
+            request.toolCallId,
+            request.arguments,
+            callSignal,
+            (update) => {
               assertCurrent(callSignal);
               const frame: WorkerGatewayToolUpdateFrame = {
                 type: "event",
@@ -234,11 +261,20 @@ export function createWorkerGatewayToolRuntime(params: {
                   }
                 }
               }
-            }),
+            },
           );
+          refusal = readToolExecutionRefusal(result);
         } catch (error) {
-          return workerSessionToolErrorResult(error);
+          result = workerSessionToolErrorResult(error);
+          refusal = readToolExecutionRefusal(error);
         }
+        if (!includeMcp) {
+          return bounded(result);
+        }
+        if (refusal?.kind === "blocked") {
+          return boundWorkerMcpRefusal(result, refusal.reason);
+        }
+        return bounded(result, consumeMcpCodeModeGuestResult(result));
       };
       const predecessor =
         tool.executionMode === "parallel"

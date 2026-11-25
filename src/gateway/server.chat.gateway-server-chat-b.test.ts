@@ -36,6 +36,7 @@ import {
   type AgentEventStream,
 } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
   captureSessionControllerSettlement,
@@ -48,7 +49,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { getMaxChatHistoryMessagesBytes } from "./chat-history-budget.js";
 import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
 import {
-  createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
   createHistoryEventHandler,
   createOversizedReplayTranscriptEvent,
@@ -78,7 +78,6 @@ import {
   callDirectChatHandler,
   callDirectChat,
 } from "./server.chat-direct-handler.test-support.js";
-import { CHAT_DOT_PNG_BASE64, INLINE_DOT_PNG_IMAGE } from "./server.chat-image.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -87,6 +86,7 @@ import {
 import {
   createDirectChatSessionStoreFixture,
   futureFixtureUpdatedAt,
+  holdSessionMutation,
   prepareMainHistoryHarness,
   writeMainSessionStore,
   writeStoredMainSession,
@@ -193,6 +193,8 @@ type HistoryPage = {
   nextOffset?: number;
   offset?: number;
   hasMore?: boolean;
+  olderCursor?: string;
+  newerCursor?: string;
   totalMessages?: number;
 };
 
@@ -288,27 +290,6 @@ function historyPage<T extends Record<string, unknown> = HistoryPage>(
   params: Record<string, unknown> = {},
 ) {
   return rpcReq<T>(ws, "chat.history", makeMainSessionParams(params));
-}
-
-async function holdSessionMutation(
-  scope: string,
-  release: ReturnType<typeof createDeferred<void>>,
-  options: {
-    kind?: Parameters<typeof runSessionMutation>[0]["kind"];
-    identities: Iterable<string | undefined>;
-  } = { identities: ["sess-main"] },
-) {
-  const started = createDeferred();
-  const mutation = runSessionMutation({
-    scope,
-    ...options,
-    run: async () => {
-      started.resolve();
-      await release.promise;
-    },
-  });
-  await started.promise;
-  return { mutation };
 }
 
 function readOpenClawSeq(message: unknown): number | undefined {
@@ -1616,105 +1597,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test.each([true, false])(
-    "chat.send keeps managed image uploads without duplicating vision input (vision=%s)",
-    async (vision) => {
-      openDirectChatSession();
-      try {
-        const provider = vision ? "test-provider" : "anthropic";
-        const model = vision ? "vision-model" : "claude-opus-4-6";
-        testState.agentConfig = vision
-          ? { model: { primary: provider + "/" + model } }
-          : {
-              model: {
-                primary: "anthropic/claude-opus-4-6",
-                fallbacks: ["anthropic/claude-haiku-4-6"],
-              },
-              imageModel: { primary: "openai/gpt-4o", fallbacks: ["openai/gpt-4o-mini"] },
-              models: { "anthropic/claude-opus-4-6": {} },
-            };
-        await writeStoredMainSession({ modelProvider: provider, model });
-        const context = createDirectChatContext(
-          vision
-            ? {
-                getRuntimeConfig,
-                loadGatewayModelCatalogSnapshot: vi
-                  .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-                  .mockResolvedValue(createChatVisionModelCatalogSnapshot()),
-              }
-            : {
-                getRuntimeConfig,
-                loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(
-                  async () => [
-                    {
-                      id: "claude-opus-4-6",
-                      name: "Claude Opus 4.6",
-                      provider: "anthropic",
-                      input: ["text"],
-                    },
-                    { id: "gpt-4o", name: "GPT-4o", provider: "openai", input: ["text", "image"] },
-                    {
-                      id: "gpt-4o-mini",
-                      name: "GPT-4o mini",
-                      provider: "openai",
-                      input: ["text", "image"],
-                    },
-                    {
-                      id: "claude-haiku-4-6",
-                      name: "Claude Haiku 4.6",
-                      provider: "anthropic",
-                      input: ["text"],
-                    },
-                  ],
-                ),
-              },
-        );
-        const idempotencyKey = vision
-          ? "idem-inline-image-managed-media"
-          : "idem-configured-image-model-with-image-fallback";
-        const captured = createDeferred<{
-          ctx: Record<string, unknown>;
-          replyOptions?: GetReplyOptions;
-        }>();
-        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-          const params = args as { ctx: Record<string, unknown>; replyOptions?: GetReplyOptions };
-          expect(params.replyOptions?.runId).toBe(idempotencyKey);
-          captured.resolve(params);
-        });
-        const responses = await requestChat(
-          "chat.send",
-          context,
-          makeChatSendParams({
-            message: "inspect the uploaded file",
-            idempotencyKey,
-            attachments: [
-              {
-                type: "image",
-                mimeType: "image/png",
-                fileName: "dot.png",
-                content: CHAT_DOT_PNG_BASE64,
-              },
-            ],
-          }),
-        );
-        expect(responses[0]?.ok).toBe(true);
-        const input = await captured.promise;
-        expect(input.replyOptions?.images).toEqual(vision ? [INLINE_DOT_PNG_IMAGE] : undefined);
-        expect(input.ctx.media).toEqual([
-          expect.objectContaining({
-            path: expect.any(String),
-            contentType: "image/png",
-            ...(vision ? { hydrationSuppressed: true } : { workspaceDir: expect.any(String) }),
-          }),
-        ]);
-        await getDirectChatSessionWorkRelease();
-      } finally {
-        dispatchInboundMessageMock.mockReset();
-        testState.agentConfig = undefined;
-      }
-    },
-  );
-
   registerChatConnectionIdentityTest({
     withDirectChatSession,
     prepareSession: () => writeStoredMainSession(makeDoneSessionEntry()),
@@ -1725,11 +1607,13 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send runs an admission-owned callback for only one concurrent retry", async () => {
-    openDirectChatSession();
+    const { storePath } = openDirectChatSession();
+    const releaseMutation = createDeferred();
     const dispatchRelease = createDeferred();
     const runId = "idem-concurrent-admission-owner";
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
+      const { mutation } = await holdSessionMutation(storePath, releaseMutation);
       const context = createDirectChatContext();
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       const firstAdmission = vi.fn(async () => true);
@@ -1744,7 +1628,22 @@ describe("gateway server chat", () => {
           respond: captureChatResponse(responses),
         });
 
-      await Promise.all([send(firstAdmission), send(secondAdmission)]);
+      // Keep the retry in pending admission, before the first input is accepted.
+      const outcomes = await Promise.allSettled([
+        send(firstAdmission),
+        (async () => {
+          try {
+            await waitForFast(() => {
+              expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+            }, FAST_WAIT_OPTS);
+            await send(secondAdmission);
+          } finally {
+            releaseMutation.resolve();
+          }
+        })(),
+        mutation,
+      ]);
+      throwIfSettledRejected(outcomes, "Concurrent chat admission failed");
 
       expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
       expect(responses).toHaveLength(2);
@@ -1767,6 +1666,7 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
+      releaseMutation.resolve();
       dispatchRelease.resolve(undefined);
       await resetDirectChatSession();
     }
@@ -2082,15 +1982,17 @@ describe("gateway server chat", () => {
           broadcast.mock.calls.flatMap(([event, payload]) =>
             event === "chat" && (payload as { runId?: string }).runId === runId ? [payload] : [],
           );
-        try {
-          await callDirectChat("chat.send", {
-            id: "queued-followup",
+        const sendQueuedInput = (id: string, respond: RespondFn) =>
+          callDirectChat("chat.send", {
+            id,
             params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
             client: makeTuiClient(),
             isWebchatConnect: () => true,
-            respond: vi.fn() as RespondFn,
+            respond,
             context,
           });
+        try {
+          await sendQueuedInput("queued-followup", vi.fn() as RespondFn);
           await withinTest(dispatchStarted.promise, signal);
           expect(options?.turnAdoptionLifecycle?.ownerKey).toBe("connection:conn-tui");
           expect(chatEvents()).toEqual([]);
@@ -2109,14 +2011,7 @@ describe("gateway server chat", () => {
           // Live queued identity still fences replay if its receipt has been evicted.
           context.dedupe.delete(`chat:${runId}`);
           const replayRespond = vi.fn() as RespondFn;
-          await callDirectChat("chat.send", {
-            id: "queued-followup-replay",
-            params: makeChatSendParams({ message: "queued prompt", idempotencyKey: runId }),
-            client: makeTuiClient(),
-            isWebchatConnect: () => true,
-            respond: replayRespond,
-            context,
-          });
+          await sendQueuedInput("queued-followup-replay", replayRespond);
           expect(replayRespond).toHaveBeenCalledWith(
             true,
             { runId, status: "in_flight" },
@@ -2164,7 +2059,11 @@ describe("gateway server chat", () => {
             expect.objectContaining({
               runId,
               ...(settlement === "dropped"
-                ? { state: "error", errorMessage: "Queued input was dropped (queue-cap-old)." }
+                ? {
+                    state: "error",
+                    errorMessage:
+                      "Your queued message was dropped because the session queue is full.",
+                  }
                 : {
                     state: "final",
                     message: expect.objectContaining({
@@ -2968,10 +2867,7 @@ describe("gateway server chat", () => {
         JSON.stringify({ type: "model_change", provider: "mock", modelId: "mock" }),
         JSON.stringify({ type: "thinking_level_change", thinkingLevel: "off" }),
       ]);
-      const storePath = testState.sessionStorePath;
-      if (!storePath) {
-        throw new Error("session store path was not initialized");
-      }
+      const storePath = expectDefined(testState.sessionStorePath, "session store path");
       for (let index = 0; index < 7; index += 1) {
         await appendTranscriptMessage(makeMainSessionScope(storePath), {
           eventId: `message-${index + 1}`,
@@ -2982,10 +2878,8 @@ describe("gateway server chat", () => {
           },
         });
       }
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: "main",
-        path: path.join(sessionDir, "openclaw-agent.sqlite"),
-      });
+      const databasePath = path.join(sessionDir, "openclaw-agent.sqlite");
+      await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
 
       const history = await historyPage(ws, {
         limit: 3,
@@ -2999,6 +2893,8 @@ describe("gateway server chat", () => {
       expect(history.payload?.offset).toBeUndefined();
       expect(history.payload?.nextOffset).toBeUndefined();
       expect(history.payload?.hasMore).toBeUndefined();
+      expect(history.payload?.olderCursor).toEqual(expect.any(String));
+      expect(history.payload?.newerCursor).toEqual(expect.any(String));
       expect(history.payload?.totalMessages).toBeUndefined();
     });
   });

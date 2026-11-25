@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -42,6 +43,10 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const rejectQuestion = (text: string) =>
       commandReply({ text, btw: { question }, isError: true });
+    const model = params.model;
+    if (!model) {
+      return rejectQuestion(NO_MODEL_CONFIGURED_MESSAGE);
+    }
 
     if (
       toolPolicyRestrictsTools(
@@ -109,7 +114,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
           agentId: sessionAgentId,
           agentDir,
           provider: params.provider,
-          model: params.model,
+          model,
           question,
           images,
           sessionEntry: targetSessionEntry,
@@ -173,7 +178,7 @@ export const handleBtwCommand: CommandHandler = defineAuthorizedTextCommand(
     } catch (error) {
       log.warn(`Side question failed: ${formatErrorMessage(error)}`);
       return rejectQuestion(
-        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+        "⚠️ Couldn't answer that side question. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
       );
     }
   },

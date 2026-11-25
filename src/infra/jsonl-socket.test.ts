@@ -1,5 +1,4 @@
 import { getEventListeners } from "node:events";
-import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import timers from "node:timers";
@@ -8,6 +7,17 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestExecHostViaSocket } from "./exec-host.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+
+vi.mock("node:timers", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:timers") & { default: typeof import("node:timers") }
+  >();
+  const overrides = {
+    setTimeout: vi.fn(actual.setTimeout),
+    clearTimeout: vi.fn(actual.clearTimeout),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 async function withSocketServer(
   server: net.Server,
@@ -48,16 +58,14 @@ async function withSocketServer(
 // advance when a test says so.
 async function withControlledTimers(run: () => Promise<void>): Promise<void> {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const schedule = vi.spyOn(timers, "setTimeout").mockImplementation(setTimeout);
-  const clear = vi.spyOn(timers, "clearTimeout").mockImplementation(clearTimeout);
-  syncBuiltinESMExports();
+  const schedule = vi.mocked(timers.setTimeout).mockImplementation(setTimeout);
+  const clear = vi.mocked(timers.clearTimeout).mockImplementation(clearTimeout);
   try {
     await run();
   } finally {
-    schedule.mockRestore();
-    clear.mockRestore();
+    schedule.mockReset();
+    clear.mockReset();
     vi.useRealTimers();
-    syncBuiltinESMExports();
   }
 }
 
@@ -250,7 +258,7 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
   });
 
   it.each([
-    { commandTimeoutMs: undefined, timeoutMs: 50, responseTimeoutMs: 50 },
+    { commandTimeoutMs: null, timeoutMs: 50, responseTimeoutMs: 50 },
     { commandTimeoutMs: 30_000, timeoutMs: undefined, responseTimeoutMs: 50_000 },
     { commandTimeoutMs: 1_000, timeoutMs: undefined, responseTimeoutMs: 21_000 },
     { commandTimeoutMs: undefined, timeoutMs: undefined, responseTimeoutMs: 20_000 },
@@ -284,11 +292,11 @@ describe.runIf(process.platform !== "win32")("exec host JSONL framing", () => {
     });
   });
 
-  it("can wait without a transport deadline when command timeoutMs is zero", async () => {
+  it.each([0, null])("waits without a deadline for timeoutMs=%s", async (timeoutMs) => {
     await withWaitingClock(async (socketPath, received) => {
       const completed = vi.fn();
       const pending = requestExec(socketPath, {
-        request: { ...request, timeoutMs: 0 },
+        request: { ...request, timeoutMs },
         timeoutMs: undefined,
       }).then(completed);
       const socket = await received;

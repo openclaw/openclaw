@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, onSettled, Show, Switch } from "solid-js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
@@ -17,6 +17,7 @@ import {
   type SessionLinkTarget,
 } from "../../../components/markdown-session-links.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import type { McpAppViewElement } from "../../../components/mcp-app-view-types.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -100,6 +101,7 @@ export type SidebarPanelProps = {
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
+  onBrowseFiles?: () => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -114,6 +116,7 @@ export type SidebarPanelProps = {
 function sidebarTitle(content: ChatDetailPanelContent | null, showingRawText: boolean) {
   switch (content?.kind) {
     case "mcp-app":
+    case "mcp-app-preview":
       return content.title;
     case "canvas":
       return content.title?.trim() || t("chat.detailPanel.renderPreview");
@@ -194,6 +197,20 @@ function CanvasPreview(props: {
   );
 }
 
+function McpAppSidebarTarget(props: { view: McpAppViewElement }) {
+  let target!: HTMLDivElement;
+  onSettled(() => props.view.presentInSidebar(target));
+  return (
+    <div
+      class="mcp-app-sidebar-target"
+      style={{ width: "100%", height: "100%", "min-height": "160px" }}
+      ref={(element) => {
+        target = element;
+      }}
+    />
+  );
+}
+
 export function SidebarPanel(props: SidebarPanelProps) {
   const title = () => sidebarTitle(props.content, props.showingRawText);
   const mobileMedia = () =>
@@ -202,7 +219,15 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const mobileReader = () =>
     mobileMedia() || (props.filePresentation === "mobile" && props.content?.kind === "file");
   const fillHost = () =>
-    ["file", "markdown", "attachment", "session-diff", "image"].includes(props.content?.kind ?? "");
+    [
+      "file",
+      "markdown",
+      "attachment",
+      "session-diff",
+      "image",
+      "canvas",
+      "mcp-app-preview",
+    ].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
   return (
@@ -234,16 +259,14 @@ export function SidebarPanel(props: SidebarPanelProps) {
           <div class="sidebar-header">
             <div class="sidebar-title">{title()}</div>
             <div class="sidebar-header__actions">
-              <openclaw-tooltip prop:content={t("chat.detailPanel.close")}>
-                <button
-                  onClick={() => props.onClose()}
-                  class="btn"
-                  type="button"
-                  aria-label={t("chat.detailPanel.close")}
-                >
-                  <Icon name="x" />
-                </button>
-              </openclaw-tooltip>
+              <button
+                onClick={() => props.onClose()}
+                class="btn"
+                type="button"
+                aria-label={t("chat.detailPanel.close")}
+              >
+                <Icon name="x" />
+              </button>
             </div>
           </div>
         </Show>
@@ -272,6 +295,13 @@ export function SidebarPanel(props: SidebarPanelProps) {
             }
           >
             <Switch fallback={<div class="muted">{t("chat.detailPanel.noContent")}</div>}>
+              <Match when={props.content?.kind === "mcp-app-preview" ? props.content : undefined}>
+                {(content) => (
+                  <Show when={content().view} keyed>
+                    {(view) => <McpAppSidebarTarget view={view} />}
+                  </Show>
+                )}
+              </Match>
               <Match when={props.content?.kind === "mcp-app" ? props.content : undefined}>
                 {(content) => (
                   <McpAppPanel
@@ -284,8 +314,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView?.imagePreview &&
-                  props.content?.kind === "file" &&
-                  props.content.mimeType === "image/svg+xml"
+                  props.content?.kind === "file"
                     ? props.content
                     : undefined
                 }
@@ -456,6 +485,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
+                      onBrowseFiles={props.onBrowseFiles}
                     />
                   </div>
                 )}

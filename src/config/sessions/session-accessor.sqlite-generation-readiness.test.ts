@@ -15,7 +15,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-import { prepareSessionGenerationFacts } from "./session-delivery-generation.js";
+import { prepareLeaseFacts } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import { test as it } from "./session-entry-fixture.test-support.js";
 
@@ -162,7 +162,7 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
       permissionMode: "full" as const,
       toolOverrides: { webSearch: true },
     });
-    const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
+    const generation = await prepareLeaseFacts({ ...scope, ...original });
     const initialSettings = generation.readSessionSettings();
     const settings = {
       permissionMode:
@@ -202,8 +202,8 @@ it.for(["metadata", "replacement"] as const)(
   "joins admitted %s publication before checking the retained session generation",
   async (kind, { signal, state: _state }) => {
     const { scope, original } = seedSession("generation-readiness", { chatType: "direct" });
-    const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
-    const releasedGeneration = await prepareSessionGenerationFacts({ ...scope, ...original });
+    const generation = await prepareLeaseFacts({ ...scope, ...original });
+    const releasedGeneration = await prepareLeaseFacts({ ...scope, ...original });
     const grant = await memoryGrant(scope, original, true);
     const { health, provider } = memoryProvider(scope, grant.audience);
     const writes: Promise<unknown>[] = [];

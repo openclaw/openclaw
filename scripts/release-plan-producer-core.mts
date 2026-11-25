@@ -26,6 +26,7 @@ import {
   type ReleasePlanLock,
   type ReleasePlanPurpose,
 } from "./release-plan-contract.mjs";
+import { qualificationAdmissionSupportingEvidence } from "./release-qualification-admission.mjs";
 import {
   releaseValidationIntentForPurpose,
   resolveReleaseValidationIntent,
@@ -58,7 +59,13 @@ type ReleasePlanRuntime = {
 
 type ReleasePlanProducerRequest =
   | { operation: "produce" | "produce-lock"; params: ReleasePlanSource }
-  | { operation: "produce-inventory" | "verify-inventory-identity"; params: ReleaseInventorySource }
+  | {
+      operation:
+        | "produce-inventory"
+        | "verify-inventory-identity"
+        | "inventory-supporting-evidence";
+      params: ReleaseInventorySource;
+    }
   | { operation: "verify-lock"; lockJson: string; params: ReleasePlanSource };
 
 const REPOSITORY = "openclaw/openclaw";
@@ -687,7 +694,24 @@ function verifyReleasePlanLock(
 export function runReleasePlanProducerOperation(
   request: ReleasePlanProducerRequest,
   runtime: ReleasePlanRuntime,
-): ReleasePlan | ReleasePlanLock | string | ReturnType<typeof produceVerifiedReleaseInventory> {
+):
+  | ReleasePlan
+  | ReleasePlanLock
+  | string
+  | ReturnType<typeof produceVerifiedReleaseInventory>
+  | ReturnType<typeof qualificationAdmissionSupportingEvidence> {
+  if (request.operation === "inventory-supporting-evidence") {
+    return qualificationAdmissionSupportingEvidence({
+      descriptor: request.params.qualificationAdmission,
+      repository: REPOSITORY,
+      candidateSha: request.params.candidateSha,
+      qualificationSha: request.params.toolingSha,
+      workflowRef: request.params.toolingFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
+      inputs: request.params.qualificationInputs,
+      runGh: runtime.runGh,
+      downloadArchive: runtime.downloadArchive,
+    });
+  }
   if (request.operation === "verify-inventory-identity") {
     return resolveSource(
       { ...request.params, runGh: runtime.runGh, downloadArchive: runtime.downloadArchive },

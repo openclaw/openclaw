@@ -431,7 +431,7 @@ export function filterCurrentDirectChildCompletionRows<
     requesterAgentId?: string;
   },
 >(
-  children: T[],
+  children: readonly T[],
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
@@ -458,7 +458,7 @@ export function filterCurrentDirectChildCompletionRows<
 }
 
 export function selectCurrentRequesterCompletionRows(params: {
-  rows: SubagentRunRecord[];
+  rows: readonly SubagentRunRecord[];
   requesterSessionKey: string;
   requesterAgentId?: string;
   frozenBatch: boolean;
@@ -508,7 +508,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const output = entry?.outputTokens;
   const hasDirectionalUsage = typeof input === "number" || typeof output === "number";
   const ioTotal = (input ?? 0) + (output ?? 0);
-  const promptCache = resolveFreshSessionTotalTokens(entry);
+  const contextTokens = resolveFreshSessionTotalTokens(entry);
   const runtimeMs =
     typeof params.startedAt === "number" && typeof params.endedAt === "number"
       ? Math.max(0, params.endedAt - params.startedAt)
@@ -518,12 +518,12 @@ export async function buildCompactAnnounceStatsLine(params: {
     `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     hasDirectionalUsage
       ? `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`
-      : promptCache === undefined
+      : contextTokens === undefined
         ? "tokens unknown"
-        : `tokens ${formatTokenCount(promptCache)} prompt/cache`,
+        : `tokens ${formatTokenCount(contextTokens)} context`,
   ];
-  if (hasDirectionalUsage && typeof promptCache === "number" && promptCache > ioTotal) {
-    parts.push(`prompt/cache ${formatTokenCount(promptCache)}`);
+  if (hasDirectionalUsage && typeof contextTokens === "number" && contextTokens > ioTotal) {
+    parts.push(`context ${formatTokenCount(contextTokens)}`);
   }
   return `Stats: ${parts.join(" • ")}`;
 }

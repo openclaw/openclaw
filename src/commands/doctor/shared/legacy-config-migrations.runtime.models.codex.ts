@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
 import { getRecord, type LegacyConfigRule } from "../../../config/legacy.shared.js";
+import { parseModelPolicyWildcardRef } from "../../../config/model-policy-ref.js";
 import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import {
   legacyCodexProviderIdentityKey,
@@ -121,10 +122,12 @@ function collectLegacyModelPolicyWildcardPaths(raw: unknown): Map<string, string
       return;
     }
     for (const [index, entry] of allow.entries()) {
-      if (typeof entry !== "string" || !entry.trim().endsWith("/*")) {
+      const wildcard = typeof entry === "string" ? parseModelPolicyWildcardRef(entry) : null;
+      // Only whole-provider wildcards name a legacy Codex provider.
+      if (!wildcard || wildcard.key !== `${wildcard.provider}/*`) {
         continue;
       }
-      const provider = normalizeProviderId(entry.trim().slice(0, -2));
+      const provider = wildcard.provider;
       if (!isLegacyCodexProviderId(provider)) {
         continue;
       }

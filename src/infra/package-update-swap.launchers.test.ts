@@ -2,74 +2,56 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { createPnpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
-import { prepareNativePackageStage } from "./update-native-package-stage.js";
+import { createNativePackageSwapFixture } from "./package-update-swap.test-support.js";
 
 describe("native launcher publication", () => {
-  it.each([false, true])(
-    "commits with an actionable warning only for missing launcher targets (missing=%s)",
-    async (missing) => {
+  it.each(["executable", "missing target", "unknown format"] as const)(
+    "publishes only launchers that start the new package (%s)",
+    async (scenario) => {
       await withTestDir({ prefix: "native-launcher-publication-" }, async (base) => {
-        const project = path.join(base, "global");
-        const globalRoot = path.join(project, "v11");
-        const packageRoot = path.join(globalRoot, "group", "node_modules", "openclaw");
-        const binDir = path.join(base, "bin");
-        await writePackageRoot(packageRoot, "1.0.0");
-        await fs.mkdir(binDir);
-        const installTarget = createPnpmTarget(globalRoot, packageRoot);
-        const native = await prepareNativePackageStage({
-          installTarget,
-          packageName: "openclaw",
-          installSpec: "openclaw@2.0.0",
-          globalBinDir: binDir,
-          env: {},
-        });
-        if (!native) {
-          throw new Error("missing native stage");
-        }
-        const candidate = path.join(native.projectRoot, path.relative(project, packageRoot));
-        await writePackageRoot(candidate, "2.0.0");
+        const { params, native, packageRoot, candidate, binDir } =
+          await createNativePackageSwapFixture(base);
         const entry = path.join(candidate, "openclaw.mjs");
         await fs.writeFile(entry, 'console.log("candidate");\n');
         const target = path.relative(
           native.binDir,
-          missing ? path.join(base, ".openclaw-update-native-removed", "openclaw.mjs") : entry,
+          scenario === "missing target"
+            ? path.join(base, ".openclaw-update-native-removed", "openclaw.mjs")
+            : entry,
         );
         // All published formats must inspect the executable path, even with correct metadata.
-        for (const [name, content] of [
-          ["openclaw", `exec node "$basedir_abs/${target}" "$@"`],
-          ["openclaw.cmd", `"node" "%~dp0\\${target.replaceAll("/", "\\")}" %*`],
-          ["openclaw.ps1", `& "node" "$basedir/${target}" $args`],
-        ]) {
+        const formats =
+          scenario === "unknown format"
+            ? [["openclaw", `exec node "${entry}" "$@"`]]
+            : [
+                ["openclaw", `exec node "$basedir_abs/${target}" "$@"`],
+                ["openclaw.cmd", `"node" "%~dp0\\${target.replaceAll("/", "\\")}" %*`],
+                ["openclaw.ps1", `& "node" "$basedir/${target}" $args`],
+              ];
+        for (const [name, content] of formats) {
           await fs.writeFile(
             path.join(native.binDir, name!),
             `${content}\n# cmd-shim-target=${entry}\n`,
           );
         }
-        const result = await swapStagedPackageInstall({
-          installTarget,
-          packageName: "openclaw",
-          stage: {
-            prefix: native.projectRoot,
-            layout: {
-              prefix: native.projectRoot,
-              globalRoot: native.globalRoot,
-              binDir: native.binDir,
-            },
-            packageRoot: candidate,
-            installTarget: createPnpmTarget(native.globalRoot, candidate),
-            native,
-          },
-        });
+        const result = await swapStagedPackageInstall(params);
+        if (scenario === "missing target") {
+          // A launcher that cannot start the package must not end as a successful update.
+          expect(result).toMatchObject({ status: "failed", step: { exitCode: 1 } });
+          expect(result.step.stderrTail).toContain(
+            `Published launcher ${path.join(binDir, "openclaw")} cannot start openclaw`,
+          );
+          expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+            "1.0.0",
+          );
+          // The live bin had no launchers before; the broken ones are not left published.
+          expect(await fs.readdir(binDir)).toEqual([]);
+          return;
+        }
         expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
-        if (missing) {
-          expect(result.step.warnings).toHaveLength(3);
-          for (const name of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
-            expect(result.step.warnings).toContainEqual(
-              expect.stringContaining(path.join(binDir, name)),
-            );
-          }
+        if (scenario === "unknown format") {
+          // An unreadable format proves nothing; the update keeps an actionable warning.
           expect(result.step.advisory).toMatchObject({
             kind: "recoverable-maintenance",
             message: expect.stringContaining("Reinstall the current openclaw version with pnpm"),

@@ -1,9 +1,12 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { prepareGitReleaseLayout } from "../../infra/git-release-paths.js";
 import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import { isMainPackageTarget, resolveGlobalInstallSpec } from "../../infra/update-global.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -13,28 +16,27 @@ import { withDeferredDebugProxyCapture } from "../../proxy-capture/runtime-defer
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import type { createUpdateProgress } from "./progress.js";
+import { confirmUpdateDowngrade, normalizeTag, type UpdateCommandOptions } from "./shared.js";
 import {
-  confirmUpdateDowngrade,
-  resolveGitInstallDir,
-  type UpdateCommandOptions,
-} from "./shared.js";
-import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
+  reportPreMutationUpdateResult,
+  assertReleaseUpdateAdmission,
+  withUpdateAdmissionReporting,
+} from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
-import {
-  UpdateCommandPendingRecoveryFailure,
-  withUpdateAdmissionReporting,
-} from "./update-command-result.js";
+import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import {
   createUpdateRunProgress,
   prepareUpdateCommand,
@@ -43,11 +45,7 @@ import {
   resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-  withUpdateInProgressEnv,
-} from "./update-command-service-env.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -71,44 +69,6 @@ export async function updateCommand(
       );
     }),
   );
-}
-
-async function withUpdateDatabaseEngine<T>(
-  env: NodeJS.ProcessEnv,
-  run: () => Promise<T>,
-): Promise<T> {
-  const [
-    { cloneEnvWithPlatformSemantics },
-    { createConfigIO },
-    { isConfigReadFailure },
-    { resolveDatabaseEngineSelection },
-    { withDatabaseEngineSelection },
-    { loadDotEnvAsync },
-  ] = await Promise.all([
-    import("../../config/env-vars.js"),
-    import("../../config/io.js"),
-    import("../../config/io.invalid-config.js"),
-    import("../../infra/database-engine/config.js"),
-    import("../../infra/database-engine/context.js"),
-    import("../../infra/dotenv.js"),
-  ]);
-  const configEnv = cloneEnvWithPlatformSemantics(env);
-  await loadDotEnvAsync({ env: configEnv });
-  const snapshot = await createConfigIO({
-    env: configEnv,
-    observe: false,
-    pluginValidation: "core-only",
-  }).readConfigFileSnapshot();
-  if (isConfigReadFailure(snapshot)) {
-    throw createUpdateConfigFailure(snapshot);
-  }
-  // Candidate Doctor owns config recovery; admission only needs the authored engine choice.
-  const selection = await resolveDatabaseEngineSelection(snapshot.sourceConfig, configEnv);
-  return await withDatabaseEngineSelection(selection, async () => {
-    const { preparePostgresPoolForUpdate } = await import("../../infra/postgres-sync/pool.js");
-    await preparePostgresPoolForUpdate("openclaw update repair");
-    return await run();
-  });
 }
 
 async function updateCommandWithRuntime(
@@ -139,67 +99,140 @@ async function updateCommandWithRuntime(
       ),
     );
   }
-  return await withUpdateAdmissionReporting(inputOpts, async () => {
-    const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
-    const serviceRoot = prepared.servicePlan?.serviceRoot;
-    const env = await resolveUpdateCommandAdmissionEnv({
-      opts: inputOpts,
-      root: resolveUpdateCommandAdmissionRoot(prepared),
-      invocationCwd,
-      pkgOwnership: prepared.pkgOwnership,
-      expectedForeground:
-        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
-    });
-    return await withUpdateDatabaseEngine(env, async () => {
-      if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
-        defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
-      }
-      const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
-      assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
-      const needsInitialization = await updateStateNeedsInitialization(env);
-      const captureOriginal =
-        !inputOpts.dryRun &&
-        !inputOpts.run &&
-        !inputOpts.recovery &&
-        !executorOptions &&
-        !env[UPDATE_RUN_ID_ENV]?.trim() &&
-        env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
-      const execute = (initialization?: InitializedUpdate) =>
-        runAdmittedUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          (opts, presentation, executor) =>
-            updateCommandInternal(
-              opts,
+  const reportHints: NonNullable<Parameters<typeof withUpdateAdmissionReporting>[3]> = {};
+  return await withUpdateAdmissionReporting(
+    inputOpts,
+    async () => {
+      const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+      const serviceRoot = prepared.servicePlan?.serviceRoot;
+      const env = await resolveUpdateCommandAdmissionEnv({
+        opts: inputOpts,
+        root: resolveUpdateCommandAdmissionRoot(prepared),
+        invocationCwd,
+        pkgOwnership: prepared.pkgOwnership,
+        expectedForeground:
+          prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
+          undefined,
+      });
+      return await withUpdateDatabaseEngine(
+        env,
+        async (configReadable, malformedConfig) => {
+          // Late admission refusals retain the captured malformed-source report decision.
+          reportHints.writeArtifacts = !malformedConfig;
+          // Channel conversions, unsupported package targets and dry runs retain their owners.
+          const channelConfig = inputOpts.dryRun
+            ? undefined
+            : await (await import("./update-command-config.js")).readUpdateChannelConfig(false);
+          const switchesToGit =
+            prepared.requestedChannel === "dev" ||
+            (prepared.requestedChannel === null &&
+              channelConfig?.storedChannel === "dev" &&
+              normalizeTag(inputOpts.tag) === null);
+          const staysGit =
+            prepared.requestedChannel === null || prepared.requestedChannel === "dev";
+          if (
+            ((prepared.installKind === "package" &&
+              !switchesToGit &&
+              !isMainPackageTarget(normalizeTag(inputOpts.tag))) ||
+              (prepared.installKind === "git" && staysGit)) &&
+            !inputOpts.dryRun
+          ) {
+            await assertReleaseUpdateAdmission({
+              root: prepared.discoveredRoot,
+              installKind: prepared.installKind,
+              timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+              pkgOwnership: prepared.pkgOwnership,
+              opts: inputOpts,
+              controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+            });
+            await assertUpdateRecoveryAdmission();
+            const { runReleaseUpdateCli } = await import("../../update/cli.js");
+            let tag =
+              prepared.installKind === "git"
+                ? undefined
+                : (normalizeTag(inputOpts.tag) ?? undefined);
+            if (prepared.installKind !== "git") {
+              const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
+              if (spec !== `openclaw@${tag ?? ""}`) {
+                tag = spec;
+              }
+            }
+            return await runReleaseUpdateCli({
+              json: Boolean(inputOpts.json),
+              restart: prepared.shouldRestart,
+              runningRoot: prepared.discoveredRoot,
+              channel: prepared.requestedChannel ?? undefined,
+              storedChannel: channelConfig?.storedChannel ?? undefined,
+              sha: inputOpts.sha,
+              tag,
+              yes: Boolean(inputOpts.yes),
+              timeoutMs: prepared.timeoutMs,
+              acceptCapabilities: Boolean(inputOpts.acceptCapabilities),
+            });
+          }
+          if (inputOpts.dryRun && resolveDebugProxySettings(env).enabled) {
+            defaultRuntime.error("Warning: Debug HTTP capture is disabled during update dry runs.");
+          }
+          const { updateStateNeedsInitialization } =
+            await import("./update-command-initialization.js");
+          assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
+          // Unreadable previews reach diagnostics before any writable state inspection.
+          const needsInitialization =
+            !configReadable || (await updateStateNeedsInitialization(env));
+          const captureOriginal =
+            !inputOpts.dryRun &&
+            !inputOpts.run &&
+            !inputOpts.recovery &&
+            !executorOptions &&
+            !env[UPDATE_RUN_ID_ENV]?.trim() &&
+            env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1";
+          const execute = (initialization?: InitializedUpdate) =>
+            runAdmittedUpdate(
+              inputOpts,
+              prepared,
               recoveryState,
               invocationCwd,
-              prepared,
-              presentation,
-              executor,
-              retainRuntime,
+              env,
+              (opts, presentation, executor) =>
+                updateCommandInternal(
+                  opts,
+                  recoveryState,
+                  invocationCwd,
+                  prepared,
+                  presentation,
+                  executor,
+                  retainRuntime,
+                  initialization,
+                ),
               initialization,
-            ),
-          initialization,
-          executorOptions,
-        );
-      if (needsInitialization || captureOriginal) {
-        const { initializeAndRunUpdate } = await import("./update-command-initialization-run.js");
-        return await initializeAndRunUpdate(
-          inputOpts,
-          prepared,
-          recoveryState,
-          invocationCwd,
-          env,
-          execute,
-          { needsInitialization, captureOriginal },
-          executorOptions,
-        );
-      }
-      return await execute();
-    });
-  });
+              executorOptions,
+            );
+          if (needsInitialization || captureOriginal) {
+            const { initializeAndRunUpdate } =
+              await import("./update-command-initialization-run.js");
+            return await initializeAndRunUpdate(
+              inputOpts,
+              prepared,
+              recoveryState,
+              invocationCwd,
+              env,
+              execute,
+              {
+                needsInitialization,
+                captureOriginal,
+                malformedConfig,
+              },
+              executorOptions,
+            );
+          }
+          return await execute();
+        },
+        inputOpts,
+      );
+    },
+    "unknown",
+    reportHints,
+  );
 }
 
 async function updateCommandInternal(
@@ -216,24 +249,21 @@ async function updateCommandInternal(
   const admissionStepTimeoutMs =
     prepared.timeoutMs ?? admittedRun.defaultStepTimeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
-  let target = initialization?.target;
-  const selectTarget = () =>
-    resolveUpdateCommandTarget(
+  const target =
+    initialization?.target ??
+    (await resolveUpdateCommandTarget(
       opts,
       recoveryState,
       invocationCwd,
       prepared,
       executor,
       admissionStepTimeoutMs,
-    );
-  if (!target) {
-    target = initialization
-      ? await withOwnedManagedUpdateEnv(initialization.env, selectTarget)
-      : await selectTarget();
-  }
+    ));
   if (!target) {
     return;
   }
+  const { createUpdateCommandExecutionGuards } = await import("./update-execution.runtime.js");
+  const executionGuards = createUpdateCommandExecutionGuards(opts, target.root);
   const runResolvedUpdate = async (stagedPackage?: StagedPackageInstallUpdate): Promise<void> => {
     const {
       startedAt,
@@ -340,8 +370,15 @@ async function updateCommandInternal(
       });
     }
 
+    // Every Git install runs from releases behind the release link.
+    const gitRelease = updateInstallKind === "git";
+    const releaseLayoutWarning = gitRelease ? prepareGitReleaseLayout() : undefined;
+    if (releaseLayoutWarning) {
+      defaultRuntime.error(`Warning: ${releaseLayoutWarning}`);
+    }
     const finalizationContext = {
       opts,
+      gitRelease,
       root,
       previousInstallRoot: discoveredRoot,
       requestedChannel,
@@ -365,6 +402,7 @@ async function updateCommandInternal(
       refuseUpdate,
     };
     const activateCurrentCore = async () => {
+      executionGuards.assertCurrent();
       run.executorFence = await executor.enter(root, {
         preflight: true,
         serviceRoot: managedServiceRoot,
@@ -409,6 +447,8 @@ async function updateCommandInternal(
     if (updateInstallKind === "package") {
       const runtimePreflight = await preparePackageUpdateRuntime({
         ...target,
+        assertCurrent: executionGuards.assertCurrent,
+        assertBoundChildCurrent: executionGuards.assertBoundChildCurrent,
         managedService: schemaPreflight.service,
         shouldRestart,
         opts,
@@ -437,10 +477,8 @@ async function updateCommandInternal(
       inspectActivatedUpdateState,
       restoreFailedUpdateDatabases,
       createUpdateCommandFinalizationFence,
-      createUpdateCommandExecutionGuards,
     } = await import("./update-execution.runtime.js");
 
-    const executionGuards = createUpdateCommandExecutionGuards(opts, root);
     const progress = createUpdateRunProgress(
       run,
       presentation.progress,
@@ -462,7 +500,9 @@ async function updateCommandInternal(
       }
       const fence = await executor.enter(root, {
         serviceRoot: managedServiceRoot,
-        activationTimeoutMs: run.deadline?.remainingMs() ?? activationTimeoutMs,
+        // Preparation can time out without revoking the owner that must record
+        // its joined failure. Only the activation caller starts this clock.
+        activationTimeoutMs,
       });
       admitExecutor(fence);
       run.activationTimeoutMs ??= activationTimeoutMs;
@@ -476,6 +516,11 @@ async function updateCommandInternal(
       const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
       assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
       preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+      // A Git release update never rewrites the tree this updater runs from.
+      if (gitRelease) {
+        mutableUpdatePrepared = true;
+        return;
+      }
       // Retention can walk the full dependency tree before the first staging step.
       // Record that work so the completed capacity check does not look stalled.
       const retentionStep = {
@@ -487,12 +532,12 @@ async function updateCommandInternal(
       const retentionStartedAt = Date.now();
       await progress.onStepStart?.(retentionStep);
       const retention = await retainRuntime({
-        mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+        mutationRoots: [root],
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,
         signal: run.deadline?.signal,
-        assertCurrent: () => fence.assertCurrent(),
+        assertCurrent: executionGuards.assertCurrent,
       });
       retainedRuntimeStep = {
         name: retentionStep.name,
@@ -508,6 +553,9 @@ async function updateCommandInternal(
 
     const execution = await executeMutableUpdate({
       ...target,
+      ...(packageInstallTarget
+        ? { updateInstallKind: "package" as const, packageInstallTarget }
+        : { updateInstallKind: "git" as const }),
       callerLegacyConfigPlan: initialization?.callerLegacyConfigPlan,
       installKind,
       timeoutMs,
@@ -542,6 +590,16 @@ async function updateCommandInternal(
     if (retainedRuntimeStep) {
       result.steps.unshift(retainedRuntimeStep);
     }
+    if (releaseLayoutWarning) {
+      result.steps.unshift({
+        name: "git-release-layout",
+        command: "select Git release layout",
+        cwd: root,
+        durationMs: 0,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: releaseLayoutWarning },
+      });
+    }
     result.runId = run.runId;
     if (result.status === "skipped" && result.reason === "already-current") {
       await activateCurrentCore();
@@ -571,51 +629,69 @@ async function updateCommandInternal(
         ownedManagedUpdateContext?.pluginInstallRecords ?? preUpdatePluginInstallRecords,
       packageUpdateNodeRunner,
     };
-    const rollbackBlockedReason = opts.recovery
-      ? undefined
-      : await inspectActivatedUpdateState({
-          result,
-          root,
-          packageUpdateNodeRunner,
-          schemaVersions: execution.schemaVersions,
-          candidateSchemaVersions: execution.candidateSchemaVersions,
-          config: finalization.configSnapshot.config,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          timeoutMs: updateStepTimeoutMs,
-        });
+    // Before update mutation, the restored predecessor may already be writing state again.
+    // A post-activation scan would replace the original failure without a mutation to inspect.
+    const failedBeforeMutation =
+      result.status === "error" &&
+      !execution.mutationStarted &&
+      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk);
+    const rollbackBlockedReason =
+      opts.recovery || failedBeforeMutation
+        ? undefined
+        : await runMutableUpdateRecovery(() =>
+            inspectActivatedUpdateState({
+              result,
+              root,
+              gitRelease,
+              candidateOpenedState: execution.candidateOpenedState,
+              packageUpdateNodeRunner,
+              schemaVersions: execution.schemaVersions,
+              candidateSchemaVersions: execution.candidateSchemaVersions,
+              config: finalization.configSnapshot.config,
+              env: ownedManagedUpdateContext?.env ?? run.env,
+              timeoutMs: updateStepTimeoutMs,
+            }),
+          );
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.
       recoveryState.ledgerHandoffOwned = true;
       const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
-      const continued = await continueMigratedUpdateInFreshProcess(
-        { ...finalization, rollbackBlockedReason },
-        progress.pendingSteps,
+      const continued = await runMutableUpdateRecovery(() =>
+        continueMigratedUpdateInFreshProcess(
+          { ...finalization, rollbackBlockedReason },
+          progress.pendingSteps,
+        ),
       );
       if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
-        const restored = await restoreFailedUpdateDatabases({
-          backup: finalization.databaseBackup,
-          result: continued.result,
-          runId: run.runId,
-          env: ownedManagedUpdateContext?.env ?? run.env,
-          assertCurrent: assertRollbackCurrent,
-          progress,
-        });
+        const backup = finalization.databaseBackup;
+        const restored = await runMutableUpdateRecovery(() =>
+          restoreFailedUpdateDatabases({
+            backup,
+            result: continued.result,
+            runId: run.runId,
+            env: ownedManagedUpdateContext?.env ?? run.env,
+            assertCurrent: assertRollbackCurrent,
+            progress,
+          }),
+        );
         if (!restored) {
           throw new UpdateCommandPendingRecoveryFailure(
             continued.result,
             continued.result.steps.at(-1)?.stderrTail ?? undefined,
           );
         }
-        await finishUpdate(
-          { ...finalization, result: continued.result },
-          {
-            beforeFinalization: async () => {
-              await progress.flushLedgerWrites();
-              recoveryState.ledgerHandoffOwned = false;
-              presentation.resume();
+        await runMutableUpdateRecovery(() =>
+          finishUpdate(
+            { ...finalization, result: continued.result },
+            {
+              beforeFinalization: async () => {
+                await progress.flushLedgerWrites();
+                recoveryState.ledgerHandoffOwned = false;
+                presentation.resume();
+              },
             },
-          },
+          ),
         );
         return;
       }
@@ -625,12 +701,14 @@ async function updateCommandInternal(
       }
       return;
     }
-    await finishUpdate(finalization, {
-      beforeFinalization: async () => {
-        await progress.flushLedgerWrites();
-        presentation.resume();
-      },
-    });
+    await runMutableUpdateRecovery(() =>
+      finishUpdate(finalization, {
+        beforeFinalization: async () => {
+          await progress.flushLedgerWrites();
+          presentation.resume();
+        },
+      }),
+    );
   };
 
   return await withUpdateCandidateAdmission(
@@ -643,6 +721,7 @@ async function updateCommandInternal(
       presentation,
       stagedPackage: initialization?.stagedPackage,
       candidateAdmission: initialization?.candidateAdmission,
+      assertCurrent: executionGuards.assertCurrent,
     },
     runResolvedUpdate,
   );

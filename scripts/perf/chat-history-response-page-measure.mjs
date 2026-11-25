@@ -5,11 +5,19 @@
  * The baseline module must export prepareChatHistoryResponsePage with its own budget owner.
  * Use an unchanged source snapshot with relative imports resolved to its checkout.
  * Run timing and allocation separately; --reverse counterbalances the initial arm.
+ * An unchanged source is an A/A control only without --fullness, which compares
+ * two different operations even when both modules come from the same revision.
  * Pages contain text, tool calls/results, images, activity, and transcript positions.
  * Before timing, compare full JSON responses for fit/tail/anchor/oversized cases.
  * Add --encode to include worker response encoding; --messages 300 --text-repeats 512
  * models repeated large-tool-result pages. Allocation is sampled separately from CPU.
  * Use --response-bytes 524288 for the transport page cap (default: 6 MiB).
+ * Use --fullness to compare the discarded full-response budget check with the
+ * candidate selection-only predicate. This measures the owner check, not RPC latency.
+ * Example: --fullness --messages 600 --text-repeats 120 --response-bytes 524288
+ *   --iterations 500 --pairs 2 (repeat with --allocation for sampled allocation).
+ * Accept only equivalent responses/fullness decisions with lower CPU or allocation;
+ * report absolute GC deltas separately and use matched controls before alleging harm.
  */
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
@@ -29,20 +37,29 @@ const { values } = parseArgs({
     allocation: { type: "boolean", default: false },
     reverse: { type: "boolean", default: false },
     encode: { type: "boolean", default: false },
+    fullness: { type: "boolean", default: false },
+    "differential-only": { type: "boolean", default: false },
     messages: { type: "string" },
     "text-repeats": { type: "string", default: "64" },
     "response-bytes": { type: "string", default: String(6 * 1024 * 1024) },
   },
 });
 assert(global.gc, "Run with --expose-gc");
-assert(values["base-source"], "Provide --base-source (use the current source for A/A)");
+assert(values["base-source"], "Provide --base-source");
 const iterations = Number(values.iterations);
 const pairs = Number(values.pairs);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(pairs) && pairs > 0);
+assert(!(values.encode && values.fullness), "Choose either --encode or --fullness");
 const method = values.encode ? "encodeChatHistoryResponsePage" : "prepareChatHistoryResponsePage";
 const base = await import(pathToFileURL(resolve(values["base-source"])).href);
-const arms = { base: base[method], candidate: candidate[method] };
+const arms = values.fullness
+  ? {
+      base: (page, options) =>
+        base.prepareChatHistoryResponsePage(page, options).omission?.byteLimited === true,
+      candidate: candidate.isChatHistoryResponsePageByteLimited,
+    }
+  : { base: base[method], candidate: candidate[method] };
 const params = {
   entry: undefined,
   maxHistoryBytes: 6 * 1024 * 1024,
@@ -68,7 +85,19 @@ const fixtures = (values.messages ? [Number(values.messages)] : [200, 2000]).map
     __openclaw: {
       id: `message-${index}`,
       seq: index + 1,
-      transcriptPosition: { source: "synthetic", rawSeq: index + 1 },
+      transcriptPosition: {
+        source: "synthetic",
+        rawSeq: index + 1,
+        ...(values.fullness && index % 3 === 2
+          ? {
+              activity: {
+                afterRawSeq: index - 1,
+                scopeId: `scope-${Math.floor(index / 30)}`,
+                startOrder: index % 30,
+              },
+            }
+          : {}),
+      },
     },
   }));
   return {
@@ -79,6 +108,14 @@ const fixtures = (values.messages ? [Number(values.messages)] : [200, 2000]).map
     pagination: { offset: 0, totalMessages: count, rawPageMessages: count },
   };
 });
+// The retired input-byte diagnostic is not part of the client response. Every
+// other field, including omission counts and all continuation fields, stays exact.
+function responseJson(result) {
+  const value = structuredClone(result);
+  delete value.omission?.normalizedBytes;
+  delete value.encodedResponse?.omission?.normalizedBytes;
+  return JSON.stringify(value);
+}
 let byteComparisons = 0;
 for (const fixture of fixtures) {
   const oversized = structuredClone(fixture);
@@ -92,14 +129,97 @@ for (const fixture of fixtures) {
       for (const messageId of [undefined, "message-1"]) {
         const options = { ...params, responseHistoryBytes, messageId };
         assert.equal(
-          JSON.stringify(arms.candidate(page, options)),
-          JSON.stringify(arms.base(page, options)),
+          responseJson(candidate[method](page, options)),
+          responseJson(base[method](page, options)),
         );
+        if (values.fullness) {
+          const full = arms.candidate(page, options);
+          assert.equal(typeof full, "boolean");
+          assert.equal(full, arms.base(page, options));
+        }
         assert.equal(JSON.stringify(page), inputBytes);
         byteComparisons++;
       }
     }
   }
+}
+// Exercise lazy selection across both cursor directions, replacement-induced
+// group splits, missing anchors and sequence maps, at exact and tiny budgets.
+if (values["differential-only"]) {
+  const savedNow = Date.now;
+  Date.now = () => 1_700_000_000_000;
+  try {
+    for (let variant = 0; variant < 8; variant++) {
+      const page = structuredClone(fixtures[0]);
+      page.messages = page.messages.slice(0, variant === 0 ? 0 : 24);
+      page.pagination = { offset: 0, totalMessages: 24, rawPageMessages: page.messages.length };
+      for (const [index, message] of page.messages.entries()) {
+        message["__openclaw"].seq = variant % 2 ? Math.floor(index / 3) + 1 : index + 1;
+        message.content[0].text = ['short 漢字🦞\n"\\', "t".repeat(60_000), "z".repeat(180_000)][
+          index % 3
+        ];
+        if (variant === 3 && index % 3 === 1) {
+          // The unavailable sentinel loses its sequence and splits this source group.
+          message["__openclaw"].id = "i".repeat(140_000) + index;
+        }
+        if (variant === 4) {
+          delete message["__openclaw"].seq;
+        }
+        if (variant === 5) {
+          (page.pagination.messageSequences ??= {})[`id:${message["__openclaw"].id}`] =
+            Math.floor(index / 4) + 1;
+        }
+        if (variant === 6) {
+          message.content = [{ type: "image", data: "YWJj".repeat(index % 2 ? 40_000 : 512) }];
+        }
+      }
+      const exactBytes = base.prepareChatHistoryResponsePage(page, {
+        ...params,
+        responseHistoryBytes: 6 * 1024 * 1024,
+      }).messagesBytes;
+      for (const responseHistoryBytes of [
+        64,
+        512,
+        4096,
+        32768,
+        131072,
+        524288,
+        6 * 1024 * 1024,
+        exactBytes - 1,
+        exactBytes,
+        exactBytes + 1,
+      ]) {
+        for (const messageId of [undefined, "message-0", "message-10", "message-23", "missing"]) {
+          for (const direction of [undefined, "older", "newer"]) {
+            page.anchor = {
+              sessionId: "fixture",
+              source: "synthetic",
+              direction,
+              hasOlder: false,
+              hasNewer: false,
+              oldestMessageId: page.messages[0]?.["__openclaw"].id,
+              newestMessageId: page.messages.at(-1)?.["__openclaw"].id,
+            };
+            const options = { ...params, responseHistoryBytes, messageId };
+            assert.equal(
+              responseJson(candidate[method](page, options)),
+              responseJson(base[method](page, options)),
+              `variant=${variant} budget=${responseHistoryBytes} anchor=${messageId} direction=${direction}`,
+            );
+            assert.equal(
+              candidate.isChatHistoryResponsePageByteLimited(page, options),
+              base.prepareChatHistoryResponsePage(page, options).omission?.byteLimited === true,
+            );
+            byteComparisons++;
+          }
+        }
+      }
+    }
+  } finally {
+    Date.now = savedNow;
+  }
+  console.log(JSON.stringify({ byteComparisons }));
+  process.exit(0);
 }
 function sampledBytes(node) {
   return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
@@ -138,9 +258,16 @@ for (const fixture of fixtures) {
       const cpuStart = process.threadCpuUsage();
       const start = performance.now();
       let bytes = 0;
+      let fullPages = 0;
       for (let index = 0; index < iterations; index++) {
         const result = arms[arm](fixture, params);
-        bytes += values.encode ? result.encodedResponse.messages.byteLength : result.messagesBytes;
+        if (values.fullness) {
+          fullPages += Number(result);
+        } else {
+          bytes += values.encode
+            ? result.encodedResponse.messages.byteLength
+            : result.messagesBytes;
+        }
       }
       const elapsedMs = performance.now() - start;
       const cpu = process.threadCpuUsage(cpuStart);
@@ -160,7 +287,7 @@ for (const fixture of fixtures) {
         arm,
         iterations,
         hostLoad,
-        bytes,
+        ...(values.fullness ? { fullPages } : { bytes }),
         ...(values.allocation
           ? { allocatedBytes }
           : {
@@ -178,6 +305,7 @@ console.log(
       node: process.version,
       responseHistoryBytes: params.responseHistoryBytes,
       mode: values.allocation ? "allocation" : "timing",
+      operation: values.fullness ? "fullness" : method,
       byteComparisons,
       rows,
     },

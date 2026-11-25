@@ -116,6 +116,7 @@ export function runIsolatedGatewayCli(params: {
   configPath: string;
   env?: NodeJS.ProcessEnv;
   onStdout?: (stdout: string) => void;
+  interact?: Parameters<typeof runCliProcessChild>[0]["interact"];
 }) {
   return runCliProcessChild({
     nodeArgs: [
@@ -148,5 +149,6 @@ export function runIsolatedGatewayCli(params: {
       ...params.env,
     },
     onStdout: params.onStdout,
+    interact: params.interact,
   });
 }

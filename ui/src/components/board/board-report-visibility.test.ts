@@ -12,10 +12,7 @@ afterEach(() => {
 });
 
 it("defers fixed reports until nearby, then retains their body and current content across tabs", async () => {
-  const observers: Array<{
-    targets: Set<Element>;
-    deliver: (target: Element) => void;
-  }> = [];
+  const observers: { targets: Set<Element>; deliver: (target: Element) => void }[] = [];
   vi.stubGlobal(
     "IntersectionObserver",
     class {
@@ -24,8 +21,7 @@ it("defers fixed reports until nearby, then retains their body and current conte
         observers.push({
           targets: this.targets,
           deliver: (target) => {
-            // SAFETY: The visibility pool consumes only target/isIntersecting;
-            // this fixture supplies the native observer's delivery contract.
+            // SAFETY: The observer fixture only needs target/isIntersecting.
             callback(
               [{ target, isIntersecting: true } as IntersectionObserverEntry],
               this as unknown as IntersectionObserver,
@@ -45,7 +41,6 @@ it("defers fixed reports until nearby, then retains their body and current conte
     },
   );
   const widget = createBoardWidget({
-    name: "deferred-report",
     contentKind: "plugin",
     pluginKind: "session:report",
     heightMode: "fixed",
@@ -58,20 +53,21 @@ it("defers fixed reports until nearby, then retains their body and current conte
   };
   const cell = mountCell(widget, { context });
   await cell.updateComplete;
-  expect(cell.querySelector(".board-widget")?.getAttribute("style")).toContain(
-    "grid-row: 1 / span 4",
-  );
+  await vi.dynamicImportSettled();
+  const target = cell.querySelector(".board-widget")!;
+  expect(target.getAttribute("style")).toContain("grid-row: 1 / span 4");
   expect(cell.querySelector("openclaw-report-widget")).toBeNull();
   expect(cell.querySelector(".board-widget__menu-trigger")).toBeNull();
-  const target = cell.querySelector(".board-widget")!;
+  expect(cell.querySelector(".board-widget__chrome")).not.toBeNull();
+  expect(cell.querySelector(".board-widget__resize-handle")).not.toBeNull();
   const observer = observers.find(({ targets }) => targets.has(target));
-  expect(observer).toBeDefined();
   observer!.deliver(target);
+  await cell.updateComplete;
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(cell.textContent).toContain("Initial report"));
   expect(cell.querySelector(".board-widget__menu-trigger")).not.toBeNull();
   const report = cell.querySelector("openclaw-report-widget");
   expect(observer!.targets.has(target)).toBe(false);
-
   cell.active = false;
   cell.hidden = true;
   cell.widget = {
@@ -84,12 +80,29 @@ it("defers fixed reports until nearby, then retains their body and current conte
   cell.hidden = false;
   await cell.updateComplete;
   expect(cell.querySelector("openclaw-report-widget")).toBe(report);
-
   const auto = mountCell({ ...widget, name: "auto-report", heightMode: "auto" }, { context });
   await waitForSolid(() => expect(auto.textContent).toContain("Initial report"));
   expect(observers.some(({ targets }) => targets.has(auto.querySelector(".board-widget")!))).toBe(
     false,
   );
+  const autoReport = auto.querySelector("openclaw-report-widget");
+  auto.active = false;
+  auto.hidden = true;
+  auto.widget = { ...auto.widget!, heightMode: "fixed", revision: 2, props: cell.widget!.props };
+  await waitForSolid(() => expect(autoReport?.textContent).toContain("Updated while hidden"));
+  expect(auto.querySelector("openclaw-report-widget")).toBe(autoReport);
+  const pending = mountCell(
+    { ...widget, name: "pending-report", grantState: "pending" },
+    { context },
+  );
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-pending"]')).not.toBeNull(),
+  );
+  expect(pending.querySelector("openclaw-report-widget")).toBeNull();
+  pending.widget = { ...pending.widget!, grantState: "rejected" };
+  await waitForSolid(() =>
+    expect(pending.querySelector('[data-test-id="board-rejected"]')).not.toBeNull(),
+  );
   cleanupCells();
-  expect(observers.every(({ targets }) => targets.size === 0)).toBe(true);
+  await waitForSolid(() => expect(observers.every(({ targets }) => targets.size === 0)).toBe(true));
 });

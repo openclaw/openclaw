@@ -5,7 +5,10 @@ import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
+import {
+  selectUsageTimeZone,
+  installUsageOverviewGateway as installMockGateway,
+} from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
 const emptyTotals = createEmptyCostUsageTotals();
@@ -21,7 +24,7 @@ function aggregates(
   };
 }
 async function selectLocalDate(page: Page, date: string) {
-  await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
+  await selectUsageTimeZone(page, "local");
   const inputs = await page.locator(".usage-date-input").all();
   expect(inputs).toHaveLength(2);
   for (const input of inputs) {
@@ -124,9 +127,7 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
           for (const { timeZone, date, mode } of calendars) {
             const initialRequests = (await gateway.getRequests("sessions.usage")).length;
-            await page
-              .getByRole("combobox", { name: "Time zone", exact: true })
-              .selectOption(timeZone);
+            await selectUsageTimeZone(page, timeZone);
             await gateway.waitForRequest("sessions.usage", { after: initialRequests });
             for (const [label, days] of [
               ["Today", 1],
@@ -178,103 +179,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("keeps hour filtering responsive across the repeated local hour", async () => {
-    const date = "2026-11-01";
-    const start = Date.parse("2026-11-01T08:30:00Z");
-    const end = Date.parse("2026-11-01T10:30:00Z");
-    const activeAt = Date.parse("2026-11-01T10:15:00Z");
-    const totals = { ...emptyTotals, input: 100, totalTokens: 100 };
-    const messages = { ...emptyMessages, total: 1, user: 1 };
-    await suite.withPage(
-      { locale: "en-US", timezoneId: "America/Los_Angeles", serviceWorkers: "block" },
-      async ({ page }) => {
-        await page.clock.setFixedTime(new Date(end));
-        expect(
-          await page.evaluate(() =>
-            ["2026-11-01T08:30:00Z", "2026-11-01T09:30:00Z"].map((timestamp) => {
-              const value = new Date(timestamp);
-              return [value.getHours(), value.getTimezoneOffset()];
-            }),
-          ),
-        ).toEqual([
-          [1, 420],
-          [1, 480],
-        ]);
-        const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "sessions.usage": {
-              updatedAt: end,
-              startDate: date,
-              endDate: date,
-              sessions: [
-                {
-                  key: "agent:main:timestamped-no-tokens",
-                  label: "Messages without token usage",
-                  agentId: "main",
-                  updatedAt: end,
-                  usage: {
-                    ...emptyTotals,
-                    firstActivity: start,
-                    lastActivity: end,
-                    activityDates: [date],
-                    messageCounts: { ...messages, total: 2, user: 2 },
-                    utcQuarterHourMessageCounts: [34, 42].map((quarterIndex) =>
-                      Object.assign({ date, quarterIndex }, messages),
-                    ),
-                    // Timestamped messages without model usage still produce zero-token buckets.
-                    utcQuarterHourTokenUsage: [34, 42].map((quarterIndex) =>
-                      Object.assign({ date, quarterIndex }, emptyTotals),
-                    ),
-                  },
-                },
-                {
-                  key: "agent:main:after-repeated-hour",
-                  label: "After the repeated hour",
-                  agentId: "main",
-                  updatedAt: activeAt,
-                  usage: {
-                    ...totals,
-                    firstActivity: activeAt,
-                    lastActivity: activeAt,
-                    activityDates: [date],
-                    messageCounts: { ...messages, user: 0, assistant: 1 },
-                    utcQuarterHourMessageCounts: [
-                      { date, quarterIndex: 41, ...messages, user: 0, assistant: 1 },
-                    ],
-                    utcQuarterHourTokenUsage: [{ date, quarterIndex: 41, ...totals }],
-                  },
-                },
-              ],
-              totals,
-              aggregates: aggregates({ ...messages, total: 3, user: 2, assistant: 1 }, [
-                { date, ...totals },
-              ]),
-            },
-            "usage.status": { updatedAt: end, providers: [] },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}usage`);
-        await selectLocalDate(page, date);
-        await expectUsageRange(gateway, date, "America/Los_Angeles");
-        const titles = page.locator(".session-bar-title");
-        const cells = page.locator(".usage-hour-cell");
-        const unfilteredTitles = ["Messages without token usage", "After the repeated hour"];
-        await expect.poll(() => titles.allTextContents()).toEqual(unfilteredTitles);
-        await expect.poll(() => cells.count()).toBe(24);
-        await expect.poll(() => cells.nth(2).getAttribute("aria-label")).toBe("2:00 · 100 tokens");
-        await cells.nth(2).click();
-        await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("true");
-        await expect.poll(() => titles.allTextContents()).toEqual(unfilteredTitles);
-        await cells.nth(2).click();
-        await cells.nth(3).click();
-        await expect.poll(() => titles.allTextContents()).toEqual([]);
-        await page.getByRole("button", { name: "Remove hours filter", exact: true }).click();
-        await expect.poll(() => titles.allTextContents()).toEqual(unfilteredTitles);
-        await expect.poll(() => cells.nth(2).getAttribute("aria-pressed")).toBe("false");
-      },
-    );
-  });
 
   it("ends a local range at the next calendar midnight after a skipped midnight", async () => {
     const date = "2026-09-06";
@@ -350,7 +254,7 @@ suite.define(() => {
         const expectedBar = (time: string) =>
           `Sep 6, ${time} · 100 tokens · Out 0 · In 100 · CW 0 · CR 0`;
         await expect.poll(barLabels).toEqual([expectedBar("01:00 AM"), expectedBar("11:59 PM")]);
-        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
+        await selectUsageTimeZone(page, "utc");
         await expectUsageRange(gateway, date);
         await page.getByRole("button", { name: "Skipped midnight", exact: true }).click();
         await expect.poll(barLabels).toEqual([expectedBar("03:59 AM"), expectedBar("04:00 AM")]);

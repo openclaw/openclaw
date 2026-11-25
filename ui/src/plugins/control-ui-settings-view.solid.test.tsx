@@ -1,9 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiSettingsContext,
   ControlUiSettingsSnapshot,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountSettingsPresentation } from "./control-ui-settings.test-support.tsx";
 
@@ -12,6 +13,7 @@ type Hello = { auth: { scopes: string[]; recoveryScope: string } };
 function fixture(
   options: {
     updateThrows?: boolean;
+    loadThrows?: boolean;
     disposeThrows?: boolean;
     retireDuringMount?: boolean;
   } = {},
@@ -38,6 +40,9 @@ function fixture(
     plugins: {
       reportError: vi.fn(),
       async loadSettingsView(_placement: unknown, signal: AbortSignal) {
+        if (options.loadThrows) {
+          throw new TypeError("Synthetic plugin render failure");
+        }
         const dispose = vi.fn();
         assetDisposers.push(dispose);
         const lifetime = AbortSignal.any([signal, runtime.signal]);
@@ -191,4 +196,14 @@ it.each([
   expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
   await expect(old.request("memory.search")).rejects.toThrow();
   await waitForSolid(() => expect(f.contexts).toHaveLength(2));
+});
+
+it("localizes the settings presentation fallback", async () => {
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized presentation fallback");
+  onTestFinished(() => translate.mockRestore());
+  const f = fixture({ loadThrows: true });
+  await waitForSolid(() =>
+    expect(f.container.textContent).toContain("localized presentation fallback"),
+  );
+  expect(translate).toHaveBeenCalledWith("pluginUi.settingsLoadFailed", undefined);
 });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
 import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -65,10 +65,8 @@ afterEach(() => {
 
 it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {
   const pluginRoot = writePreSplitSdkBridgeConsumerFixture();
-  const hostRoot = createCompiledSdkHost(
-    publishedSdkBridgeEntrypoints,
+  const hostRoot = prepareCompiledSdkHost(publishedSdkBridgeEntrypoints, { mode: "link" })(
     (prefix) => tempDirs.make(prefix),
-    { mode: "link" },
   );
   if (hostRoot) {
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", hostRoot);

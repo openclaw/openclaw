@@ -1433,6 +1433,7 @@ describe("runCopilotAttempt", () => {
       expect(result.terminal).toEqual({ kind: "ok" });
       const submitted = requireCreateSessionConfig(sdk) as { tools?: SdkTool[] };
       const content = requireSystemMessage(sdk);
+      expect(content).toContain("Permission blocks:");
       await waitForEventLoopTurn();
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),

@@ -28,6 +28,9 @@ export type MSTeamsDelegatedTokens = {
 export type MSTeamsDelegatedOAuthContext = {
   log: (msg: string) => void;
   note: (message: string, title?: string) => Promise<void>;
-  prompt: (message: string) => Promise<string>;
+  prompt: (params: {
+    message: string;
+    validate: (value: string) => string | undefined;
+  }) => Promise<string>;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
 };

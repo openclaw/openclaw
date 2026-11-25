@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
+import * as manifestWorker from "./workspace-manifest-worker.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
@@ -58,6 +61,7 @@ async function workspace(eol = "\n", added = false) {
     bytes,
     base: base.manifest,
     current: current.manifest,
+    reconciliation: prepareWorkspaceReconciliation(base.manifest, current.manifest),
     baseManifestRef: base.manifestRef,
     currentManifestRef: current.manifestRef,
   };
@@ -184,10 +188,10 @@ it.each([
       }
     },
   });
-  const remove = fs.rm;
+  const remove = nativeWorktreeFilesystem.remove;
   const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
-  vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
-  vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+  vi.spyOn(manifestWorker, "prepareWorkspaceTemporaryDirectory").mockResolvedValueOnce(scratch);
+  vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementation(async (target, options) => {
     if (target === scratch && cleanupFails) {
       throw new Error("scratch removal failed");
     }

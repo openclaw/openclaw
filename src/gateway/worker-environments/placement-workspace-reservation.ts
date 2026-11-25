@@ -1,5 +1,5 @@
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   placementAuthorityOwnerFor,
@@ -61,24 +61,24 @@ export function createPlacementWorkspaceReservationOps(
   const withReservation = async <T>(
     scope: string,
     sessionId: string,
-    run: (assertOwned: () => void) => Promise<T>,
+    run: (assertLeaseCurrent: () => void) => Promise<T>,
   ): Promise<T> =>
-    await withOpenClawStateLease(
+    await withOpenClawStateLeaseAsync(
       {
         scope,
         key: sessionId,
-        database: { scope: "shared", options: { path: runtime.path } },
         leaseMs: 60000,
         waitMs: 0,
         heartbeat: "worker",
         leaseLabel: "session publication exclusion",
         signal,
       },
-      async (lease) => await run(() => lease.assertOwned()),
+      context,
+      (lease) => run(lease.assertCurrent),
     );
   const withWorkspaceExclusion = <T>(
     sessionId: string,
-    run: (assertOwned: () => void) => Promise<T>,
+    run: (assertLeaseCurrent: () => void) => Promise<T>,
   ) => withReservation(SCOPE, sessionId, run);
   const withWorkspaceReservation = async <T>(
     identity: WorkerSessionPlacementIdentity,
@@ -90,7 +90,7 @@ export function createPlacementWorkspaceReservationOps(
       return await withWorkspaceExclusion(
         identity.sessionId,
         async (assertPublisherExclusion) =>
-          await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
+          await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertLeaseCurrent) => {
             const prepared = await preparePlacementAuthorityRead(
               runtime.path,
               identity.sessionId,
@@ -100,7 +100,7 @@ export function createPlacementWorkspaceReservationOps(
               assertReconciled(prepared.value, identity, workspace);
               const assertCurrent = () => {
                 assertPublisherExclusion();
-                assertOwned();
+                assertLeaseCurrent();
                 prepared.assertCurrent();
               };
               // Exclusion blocks new claims; committed placement changes revoke the prepared facts.

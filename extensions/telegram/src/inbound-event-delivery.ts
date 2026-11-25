@@ -1,14 +1,15 @@
 import { createInboundEventDeliveryCorrelation } from "openclaw/plugin-sdk/inbound-event-delivery";
-import { stripTelegramInternalPrefixes } from "./targets.js";
+import { parseTelegramTarget } from "./targets.js";
 
 export const telegramInboundEventDelivery = createInboundEventDeliveryCorrelation({
   targetsMatch(expected, actual) {
-    const expectedTarget = stripTelegramInternalPrefixes(expected).toLowerCase();
-    const actualTarget = stripTelegramInternalPrefixes(actual).toLowerCase();
+    // A chat-level expectation also accepts deliveries into one of its topics.
+    const want = parseTelegramTarget(expected.toLowerCase());
+    const got = parseTelegramTarget(actual.toLowerCase());
     return (
-      expectedTarget === actualTarget ||
-      (!/:topic:\d+$/u.test(expectedTarget) &&
-        expectedTarget === actualTarget.replace(/:topic:\d+$/u, ""))
+      want.chatId === got.chatId &&
+      want.directMessagesTopicId === got.directMessagesTopicId &&
+      (want.messageThreadId === undefined || want.messageThreadId === got.messageThreadId)
     );
   },
 });

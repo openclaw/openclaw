@@ -74,9 +74,8 @@ export function continueStalledReplyTurn({
   ) {
     return false;
   }
-  try {
-    followupRun.operatorAuthority?.assertCurrent();
-  } catch {
+  // Refusing this continuation does not revoke or settle any queued source.
+  if (followupRun.operatorAuthority?.signal?.aborted) {
     return false;
   }
   const queuedRequest = !guidance && claimNextQueuedFollowupRequestFrom(queueKey, followupRun);
@@ -235,12 +234,13 @@ async function executePreparedReplyAgentRunWithCompletion(
   const runWithGoalReturn = createGoalContinuationReturn(
     sessionKey &&
       storePath &&
-      activeSessionEntry?.goal?.status === "active" &&
+      activeSessionEntry &&
       (activeSessionEntry.agentHarnessId === undefined ||
         activeSessionEntry.agentHarnessId === "openclaw")
       ? {
           base: followupRun,
-          initialGoalId: activeSessionEntry.goal.id,
+          initialGoalId:
+            activeSessionEntry.goal?.status === "active" ? activeSessionEntry.goal.id : undefined,
           expectedSession: activeSessionEntry,
           sessionKey,
           storePath,

@@ -11,6 +11,7 @@ export function readChild(
   signal?: AbortSignal,
   options?: {
     targetVersion?: string;
+    targetSha?: string;
     readJobLog?: (jobId: number) => string | Promise<string>;
     reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (
@@ -32,5 +33,9 @@ export function updateReleaseTransportEpisode(
   options?: { deadline?: number; monotonicNow?: number; wallNow?: number },
 ): ReleaseRecord;
 export function parsePlanInputs(value: string): ReleaseRecord;
+export function effectiveReleasePlanGates(
+  gates: ReleaseRecord[],
+  env?: Record<string, string | undefined>,
+): ReleaseRecord[];
 export function hydrateReusedPlan(plan: ReleaseRecord[], evidence: ReleaseRecord): ReleaseRecord[];
 export function formatReleaseStateHeartbeat(mode: string, decision: ReleaseRecord): string;

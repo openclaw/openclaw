@@ -88,7 +88,11 @@ vi.mock("../../state/openclaw-state-db-readonly.js", async (importOriginal) => {
     ...actual,
     executeExistingOpenClawStateRead: (...args) => {
       const command = args[1];
-      if (command.type === "workerEnvironments.snapshot" && command.ids && delivery.failReadback) {
+      if (
+        command.type === "workerEnvironments.snapshot" &&
+        command.input.ids &&
+        delivery.failReadback
+      ) {
         delivery.failReadback = false;
         throw delivery.readFailure;
       }

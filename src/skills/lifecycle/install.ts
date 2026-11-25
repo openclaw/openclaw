@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { canAccess } from "../../infra/path-existence.js";
 import {
   evaluateSkillInstallPolicy,
   type SkillInstallSpecMetadata,
@@ -166,7 +167,7 @@ async function resolveBrewBinDir(
     }
   }
   for (const candidate of fallbackDirs) {
-    if (fs.existsSync(candidate)) {
+    if (await canAccess(candidate)) {
       return candidate;
     }
   }
@@ -594,7 +595,7 @@ export async function installSkillDependencies(
         ? path.join(path.parse(process.cwd()).root, "var", "lib", "openclaw")
         : path.join(os.homedir(), ".openclaw");
     const prefix = path.join(stateDir, "tools", "node", "npm");
-    await fs.promises.mkdir(prefix, { recursive: true, mode: 0o700 });
+    await fs.mkdir(prefix, { recursive: true, mode: 0o700 });
     envOverrides.NPM_CONFIG_PREFIX = prefix;
     envOverrides.npm_config_prefix = prefix;
   }

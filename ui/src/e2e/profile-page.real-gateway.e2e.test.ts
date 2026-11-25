@@ -27,7 +27,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const authenticatedUser = "primary.user@example.test";
+const authenticatedUser =
+  "https://identity.example.test/realms/team#00000000-0000-4000-8000-000000000003";
 const administrator = "administrator@example.test";
 
 suite.define(() => {
@@ -47,7 +48,8 @@ suite.define(() => {
     await runQaGatewayFixture(
       async () => {
         const guest = ensureProfileForEmail(authenticatedUser);
-        setDisplayName(guest.id, "Test Person");
+        // Reproduce a profile created before opaque proxy subjects stopped becoming names.
+        setDisplayName(guest.id, authenticatedUser);
         setUserProfileRole(ensureProfileForEmail(administrator).id, "administrator");
         const origin = new URL(suite.server.baseUrl).origin;
         const trustedProxy = {
@@ -146,7 +148,7 @@ suite.define(() => {
         const adminClient = admin;
 
         await suite.withPage(
-          { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
+          { locale: "en-US", serviceWorkers: "block", viewport: { height: 1100, width: 1280 } },
           async ({ page }) => {
             const text = (selector: string) =>
               expect.poll(() => page.locator(selector).textContent());
@@ -168,10 +170,22 @@ suite.define(() => {
               });
               await writeFile(path.join(suite.artifactDir, name), frame.png);
             };
-            await text(".profile-hero__name").toBe("Test Person");
+            const name = page.locator(".identity-name-control input");
+            await expect.poll(() => name.isEnabled()).toBe(true);
             await page.locator("#personal-instructions-content:enabled").waitFor();
+            await capture("proxy-profile.png", "#settings-profile-identity");
+            await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
+            await expect.poll(() => name.inputValue()).toBe("");
+            expect(await page.locator(".identity-emails").count()).toBe(0);
+            expect(await page.locator(".profile-hero").textContent()).not.toContain(
+              authenticatedUser,
+            );
+            await name.fill("Test Person");
+            await name.press("Enter");
+            await text(".profile-hero__name").toBe("Test Person");
+            expect(await page.locator(".identity-emails").count()).toBe(0);
             await capture("guest-profile.png", "#settings-profile-access");
-            await text(".profile-hero__handle").toContain(authenticatedUser);
+            await text(".profile-hero__handle").not.toContain(authenticatedUser);
             await text(".profile-hero").not.toContain("Clipper");
             const draft = page.locator(".identity-name-control input");
             await draft.fill("Local draft");
@@ -182,18 +196,22 @@ suite.define(() => {
             await nameInput.fill("Remote Person");
             await nameInput.press("Enter");
             await text(".profile-hero__name").toBe("Remote Person");
-            await editor.locator('#settings-profile-identity input[type="file"]').setInputFiles({
-              name: "avatar.png",
-              mimeType: "image/png",
-              buffer: Buffer.from(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
-                "base64",
-              ),
-            });
+            // The sibling's profile event can arrive before this editor's save completes.
+            await editor
+              .locator('#settings-profile-identity input[type="file"]:enabled')
+              .setInputFiles({
+                name: "avatar.png",
+                mimeType: "image/png",
+                buffer: Buffer.from(
+                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6kAAAAASUVORK5CYII=",
+                  "base64",
+                ),
+              });
             const image = editor.locator(".identity-avatar-control img");
             await expect
               .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
               .toBeGreaterThan(0);
+            expect(await editor.locator(".identity-emails").count()).toBe(0);
             await editor.reload();
             await expect.poll(() => nameInput.inputValue()).toBe("Remote Person");
             await expect
@@ -201,7 +219,7 @@ suite.define(() => {
               .toBeGreaterThan(0);
             await nameInput.fill("");
             await nameInput.press("Enter");
-            await text(".profile-hero__name").toBe(authenticatedUser);
+            await text(".profile-hero__name").toBe(`Person ${guest.id.slice(0, 8)}`);
             await expect.poll(() => draft.inputValue()).toBe("Local draft");
             await editor.close();
             const auth = () =>
@@ -230,10 +248,7 @@ suite.define(() => {
             await page.goto(new URL("settings/profile", suite.server.baseUrl).href);
             const access = page.locator("#settings-profile-access");
             await access
-              .getByText(
-                "Your role limits access. Device approval cannot grant administrator access. If you need more access, ask a Gateway administrator to change your role, then reconnect.",
-                { exact: true },
-              )
+              .getByText("Only admins can manage access. Ask an admin for access.", { exact: true })
               .waitFor();
             expect(
               await access.getByRole("button", { name: "Request admin", exact: true }).count(),
@@ -258,20 +273,16 @@ suite.define(() => {
             await page.locator("#personal-instructions-content:enabled").waitFor();
             await capture("promoted-profile.png", "#settings-profile-access");
             await access.getByRole("button", { name: "Request admin", exact: true }).click();
-            await access.getByText(/Approve this browser by running/u).waitFor();
+            await access.getByText(/Ask an admin to approve this browser/u).waitFor();
             const pending = (await listPairing()).pending;
             expect(pending).toHaveLength(1);
             expect(pending[0]?.scopes).toContain("operator.admin");
             expect((await auth()).scopes).not.toContain("operator.admin");
             await adminClient.request("device.pair.approve", { requestId: pending[0]!.requestId });
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             expect((await auth()).scopes).toContain("operator.admin");
             await page.reload();
-            await access
-              .getByText("You have permission to manage this server.", { exact: true })
-              .waitFor();
+            await access.getByText("You have admin access.", { exact: true }).waitFor();
             const reloadedAuth = await auth();
             expect(reloadedAuth.scopes).toContain("operator.admin");
             expect(

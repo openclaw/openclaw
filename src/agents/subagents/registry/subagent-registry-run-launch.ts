@@ -1,4 +1,5 @@
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import { captureQueuedOperatorRecoverySource } from "../../../gateway/operator-run-recovery-source.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -16,6 +17,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -46,6 +48,7 @@ import {
 } from "./subagent-registry-run-launch-record.js";
 import { SubagentRecoveryManager } from "./subagent-registry-run-recovery.js";
 import { prepareSubagentRegistrationRows } from "./subagent-registry-state.js";
+import { startSubagentTyping } from "./subagent-registry-typing.js";
 import type {
   RegisterSubagentRunOptions,
   SubagentRegistrationScope,
@@ -222,7 +225,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       const assertCurrent = () => {
         options.assertCurrent?.();
         authority?.assertCurrent();
-        authority?.signal.throwIfAborted();
         registrationOwnership.assertCurrent();
         if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
           throw new SubagentRegistryMutationRejectedError(
@@ -231,6 +233,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         }
       };
       assertCurrent();
+      // Restart re-admits this source for the woken parent turn; unavailable ones get the baseline.
+      const requesterOperatorSource = captureQueuedOperatorRecoverySource(
+        authority?.operatorAuthority,
+      );
       preparedRows = await prepareSubagentRegistrationRows(
         childSessionKey,
         [
@@ -321,6 +327,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               },
               cfg,
             );
+          if (requesterOperatorSource && requesterOperatorSource.kind !== "unavailable") {
+            entry.requesterOperatorSource = requesterOperatorSource;
+          }
           const postimages = this.planSupersededKillReconciliations(rows, entry);
           postimages.set(runId, entry);
           plannedEntry = entry;
@@ -354,7 +363,15 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(entry, authority);
+                subagentRuns.bindCompletionAuthority(
+                  entry,
+                  authority,
+                  options.requesterRunInstance ??
+                    getGatewayToolCallerIdentity()?.operationalRunInstance,
+                  options.requesterRunInstance
+                    ? { runId: options.requesterRunInstance.runId }
+                    : undefined,
+                );
                 custodyTransferred = true;
               }
             } finally {
@@ -404,7 +421,6 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         options.assertCurrent?.();
         options.assertPublicationCurrent?.();
         authority?.assertCurrent();
-        authority?.signal.throwIfAborted();
         const current = currentEntry();
         if (
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
@@ -427,6 +443,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           current,
           this.options.resolveSubagentWaitTimeoutMs(cfg, registerParams.runTimeoutSeconds ?? 0),
         );
+        await startSubagentTyping(current, authority, currentEntry);
       }
     } catch (error) {
       if (!queuedScope) {
@@ -546,6 +563,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         return {
           value: { source: current, entry, terminalBeforeAcceptance },
           postimages,
+          removalReason: "run_rekeyed",
           ...(current.runId !== nextRunId ? { rekeys: new Map([[current.runId, nextRunId]]) } : {}),
         };
       },

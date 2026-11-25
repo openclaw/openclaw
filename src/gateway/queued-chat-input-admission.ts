@@ -1,13 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { PreparedRequesterProfile } from "../auto-reply/requester-profile.js";
-import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type QueuedChatInputTarget = {
+type QueuedChatInputTarget = {
   agentId: string;
   storePath: string;
   sessionKey: string;
   sessionId: string;
+  inputId: string;
   runId: string;
   message: PersistedUserTurnMessage;
   requestHash: string;

@@ -5,7 +5,7 @@ import path from "node:path";
 import { collectPackageDistImportErrors } from "./lib/package-dist-imports.mjs";
 
 function usage() {
-  return "Usage: node scripts/check-package-dist-imports.mjs [package-root]";
+  return "Usage: node scripts/check-package-dist-imports.mjs [package-root] [--imports <composition-imports.json>]";
 }
 
 function fail(message) {
@@ -23,12 +23,14 @@ function parseArgs(argv) {
     throw new Error(`Unknown package dist import check option: ${packageRootArg}`);
   }
   const extraArg = args[1]?.trim();
-  if (args.length > 1) {
+  const importsFile = extraArg === "--imports" ? args[2]?.trim() : undefined;
+  if (args.length > 1 && (args.length !== 3 || !importsFile)) {
     throw new Error(`Unexpected package dist import check argument: ${extraArg}`);
   }
   return {
     help: false,
     packageRoot: path.resolve(packageRootArg || process.cwd()),
+    importsFile: importsFile ? path.resolve(importsFile) : undefined,
   };
 }
 
@@ -68,8 +70,18 @@ function collectFiles(rootDir) {
   return files;
 }
 
+const files = collectFiles(distRoot);
+const fileSet = new Set(files);
+// The composition archive owns these edges; lifecycle and pruning may remove
+// importers, but any retained importer must still have its runtime targets.
+const imports = cliArgs.importsFile
+  ? JSON.parse(fs.readFileSync(cliArgs.importsFile, "utf8")).filter((edge) =>
+      fileSet.has(edge.importerPath),
+    )
+  : undefined;
 const errors = collectPackageDistImportErrors({
-  files: collectFiles(distRoot),
+  files,
+  imports,
   readText(relativePath) {
     return fs.readFileSync(path.join(packageRoot, relativePath), "utf8");
   },
