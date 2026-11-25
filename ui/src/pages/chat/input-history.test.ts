@@ -7,7 +7,7 @@ import {
   nativeHistoryMessage,
   nativeHistorySeq,
 } from "./chat-pane-history.test-support.ts";
-import { handleChatDraftChange, handleChatInputHistoryKey } from "./input-history.ts";
+import { handleChatDraftChange } from "./input-history.ts";
 
 it("bounds recall by users and does not skip prompts prepended during a round", async () => {
   const seqs = Array.from({ length: 204 }, (_, i) => i + 1);
@@ -21,7 +21,7 @@ it("bounds recall by users and does not skip prompts prepended during a round", 
   state.currentSessionId = "session-id";
   state.chatMessage = "Draft to retain";
   const press = (key: "ArrowUp" | "ArrowDown", caret = 0) =>
-    handleChatInputHistoryKey(state, {
+    state.handleChatInputHistoryKey({
       key,
       selectionStart: caret,
       selectionEnd: caret,
@@ -60,6 +60,19 @@ it("bounds recall by users and does not skip prompts prepended during a round", 
   expect(state.chatMessage).toBe("Draft to retain");
 });
 
+it("recalls distinct loaded prompts before reading past their window", () => {
+  const request = vi.fn();
+  const { state } = createNativeShowEarlierPane(request, 203);
+  state.chatMessages = ["Earlier loaded prompt", ...Array<string>(100).fill("Repeated prompt")].map(
+    (text, timestamp) => ({ role: "user", content: text, timestamp }),
+  );
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
+  expect(state.chatMessage).toBe("Repeated prompt");
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
+  expect(state.chatMessage).toBe("Earlier loaded prompt");
+  expect(request).not.toHaveBeenCalled();
+});
+
 it("consumes a boundary probe without recalling probe rows or mutating rendered history", async () => {
   const anchor = {
     ...nativeHistoryMessage(203),
@@ -92,7 +105,7 @@ it("consumes a boundary probe without recalling probe rows or mutating rendered 
   const originalMessages = [...rendered];
   const pagination = state.chatHistoryPagination;
 
-  state.handleChatInputHistoryKey(recallKey("ArrowUp"));
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
   expect(state.chatMessage).toBe("message 203");
   const pending = state.handleChatInputHistoryKey(recallKey("ArrowUp"));
   expect(pending).toBeInstanceOf(Promise);
@@ -128,7 +141,7 @@ it.each(["missing", "repeated", "reset"] as const)(
     const rendered = state.chatMessages;
     const originalMessages = [...rendered];
 
-    state.handleChatInputHistoryKey(recallKey("ArrowUp"));
+    expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
     expect(state.chatMessage).toBe("message 203");
     const pending = state.handleChatInputHistoryKey(recallKey("ArrowUp"));
     expect(await pending).toBeNull();
@@ -175,11 +188,11 @@ it("clears a recall error when a new traversal successfully retries", async () =
     .mockResolvedValueOnce({ messages: [nativeHistoryMessage(201)] });
   const { state } = createNativeShowEarlierPane(request, 203);
   const press = (key: "ArrowUp" | "ArrowDown") => state.handleChatInputHistoryKey(recallKey(key));
-  press("ArrowUp");
+  expect(press("ArrowUp")).toBe("up");
   await press("ArrowUp");
   expect(state.chatError).toBe("History unavailable");
-  press("ArrowDown");
-  press("ArrowUp");
+  expect(press("ArrowDown")).toBe("down");
+  expect(press("ArrowUp")).toBe("up");
   await press("ArrowUp");
   expect(state.chatMessage).toBe("message 201");
   expect(state.chatError).toBeFalsy();
@@ -200,7 +213,7 @@ it.each(["connection", "session"] as const)(
     const rendered = state.chatMessages;
     const originalMessages = [...rendered];
 
-    state.handleChatInputHistoryKey(recallKey("ArrowUp"));
+    expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
     expect(state.chatMessage).toBe("message 203");
     const pending = state.handleChatInputHistoryKey(recallKey("ArrowUp"));
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -247,15 +260,15 @@ it.each(["reconnect", "navigate"] as const)(
         recallKey(key, key === "ArrowDown" ? state.chatMessage.length : 0),
       );
 
-    press("ArrowUp");
+    expect(press("ArrowUp")).toBe("up");
     const pending = press("ArrowUp");
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     if (action === "reconnect") {
       state.connectionEpoch = (state.connectionEpoch ?? 0) + 1;
     } else {
-      press("ArrowDown");
+      expect(press("ArrowDown")).toBe("down");
       expect(state.chatMessage).toBe("Saved draft");
-      press("ArrowUp");
+      expect(press("ArrowUp")).toBe("up");
     }
     page.resolve(older);
     expect(await pending).toBeNull();
@@ -265,8 +278,8 @@ it.each(["reconnect", "navigate"] as const)(
     expect(await next).toBe("up");
     expect(state.chatMessage).toBe("message 201");
     expect(request).toHaveBeenCalledTimes(2);
-    press("ArrowDown");
-    press("ArrowDown");
+    expect(press("ArrowDown")).toBe("down");
+    expect(press("ArrowDown")).toBe("down");
     expect(state.chatMessage).toBe("Saved draft");
   },
 );
@@ -331,7 +344,7 @@ it("yields after three sparse pages and resumes from the next cursor on another 
   await up();
   expect(cursors).toEqual(["older-2", "page-2", "page-3", "page-4"]);
   expect(state.chatMessage).toBe("message 201");
-  state.handleChatInputHistoryKey(recallKey("ArrowDown"));
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowDown"))).toBe("down");
   expect(state.chatMessage).toBe("Draft to retain");
   expect(state.chatMessages).toBe(transcript);
 });
@@ -340,10 +353,10 @@ it("cancels before the older-prompt module starts its first read", async () => {
   const request = vi.fn();
   const { state } = createNativeShowEarlierPane(request, 203);
   state.chatMessage = "Unsent draft";
-  state.handleChatInputHistoryKey(recallKey("ArrowUp"));
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowUp"))).toBe("up");
   const pending = state.handleChatInputHistoryKey(recallKey("ArrowUp"));
   expect(pending).toBeInstanceOf(Promise);
-  state.handleChatInputHistoryKey(recallKey("ArrowDown"));
+  expect(state.handleChatInputHistoryKey(recallKey("ArrowDown"))).toBe("down");
   await expect(pending).resolves.toBeNull();
   expect(request).not.toHaveBeenCalled();
   expect(state.chatMessage).toBe("Unsent draft");
@@ -368,13 +381,13 @@ it.each(["down", "down in text", "modified down", "edit", "replace edge"] as con
       state.chatMentions = mentions;
       const press = (key: "ArrowUp" | "ArrowDown") =>
         state.handleChatInputHistoryKey(recallKey(key));
-      press("ArrowUp");
+      expect(press("ArrowUp")).toBe("up");
       const pending = press("ArrowUp");
       await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
       if (action === "edit") {
         handleChatDraftChange(state, "Edited draft");
       } else if (action === "down") {
-        press("ArrowDown");
+        expect(press("ArrowDown")).toBe("down");
       } else if (action === "down in text" || action === "modified down") {
         expect(
           state.handleChatInputHistoryKey({
@@ -395,15 +408,15 @@ it.each(["down", "down in text", "modified down", "edit", "replace edge"] as con
       expect(state.chatError).toBeFalsy();
       if (action === "down in text" || action === "modified down") {
         expect(state.chatMessage).toBe("message 203");
-        press("ArrowDown");
+        expect(press("ArrowDown")).toBe("down");
       }
       if (action === "replace edge") {
         expect(state.chatMessage).toBe("message 203");
         await press("ArrowUp");
         expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: "replacement" });
         expect(state.chatMessage).toBe("message 201");
-        press("ArrowDown");
-        press("ArrowDown");
+        expect(press("ArrowDown")).toBe("down");
+        expect(press("ArrowDown")).toBe("down");
       }
       expect(state.chatMessage).toBe(action === "edit" ? "Edited draft" : "@alex Draft to retain");
       if (action !== "edit") {

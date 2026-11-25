@@ -8,7 +8,8 @@ import {
 } from "../../api/gateway-socket.test-support.ts";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { loadOlderChatHistoryPage, requestSharedHistory } from "./chat-history-request.ts";
+import { loadOlderChatHistoryPage } from "./chat-history-older-request.ts";
+import { requestSharedHistory } from "./chat-history-request.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";

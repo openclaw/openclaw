@@ -25,14 +25,9 @@ import {
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
+import type { StagedOlderRead } from "./chat-history-older-request.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
-import {
-  fetchStagedOlderHistoryPage,
-  chatHistoryOlderSelector,
-  isStagedOlderHistoryPageCurrent,
-  loadOlderChatHistoryPage,
-  type StagedOlderHistoryPage,
-} from "./chat-history-request.ts";
+import { chatHistoryOlderSelector, olderPageRequests } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import {
   commitCurrentChatHistorySnapshot,
@@ -87,11 +82,11 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   // validated at consume time. Catalog sessions stay reactive: their opaque
   // cursor loads apply directly to pane state and cannot be parked.
   // Viewport resets replace the owner; ordinary loads keep an in-flight prefetch joinable.
-  private stagedOlder: {
-    controller: AbortController;
-    page: StagedOlderHistoryPage | null;
-    load: Promise<void> | null;
-  } = { controller: new AbortController(), page: null, load: null };
+  private stagedOlder: StagedOlderRead = {
+    controller: new AbortController(),
+    page: null,
+    load: null,
+  };
 
   private retireOlderMessagesReads(interrupted = false): void {
     this.olderLoadGeneration += 1;
@@ -443,37 +438,30 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           this.history.catalogMessages.slice(0, this.history.catalogMessages.length - count),
         );
       } else {
-        let result = this.takeStagedOlderPage(state);
-        if (!result && this.stagedOlder.load) {
-          // Join the in-flight prefetch instead of issuing a duplicate request.
+        let requests = olderPageRequests.peek();
+        if (!requests) {
+          const version = chatHistoryRequests(state).historyVersion;
           this.history.loadingOlder = true;
-          await this.stagedOlder.load;
-          if (!isCurrent()) {
+          requests = await olderPageRequests();
+          if (!isCurrent() || chatHistoryRequests(state).historyVersion !== version) {
             return false;
           }
-          result = this.takeStagedOlderPage(state);
         }
-        const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore) {
+        const page = await requests.readViewportOlderPage(
+          state,
+          this.stagedOlder,
+          read.signal,
+          isCurrent,
+          () => {
+            this.history.loadingOlder = true;
+          },
+          () => nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages)),
+        );
+        if (!page || !isCurrent()) {
           return false;
         }
-        const expectedSessionId = state.currentSessionId?.trim() ?? "";
-        const selector = chatHistoryOlderSelector(state);
-        if (!selector) {
-          return false;
-        }
-        const boundary =
-          "messageId" in selector
-            ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages))
-            : undefined;
-        const requestedCursor = pagination.olderCursor;
-        if (!result) {
-          this.history.loadingOlder = true;
-          result = (await loadOlderChatHistoryPage(state, selector, read.signal)) ?? null;
-        }
-        if (!isCurrent()) {
-          return false;
-        }
+        const { pagination, expectedSessionId, boundary, requestedCursor } = page;
+        const result: ChatHistoryResult | null = page.result;
         if (!result) {
           // A same-session refresh may supersede the request without changing
           // the pane. Preserve the cursor and make that interrupted action retryable.
@@ -567,45 +555,10 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   private stageNextOlderPage(state: ChatState): void {
-    if (this.stagedOlder.page || this.stagedOlder.load) {
-      return;
-    }
-    const pagination = state.chatHistoryPagination;
-    const cursor = pagination.hasMore && pagination.olderCursor;
-    if (!cursor) {
-      return;
-    }
     const owner = this.stagedOlder;
-    // One async closure keeps the bookkeeping inside the awaited promise, so a
-    // joiner resuming from this load always observes the staged page and the
-    // cleared in-flight slot together. The owner guard keeps a stale
-    // finally (fetch outliving a viewport reset) off a successor's slot.
-    this.stagedOlder.load = (async () => {
-      try {
-        const staged = await fetchStagedOlderHistoryPage(state, cursor, owner.controller.signal);
-        if (staged && owner === this.stagedOlder && this.state === state) {
-          this.stagedOlder.page = staged;
-        }
-      } catch {
-        // Prefetch is best-effort: the reactive path owns retries, error
-        // surfacing, and the blocked-until-intent machinery.
-      } finally {
-        if (owner === this.stagedOlder) {
-          this.stagedOlder.load = null;
-        }
-      }
-    })();
-  }
-
-  // Single-consume: an invalid staged page is discarded rather than retried so
-  // stale prefetches can never shadow the reactive path's fresh cursor.
-  private takeStagedOlderPage(state: ChatState): ChatHistoryResult | null {
-    const staged = this.stagedOlder.page;
-    if (!staged) {
-      return null;
-    }
-    this.stagedOlder.page = null;
-    return isStagedOlderHistoryPageCurrent(state, staged) ? staged.result : null;
+    olderPageRequests
+      .peek()
+      ?.stageNextOlderPage(state, owner, () => owner === this.stagedOlder && this.state === state);
   }
 
   protected async rewindToMessage(entryId: string): Promise<boolean> {

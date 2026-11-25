@@ -70,11 +70,9 @@ it("applies native drafts through the real Chat draft owner", () => {
     chatMessages: [],
     chatLocalInputHistoryBySession: { s1: [{ text: "previous input", ts: 1 }] },
   };
-  handleChatInputHistoryKey(state, {
-    key: "ArrowUp",
-    selectionStart: 0,
-    selectionEnd: 0,
-  });
+  expect(
+    handleChatInputHistoryKey(state, { key: "ArrowUp", selectionStart: 0, selectionEnd: 0 }),
+  ).toBe("up");
   drafts.subscribe((text) => applyDraftChange(state, text));
   dispatch(bridge, { type: "draft-text", payload: { text: "native injection" } });
   expect(state.chatMessage).toBe("native injection");

@@ -4,14 +4,17 @@ import {
   nativeHistoryMessageSourceIdentity,
   oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
+import { requestOlderChatHistoryPage } from "./chat-history-older-request.ts";
 import {
+  type captureOlderHistoryClaim,
+  type chatHistoryOlderSelector,
   chatHistoryBoundarySelector,
-  requestOlderChatHistoryPage,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import { resolveChatHistoryPagination } from "./chat-history-snapshot.ts";
 import { setChatError } from "./chat-history-state.ts";
 import { requiresChatHistoryReload } from "./chat-history.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import {
   CHAT_INPUT_HISTORY_LIMIT,
   userInput,
@@ -34,13 +37,15 @@ function appendOlderInputs(items: string[], messages: unknown[], end = messages.
 }
 
 export async function recallOlderInput(
-  input: ChatInputHistoryState,
+  input: ChatInputHistoryState & ChatState,
   round: ChatInputHistoryRound,
-  index: number,
+  claim: ReturnType<typeof captureOlderHistoryClaim> | null,
+  cursor: { selector: ReturnType<typeof chatHistoryOlderSelector>; boundaryId?: string },
+  sessionId: string | null | undefined,
   signal: AbortSignal,
   current: () => boolean,
 ): Promise<"up" | null> {
-  const { reader, items } = round;
+  const { items, index } = round;
   // The user may cancel while the optional module itself is loading.
   if (!current()) {
     return null;
@@ -66,16 +71,15 @@ export async function recallOlderInput(
       return select(next);
     }
   }
-  if (!reader) {
+  if (!claim) {
     return null;
   }
-  const { state, claim, sessionId, cursor } = reader;
   try {
     for (let page = 0; page < 3 && cursor.selector; page++) {
       const requested = cursor.selector;
       const boundary =
         "messageId" in requested
-          ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages))
+          ? nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(input.chatMessages))
           : undefined;
       const result = await requestOlderChatHistoryPage(
         claim.client,
@@ -94,7 +98,7 @@ export async function recallOlderInput(
         (next.hasMore &&
           (!next.olderCursor || ("cursor" in requested && requested.cursor === next.olderCursor)))
       ) {
-        cursor.selector = "cursor" in requested ? chatHistoryBoundarySelector(state) : null;
+        cursor.selector = "cursor" in requested ? chatHistoryBoundarySelector(input) : null;
         cursor.boundaryId = cursor.selector?.messageId;
         throw new Error(t("chat.thread.earlierInterrupted"));
       }

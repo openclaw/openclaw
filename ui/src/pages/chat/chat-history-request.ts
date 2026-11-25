@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { lazyModule } from "solid-js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -9,13 +10,9 @@ import {
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { scopedAgentIdForSession } from "../../lib/sessions/navigation.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
-import {
-  chatHistoryRequestParams,
-  CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-} from "./chat-history-request-params.ts";
+import { chatHistoryRequestParams } from "./chat-history-request-params.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
-  type ChatHistoryResult,
   type ChatHistoryObservation,
   type ObservedChatHistoryResponse,
   type ChatHistoryDeltaResult,
@@ -26,12 +23,7 @@ import {
   resolveChatHistoryPagination,
   historySessionId,
 } from "./chat-history-snapshot.ts";
-import {
-  chatHistoryRequests,
-  beginHistoryRequest,
-  acceptsHistoryResult,
-  type InitialChatHistoryReceipt,
-} from "./chat-history-state.ts";
+import { chatHistoryRequests, type InitialChatHistoryReceipt } from "./chat-history-state.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
@@ -63,11 +55,6 @@ export function captureChatHistoryRun(
       }
     : undefined;
 }
-
-// Keep startup small, then amortize older-history reads and prepend work across
-// larger pages. The Gateway owns the response byte and single-message limits.
-export const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
-const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: Omit<ChatHistoryObservation, "run">;
@@ -336,6 +323,10 @@ export async function requestChatSessionSnapshot(
   };
 }
 
+// The initial transcript never needs the older-page transport. Recall and the
+// transcript viewport share it once either one crosses the loaded edge.
+export const olderPageRequests = lazyModule(() => import("./chat-history-older-request.ts"));
+
 type OlderHistorySelector = { cursor: string } | { messageId: string; sessionId: string };
 
 export function chatHistoryOlderSelector(state: ChatState): OlderHistorySelector | null {
@@ -355,77 +346,6 @@ export function chatHistoryBoundarySelector(state: ChatState) {
   return messageId && sessionId ? { messageId, sessionId } : null;
 }
 
-export async function requestOlderChatHistoryPage(
-  client: GatewayBrowserClient,
-  sessionKey: string,
-  requestAgentId: string | undefined,
-  selector: OlderHistorySelector,
-  isCurrent: () => boolean,
-  signal?: AbortSignal,
-): Promise<ChatHistoryResult> {
-  const result = attachHistoryActivity(
-    await retryChatHistoryRead({
-      method: "chat.history",
-      controller: new AbortController(),
-      signal,
-      isCurrent,
-      request: (readSignal) =>
-        client.request<ChatHistoryResult>(
-          "chat.history",
-          {
-            sessionKey,
-            toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-            ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            limit: "messageId" in selector ? 1 : CHAT_HISTORY_OLDER_PAGE_LIMIT,
-            maxBytes: CHAT_HISTORY_OLDER_PAGE_MAX_BYTES,
-            ...selector,
-          },
-          { signal: readSignal },
-        ),
-    }),
-  );
-  return {
-    ...result,
-    messages: visibleChatHistoryMessages(result.messages),
-  };
-}
-
-export async function loadOlderChatHistoryPage(
-  state: ChatState,
-  selector: OlderHistorySelector,
-  signal?: AbortSignal,
-): Promise<ChatHistoryResult | undefined> {
-  if (!state.client || !state.connected) {
-    return undefined;
-  }
-  const client = state.client;
-  const sessionKey = state.sessionKey;
-  const requestAgentId = scopedAgentIdForSession(state, sessionKey);
-  const ownership = beginHistoryRequest(
-    state,
-    client,
-    state.connectionEpoch,
-    sessionKey,
-    requestAgentId,
-  );
-  const result = await requestOlderChatHistoryPage(
-    client,
-    sessionKey,
-    requestAgentId,
-    selector,
-    () => acceptsHistoryResult(state, ownership),
-    signal,
-  );
-  if (signal?.aborted || !acceptsHistoryResult(state, ownership)) {
-    return undefined;
-  }
-  return result;
-}
-
-export type StagedOlderHistoryPage = NonNullable<
-  Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
->;
-
 // A read-only page borrows the transcript owner's generation without superseding its loads.
 export function captureOlderHistoryClaim(state: ChatState, client: GatewayBrowserClient) {
   const sessionKey = state.sessionKey;
@@ -437,45 +357,4 @@ export function captureOlderHistoryClaim(state: ChatState, client: GatewayBrowse
     version: chatHistoryRequests(state).historyVersion,
     agentId: scopedAgentIdForSession(state, sessionKey),
   };
-}
-
-// The staged prefetch deliberately skips beginHistoryRequest: request
-// ownership is last-writer-wins, so a background fetch bumping the version
-// could invalidate a concurrent tail load's apply. The claim below carries the
-// same facts and the pane validates it at consume time instead.
-export async function fetchStagedOlderHistoryPage(
-  state: ChatState,
-  cursor: string,
-  signal?: AbortSignal,
-) {
-  if (!state.client || !state.connected) {
-    return undefined;
-  }
-  const client = state.client;
-  const claim = captureOlderHistoryClaim(state, client);
-  const result = await requestOlderChatHistoryPage(
-    client,
-    claim.sessionKey,
-    claim.agentId,
-    { cursor },
-    () => acceptsHistoryResult(state, claim),
-    signal,
-  );
-  return { claim, requestedCursor: cursor, result };
-}
-
-/** A staged page is valid only for the exact connection, session, and the
- * pagination cursor it was fetched at; any drift means the reactive path must
- * refetch (tail reloads may replace the window, resets reuse session keys). */
-export function isStagedOlderHistoryPageCurrent(
-  state: ChatState,
-  staged: StagedOlderHistoryPage,
-): boolean {
-  const claim = staged.claim;
-  const pagination = state.chatHistoryPagination;
-  return (
-    acceptsHistoryResult(state, claim) &&
-    pagination.hasMore &&
-    pagination.olderCursor === staged.requestedCursor
-  );
 }
