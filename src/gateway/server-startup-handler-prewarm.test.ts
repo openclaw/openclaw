@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostIo from "../infra/host-io-pressure.js";
 import * as hostMemory from "../infra/host-memory.js";
 import {
   resetGatewayWorkAdmission,
@@ -416,3 +417,53 @@ it.each(["close", "restart"] as const)(
     }
   },
 );
+
+it("skips handler warmups when readiness arrives under pressure and retries templates after recovery", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
+  const ready = createDeferred();
+  scheduleDependencyPreparation({ waitForPostReadyWork: () => ready.promise });
+  await vi.advanceTimersByTimeAsync(0);
+  lowMemory.mockReturnValue(true);
+  ready.resolve();
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+  expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+
+  lowMemory.mockReturnValue(false);
+  await vi.advanceTimersByTimeAsync(60_000);
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+});
+
+it("skips delayed context preparation when memory falls after history was warmed", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
+  schedule();
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  lowMemory.mockReturnValue(true);
+  await drainPrewarm();
+  expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
+  expect(mocks.listManagedPlugins).not.toHaveBeenCalled();
+});
+
+it("checks memory between dependency template preparations", async () => {
+  const lowMemory = vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
+  vi.spyOn(hostIo, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  let deferred: boolean | undefined;
+  mocks.prewarmLocalWorkspaceTemplates.mockImplementationOnce(async ({ shouldDefer }) => {
+    lowMemory.mockReturnValue(true);
+    deferred = await shouldDefer?.();
+  });
+  const handles = scheduleGatewayPrewarm(prewarmOptions());
+  sidecars.push(...handles);
+  // A concurrent handler warmup also defers templates, masking the pressure transition.
+  await expectDefined(
+    handles.find((handle) => handle.name === "handler-prewarm"),
+    "handler warmup",
+  ).stop();
+  await vi.advanceTimersByTimeAsync(1);
+  await vi.dynamicImportSettled();
+  expect(deferred).toBe(true);
+});
