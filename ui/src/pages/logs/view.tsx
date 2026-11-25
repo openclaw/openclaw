@@ -322,7 +322,13 @@ export function LogsView(props: LogsProps) {
     const movedUp = element.scrollTop < lastScrollTop;
     lastScrollTop = element.scrollTop;
     if (readerIntent) {
-      extendReaderIntent();
+      // Native completion owns active scrolling; a loaded WebKit can pause between events.
+      if ("onscrollend" in element) {
+        cancelLayout(readerInputFrame);
+        clearTimeout(readerIntentTimer);
+      } else {
+        extendReaderIntent();
+      }
     }
     if (Math.abs(distance) < 2) {
       // Reaching the estimated bottom must survive the next wrapped-row measurements.
@@ -609,6 +615,13 @@ export function LogsView(props: LogsProps) {
                 aria-label={t("gatewayLogs.title")}
                 tabindex={0}
                 onScroll={(event) => followReader(event.currentTarget)}
+                onScrollEnd={() => {
+                  // A previous gesture can finish before the next input starts moving.
+                  if (!readerScrollPending) {
+                    clearTimeout(readerIntentTimer);
+                    readerIntent = readerHoldsPointer;
+                  }
+                }}
                 onWheel={beginReaderScroll}
                 onTouchStart={beginReaderScroll}
                 // Scrollbar and selection drags scroll with no wheel or touch to announce them.

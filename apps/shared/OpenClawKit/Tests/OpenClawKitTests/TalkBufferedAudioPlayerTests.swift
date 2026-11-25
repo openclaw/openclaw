@@ -9,9 +9,10 @@ import Testing
         let wav = makeWav16Mono(sampleRate: 8000, samples: 80)
         defer { _ = TalkBufferedAudioPlayer.shared.stop() }
 
-        _ = try await withTimeout(seconds: 10.0) {
-            await TalkBufferedAudioPlayer.shared.play(data: wav)
-        }
+        _ = try await AsyncTimeout.withTimeout(
+            seconds: 10.0,
+            onTimeout: { TimeoutError() },
+            operation: { await TalkBufferedAudioPlayer.shared.play(data: wav) })
     }
 
     @MainActor
@@ -24,34 +25,17 @@ import Testing
         }
 
         await Task.yield()
-        _ = await TalkBufferedAudioPlayer.shared.play(data: wav)
-
-        _ = try await withTimeout(seconds: 10.0) {
-            await first.value
-        }
+        _ = try await AsyncTimeout.withTimeout(
+            seconds: 10.0,
+            onTimeout: { TimeoutError() },
+            operation: {
+                _ = await TalkBufferedAudioPlayer.shared.play(data: wav)
+                return await first.value
+            })
     }
 }
 
 private struct TimeoutError: Error {}
-
-private func withTimeout<T: Sendable>(
-    seconds: Double,
-    _ work: @escaping @Sendable () async throws -> T) async throws -> T
-{
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await work()
-        }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw TimeoutError()
-        }
-        let result = try await group.next()
-        group.cancelAll()
-        guard let result else { throw TimeoutError() }
-        return result
-    }
-}
 
 private func makeWav16Mono(sampleRate: UInt32, samples: Int) -> Data {
     let channels: UInt16 = 1

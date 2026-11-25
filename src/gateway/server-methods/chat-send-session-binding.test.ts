@@ -463,6 +463,64 @@ it.each(admissionScenarios)(
   },
 );
 
+it("grants skill authoring to the first message typed after a Control UI reconnect", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    await loadOrCreateProcessDeviceIdentityAsync();
+    setRuntimeConfigSnapshot({});
+    const runId = "reconnect-resume-authoring";
+    const sessionId = "resumed-session";
+    const profile = ensureProfileForEmail("reconnect-authoring@example.test");
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main" },
+      {
+        sessionId,
+        updatedAt: Date.now(),
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      },
+    );
+    const client = createBindingClient({
+      profileId: profile.id,
+      signal: new AbortController().signal,
+      dashboard: true,
+      admin: true,
+      scopes: ["operator.admin"],
+    });
+    const { entered, release, observe, hold } = holdProjectedChatDispatch();
+    let options: DispatchOptions | undefined;
+    let releaseAuthorization: (() => void) | undefined;
+    try {
+      const params = {
+        sessionKey: "main",
+        sessionId,
+        __controlUiReconnectResume: true,
+        message: "Save this workflow as a skill",
+        idempotencyKey: runId,
+      };
+      const request = await prepareBindingRequest(params, client, createBindingContext());
+      releaseAuthorization = request.sessionMutationAuthorization?.release;
+      await handleDirectExternalChatSend({ ...request, hasCurrentClientAuthority: () => true });
+      expect(request.respond.mock.calls[0]?.[0], JSON.stringify(request.respond.mock.calls)).toBe(
+        true,
+      );
+      options = await entered.promise;
+      expect(options.replyOptions?.skillLibraryAuthoring).toBeDefined();
+    } finally {
+      release.resolve();
+      await options?.replyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      const owned = observe.mock.calls.at(-1)?.[0];
+      if (owned) {
+        await owned.admission.sourceRef.input.settlement.promise;
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+        owned.admission.cleanupAdmittedRun();
+        clearAgentRunContext(runId, owned.admission.lifecycleGeneration);
+      }
+      releaseAuthorization?.();
+      hold.mockRestore();
+      observe.mockRestore();
+    }
+  });
+});
+
 const reactionSourceScenarios = ["allowed", "credential-revoked"] as const;
 
 it.each(

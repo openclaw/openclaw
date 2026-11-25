@@ -9,8 +9,13 @@ import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
 } from "../../infra/gateway-suspend-coordinator.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
+} from "../../infra/operator-authority-error.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { dispatchGatewayMethod } from "../../plugin-sdk/gateway-method-runtime.js";
+import { getGatewayRequestAuthorityV1 } from "../../plugin-sdk/gateway-request-authority.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import {
@@ -117,6 +122,7 @@ describe("plugin HTTP route runtime scopes", () => {
           auth,
           handler: () => {
             scope = getPluginRuntimeGatewayRequestScope();
+            expect(getGatewayRequestAuthorityV1()).toBeUndefined();
             requireScope("agent", scope?.client?.connect.scopes);
             return true;
           },
@@ -182,6 +188,96 @@ describe("plugin HTTP route runtime scopes", () => {
       expect(scope?.client?.authenticatedUserProfile).toEqual(
         auth === "gateway" ? profile : undefined,
       );
+    },
+  );
+
+  it.each(["trusted-proxy", "token"] as const)(
+    "projects individual identity separately from attribution with %s",
+    async (authMethod) => {
+      const profileId = "profile-a";
+      let authority: ReturnType<typeof getGatewayRequestAuthorityV1>;
+      let grantCurrent = true;
+      const response = await invoke(
+        {
+          handler: async () => {
+            authority = getGatewayRequestAuthorityV1();
+            expect(authority?.attributionProfileId).toBe(profileId);
+            expect(authority?.personProfileId).toBe(
+              authMethod === "trusted-proxy" ? profileId : undefined,
+            );
+            expect(authority?.requiredGrantPluginId).toBe("policy");
+            await authority?.revalidate();
+            grantCurrent = false;
+            expect(() => authority?.assertCurrent()).not.toThrow();
+            await expect(authority?.revalidate()).resolves.toBeUndefined();
+            expect(() => authority?.assertCurrent("policy")).toThrow("grant ended");
+            expect(() => authority?.assertCurrent("other-policy")).toThrow(
+              GatewayOperatorAccessDeniedError,
+            );
+            return true;
+          },
+        },
+        {
+          ...trusted,
+          gatewayRequestAuth: {
+            authMethod,
+            trustDeclaredOperatorScopes: false,
+            ...(authMethod === "trusted-proxy" ? { personProfileId: profileId } : {}),
+            authenticatedUserProfile: {
+              profileId,
+              displayName: null,
+              hasAvatar: false,
+              updatedAt: 1,
+            },
+            operatorAccessAuthority: {
+              requiredPolicyPlugin: "policy",
+              // Multiple contributing policies cannot be represented by one recovery grant.
+              gatewayAccessGrant: undefined,
+              signal: new AbortController().signal,
+              assertCurrent() {
+                if (!grantCurrent) {
+                  throw new Error("grant ended");
+                }
+              },
+            },
+          },
+        },
+      );
+      expect(response).toMatchObject({ handled: true, res: { statusCode: 200 } });
+      grantCurrent = true;
+      expect(() => authority?.assertCurrent()).toThrow("Gateway request authority expired");
+      expect(getGatewayRequestAuthorityV1()).toBeUndefined();
+    },
+  );
+
+  it.each(["ended", "unavailable"] as const)(
+    "maps original named grant failures (%s)",
+    async (cause) => {
+      const response = await invoke(
+        {
+          handler() {
+            getGatewayRequestAuthorityV1()?.assertCurrent("policy");
+            return true;
+          },
+        },
+        {
+          ...trusted,
+          gatewayRequestAuth: {
+            ...trusted.gatewayRequestAuth!,
+            operatorAccessAuthority: {
+              requiredPolicyPlugin: "policy",
+              signal: new AbortController().signal,
+              assertCurrent() {
+                if (cause === "unavailable") {
+                  throw new GatewayOperatorAccessUnavailableError();
+                }
+                throw new GatewayOperatorAccessDeniedError("grant-revoked");
+              },
+            },
+          },
+        },
+      );
+      expect(response.res.statusCode).toBe(cause === "ended" ? 403 : 503);
     },
   );
 

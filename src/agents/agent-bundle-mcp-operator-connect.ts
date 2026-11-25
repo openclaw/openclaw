@@ -17,6 +17,8 @@ import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { completeOperatorMcpOAuthLink, startOperatorMcpOAuthLink } from "./mcp-oauth-link.js";
 import { readMcpOAuthCredentialsStatuses } from "./mcp-oauth.js";
+import { withMcpSignInCards } from "./mcp-sign-in-elicitation.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 export type OperatorMcpConnectContext = {
   cfg: OpenClawConfig;
@@ -28,17 +30,22 @@ export type OperatorMcpConnectContext = {
   toolDenylist?: string[];
 };
 
+function canOfferOperatorMcpSignIn(
+  context: OperatorMcpConnectContext | undefined,
+): context is OperatorMcpConnectContext {
+  return (
+    context?.senderIsOwner === true &&
+    context.chatType === "direct" &&
+    context.isTurnTainted?.() === false
+  );
+}
+
 /** Shared sign-in is turn-bound; never store its authority on the session runtime. */
 async function createOperatorMcpConnect(
   runtime: SessionMcpRuntime,
   context: OperatorMcpConnectContext | undefined,
 ): Promise<RequesterMcpConnect | undefined> {
-  if (
-    !context ||
-    context.senderIsOwner !== true ||
-    context.chatType !== "direct" ||
-    context.isTurnTainted?.() !== false
-  ) {
+  if (!canOfferOperatorMcpSignIn(context)) {
     return undefined;
   }
   const { loaded, fingerprint, safeServerNamesByServer } = loadSessionMcpConfig({
@@ -148,5 +155,7 @@ export async function resolveMcpConnectSurface(
           }
         : undefined;
     },
+    withSignIn: (tools: AnyAgentTool[]) =>
+      withMcpSignInCards(tools, () => canOfferOperatorMcpSignIn(context)),
   };
 }

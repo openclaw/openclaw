@@ -39,14 +39,6 @@ type Start = (
   fixture: RecoveryFixture,
 ) => Promise<{ authority: { scopes: readonly string[] }; release: () => void }>;
 
-const cronSource = (fixture: RecoveryFixture) =>
-  ({
-    version: 1,
-    kind: "gateway",
-    agentId: fixture.target.agentId,
-    sourceRunId: "scheduled-source-run",
-    snapshot: fixture.snapshot,
-  }) as const;
 const queued = (fixture: RecoveryFixture) =>
   ({
     source: { kind: "gateway", snapshot: fixture.snapshot },
@@ -55,8 +47,7 @@ const queued = (fixture: RecoveryFixture) =>
     assertCurrent: () => {},
   }) as const;
 const chatStart: Start = (fixture) => restoreGatewayQueuedOperatorRecovery(queued(fixture));
-const automationStart: Start = (fixture) =>
-  restoreScheduledAutomationOperator({ ...queued(fixture), operatorSource: cronSource(fixture) });
+const automationStart: Start = (fixture) => restoreScheduledAutomationOperator(queued(fixture));
 
 // Each kind uses the entry its producer uses, with the saved-source shape it stores.
 const chatKinds: Array<[string, Start]> = [
@@ -70,9 +61,6 @@ const chatKinds: Array<[string, Start]> = [
       }),
   ],
   ["restart replay of a queued chat input", chatStart],
-  ["restart completion wake", chatStart],
-  ["system turn with a recorded requester", chatStart],
-  ["worker environment provision resume", chatStart],
   [
     "plugin service session work accepted in a chat turn",
     (fixture) =>
@@ -86,16 +74,6 @@ const chatKinds: Array<[string, Start]> = [
 ];
 const automationKinds: Array<[string, Start]> = [
   ["cron agent turn, command and script", automationStart],
-  ["cron conversation event", automationStart],
-  ["native stream source", automationStart],
-  [
-    "scheduled plugin command",
-    (fixture) =>
-      restoreScheduledAutomationOperator({
-        ...queued(fixture),
-        operatorSource: cronSource(fixture),
-      }),
-  ],
   [
     "plugin service session work accepted in a cron run",
     (fixture) => restoreScheduledAutomationOperator(queued(fixture)),

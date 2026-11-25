@@ -53,6 +53,7 @@ import {
 import {
   PluginSdkApiAcknowledgementError,
   findPluginSdkApiReleaseNoteOmissions,
+  isPluginSdkApiAcknowledgement,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -331,9 +332,11 @@ export function parseArgs(argv: string[]) {
   }
   if (
     options.pluginSdkApiAcknowledgement &&
-    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+    !isPluginSdkApiAcknowledgement(options.pluginSdkApiAcknowledgement)
   ) {
-    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
+    throw new Error(
+      "--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest, optionally followed by @<qualified-predecessor-tag>",
+    );
   }
   options.workflowRef ||= "main";
   if (options.workflowRef !== "main") {
@@ -1578,7 +1581,6 @@ export function buildPrepareCommand(
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
@@ -1858,8 +1860,10 @@ async function runTelegramIfNeeded(
   if (coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
     const waived = qualificationManifest.waivers?.some(
       (waiver: JsonRecord) =>
-        waiver.jobName ===
-        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+        waiver.childRole === "releaseChecksCandidate" &&
+        (waiver.jobName === undefined ||
+          waiver.jobName ===
+            "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"),
     );
     if (waived) {
       return { status: "waived", providerMode: "mock-openai" };

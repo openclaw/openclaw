@@ -52,10 +52,12 @@ and live-authority gates.
 
 Normally publish beta, validate, then promote stable. Core and every published
 official npm plugin must have `beta` at least as new as `latest`; preserve a newer
-beta. Prereleases precede their same-base final. Final versions require stable
+beta. Prereleases precede their same-base final. Final versions normally require stable
 validation even when first published to beta.
 
 ## Release validation
+
+Normal releases follow these validation requirements.
 
 - Stable/final publication requires stable or full validation, longer soak,
   and blocking performance checks; beta-profile evidence is insufficient.
@@ -71,12 +73,11 @@ validation even when first published to beta.
   package integrity, and all Linux/Windows/macOS Gateway checks, including
   Windows packaged install/upgrade in Release Checks. All-group qualification
   includes all nine Gateway install/upgrade combinations.
-- Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
-  cover every failed cause. Missing, skipped, or cancelled required coverage
-  blocks. Exact failed live-provider/Telegram leaves and operator-accepted
-  `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
-  candidate, job, version, and attempt restrictions still apply. **FRV must
-  conclude success; publishers cannot waive it.**
+- Selected `openclaw/ci-gate` must succeed unless it is itself waived. A matching
+  job waiver does not require a run; omit `jobName` to waive the entire child
+  role and all descendants without a run or receipt. Optional `step` limits a
+  job waiver to the first incomplete or failed step. Unwaived gaps block, and
+  waived is not passed. **FRV must conclude success.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
   profile/OS coverage; skipped or deferred is not passed.
@@ -122,8 +123,8 @@ caller-specific approval reads.
 ### Resume activation while ClawHub recovery is independent
 
 For already-published core, recovery accepts `defer_clawhub=true`,
-`openclaw_npm_resume_run_id=<original-successful-run>`, and
-`wait_for_clawhub=false` only with direct `publish_openclaw_npm=true` and no
+`openclaw_npm_resume_run_id=<original-successful-run>` only with direct
+`publish_openclaw_npm=true` and no
 `prepared_plugins`. It authenticates original registry bytes/provenance, retains
 npm/source/artifact/approval/finalization gates, and neither republishes core
 nor plans/dispatches ClawHub work.
@@ -229,8 +230,8 @@ Only authenticated direct admission qualifies evidence for publication.
 Unadmitted historical manifests, including v3, require new admitted
 qualification; ancestry alone is not admission. Use [receipt-only recovery](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery)
 to reseal existing qualification without rerunning any wave. A separately admitted,
-signed ledger can add waivers for exact retained attempts, but missing evidence or
-unwaived failures still block publication. C, Q, and P may remain independent.
+signed ledger can add candidate-scoped job or whole-child waivers. Recovery cannot replace unwaived receipts or qualify unwaived
+failures. C, Q, and P may remain independent.
 
 ### Frozen qualification identity
 

@@ -252,13 +252,16 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
 }
 
 export function isDeliveryTerminalForRequesterSettle(
-  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason" | "requesterSettleWake">,
 ): boolean {
   return (
     entry.delivery?.status === "delivered" ||
     (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
     entry.delivery?.status === "discarded" ||
-    entry.delivery?.disposition === "delivered"
+    entry.delivery?.disposition === "delivered" ||
+    // A yielded requester's batch owns an ended child's delivery; the earlier per-child
+    // attempt may target the aborted turn and must not keep that batch unsettled.
+    entry.requesterSettleWake?.afterRequesterYield === true
   );
 }
 
