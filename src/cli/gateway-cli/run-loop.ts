@@ -16,6 +16,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -1283,4 +1284,3 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
   const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
   return cleanup.finish(code, failures, loopFailure);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

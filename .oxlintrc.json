@@ -534,9 +534,9 @@
     {
       "files": ["src/cli/gateway-cli/run-loop.ts"],
       "rules": {
-        // #204868: inherited 1235 lines plus two for the existing stop-budget custody join.
+        // #204868: inherited 1235 lines plus three for the stop-budget join and required import.
         // The cohesive persistence/custody release block already moved to run-loop-cleanup.ts.
-        "max-lines": ["error", { "max": 1237, "skipBlankLines": true, "skipComments": true }]
+        "max-lines": ["error", { "max": 1238, "skipBlankLines": true, "skipComments": true }]
       }
     },
     {
