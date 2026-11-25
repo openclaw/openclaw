@@ -196,7 +196,7 @@ try {
             config,
             agentRuntime: createPluginRuntime().agent,
             sessionTarget,
-            authority: resolveTalkAgentConsultAuthority(undefined),
+            authority: resolveTalkAgentConsultAuthority(),
           });
         },
         text: "Use the release branch instead.",

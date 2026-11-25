@@ -560,7 +560,7 @@ export async function runTalkNativeActionParity(fixture: {
       sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
       ownerConnId: fixture.connectionId,
       runAuthority: retained,
-      authority: resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+      authority: resolveTalkAgentConsultAuthority(client),
       getVoiceSessionId: () => fixture.voiceSessionId,
       initialItems: [],
     });

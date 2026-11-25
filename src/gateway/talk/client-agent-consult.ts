@@ -105,7 +105,7 @@ export function createTalkClientAgentConsultRunner(params: {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
   const getConfig = () => params.context.getRuntimeConfig?.() ?? params.config;
   const authority: TalkAgentConsultAuthority = {
-    ...(params.authority ?? resolveTalkAgentConsultAuthority(undefined)),
+    ...(params.authority ?? resolveTalkAgentConsultAuthority()),
     operatorAuthority:
       params.runAuthority?.operatorAuthority ?? params.authority?.operatorAuthority,
   };
