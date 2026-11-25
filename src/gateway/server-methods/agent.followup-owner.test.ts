@@ -199,6 +199,9 @@ it.for(["observer error", "observer error before dispatch", "cancel before dispa
           continuation = Promise.resolve(result);
           return result;
         },
+        runWithRequester(work) {
+          return this.run(work);
+        },
         release: () => {
           requesterAuthority?.release();
           closed.resolve();

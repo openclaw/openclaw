@@ -455,6 +455,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
+      catalogPreviewImage: catalog ? this.history.catalogPreviewImage : undefined,
       messages,
       toolMessages: catalog ? emptyTranscriptItems : state.chatToolMessages,
       guardianNotices: catalog ? emptyTranscriptItems : state.guardianNotices,
@@ -601,9 +602,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onRemoveAttachment: this.removeBrowserAnnotation,
       ...this.runRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
-        onRewindMessage: selectedSessionArchived
-          ? undefined
-          : sessionActionCallbacks.onRewindMessage,
         isCurrent: () =>
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>

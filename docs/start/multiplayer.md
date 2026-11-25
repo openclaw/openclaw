@@ -48,6 +48,102 @@ A gateway is one trust domain. Everyone who can message a tool-enabled agent sha
 
 If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead, ideally on separate OS users or hosts: [Security trust model](/gateway/security/trust-model).
 
+### Participate collaborator policy
+
+Participate lets an explicitly invited collaborator send bounded agent inputs
+without general operator write authority. For a documentation collaborator,
+use this definition under `gateway.roles.definitions`:
+
+```json5
+{
+  collaborator: {
+    sessions: {
+      others: "invited",
+      maxInvitedAccess: "send",
+      invitedPermission: "read-only",
+      invitedTools: [
+        "read",
+        "ls",
+        "web_search",
+        "web_fetch",
+        "tool_search",
+        "tool_describe",
+        "dispatch_action",
+      ],
+    },
+    scopes: ["operator.sessions.read"],
+    agents: ["main"],
+  },
+}
+```
+
+Assign the role, then grant **Participate** on the intended session. The role
+ceiling alone does not grant membership. The session must use Gateway-local
+OpenClaw execution; native/CLI runtimes and remote workers cannot enforce this
+participant ceiling.
+
+`invitedPermission` sets the participant's permission ceiling: `read-only`,
+`guarded`, `workspace` (the default), or `full`. The effective mode is the lower
+of that ceiling and the session's mode; ordinary model/tool and host policy can
+narrow it further. Workspace mode uses the configured command reviewer. Any
+human approval goes only to the session creator or an administrator, never the
+participant. File tools stay inside the session root even in full mode. This is
+not an OS sandbox for shell commands; use sandbox isolation for untrusted code.
+
+For opted-in roles with `maxInvitedAccess`, `sandbox: "required"` applies to the
+role's own sessions. An invited participant uses the other session's sandbox
+settings, with the permission, tool and file boundaries above; invited members
+can read its workspace at their granted level. This does not let them start an
+unsandboxed session of their own. Roles without `maxInvitedAccess` keep their
+sandbox requirement when opening other sessions too.
+
+`invitedTools` replaces the default list, as in the example above; `[]` permits no
+tools. To keep the defaults and add browser access instead, use:
+
+```json5 validate=false
+{
+  sessions: {
+    others: "invited",
+    maxInvitedAccess: "send",
+    invitedPermission: "read-only",
+    invitedAlsoAllow: ["browser"],
+  },
+}
+```
+
+Both fields require `maxInvitedAccess` and `others: "invited"`. Setting both is a
+config error, even if either list is empty. Omit both, or use
+`invitedAlsoAllow: []`, to keep the defaults. These include file, shell, web,
+discovery, skill, image, progress, GitHub publication, and native child tools.
+Both lists accept ordinary tool names, groups, and wildcards for core, plugin,
+and MCP tools that are otherwise offered and authorized. There is no fixed upper
+allowlist, but the `openclaw` tool and Gateway configuration, role, membership,
+and restart mutations remain denied, even with `"*"`. Installing, uninstalling,
+enabling, or disabling plugins changes Gateway configuration and is also denied.
+Plugin reload is denied because it can approve new plugin capabilities.
+Agent policy can still deny
+any listed tool. There is no per-person tool override: duplicate the role to give
+one person a different policy.
+
+Listing tools intentionally delegates agent or Gateway capabilities. Existing
+role and scope checks use the admitted participant, not the session creator.
+Plugin JavaScript, MCP servers, desktop access, and channel credentials may use
+agent-owned or shared resources; this tool policy does not sandbox them.
+Allowing `exec` keeps permission ceilings, approvals, and sandbox policy in force;
+its starting directory and file tools remain bounded to the session root.
+
+`sessions_spawn` permits hidden, same-agent, Gateway-local OpenClaw children, not
+visible sessions, other roots, agents, workers, or runtimes. Children retain the
+original invitation, root, tool and permission ceilings; each new child turn
+rechecks current access. Child exec approvals require the original session
+creator, not the participant or an unrelated administrator.
+
+Each accepted input captures its resolved tool list. Queued and recovered work
+must satisfy both the retained and current policies as independent restrictions,
+so widening the role does not widen an old input. See
+[operator scopes](/gateway/operator-scopes#named-operator-roles) for the exact
+default list and child restrictions.
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).

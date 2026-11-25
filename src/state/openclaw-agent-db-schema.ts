@@ -203,7 +203,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     integrityCheck,
   );
   const startedAt = performance.now();
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
+  if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const boundedIndexes =
       runtimeAdmission && !verification && !reuseAdmission && integrityCheck !== "full"
         ? admitAgentDatabaseRuntimeStructure(database, pathname, agentId, diagnostics)
@@ -298,6 +298,11 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion > targetVersion) {
+        if (targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+          // A compatible newer writer owns its version and floor; runtime open must not rewrite either.
+          assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
+          return;
+        }
         throw new Error(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
@@ -729,7 +734,13 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const admittedDb = admitOpenClawAgentDatabaseSchema(db, { agentId, path: pathname });
   if (databaseOptions.register === true) {
-    registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env, admittedDb });
+    registerOpenClawAgentDatabase({
+      agentId,
+      path: pathname,
+      env: options.env,
+      admittedDb,
+      schemaVersion: readSqliteUserVersion(db),
+    });
   }
 }
 

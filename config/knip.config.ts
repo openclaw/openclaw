@@ -478,6 +478,7 @@ const repositoryScriptEntries = [
   // upgrade-survivor-docker.sh builds the successor fixture and runs the scenario by path.
   "scripts/e2e/lib/upgrade-survivor/release-fixture.mjs!",
   "scripts/e2e/lib/upgrade-survivor/release-update.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/schema-downgrade-run.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/embedded-run-liveness-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
@@ -1261,10 +1262,6 @@ const config = {
     // the full-tree audit still checks all exports against their boundary tests.
     "src/infra/database-port-recovery.ts": ["exports"],
     "src/infra/sqlite-snapshot.ts": ["exports"],
-    // Participate split part 1 stores member access levels; part 4 adds the
-    // session.members.setAccess handler that calls these writers. Remove then.
-    "src/config/sessions/session-sharing-store.ts": ["exports"],
-    "src/config/sessions/session-sharing-store.async.ts": ["exports"],
     "scripts/**": ["exports", "nsExports", "types", "nsTypes", "enumMembers", "namespaceMembers"],
     // PR2a admits physical facts now; PR2b routes state maintenance to these capabilities.
     // The full-tree test-aware scan still audits their boundary-test consumers.

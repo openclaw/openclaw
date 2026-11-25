@@ -1,5 +1,6 @@
 import { isBuildOnlyNpmPreflight, SEALED_NPM_PREFLIGHT_SCHEMA } from "../npm-prepared-bundle.mjs";
 import {
+  isPluginSdkApiAcknowledgement,
   selectPluginSdkApiReleaseEvidence,
   validatePluginSdkApiReleaseEvidence,
 } from "../plugin-sdk-api-release-evidence.mjs";
@@ -34,7 +35,7 @@ function selectedPackages(manifest) {
 export function resolveReleasePublishInputs(manifest, overrides = {}) {
   const overrideAcknowledgement = (overrides.pluginSdkApiAcknowledgement ?? "").trim();
   requireValue(
-    overrideAcknowledgement === "" || /^[a-f0-9]{8}$/u.test(overrideAcknowledgement),
+    overrideAcknowledgement === "" || isPluginSdkApiAcknowledgement(overrideAcknowledgement),
     "SDK override",
   );
   const sealed = manifest?.publishInputs;
@@ -119,7 +120,10 @@ export function resolveReleasePublishInputs(manifest, overrides = {}) {
     );
   }
   const acknowledgement = overrideAcknowledgement || sealed.pluginSdkApiAcknowledgement;
-  requireValue(acknowledgement === "" || /^[a-f0-9]{8}$/u.test(acknowledgement), "SDK override");
+  requireValue(
+    acknowledgement === "" || isPluginSdkApiAcknowledgement(acknowledgement),
+    "SDK override",
+  );
   return {
     ...sealed,
     pluginSdkApiAcknowledgement: acknowledgement,

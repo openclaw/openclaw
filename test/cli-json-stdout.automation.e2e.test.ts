@@ -6,6 +6,7 @@ import {
   expectCleanOutput,
   expectCliError,
   expectMissing,
+  expectOnlyLoggingState,
   runIsolatedCli,
   withCliHome,
 } from "./cli-json-stdout-contract.test-support.js";
@@ -96,7 +97,7 @@ describe("cli json stdout contract", () => {
       } else {
         expect(result.stderr).toContain(message);
         expect(result.stderr).not.toContain(gatewayError);
-        await expectMissing(stateDir);
+        await expectOnlyLoggingState(stateDir);
       }
       if ("tty" in testCase && !("human" in testCase)) {
         expect(result.stderr).toContain("\u001B[?25h");

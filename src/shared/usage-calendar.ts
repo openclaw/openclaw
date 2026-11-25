@@ -1,4 +1,9 @@
-import type { UsageDailyBucket } from "../infra/session-cost-usage.types.js";
+import type { UsageCivilDays, UsageDailyBucket } from "../infra/session-cost-usage.types.js";
+import { getUtcCalendarTimeMs } from "./iso-time.js";
+
+export function includesUsageDay(date: string, days?: UsageCivilDays): boolean {
+  return !days || (date >= days.from && date <= days.through);
+}
 
 /** Maps UTC timestamps to the requested report calendar; one instance caches each lookup. */
 export function createUsageCalendar(bucket: UsageDailyBucket) {
@@ -44,7 +49,10 @@ export function createUsageCalendar(bucket: UsageDailyBucket) {
       minute = value("minute");
       second = value("second");
     }
-    const calendarMs = Date.UTC(year, month - 1, day, hour, minute, second);
+    const calendarMs =
+      year >= 100
+        ? Date.UTC(year, month - 1, day, hour, minute, second)
+        : getUtcCalendarTimeMs(year, month - 1, day, hour, minute, second, 0);
     const result = {
       date: `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
       hour,
@@ -88,7 +96,7 @@ export function createUsageCalendar(bucket: UsageDailyBucket) {
     }
     return low;
   }
-  return { at, quarter, nextHour };
+  return { at, quarter, nextHour, civilDays: bucket.civilDays };
 }
 
 export type UsageCalendar = ReturnType<typeof createUsageCalendar>;

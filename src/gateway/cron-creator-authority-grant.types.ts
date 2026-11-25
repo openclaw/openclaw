@@ -13,9 +13,9 @@ export type CronAuthenticatedChannelRequester = {
   senderId: string;
 };
 
-/** Admission fact, checked once at run start; an authorized yield can transfer it. */
+/** A `manage` grant, checked once at run start; an authorized yield can transfer it. */
 export type CronManagementEntitlement = Readonly<{
-  source: "control-ui-admin" | "native-app-admin" | "channel-owner";
+  source: "operator" | "channel-owner";
 }>;
 
 export type CronCreatorAuthorityRunScope = {
@@ -32,8 +32,6 @@ export type CronCreatorAuthorityRunScope = {
   }>;
   /** Fresh admission only; never transferred with a management continuation. */
   readonly callerScopedCreation?: true;
-  /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
-  readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
   active: boolean;
   abort: () => void;

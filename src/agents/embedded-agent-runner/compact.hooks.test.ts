@@ -102,6 +102,7 @@ import {
   mockPendingNativeCompaction,
 } from "./compact.hooks.pending.test-support.js";
 import { registerCompactionSafeguardTests } from "./compact.hooks.safeguard.test-support.js";
+import { registerCompactionPermissionTests } from "./compact.hooks.tools.test-support.js";
 import { createModelAliasMetadata } from "./model-alias-metadata.test-support.js";
 import { abortEmbeddedAgentRun, isEmbeddedAgentRunHandleActive } from "./runs.js";
 import {
@@ -835,43 +836,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     },
   );
 
-  it.each([
-    { execMode: "deny", permissionMode: "read-only", expectedExecMode: "deny", rootless: false },
-    { execMode: "allowlist", permissionMode: "guarded", expectedExecMode: "ask", rootless: false },
-    { execMode: "full", permissionMode: "full", expectedExecMode: "full", rootless: false },
-    { execMode: undefined, permissionMode: "workspace", expectedExecMode: "auto", rootless: true },
-  ] as const)(
-    "uses the final $permissionMode permission policy for compaction tools",
-    async ({ execMode, permissionMode, expectedExecMode, rootless }) => {
-      const workspaceDir = rootless
-        ? compactionFixture.makeTempDir("openclaw-rootless-compaction-permission-")
-        : join(TEST_WORKSPACE_DIR, "workspace");
-      const root = rootless ? await realpath(workspaceDir) : workspaceDir;
-      await compactDirect({
-        workspaceDir,
-        requireWorkspaceOnly: rootless || undefined,
-        permissionMode: rootless ? "workspace" : "full",
-        sessionRoot: rootless ? undefined : root,
-        execOverrides: execMode ? { mode: execMode } : undefined,
-        sessionEntry: {
-          sessionId: TEST_SESSION_ID,
-          permissionMode: rootless ? "workspace" : "full",
-          sessionRoot: rootless ? undefined : root,
-        },
-      });
-
-      const toolOptions = expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
-        sessionPermissionPolicy: {
-          mode: permissionMode,
-          root,
-        },
-      });
-      expect(toolOptions.exec).toEqual(expect.objectContaining({ mode: expectedExecMode }));
-      if (rootless) {
-        expect(toolOptions.requireWorkspaceOnly).toBe(true);
-      }
-    },
-  );
+  registerCompactionPermissionTests({
+    compactDirect,
+    fixture: compactionFixture,
+    workspaceDir: () => TEST_WORKSPACE_DIR,
+    sessionId: () => TEST_SESSION_ID,
+    toolOptions: () => mockCallArg(createOpenClawCodingToolsMock),
+  });
 
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";

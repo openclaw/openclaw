@@ -17,6 +17,7 @@ import {
   providerCatalogEntry,
   createModelsListTestContext,
 } from "./models-list-result.openai-routes.test-support.js";
+import * as runtimeChoices from "./models-list-runtime-choices.js";
 
 const IMPLICIT_CODEX_RUNTIME = {
   id: "codex",
@@ -34,6 +35,34 @@ const IMPLICIT_OPENCLAW_RUNTIME = {
 } as const;
 
 describe("models.list OpenAI routes", () => {
+  it("only prepares the requested provider's rows in a full catalog refresh", async () => {
+    const context = createModelsListTestContext({
+      catalog: [
+        catalogEntry("shared", "openai-responses"),
+        providerCatalogEntry("local", "shared"),
+        providerCatalogEntry("local", "other"),
+      ],
+      catalogComplete: true,
+      preparedAuthStore: { version: 1, profiles: {} },
+      catalogDiagnostics: { providerOutcomes: [{ provider: "local", status: "ready" }] },
+    });
+    const read = (provider?: string) =>
+      buildModelsListResult({
+        source: { kind: "gateway", context },
+        params: { view: "all", refresh: true, provider, includeDefaultModels: false },
+      });
+    using prepare = vi.spyOn(runtimeChoices, "prepareModelPickerRuntimeProjection");
+    const all = await read();
+    expect(prepare.mock.calls.map(([{ entry }]) => entry.provider)).toContain("local");
+    prepare.mockClear();
+
+    const scoped = await read("openai");
+    const expected = all.models.filter((row) => row.provider === "openai");
+    expect(expected.map((row) => row.id)).toEqual(["shared"]);
+    expect(scoped).toEqual({ ...all, models: expected });
+    expect(prepare.mock.calls.map(([{ entry }]) => entry.provider)).toEqual(["openai"]);
+  });
+
   it("uses the system-agent owner when no request agent is given", async () => {
     const config: OpenClawConfig = {
       agents: {

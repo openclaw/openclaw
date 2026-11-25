@@ -70,11 +70,7 @@ import {
 } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  hasAutomationAdminDelegation,
-  type QueuedOperatorRecoverySource,
-  type RestartRecoveryOperatorSource,
-} from "./operator-run-recovery-source.codec.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -89,9 +85,7 @@ export type OperatorAdmissionContext = Pick<
 >;
 
 type Facts = (
-  | (Extract<QueuedOperatorRecoverySource, { kind: "gateway" }> & {
-      source?: RestartRecoveryOperatorSource;
-    })
+  | Extract<QueuedOperatorRecoverySource, { kind: "gateway" }>
   | Extract<QueuedOperatorRecoverySource, { kind: "channel" }>
   | {
       kind: "recorded";
@@ -101,6 +95,8 @@ type Facts = (
       > & { assignedRole: string | null; githubLogin?: string | null };
     }
   | { kind: "live"; authority: AdmittedRunOperatorAuthority }
+  // A session's person with no recorded source: a background turn admits only their role.
+  | { kind: "person"; snapshot: { profileId: string } }
 ) & { agentId?: string };
 type PreparedOperatorAdmission = {
   config: OpenClawConfig;
@@ -120,7 +116,6 @@ type PreparedOperatorAdmission = {
         };
       }
     | undefined;
-  channelIdentity: UserChannelIdentity | undefined;
   ingressAuth: ResolvedGatewayAuth;
 };
 
@@ -220,7 +215,6 @@ export async function prepareOperatorAdmission(
       ingress,
       paired,
       channel,
-      channelIdentity,
       ingressAuth,
     };
   } catch (error) {
@@ -236,11 +230,19 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   const sessionsWrite = operatorScopeSatisfied("operator.sessions.write", scopes);
   return Object.freeze({
     owner,
+    automations: owner
+      ? "manage"
+      : operatorScopeSatisfied("operator.cron", scopes)
+        ? "self"
+        : "none",
     skillAuthoring: sessionsWrite,
     questionReplace: sessionsWrite,
     commands: owner ? "all" : "none",
   });
 }
+
+/** A process the operator runs on this host (CLI, standalone MCP, MCP owner token) is the owner. */
+export const LOCAL_HOST = Object.freeze({ grant: decideTurnGrant(["operator.admin"]) });
 
 /** What channel ingress knows about a sender; admission decides what it may do. */
 export type ChannelSenderFacts = Readonly<
@@ -302,8 +304,6 @@ function intersectOperatorRunModelPolicy(
 type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
-  controlUiAdmin: boolean;
   release: () => void;
 };
 
@@ -317,7 +317,7 @@ export function decideOperatorAdmission(
 ): OperatorAdmissionDecision;
 /** Decide once from prepared owners and committed config; the run keeps only frozen facts. */
 export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperatorAdmission) {
-  const { config, identity, ingress, paired, channel, channelIdentity, context } = prepared;
+  const { config, identity, ingress, paired, channel, context } = prepared;
   const live = facts.kind === "live" ? facts.authority : undefined;
   const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
@@ -373,7 +373,12 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     ) {
       refuse();
     }
-    let scopes = snapshot.scopes;
+    let scopes =
+      facts.kind === "person"
+        ? ["operator.admin"]
+        : facts.kind === "live"
+          ? facts.authority.scopes
+          : facts.snapshot.scopes;
     let grant = channel
       ? channel.operatorProfile.gatewayAccessGrant
       : live
@@ -519,7 +524,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         throw new GatewayOperatorRecoveryAuthorizationError(error);
       }
     }
-    if (profile && (gateway || live || facts.kind === "recorded")) {
+    if (profile && facts.kind !== "channel") {
       const access =
         principal?.kind === "owner"
           ? null
@@ -548,6 +553,9 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     );
     if (role) {
       scopes = intersectOperatorScopes(scopes, role.scopes);
+    } else if (facts.kind === "person" && profileId !== GATEWAY_OWNER_PROFILE_ID) {
+      // Without a recorded source, a person has only what a named role gives them.
+      scopes = [];
     }
     const agents = role?.agents ?? (!identity ? live?.rolePolicy?.agents : undefined);
     if (facts.agentId && agents && agents !== "*" && !agents.includes(facts.agentId)) {
@@ -573,14 +581,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         manifestPlugins: getProcessGatewayPluginMetadataSnapshot() ?? [],
       }),
     );
-    const requesterOwner =
-      facts.kind === "channel"
-        ? channelIdentity !== undefined &&
-          (isChannelOwner(config, channelIdentity) ||
-            operatorScopeSatisfied("operator.admin", scopes))
-        : facts.kind === "gateway" && facts.source && facts.source.kind !== "gateway"
-          ? principal?.kind !== "member"
-          : operatorScopeSatisfied("operator.admin", scopes);
     const authority = createAdmittedRunOperatorAuthority({
       profileId,
       canonicalIdentity: identity ? { profileId } : null,
@@ -602,7 +602,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
       channelOwner: live?.channelOwner,
-      requesterOwner,
       grant: decideTurnGrant(scopes),
       modelPolicy,
       rolePolicy: role
@@ -634,14 +633,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return {
       authority,
       authenticatedUserProfile,
-      automationAdmin: Boolean(
-        gateway &&
-        hasAutomationAdminDelegation(gateway) &&
-        operatorScopeSatisfied("operator.admin", scopes),
-      ),
-      controlUiAdmin: Boolean(
-        gateway?.controlUiAdmin && operatorScopeSatisfied("operator.admin", scopes),
-      ),
       release: () => identity?.release(),
     };
   } catch (error) {

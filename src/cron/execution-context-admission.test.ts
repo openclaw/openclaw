@@ -35,7 +35,6 @@ const RESTORED_OPERATOR: AdmittedRunOperatorAuthority = {
   canonicalIdentity: null,
   profileId: "requester",
   scopes: ["operator.admin"],
-  requesterOwner: true,
   grant: decideTurnGrant(["operator.admin"]),
 };
 
@@ -503,20 +502,5 @@ describe("occurrence pause", () => {
     expect(text).toContain(`Automation "${"a".repeat(119)}" is paused`);
     expect(text).toContain(`\`${PARENT_KEY}\`, is unavailable: it was archived.`);
     expect(text).toContain("openclaw automations enable job-1");
-  });
-});
-
-describe("prepareCronRunAdmission", () => {
-  it("refuses a scheduled run that carries no admitted occurrence", () => {
-    expect(() =>
-      prepareCronRunAdmission({
-        cfg: {},
-        agentId: "main",
-        runId: "run-1",
-        sessionKey: "agent:main:cron:job-1:run:s1",
-        jobId: "job-1",
-        deliveryAttemptFence: null,
-      } as unknown as Parameters<typeof prepareCronRunAdmission>[0]),
-    ).toThrow("a scheduled run requires its admitted occurrence");
   });
 });

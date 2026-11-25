@@ -72,6 +72,10 @@ export function evaluateReleaseChildPolicy(input: {
 }): ReleaseChildPolicy;
 export const RELEASE_VALIDATION_WAIVERS_PATH: string;
 export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
+export function validateAuthoredReleaseWaivers(
+  previous: ReleaseValidationWaiver[],
+  proposed: ReleaseValidationWaiver[],
+): void;
 export function firstIncompleteReleaseStep(steps?: ReleasePolicyJob["steps"]): string | undefined;
 export function isWaived(
   scope: {

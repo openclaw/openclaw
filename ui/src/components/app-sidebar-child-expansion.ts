@@ -1,12 +1,12 @@
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
-export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
+type SidebarExpansionMode = "collapsed-by-user" | "expanded-by-user" | "expanded-fully";
 
 type SidebarExpansionScope = { agentId: string; connectionIdentity: unknown };
 
 /** Parent disclosure state: explicit choices and the path to the selected session. */
 export class SidebarChildExpansion {
-  readonly #modes = new Map<string, SidebarExpansionMode>();
+  readonly #modes = new Map<string, SidebarExpansionMode | "revealed">();
   #restoredPending = false;
   #activeSessionKey: string | null = null;
   readonly #revealedPaths = new Set<string>();
@@ -43,7 +43,7 @@ export class SidebarChildExpansion {
         return false;
       }
       if (this.revealOnce("session:" + row.key) && !this.isExpanded(row.key)) {
-        this.#modes.set(row.key, "expanded");
+        this.#modes.set(row.key, "revealed");
       }
       return true;
     };
@@ -68,9 +68,9 @@ export class SidebarChildExpansion {
     this.#modes.delete(key);
   }
 
-  isExpanded(key: string): boolean {
+  isExpanded(key: string, cachedSelectedPath = false): boolean {
     const mode = this.#modes.get(key);
-    return mode === "expanded" || mode === "expanded-fully";
+    return cachedSelectedPath || (mode !== undefined && mode !== "collapsed-by-user");
   }
 
   isFullyShown(key: string): boolean {
@@ -78,15 +78,19 @@ export class SidebarChildExpansion {
   }
 
   capture(key: string): SidebarExpansionMode | undefined {
-    return this.#modes.get(key);
+    const mode = this.#modes.get(key);
+    return mode === "revealed" ? undefined : mode;
   }
 
-  restore(rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[]): void {
+  restore(
+    rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode | "expanded" }[],
+  ): void {
     this.#revealedPaths.clear();
     this.#modes.clear();
-    for (const row of rows) {
-      if (row.childrenDisplayMode !== undefined) {
-        this.#modes.set(row.key, row.childrenDisplayMode);
+    for (const { key, childrenDisplayMode: mode } of rows) {
+      // Older snapshots cannot tell whether a plain expansion was user-initiated.
+      if (mode !== undefined && mode !== "expanded") {
+        this.#modes.set(key, mode);
       }
     }
     // The first authoritative projection changes the connection scope; these
@@ -101,7 +105,7 @@ export class SidebarChildExpansion {
       this.#modes.set(key, "collapsed-by-user");
       return { expanded: false };
     }
-    this.#modes.set(key, "expanded");
+    this.#modes.set(key, "expanded-by-user");
     return { expanded: true };
   }
 

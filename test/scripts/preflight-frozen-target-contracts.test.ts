@@ -165,6 +165,7 @@ describe("update-channel refusal contract", () => {
   const target = "src/cli/update-cli/update-command-target.ts";
   const global = "src/infra/update-global.ts";
   const gitRoute = "src/cli/update-cli/update-command-git.ts";
+  const report = "src/cli/update-cli/update-command-admission-report.ts";
   it.each([
     {
       gitMode: "in-place",
@@ -172,6 +173,8 @@ describe("update-channel refusal contract", () => {
       tag: "main",
       condition: 'explicitTag === "main"',
       helper: "",
+      ownerReport: "",
+      packageMode: "switch",
     },
     {
       gitMode: "detached",
@@ -180,14 +183,17 @@ describe("update-channel refusal contract", () => {
       condition: "isMainPackageTarget(explicitTag)",
       helper:
         'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}',
+      ownerReport: "throw new Error(`The resident launcher owns this installation. ${route}`);",
+      packageMode: "refuse",
     },
   ])(
-    "retains the $tag refusal and $gitMode route with omissions disabled",
-    ({ tag, condition, helper, gitMode, route }) => {
+    "retains the $tag refusal, $gitMode route and $packageMode Git-to-package switch",
+    ({ tag, condition, helper, gitMode, route, ownerReport, packageMode }) => {
       const f = fixture({
         [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
         [global]: helper,
         [gitRoute]: route,
+        [report]: ownerReport,
       });
       // Selection follows committed source, not a dirty working-tree replacement.
       writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
@@ -204,18 +210,24 @@ describe("update-channel refusal contract", () => {
         modes: {
           OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag,
           OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE: gitMode,
+          OPENCLAW_FROZEN_TARGET_GIT_TO_PACKAGE_MODE: packageMode,
         },
         files: [],
       });
       expect(record.docker.omitted).toEqual([]);
       expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
-        expect.arrayContaining([target, global, gitRoute]),
+        expect.arrayContaining([target, global, gitRoute, report]),
       );
     },
   );
 
   it("rejects an unknown refusal contract rather than dropping its probe", () => {
-    const f = fixture({ [target]: "unknownContract();", [global]: "", [gitRoute]: "" });
+    const f = fixture({
+      [target]: "unknownContract();",
+      [global]: "",
+      [gitRoute]: "",
+      [report]: "",
+    });
     expectRejected(
       f.run(
         { docker: { lanes: ["update-channel-switch"] } },

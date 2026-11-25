@@ -13,6 +13,7 @@ import {
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -225,6 +226,10 @@ export async function applySessionModelSelectionInternal(
     sessionEntry: startingEntry,
     profileOverride: request.profileOverride,
     provider: request.provider,
+    previousProvider: startingEntry.agentRuntimeOverride
+      ? (resolveSessionModelRef(params.cfg, startingEntry, params.agentId)?.provider ??
+        params.currentProvider)
+      : undefined,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
     thinkingPolicyRequired: hasPendingFollowupQueueWork([params.sessionKey]),

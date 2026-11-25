@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
+import { resolveAutoAgentHarnessId } from "../agents/harness/support.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,7 +26,24 @@ function selectionKey(params: RuntimeSelection) {
   ];
 }
 
-/** Prepared agent scopes make keys session-independent; the next selection rechecks live harnesses. */
+export function resolveSessionProjectedAutoRuntime(
+  params: Pick<RuntimeSelection, "agentId" | "provider" | "model"> & {
+    cfg: OpenClawConfig;
+    sessionKey?: string;
+  },
+): string {
+  return (
+    resolveAutoAgentHarnessId({
+      config: params.cfg,
+      agentScope: { kind: "prepared", agentId: params.agentId },
+      provider: params.provider,
+      modelId: params.model,
+      sessionKey: params.sessionKey,
+    }) ?? "openclaw"
+  );
+}
+
+/** Share model-route decisions within a projection batch. */
 export function createSessionRuntimeResolution(cfg: OpenClawConfig) {
   const metadata = new Map<string, ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>>();
   const effective = new Map<string, string>();
@@ -84,20 +102,28 @@ export function createSessionRuntimeResolution(cfg: OpenClawConfig) {
       }
       return value;
     },
-    effective(params: RuntimeSelection, route?: { api?: string; baseUrl?: unknown }) {
+    effective(
+      params: RuntimeSelection,
+      route?: { api?: string; baseUrl?: unknown },
+      preparedAutoRuntime?: string,
+    ) {
       const modelBaseUrl = normalizeOptionalString(route?.baseUrl);
       const key = JSON.stringify([...selectionKey(params), route?.api, modelBaseUrl]);
       let value = effective.get(key);
       if (value === undefined) {
-        value = resolveEffectiveAgentRuntime({
-          cfg,
-          agentScope: { kind: "prepared", agentId: params.agentId },
-          provider: params.provider,
-          modelId: params.model,
-          sessionEntry: params.entry,
-          modelApi: route?.api,
-          modelBaseUrl,
-        });
+        // Without a catalog route the caller has already resolved the policy to auto.
+        value = route
+          ? resolveEffectiveAgentRuntime({
+              cfg,
+              agentScope: { kind: "prepared", agentId: params.agentId },
+              provider: params.provider,
+              modelId: params.model,
+              sessionEntry: params.entry,
+              modelApi: route.api,
+              modelBaseUrl,
+              preparedAutoRuntime,
+            })
+          : resolveSessionProjectedAutoRuntime({ ...params, cfg });
         effective.set(key, value);
       }
       return value;

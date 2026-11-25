@@ -17,17 +17,17 @@ OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the age
 This page is an index. The browser documentation is split across nine pages,
 one per reader job. Open the page that matches your task.
 
-| Page                                                                         | Read it when                                                                    |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| [Browser setup](/tools/browser/setup)                                        | You are turning the browser on for the first time, or the tool is missing.      |
-| [Browser profiles](/tools/browser/profiles)                                  | You are choosing between the managed browser and a signed-in Chrome session.    |
-| [Browser configuration](/tools/browser/configuration)                        | You need the config block, ports, SSRF policy, or a different Chromium binary.  |
-| [Remote and hosted browsers](/tools/browser/remote)                          | The browser lives on another machine, or you use a hosted CDP provider.         |
-| [Browser security](/tools/browser/security)                                  | You are reviewing control-API auth or handling remote CDP tokens.               |
-| [Multi-profile and existing-session attach](/tools/browser/existing-session) | You want extra named profiles or the agent inside your signed-in browser.       |
-| [Isolation and browser selection](/tools/browser/isolation)                  | You need the isolation guarantees, the binary search order, or the control API. |
-| [Browser troubleshooting](/tools/browser/troubleshooting)                    | The browser will not start, or a navigation is blocked.                         |
-| [Browser agent tools](/tools/browser/agent-tools)                            | You need the browser tool actions and the arguments an agent passes.            |
+| Page                                                                         | Read it when                                                                                                                                                         |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Browser setup](/tools/browser/setup)                                        | You are turning the browser on for the first time, or the tool is missing.                                                                                           |
+| [Browser profiles](/tools/browser/profiles)                                  | You are choosing between the managed browser and a signed-in Chrome session, or using [Browser handoff](/tools/browser/profiles#browser-handoff) (**Take control**). |
+| [Browser configuration](/tools/browser/configuration)                        | You need the config block, ports, SSRF policy, or a different Chromium binary.                                                                                       |
+| [Remote and hosted browsers](/tools/browser/remote)                          | The browser lives on another machine, or you use a hosted CDP provider.                                                                                              |
+| [Browser security](/tools/browser/security)                                  | You are reviewing control-API auth or handling remote CDP tokens.                                                                                                    |
+| [Multi-profile and existing-session attach](/tools/browser/existing-session) | You want extra named profiles or the agent inside your signed-in browser.                                                                                            |
+| [Isolation and browser selection](/tools/browser/isolation)                  | You need the isolation guarantees, the binary search order, or the control API.                                                                                      |
+| [Browser troubleshooting](/tools/browser/troubleshooting)                    | The browser will not start, or a navigation is blocked.                                                                                                              |
+| [Browser agent tools](/tools/browser/agent-tools)                            | You need the browser tool actions and the arguments an agent passes.                                                                                                 |
 
 ## What you get
 
@@ -40,6 +40,7 @@ one per reader job. Open the page that matches your task.
 - A bundled `browser-automation` skill that teaches agents the snapshot,
   stable-tab, stale-ref, and manual-blocker recovery loop when the browser
   plugin is enabled.
+- Live Control UI Browser panel with [Browser handoff](/tools/browser/profiles#browser-handoff) (**Take control** / **Release control**) so you can pause agent input for sign-ins, 2FA, CAPTCHAs, or private Chrome settings and password management.
 - Optional multi-profile support (`openclaw`, `work`, `remote`, ...).
 
 This browser is **not** your daily driver. It is a safe, isolated surface for
@@ -59,6 +60,7 @@ still resolves. Each entry points at the page that now holds the content.
 - <a id="missing-browser-command-or-tool" />[Missing browser command or tool](/tools/browser/setup#missing-browser-command-or-tool)
 - <a id="profiles%3A-openclaw%2C-user%2C-chrome" /><a id="profiles-openclaw-user-chrome" />[Profiles: `openclaw`, `user`, `chrome`](/tools/browser/profiles)
 - <a id="browser-panel-in-the-control-ui" />[Browser panel in the Control UI](/tools/browser/profiles#browser-panel-in-the-control-ui)
+- <a id="browser-handoff" />[Browser handoff (Take control)](/tools/browser/profiles#browser-handoff)
 - <a id="configuration" />[Configuration](/tools/browser/configuration#configuration)
 - <a id="tab-cleanup-ownership" />[Tab cleanup ownership](/tools/browser/configuration#tab-cleanup-ownership)
 - <a id="screenshot-vision-(text-only-model-support)" /><a id="screenshot-vision-text-only-model-support" />[Screenshot vision (text-only model support)](/tools/browser/configuration#screenshot-vision-text-only-model-support)
