@@ -12,6 +12,7 @@ export function CopyButton(props: {
   ref?: (element: HTMLButtonElement) => void;
   idleLabel?: string;
   bare?: boolean;
+  class?: string;
   /** Icon-only surfaces show failure as an icon and report outcomes in the tooltip. */
   iconFeedback?: boolean;
   buttonAttributes?: SolidJSX.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -31,7 +32,10 @@ export function CopyButton(props: {
           >
             <button
               {...props.buttonAttributes}
-              class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
+              class={[
+                props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn",
+                props.class ?? "",
+              ]}
               type="button"
               aria-label={label()}
               ref={[

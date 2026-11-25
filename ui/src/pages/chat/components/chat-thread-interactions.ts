@@ -378,7 +378,7 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   ) {
     return;
   }
-  const group = target.closest(".chat-group--with-footer");
+  const group = target.closest(".chat-inter-session-message, .chat-group--with-footer");
   if (
     !(group instanceof HTMLElement) ||
     !transcript.contains(group) ||

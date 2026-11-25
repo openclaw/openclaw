@@ -101,7 +101,7 @@ export function RewindButton(props: { onRewind: () => void }) {
     <span class="chat-confirm-wrap chat-rewind-wrap">
       <openclaw-tooltip prop:content={label()}>
         <button
-          class="chat-group-rewind"
+          class="chat-group-rewind chat-footer-btn"
           aria-label={label()}
           onClick={(event: Event) =>
             // SAFETY: This handler is registered on the native button rendered here.

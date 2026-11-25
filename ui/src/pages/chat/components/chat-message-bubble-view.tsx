@@ -64,7 +64,12 @@ import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
 } from "./chat-message-media.ts";
-import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-view.tsx";
+import {
+  ForwardedDescriptionDisclosure,
+  MarkdownText,
+  MessageJson,
+  MessageMarkdown,
+} from "./chat-message-text-view.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -149,6 +154,30 @@ export function GroupedMessage(props: {
                       />
                     </Show>
                     <Switch>
+                      <Match when={props.options.forwardedDescription}>
+                        <ForwardedDescriptionDisclosure
+                          description={props.options.forwardedDescription!.text}
+                          expanded={props.options.isToolMessageExpanded?.(
+                            props.options.forwardedDescription!.disclosureId,
+                          )}
+                          searchResult={props.options.searchResult}
+                          onToggle={
+                            props.options.onToggleToolMessageExpanded &&
+                            ((wasExpanded) =>
+                              props.options.onToggleToolMessageExpanded?.(
+                                props.options.forwardedDescription!.disclosureId,
+                                wasExpanded,
+                              ))
+                          }
+                        >
+                          <BubbleContents
+                            state={state}
+                            messageKey={props.messageKey}
+                            options={props.options}
+                            onOpenSidebar={props.onOpenSidebar}
+                          />
+                        </ForwardedDescriptionDisclosure>
+                      </Match>
                       <Match when={state().voiceTranscript}>
                         <ChatBubbleActivity
                           label={t("chat.messages.voiceTranscript")}

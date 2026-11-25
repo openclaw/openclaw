@@ -24,7 +24,12 @@ function update(id: string, source = sourceKey) {
     content: "Original receipt " + id + ": " + "verification detail ".repeat(90) + "END " + id,
     timestamp: 1000,
     senderSession: { sessionKey: source, agentId: "main", label: "Visualize tool icons" },
-    provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceSessionKey: source },
+    provenance: {
+      kind: "inter_session",
+      sourceTool: "sessions_send",
+      sourceSessionKey: source,
+      sourceSummary: "Receipt " + id + " verified",
+    },
     __openclaw: { id, runId: "run-" + id, turnBoundary: true },
   };
 }
@@ -171,7 +176,7 @@ describe("session activity", () => {
     }
     expect(group.messages.map((entry) => entry.message)).toEqual(messages);
     expect(latestTranscriptAnnouncement(projection.collapsedItems)?.text).toBe(
-      "3 updates from Visualize tool icons",
+      "Receipt third verified",
     );
     const expansions = new Map<string, boolean>();
     const index = projectTranscriptIndex(projection, expansions, { assistantName: "OpenClaw" });
@@ -179,7 +184,7 @@ describe("session activity", () => {
     expect(index.loadedReplySources.get("second")?.message).toBe(messages[1]);
     expect(index.positionIndex.markers).toHaveLength(0);
     expandReplyTargetWork(projection.transcriptItems, expansions, "second");
-    expect(expansions.get("session-activity:" + group.key)).toBe(true);
+    expect(expansions.get("session-activity:" + group.messages[1]!.key)).toBe(true);
     expect(
       projectTranscriptIndex(projection, expansions, { assistantName: "OpenClaw" }).positionIndex
         .markers,
@@ -208,8 +213,11 @@ describe("session activity", () => {
     },
   );
 
-  it("expands the full original messages in one disclosure and retains source navigation", () => {
-    const group = chain([update("first"), update("second")]).transcriptItems[0];
+  it("expands individual original messages inside native bubbles and retains separate source navigation", () => {
+    const group = chain([
+      { ...update("first"), timestamp: 1000 },
+      { ...update("second"), timestamp: 121000 },
+    ]).transcriptItems[0];
     if (group?.kind !== "group") {
       throw new Error("expected activity group");
     }
@@ -218,8 +226,8 @@ describe("session activity", () => {
       view.render(group, {
         showReasoning: false,
         showToolCalls: false,
-        assistantName: "OpenClaw",
         agentId: "main",
+        assistantName: "OpenClaw",
         isToolMessageExpanded: (id) => expanded.get(id),
         onToggleToolMessageExpanded: (id, previous) => {
           expanded.set(id, !previous);
@@ -227,41 +235,55 @@ describe("session activity", () => {
         },
       });
     draw();
-    const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
-    const summary = disclosure?.querySelector("summary");
-    if (!disclosure || !summary) {
-      throw new Error("expected disclosure");
-    }
-    // Lit part markers are bookkeeping; the rendered summary must not change on toggle.
-    const summaryMarkup = () => summary.innerHTML.replace(/<!--[^]*?-->/gu, "");
-    const collapsedMarkup = summaryMarkup();
-    expect(disclosure.open).toBe(false);
-    expect(summary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "2 updates from Visualize tool icons",
+    const disclosures = container.querySelectorAll(".chat-message-disclosure--description");
+    expect(disclosures).toHaveLength(2);
+    const first = disclosures[0]!;
+    expect(first.parentElement?.classList.contains("chat-bubble")).toBe(true);
+    expect(first.querySelector(".chat-message-disclosure__description")?.textContent).toBe(
+      "Receipt first verified",
     );
-    expect(container.textContent).not.toContain("Original receipt");
-    expect(
-      container.querySelector(".chat-avatar, .chat-avatar-slot, .chat-group--forwarded"),
-    ).toBeNull();
-    expect(summary.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
+    const source = container.querySelector(".chat-group-messages > .chat-reply-attribution");
+    expect(source?.textContent?.replace(/\s+/gu, " ").trim()).toBe("From Visualize tool icons");
+    expect(source?.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
       sourceKey,
     );
-    disclosure.open = true;
-    disclosure.dispatchEvent(new Event("toggle"));
-    expect(disclosure.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
-    expect(summaryMarkup()).toBe(collapsedMarkup);
+    expect(source?.closest("summary")).toBeNull();
+    expect(container.querySelector(".chat-avatar")).not.toBeNull();
     expect(
-      disclosure.querySelector(".chat-session-activity__body .chat-reply-attribution"),
-    ).toBeNull();
-    expect(container.textContent).toContain("END first");
-    expect(container.textContent).toContain("END second");
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    expect(container.querySelectorAll(".chat-group-timestamp")).toHaveLength(2);
-    draw();
-    expect(disclosure.open).toBe(true);
-    disclosure.open = false;
-    disclosure.dispatchEvent(new Event("toggle"));
+      Array.from(container.querySelectorAll(".chat-session-activity__meta time")).map((time) =>
+        time.getAttribute("datetime"),
+      ),
+    ).toEqual(["1970-01-01T00:00:01.000Z", "1970-01-01T00:02:01.000Z"]);
     expect(container.textContent).not.toContain("Original receipt");
+    first.querySelector<HTMLButtonElement>("button")!.click();
+    expect(container.textContent).toContain("END first");
+    expect(container.textContent).not.toContain("END second");
+    expect(first.querySelector(".chat-message-disclosure__description")?.textContent).toBe(
+      "Receipt first verified",
+    );
+    expect(disclosures[1]!.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      first.querySelector(
+        ".chat-message-disclosure__original .chat-bubble, .chat-reply-attribution",
+      ),
+    ).toBeNull();
+    expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
+    expect(first.querySelector("button")?.textContent).toContain("Show less");
+    first.querySelector<HTMLButtonElement>("button")!.click();
+    expect(container.textContent).not.toContain("Original receipt");
+  });
+
+  it("shows the original message directly when the sender omits a summary", () => {
+    const message = update("legacy");
+    const { sourceSummary: _summary, ...provenance } = message.provenance;
+    const group = chain([{ ...message, provenance }]).transcriptItems[0];
+    if (group?.kind !== "group") {
+      throw new Error("expected group");
+    }
+    view.render(group, { showReasoning: false, agentId: "main" });
+    expect(container.querySelector(".chat-session-activity")).toBeNull();
+    expect(container.textContent).toContain("END legacy");
+    expect(container.querySelectorAll(".chat-bubble")).toHaveLength(1);
   });
 
   it("retains a focused action while a same-key forwarded message refreshes", () => {
@@ -344,7 +366,7 @@ describe("session activity", () => {
     expect(onOpenReply).toHaveBeenCalledWith("older");
   });
 
-  it("shows matching text immediately in transcript search", () => {
+  it("shows matching text immediately in transcript search without a collapse control", () => {
     const projection = chain([update("search")], true);
     const group = projection.transcriptItems[0];
     if (group?.kind !== "group") {
@@ -355,10 +377,14 @@ describe("session activity", () => {
       searchResult: true,
       isToolMessageExpanded: () => false,
     });
-    expect(container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
+    expect(
+      container.querySelector(".chat-message-disclosure--description.is-expanded"),
+    ).not.toBeNull();
     expect(container.textContent).toContain("END search");
     expect(container.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
-    const sourceLink = container.querySelector("summary a[data-session-key]");
+    const sourceLink = container.querySelector(
+      ".chat-group-messages > .chat-reply-attribution a[data-session-key]",
+    );
     expect(sourceLink).not.toBeNull();
     const sourceClick = new MouseEvent("click", { bubbles: true, cancelable: true });
     sourceLink?.dispatchEvent(sourceClick);
@@ -369,8 +395,6 @@ describe("session activity", () => {
         .markers,
     ).toHaveLength(1);
     expect(collapsed.get("session-activity:" + group.key)).toBe(false);
-    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-    container.querySelector("summary")?.dispatchEvent(click);
-    expect(click.defaultPrevented).toBe(true);
+    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
 });

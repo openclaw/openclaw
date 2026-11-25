@@ -49,8 +49,12 @@
   max-height: none;
 }
 
-.chat-message-disclosure:not(.is-expanded):has(> .chat-message-disclosure__toggle:not([hidden]))
-  > .chat-message-disclosure__content {
+.chat-message-disclosure:not(.is-expanded):not(.chat-message-disclosure--description):has(
+    > .chat-message-disclosure__toggle:not([hidden])
+  )
+  > .chat-message-disclosure__content,
+.chat-message-disclosure--description:not(.is-expanded)
+  > .chat-message-disclosure__content[data-preview-overflow] {
   mask-image: linear-gradient(
     to bottom,
     black calc(100% - var(--chat-disclosure-fade-size, var(--chat-text-size) * 1.6 * 0.5)),
@@ -61,6 +65,16 @@
   .chat-group.user & :where(pre, .code-block-viewport) {
     overflow: clip;
   }
+}
+
+.chat-message-disclosure__description {
+  overflow-wrap: anywhere;
+}
+
+.chat-message-disclosure__original {
+  margin-block-start: var(--space-3);
+  border-block-start: 1px solid var(--border-strong);
+  padding-block-start: var(--space-3);
 }
 
 .chat-message-disclosure__toggle {
@@ -79,6 +93,10 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1;
   cursor: var(--cursor-action);
+}
+
+.chat-message-disclosure--description > .chat-message-disclosure__toggle {
+  scroll-margin-block: var(--space-3);
 }
 
 .chat-bubble--with-images .chat-message-disclosure__toggle {

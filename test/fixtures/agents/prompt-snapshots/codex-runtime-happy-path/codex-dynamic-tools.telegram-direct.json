@@ -2222,6 +2222,13 @@
               "minLength": 1,
               "type": "string"
             },
+            "description": {
+              "description": "Optional sender-written preview, up to 280 characters. Write one short paragraph without line breaks. The full message remains expandable.",
+              "maxLength": 280,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
             "label": {
               "maxLength": 512,
               "minLength": 1,

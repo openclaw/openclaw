@@ -18,6 +18,8 @@ export type InputProvenance = {
   sourceTool?: string;
   sourceRole?: "subagent";
   sourcePromptPrefix?: string;
+  /** Sender-authored display metadata, never a replacement for transcript content. */
+  sourceSummary?: string;
   jobId?: string;
   runId?: string;
   /** A host tool handoff's committed result for model-history replay. */
@@ -114,6 +116,7 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     "sourceChannel",
     "sourceTool",
     "sourcePromptPrefix",
+    "sourceSummary",
     "jobId",
     "runId",
   ] as const) {

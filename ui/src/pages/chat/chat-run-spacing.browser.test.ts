@@ -42,7 +42,7 @@ function runBlockSpacingHtml() {
           <div class="chat-group-footer">
             <span class="chat-sender-name">Assistant</span>
             <div class="chat-group-footer-actions">
-              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+              <button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy">${iconSvg()}</button>
             </div>
           </div>
         </div>
@@ -59,7 +59,7 @@ function runBlockSpacingHtml() {
           <div class="chat-group-footer chat-group-footer--persistent-identity">
             <span class="chat-sender-name">You</span>
             <div class="chat-group-footer-actions">
-              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+              <button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy">${iconSvg()}</button>
             </div>
           </div>
         </div>
@@ -76,7 +76,7 @@ function runBlockSpacingHtml() {
           <div class="chat-group-footer chat-group-footer--persistent-identity">
             <span class="chat-sender-name">You</span>
             <div class="chat-group-footer-actions">
-              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+              <button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy">${iconSvg()}</button>
             </div>
           </div>
         </div>

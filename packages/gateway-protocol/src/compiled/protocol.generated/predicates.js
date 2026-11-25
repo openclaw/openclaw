@@ -737,7 +737,7 @@ var External = [
     /(^message$|^agentId$|^provider$|^model$|^to$|^replyTo$|^sessionId$|^sessionKey$|^createSessionIfMissing$|^expectedExistingSessionId$|^expectedExistingSessionLifecycleRevision$|^thinking$|^deliver$|^attachments$|^channel$|^replyChannel$|^accountId$|^replyAccountId$|^threadId$|^groupId$|^groupChannel$|^groupSpace$|^timeout$|^bestEffortDeliver$|^lane$|^cwd$|^cleanupBundleMcpOnRunEnd$|^modelRun$|^promptMode$|^extraSystemPrompt$|^bootstrapContextMode$|^bootstrapContextRunKind$|^acpTurnSource$|^internalRuntimeHandoffId$|^execApprovalFollowupExpectedSessionId$|^internalEvents$|^inputProvenance$|^suppressPromptPersistence$|^sessionEffects$|^sourceReplyDeliveryMode$|^disableMessageTool$|^swarmCollector$|^swarmOutputSchema$|^voiceWakeTrigger$|^idempotencyKey$|^label$)/u,
     /(^type$|^source$|^childSessionKey$|^childSessionId$|^announceType$|^taskLabel$|^status$|^statusLabel$|^result$|^noVisibleResult$|^modelRouteChange$|^attachments$|^mediaUrls$|^statsLine$|^replyInstruction$)/u,
     /(^type$|^path$|^url$|^mediaUrl$|^filePath$|^mimeType$|^name$|^sizeBytes$|^durationMs$|^width$|^height$)/u,
-    /(^kind$|^originSessionId$|^sourceSessionKey$|^sourceChannel$|^sourceTool$|^sourceRole$|^sourcePromptPrefix$|^jobId$|^runId$)/u,
+    /(^kind$|^originSessionId$|^sourceSessionKey$|^sourceChannel$|^sourceTool$|^sourceRole$|^sourcePromptPrefix$|^sourceSummary$|^jobId$|^runId$)/u,
     /^.*$/u,
     /(^agentId$|^sessionKey$)/u,
     /(^runId$|^timeoutMs$)/u,
@@ -4243,6 +4243,9 @@ var External = [
     (value.sourcePromptPrefix === void 0 ||
       !("sourcePromptPrefix" in value) ||
       check_277(value.sourcePromptPrefix)) &&
+    (value.sourceSummary === void 0 ||
+      !("sourceSummary" in value) ||
+      check_277(value.sourceSummary)) &&
     (value.jobId === void 0 || !("jobId" in value) || check_277(value.jobId)) &&
     (value.runId === void 0 || !("runId" in value) || check_277(value.runId)),
   check_452 = (value) =>

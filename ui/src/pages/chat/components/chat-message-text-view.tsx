@@ -3,6 +3,7 @@ import {
   children,
   createMemo,
   createSignal,
+  createUniqueId,
   createRoot,
   getOwner,
   latest,
@@ -186,20 +187,127 @@ function TextDisclosure(props: {
         >
           {content()}
         </DisclosureContent>
-        <button
-          class="chat-message-disclosure__toggle"
-          ref={(element) => {
+        <DisclosureToggle
+          expanded={expanded()}
+          buttonRef={(element) => {
             toggle = element;
           }}
-          type="button"
-          aria-expanded={expanded() ? "true" : "false"}
-          onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
-        >
-          {t(expanded() ? "chat.messages.showLess" : "chat.messages.showMore")}
-          <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
-        </button>
+          onToggle={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
+        />
       </div>
     </Show>
+  );
+}
+
+function DisclosureToggle(props: {
+  expanded: boolean;
+  controls?: string;
+  buttonRef: (element: HTMLButtonElement) => void;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      class="chat-message-disclosure__toggle"
+      ref={(element) => props.buttonRef(element)}
+      type="button"
+      aria-expanded={props.expanded ? "true" : "false"}
+      aria-controls={props.controls}
+      onClick={() => props.onToggle()}
+    >
+      {t(props.expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
+      <Icon name={props.expanded ? "chevronUp" : "chevronDown"} aria-hidden="true" />
+    </button>
+  );
+}
+
+/** A sender description previews a separate message, even when the preview fits. */
+export function ForwardedDescriptionDisclosure(props: {
+  description: string;
+  expanded?: boolean;
+  searchResult?: boolean;
+  onToggle?: (wasExpanded: boolean) => void;
+  children: JSX.Element;
+}) {
+  const [localExpanded, setLocalExpanded] = createSignal(false);
+  const expanded = () =>
+    props.searchResult ||
+    (props.onToggle ? props.expanded : (props.expanded ?? localExpanded())) ||
+    false;
+  const originalId = createUniqueId();
+  let original: HTMLDivElement | undefined;
+  const presented = useContext(ContentPresentation);
+  let text: HTMLDivElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
+  return (
+    <div
+      class={[
+        "chat-message-disclosure chat-message-disclosure--description",
+        { "is-expanded": expanded() },
+      ]}
+    >
+      <div
+        class="chat-message-disclosure__content"
+        ref={messageOverflowRef(
+          () => ({
+            expanded: expanded(),
+            forwarded: false,
+            connected: presented(),
+            plainTextPreview: true,
+          }),
+          () => ({ text, toggle }),
+        )}
+      >
+        <div
+          class="chat-text chat-message-disclosure__description"
+          dir="auto"
+          ref={(element) => {
+            text = element;
+          }}
+        >
+          {props.description.replace(/[\u2028\u2029]/gu, " ")}
+        </div>
+      </div>
+      <div
+        id={originalId}
+        hidden={!expanded()}
+        tabindex={-1}
+        ref={(element) => {
+          original = element;
+        }}
+      >
+        <Show when={expanded()}>
+          <div class="chat-message-disclosure__original">{props.children}</div>
+        </Show>
+      </div>
+      <Show when={!props.searchResult}>
+        <DisclosureToggle
+          expanded={expanded()}
+          controls={originalId}
+          buttonRef={(element) => {
+            toggle = element;
+          }}
+          onToggle={() => {
+            const wasExpanded = expanded();
+            if (props.onToggle) {
+              props.onToggle(wasExpanded);
+            } else {
+              setLocalExpanded((open) => !open);
+            }
+            if (wasExpanded || document.activeElement === toggle) {
+              requestAnimationFrame(() => {
+                if (wasExpanded && !expanded()) {
+                  // The row anchor is above the viewport when a long body shrinks.
+                  toggle?.scrollIntoView({ block: "nearest" });
+                } else if (!wasExpanded && document.activeElement === toggle) {
+                  // The revealed content precedes the toggle. Begin Tab order there.
+                  original?.focus({ preventScroll: true });
+                }
+              });
+            }
+          }}
+        />
+      </Show>
+    </div>
   );
 }
 

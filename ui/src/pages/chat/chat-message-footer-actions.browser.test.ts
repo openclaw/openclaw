@@ -30,8 +30,8 @@ describeBrowser("chat message footer actions", () => {
             </div>
             <div class="chat-group-footer">
               <div class="chat-group-footer-actions">
-                <button class="chat-reply-btn" type="button" aria-label="Reply">${iconSvg}</button>
-                <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg}</button>
+                <button class="chat-reply-btn chat-footer-btn" type="button" aria-label="Reply">${iconSvg}</button>
+                <button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy">${iconSvg}</button>
               </div>
             </div>
           </div>

@@ -3,7 +3,11 @@ import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibili
 import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import {
+  isSessionActivityGroup,
+  isInterSessionMessage,
+  readInterSessionSummary,
+} from "../chat-turn-boundary.ts";
 import { prepareChatStreamRender } from "./chat-message-markdown-view.tsx";
 
 type ChatPositionMarker = {
@@ -66,6 +70,7 @@ export function projectChatPositions(
   const group = (item: MessageGroup, rowKey: string) => {
     if (
       isSessionActivityGroup(item) &&
+      !isInterSessionMessage(item.messages[0]?.message) &&
       !searchActive &&
       !expandedWork.get("session-activity:" + item.key)
     ) {
@@ -75,7 +80,12 @@ export function projectChatPositions(
       return;
     }
     for (const source of item.messages) {
-      if (!source.hasVisibleContent) {
+      if (
+        !source.hasVisibleContent ||
+        (!searchActive &&
+          readInterSessionSummary(source.message) &&
+          !expandedWork.get("session-activity:" + source.key))
+      ) {
         continue;
       }
       const messageId = persistedMessageEntryId(source.message) ?? source.key;

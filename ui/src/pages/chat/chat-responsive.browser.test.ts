@@ -127,7 +127,7 @@ type AvatarPlacement = "gutter" | "footer" | "none";
 // placement renders the same turns: gutter avatars, footer avatars in direct
 // threads, or none for subagent sessions.
 function uniformTurnSpacingHtml(placement: AvatarPlacement) {
-  const copy = `<div class="chat-group-footer-actions"><button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button></div>`;
+  const copy = `<div class="chat-group-footer-actions"><button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy">${iconSvg()}</button></div>`;
   const row = (group: string) => `<div class="chat-virtual-row">${group}</div>`;
   const gutterAvatar = (role: string) =>
     placement === "gutter" ? `<div class="chat-avatar ${role}">A</div>` : "";
@@ -211,7 +211,7 @@ function uniformTurnSpacingHtml(placement: AvatarPlacement) {
 function chatFooterActionsHtml() {
   return `
     <div class="chat-group-footer-actions">
-      <button class="chat-copy-btn" type="button" aria-label="Copy as markdown">
+      <button class="chat-copy-btn chat-footer-btn" type="button" aria-label="Copy as markdown">
         <span class="chat-copy-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
     </div>

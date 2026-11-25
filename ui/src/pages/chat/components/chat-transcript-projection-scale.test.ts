@@ -591,7 +591,11 @@ describe("transcript projection", () => {
   it("opens the visible forwarded disclosure when replying across search after a prepend", async () => {
     const forwarded = (id: string, content: string, timestamp: number) => ({
       role: "assistant",
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSummary: `Preview for ${id}`,
+      },
       senderSession: { sessionKey: "agent:other:main", agentId: "other", label: "Other" },
       content,
       timestamp,
@@ -615,10 +619,12 @@ describe("transcript projection", () => {
     await view.settle();
 
     expect(state.search.snapshot.open).toBe(false);
-    expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
-      true,
+    const opened = view.container.querySelector(
+      ".chat-message-disclosure--description.is-expanded",
     );
-    expect(view.container.textContent).toContain("Hidden original");
+    expect(opened?.querySelector(".chat-message-disclosure__original")?.textContent).toContain(
+      "Hidden original",
+    );
   });
 });
 

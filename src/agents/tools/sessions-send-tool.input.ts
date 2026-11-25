@@ -1,6 +1,7 @@
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { SESSIONS_SEND_DESCRIPTION_MAX_LENGTH } from "./sessions-send-tool.schema.js";
 
 export function readSessionsSendTarget(params: Record<string, unknown>) {
   const sessionKeyParam = readToolStringParam(params, "sessionKey");
@@ -23,12 +24,26 @@ export function readSessionsSendTarget(params: Record<string, unknown>) {
   };
 }
 
-export function readSessionsSendMessage(params: Record<string, unknown>): string {
+export function readSessionsSendContent(params: Record<string, unknown>) {
   const message = readToolStringParam(params, "message", { required: true, trim: false });
   if (!message.trim()) {
     throw new ToolInputError("message required");
   }
-  return message;
+  if (params.description === undefined) {
+    return { message, description: undefined };
+  }
+  const description = readToolStringParam(params, "description", { required: true, trim: false });
+  const trimmed = description.trim();
+  if (
+    !trimmed ||
+    (description.length > SESSIONS_SEND_DESCRIPTION_MAX_LENGTH &&
+      Array.from(description).length > SESSIONS_SEND_DESCRIPTION_MAX_LENGTH)
+  ) {
+    throw new ToolInputError(
+      `description must be non-blank and at most ${SESSIONS_SEND_DESCRIPTION_MAX_LENGTH} characters`,
+    );
+  }
+  return { message, description: trimmed.replace(/[\r\n\u2028\u2029]+/gu, " ") };
 }
 
 export function readSessionsSendTimeout(

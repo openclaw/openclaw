@@ -1,0 +1,14 @@
+/* Geometry, tint and bubble edges remain owned by the native forwarded bubble. */
+.chat-group--inter-session > .chat-avatar,
+.chat-group--inter-session > .chat-avatar-slot {
+  margin-top: 22px;
+}
+
+.chat-inter-session-message {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.chat-group--inter-session .chat-reply-attribution {
+  max-width: 100%;
+}
