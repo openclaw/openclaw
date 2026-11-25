@@ -667,6 +667,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           client,
           ownsScope: ownsAccountScope,
           selection: ownsSelection() && snapshot?.selfUser ? accountSelection : undefined,
+          adminIdentity: snapshot?.hello?.auth?.scopes?.includes("operator.admin"),
+          // models.list({ authProfileId }) previews only the caller's personal account.
+          // A shared pin cannot use that draft readiness/first-message contract.
+          allowShared: false,
           model,
           disabled:
             options.sending || !model || !hasOperatorWriteAccess(snapshot?.hello?.auth ?? null),

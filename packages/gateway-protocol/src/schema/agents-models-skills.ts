@@ -169,19 +169,12 @@ export const AgentsDeleteResultSchema = closedObject({
   purgeFailed: Type.Optional(Type.Literal(true)),
 });
 
-/** Reads model-provider credential health for one configured agent. */
-export const ModelsAuthStatusParamsSchema = closedObject({
-  refresh: Type.Optional(Type.Boolean()),
-  /** Await cold or stale provider usage using prepared credentials, without refreshing auth. */
-  refreshUsage: Type.Optional(Type.Boolean()),
-  agentId: Type.Optional(Type.String()),
-});
-
-/** Rebuilds Gateway auth state after a credential or selection mutation. */
-export const ModelsAuthRefreshParamsSchema = closedObject({
-  operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
-  agentId: Type.Optional(Type.String()),
-});
+export {
+  ModelsAuthStatusParamsSchema,
+  ModelsAuthRefreshParamsSchema,
+  type ModelsAuthStatusParams,
+  type ModelsAuthRefreshParams,
+} from "./models-auth-status.js";
 
 /** Saves a model-provider API key without changing model selection. */
 export const ModelsAuthSetApiKeyParamsSchema = Type.Object(
@@ -792,10 +785,8 @@ export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelsAuthSetApiKeyParams = Static<typeof ModelsAuthSetApiKeyParamsSchema>;
 export type ModelsAuthSetApiKeyResult = Static<typeof ModelsAuthSetApiKeyResultSchema>;
-export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
 export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
-export type ModelsAuthRefreshParams = Static<typeof ModelsAuthRefreshParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

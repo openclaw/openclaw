@@ -7,6 +7,7 @@ import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/strin
 import {
   ErrorCodes,
   validateModelsAuthSetApiKeyParams,
+  validateModelsAuthStatusParams,
   type ModelsAuthSetApiKeyResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
@@ -340,7 +341,24 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
     });
   },
-  "models.authStatus": async ({ params, respond, context, client }) => {
+  "models.authStatus": async (options) => {
+    const { params, respond, context, client } = options;
+    if (params.accountTarget !== undefined) {
+      if (
+        !assertValidParams(params, validateModelsAuthStatusParams, "models.authStatus", respond)
+      ) {
+        return;
+      }
+      const target = params.accountTarget;
+      if (target) {
+        await respondUnavailableOnThrow(respond, async () => {
+          const { readSharedAccountTarget } =
+            await import("./models-auth-status-account-target.js");
+          await readSharedAccountTarget(options, target, params.agentId);
+        });
+      }
+      return;
+    }
     const now = Date.now();
     const refreshRequested = Boolean(params.refresh);
     const includeProfileIdentity = hasGatewayAdminScope(client);

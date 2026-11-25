@@ -132,6 +132,66 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it.each([
+    ["operator.write", "owner", true],
+    ["operator.write", "viewer", false],
+    ["operator.read", "owner", false],
+    ["operator.sessions.write", "owner", false],
+  ] as const)("gates shared profile pins for %s on a %s row", async (scope, role, allowed) => {
+    const { state, selectedSession, access } = await createControlsFixture(scope, role);
+    state.chatAccountSelection = { kind: "automatic", label: "Automatic" };
+    state.chatModelCatalog[0]!.available = true;
+    const authStatus = {
+      ts: 1,
+      accountTarget: {
+        provider: "openai",
+        model: "gpt-test-a",
+        runtime: "openclaw",
+        accounts: [{ profileId: "openai:review" }],
+      },
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [{ profileId: "openai:review", type: "oauth", status: "ok" }],
+        },
+      ],
+    };
+    const normal = state.request.getMockImplementation()!;
+    state.request.mockImplementation((method, params, ...rest) =>
+      method === "models.authStatus"
+        ? Promise.resolve(authStatus)
+        : normal(method, params, ...rest),
+    );
+    const props = () =>
+      renderControls(state, { selectedSession, modelAccess: access.model }).composerControls.model
+        .renderAccountSection!("openai/gpt-test-a")!.viewProps(0);
+    props().onToggle();
+    await vi.waitFor(() =>
+      expect(props().options.some((option) => option.value === "shared:openai:review")).toBe(
+        allowed,
+      ),
+    );
+    expect(state.request.mock.calls.some(([method]) => method === "models.authStatus")).toBe(
+      allowed,
+    );
+    props().onSelect("shared:openai:review", new MouseEvent("click"));
+    if (allowed) {
+      await vi.waitFor(() =>
+        expect(state.request).toHaveBeenCalledWith(
+          "sessions.patch",
+          expect.objectContaining({
+            key: selectedSession.key,
+            expectedSessionId: selectedSession.sessionId,
+            model: "openai/gpt-test-a@openai:review",
+          }),
+        ),
+      );
+    } else {
+      expect(state.request.mock.calls.map(([method]) => method)).not.toContain("sessions.patch");
+    }
+  });
   it("uses live permission facts while the model catalog is still unavailable", async () => {
     const { state, selectedSession, access } =
       await createControlsFixture("operator.sessions.write");

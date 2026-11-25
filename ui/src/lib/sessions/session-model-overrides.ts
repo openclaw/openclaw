@@ -1,3 +1,4 @@
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
@@ -34,7 +35,9 @@ export function createSessionModelOverrides(host: Host) {
       pendingModelPatch.revision += 1;
     }
     const state = host.readState();
-    const normalizedValue = typeof value === "string" ? value.trim() : value;
+    // Account pins belong to the request, not the model displayed by session consumers.
+    const normalizedValue =
+      typeof value === "string" ? splitTrailingAuthProfile(value).model : value;
     const hasOverride = Object.hasOwn(state.modelOverrides, normalizedKey);
     if (
       normalizedValue === undefined

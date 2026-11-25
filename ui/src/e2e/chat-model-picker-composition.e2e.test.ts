@@ -98,6 +98,47 @@ suite.define(() => {
     });
   });
 
+  it("finds a shared account from model search without displaying its pending pin", async () => {
+    await suite.withPage({ viewport: { width: 1060, height: 800 } }, async ({ page }) => {
+      const models = [
+        { id: "shared-alpha", provider: "openai", name: "Draft model", available: true },
+      ];
+      const profileId = "openai:studio@example.test";
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        operatorScopes: ["operator.read", "operator.write"],
+        methodResponses: {
+          "models.list": { models, accountSelection: { kind: "automatic", label: "Automatic" } },
+          "models.authStatus": {
+            ...authStatus(profileId, "studio@example.test"),
+            accountTarget: {
+              provider: "openai",
+              model: "shared-alpha",
+              runtime: "openclaw",
+              accounts: [{ profileId }],
+            },
+          },
+          "users.listModelAccounts": { profileId: "owner", accounts: [], links: [] },
+        },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      const { picker, trigger, search } = modelPicker(page);
+      await trigger.click();
+      await search.fill("Shared account");
+      const choice = picker.locator('[data-chat-account-option^="shared:"]:visible');
+      await polledText(choice).toContain("Shared account");
+      const patches = await gateway.deferNext("sessions.patch");
+      await search.press("Enter");
+      expect(
+        (await gateway.waitForRequest("sessions.patch", { after: patches })).params.model,
+      ).toBe("openai/shared-alpha@" + profileId);
+      expect(await trigger.textContent()).not.toContain("@example.test");
+      expect(await trigger.getAttribute("aria-label")).not.toContain("@example.test");
+      await gateway.resolveDeferred("sessions.patch", { ok: true });
+    });
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];

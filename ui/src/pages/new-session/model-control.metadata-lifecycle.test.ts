@@ -160,6 +160,17 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   };
 }
 
+it("does not offer shared draft pins from auth status: explicit previews require a personal account", async () => {
+  const f = retainedAccountDraft();
+  await waitForModelControl(f.control, f.context, "main", f.agent);
+  f.openAccounts();
+  await vi.waitFor(() => expect(f.draw().textContent).toContain(f.account.label));
+  expect(f.draw().textContent).toContain("Your accounts");
+  expect(f.draw().textContent).not.toContain("Shared accounts");
+  expect(f.request.mock.calls.some(([method]) => method === "models.authStatus")).toBe(false);
+  expect(f.model()).not.toContain("@");
+});
+
 it("retires a consumed personal-account model before the next configured draft", async () => {
   const f = retainedAccountDraft("retire");
   await f.connect();

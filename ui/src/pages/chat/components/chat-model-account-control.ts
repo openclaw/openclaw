@@ -4,12 +4,12 @@ import type {
   UsersListModelAccountsResult,
 } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { ModelAuthStatusResult } from "../../../api/types.ts";
+import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelAccountListEnglish } from "../../../i18n/locales/en-model-account-list.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
+import { sharedModelAccountChoices } from "../../../lib/shared-model-account-choices.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 
 registerModelAccountListEnglish();
@@ -22,6 +22,12 @@ type AccountInventoryScope = {
 
 type AccountInventory = {
   selection?: ChatAccountSelection;
+  shared?: {
+    key: string;
+    auth?: ModelAuthStatusResult | null;
+    result?: ModelAuthStatusResult;
+    error?: string;
+  };
   accounts: UserModelAccount[];
   nextCursor?: string;
   loaded: boolean;
@@ -42,6 +48,7 @@ function accountInventory(scope: AccountInventoryScope, selection?: ChatAccountS
     const next: AccountInventory = projectChatFields<AccountInventory>(
       {
         accounts: [],
+        shared: undefined,
         nextCursor: undefined,
         loading: false,
         loaded: false,
@@ -49,7 +56,7 @@ function accountInventory(scope: AccountInventoryScope, selection?: ChatAccountS
         error: null,
         isCurrent: () => inventories.get(scope.owner) === next && scope.ownsScope(),
       },
-      ["accounts", "nextCursor", "loaded", "loading", "open", "error"],
+      ["accounts", "shared", "nextCursor", "loaded", "loading", "open", "error"],
     );
     inventories.set(scope.owner, next);
     inventory = next;
@@ -113,6 +120,12 @@ export function renderChatModelAccountControl(
   params: AccountInventoryScope & {
     modelAuthStatusResult?: ModelAuthStatusResult | null;
     selection: ChatAccountSelection | null | undefined;
+    allowShared?: boolean;
+    route?: ModelCatalogEntry;
+    agentId?: string;
+    sessionKey?: string;
+    adminIdentity?: boolean;
+    onSelectShared?: (profileId: string) => Promise<boolean>;
     model: string;
     disabled: boolean;
     ownsSelection?: () => boolean;
@@ -130,63 +143,145 @@ export function renderChatModelAccountControl(
     ? normalizeChatModelProviderId(params.model.slice(0, params.model.indexOf("/")))
     : "";
   const currentId = selection.kind === "automatic" ? undefined : selection.authProfileId;
-  const profiles =
-    params.modelAuthStatusResult?.providers
-      .filter(
-        (p) =>
-          canonicalModelAuthProviderId(normalizeChatModelProviderId(p.provider)) ===
-          canonicalModelAuthProviderId(provider),
-      )
-      .flatMap((p) => p.profiles) ?? [];
-  const email = (profileId: string | undefined) =>
-    profiles.find((profile) => profile.profileId === profileId)?.email;
-  const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
+  const route = params.route;
+  const target =
+    params.allowShared &&
+    params.sessionKey &&
+    !params.disabled &&
+    params.onSelectShared &&
+    route &&
+    route.available === true &&
+    route.manualSelectionAllowed !== false
+      ? {
+          sessionKey: params.sessionKey,
+          provider: route.provider,
+          model: route.id,
+          runtime: route.agentRuntime?.id ?? "openclaw",
+        }
+      : undefined;
+  const key = target && JSON.stringify(target);
+  const sharedSnapshot = () =>
+    key &&
+    currentInventory.shared?.key === key &&
+    currentInventory.shared.auth === params.modelAuthStatusResult
+      ? currentInventory.shared
+      : undefined;
+  const snapshot = sharedSnapshot();
+  const loadShared = async () => {
+    if (
+      !client ||
+      !key ||
+      !target ||
+      !currentInventory.isCurrent() ||
+      params.ownsSelection?.() === false
+    ) {
+      return;
+    }
+    const request = { key, auth: params.modelAuthStatusResult };
+    currentInventory.shared = request;
+    try {
+      const result = await client.request<ModelAuthStatusResult>("models.authStatus", {
+        agentId: params.agentId,
+        accountTarget: target,
+      });
+      if (currentInventory.isCurrent() && currentInventory.shared === request) {
+        currentInventory.shared = { ...request, result };
+      }
+    } catch (error) {
+      if (currentInventory.isCurrent() && currentInventory.shared === request) {
+        currentInventory.shared = {
+          ...request,
+          error: params.adminIdentity
+            ? formatUiError(error, t("profilePage.modelAccounts.inventoryFailed"))
+            : t("profilePage.modelAccounts.inventoryFailed"),
+        };
+      }
+    }
+  };
+  const profiles = params.modelAuthStatusResult?.providers.find(
+    (record) => normalizeChatModelProviderId(record.provider) === provider,
+  )?.profiles;
+  const personal = currentInventory.accounts.filter((account) => account.provider === provider);
+  const shared = sharedModelAccountChoices(snapshot?.result, params.model, route);
+  const adminProfile = (id: string | undefined) =>
+    params.adminIdentity ? profiles?.find((profile) => profile.profileId === id) : undefined;
+  const personalLabel = (label: string, id: string | undefined, index: number) => {
+    if (params.adminIdentity || (!label.includes("@") && (!id || !label.includes(id)))) {
+      return label;
+    }
+    return index < 0
+      ? t("chat.modelAccounts.personalAccount")
+      : t("chat.modelAccounts.personalNumber", { number: String(index + 1) });
+  };
+  const selectedProfile = adminProfile(currentId);
   const selectedLabel =
     selection.kind === "automatic"
       ? t("chat.modelAccounts.automatic")
-      : selectedProfile?.displayName || selection.label;
-  const selectedIdentity = [
-    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
-  ].join(" · ");
-  const description = (account: UserModelAccount | undefined) =>
-    email(account?.authProfileId) ??
-    (account &&
-    currentInventory.accounts.some(
-      (candidate) =>
-        candidate.authProfileId !== account.authProfileId &&
-        candidate.provider === account.provider &&
-        candidate.label === account.label,
-    )
-      ? account.authProfileId
-      : undefined);
+      : selectedProfile?.displayName ||
+        (selection.kind === "shared"
+          ? (shared.find((choice) => choice.profileId === currentId)?.label ??
+            (params.adminIdentity ? selection.label : t("chat.modelAccounts.sharedAccount")))
+          : personalLabel(
+              selection.label,
+              currentId,
+              personal.findIndex((a) => a.authProfileId === currentId),
+            ));
   const currentValue = "current";
-  const options: ReadonlyArray<{
+  const current = {
+    value: currentValue,
+    label: selectedLabel,
+    description: selectedProfile?.email,
+  };
+  const options: Array<{
     value: string;
     label: string;
+    group?: string;
     description?: string;
     disabled?: boolean;
-  }> = [
-    {
-      value: currentValue,
-      label: selectedLabel,
-      description:
-        email(currentId) ??
-        description(
-          currentInventory.accounts.find((account) => account.authProfileId === currentId),
-        ),
-    },
-    ...currentInventory.accounts
-      .filter((account) => account.provider === provider && account.authProfileId !== currentId)
-      .map((account) => ({
+  }> = [];
+  if (selection.kind === "automatic" || (selection.kind === "personal" && !currentId)) {
+    options.push(current);
+  } else if (params.onAutomatic) {
+    options.push({ value: "automatic", label: t("chat.modelAccounts.automatic") });
+  }
+  const sharedGroup = t("chat.modelAccounts.shared");
+  if (selection.kind === "shared") {
+    options.push({ ...current, group: sharedGroup });
+  }
+  for (const choice of shared) {
+    if (
+      choice.profileId !== currentId &&
+      !personal.some((a) => a.authProfileId === choice.profileId)
+    ) {
+      const profile = params.adminIdentity ? choice : undefined;
+      options.push({
+        value: `shared:${choice.profileId}`,
+        label:
+          profile?.displayName ||
+          profile?.email ||
+          (params.adminIdentity ? choice.profileId : choice.label),
+        group: sharedGroup,
+        description: profile?.displayName ? profile.email : undefined,
+      });
+    }
+  }
+  const personalGroup = t("chat.modelAccounts.personal");
+  if (selection.kind === "personal" && currentId) {
+    options.push({ ...current, group: personalGroup });
+  }
+  for (const [index, account] of personal.entries()) {
+    if (account.authProfileId !== currentId) {
+      options.push({
         value: `account:${account.authProfileId}`,
-        label: account.label,
-        description: description(account),
-      })),
-    ...(params.onAutomatic
-      ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
-      : []),
-    ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
-  ];
+        group: personalGroup,
+        label: personalLabel(account.label, account.authProfileId, index),
+        description: adminProfile(account.authProfileId)?.email,
+      });
+    }
+  }
+  if (params.onManage) {
+    options.push({ value: "manage", label: t("chat.modelAccounts.manage") });
+  }
   const selectAccount = (value: string, event: MouseEvent) => {
     event.stopPropagation();
     if (!currentInventory.isCurrent() || params.ownsSelection?.() === false || params.disabled) {
@@ -198,7 +293,17 @@ export function renderChatModelAccountControl(
       params.onAutomatic?.();
     } else if (value === "retry") {
       event.preventDefault();
-      void loadAccounts(currentInventory, client, currentInventory.nextCursor);
+      if (currentInventory.error) {
+        void loadAccounts(currentInventory, client, currentInventory.nextCursor);
+      }
+      if (snapshot?.error) {
+        void loadShared();
+      }
+    } else if (value.startsWith("shared:")) {
+      const choice = shared.find((entry) => `shared:${entry.profileId}` === value);
+      if (choice && sharedSnapshot() === snapshot) {
+        void params.onSelectShared?.(choice.profileId);
+      }
     } else {
       const account = currentInventory.accounts.find(
         (candidate) =>
@@ -213,17 +318,32 @@ export function renderChatModelAccountControl(
     currentInventory.open = !currentInventory.open;
     if (currentInventory.open) {
       accountPrefetch(currentInventory, client)?.();
+      if (target && !sharedSnapshot()) {
+        void loadShared();
+      }
     }
   };
   // The picker observes this section snapshot to resynchronize its search DOM.
   const open = currentInventory.open;
-  const error = currentInventory.error;
-  const loading = currentInventory.loading ? (currentInventory.loaded ? "more" : "initial") : null;
+  const error = currentInventory.error ?? snapshot?.error ?? null;
+  const loading = currentInventory.loading
+    ? currentInventory.loaded
+      ? "more"
+      : "initial"
+    : snapshot && !snapshot.result && !snapshot.error
+      ? "more"
+      : null;
   const cursor = currentInventory.nextCursor;
   const viewProps = (startIndex: number) => ({
     selectionKind: selection.kind,
-    disabled: params.disabled,
-    selectedIdentity,
+    disabled:
+      params.disabled ||
+      (currentInventory.loaded &&
+        (!target || Boolean(snapshot?.result)) &&
+        !cursor &&
+        !error &&
+        options.length === 1),
+    selectedIdentity: selectedLabel,
     options,
     currentValue,
     open,
@@ -246,10 +366,21 @@ export function renderChatModelAccountControl(
           }
         : undefined,
   });
+  const personalPrefetch = accountPrefetch(currentInventory, client);
+  const prefetch =
+    personalPrefetch || (target && !snapshot)
+      ? () => {
+          personalPrefetch?.();
+          if (target && !sharedSnapshot()) {
+            void loadShared();
+          }
+        }
+      : undefined;
   return {
-    prefetch: params.disabled ? undefined : accountPrefetch(currentInventory, client),
+    prefetch: params.disabled ? undefined : prefetch,
     onClose: () => {
       currentInventory.open = false;
+      currentInventory.shared = undefined;
     },
     viewProps,
   };

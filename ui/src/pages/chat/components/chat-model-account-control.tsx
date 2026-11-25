@@ -150,6 +150,9 @@ export function ChatModelAccountOptions(
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => {
             const key = createMemo(() => `account:${option().value}`);
+            const description = createMemo(() =>
+              [renderRow() && option().group, option().description].filter(Boolean).join(" · "),
+            );
             return (
               <>
                 <Show when={option().value === "manage"}>{pagination()}</Show>
@@ -159,7 +162,17 @@ export function ChatModelAccountOptions(
                       option().value === "manage" ? "chat-controls__account-footer" : undefined
                     }
                   >
+                    <Show
+                      when={
+                        !renderRow() &&
+                        option().group &&
+                        option().group !== props.options[index() - 1]?.group
+                      }
+                    >
+                      <div class="chat-controls__account-group-label">{option().group}</div>
+                    </Show>
                     <button
+                      aria-description={option().group}
                       ref={search?.rowRef(() => `account:${option().value}`)}
                       id={search?.optionId(`account:${option().value}`)}
                       class={[
@@ -173,7 +186,7 @@ export function ChatModelAccountOptions(
                             option().value === props.currentValue,
                         },
                       ]}
-                      data-has-description={option().description ? "" : undefined}
+                      data-has-description={description() ? "" : undefined}
                       type="button"
                       role="option"
                       aria-selected={option().value === props.currentValue ? "true" : "false"}
@@ -205,11 +218,9 @@ export function ChatModelAccountOptions(
                       </Show>
                       <span class="chat-controls__model-option-copy">
                         <span class="chat-controls__model-option-name">{option().label}</span>
-                        <Show when={option().description}>
+                        <Show when={description()}>
                           <span class="chat-controls__auth-meta">
-                            <span class="chat-controls__model-option-name">
-                              {option().description}
-                            </span>
+                            <span class="chat-controls__model-option-name">{description()}</span>
                           </span>
                         </Show>
                       </span>

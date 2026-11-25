@@ -2,7 +2,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { canPresentGatewayMethod } from "../../lib/gateway-methods.ts";
+import { resolveModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
 import {
   readSessionMethodAccess,
   readSessionMethodScopeAccess,
@@ -280,13 +283,44 @@ export function renderChatPaneComposerControls(params: {
         snapshot,
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
-        renderAccountSection: (accountModel) =>
-          renderChatModelAccountControl({
+        renderAccountSection: (accountModel) => {
+          const entry = resolveModelRuntimeEntry(
+            state.chatModelCatalog.find(
+              (row) => buildQualifiedChatModelValue(row.id, row.provider) === accountModel,
+            ),
+            selectedSession?.agentRuntime?.id,
+          );
+          const canReadProfiles = canPresentGatewayMethod(
+            state,
+            "models.authStatus",
+            "operator.read",
+            {
+              requireAdvertisement: false,
+            },
+          );
+          const selectProfile = (profileId: string) => {
+            const model = `${accountModel}@${profileId}`;
+            return modelAccess.allowed && canPatch({ model })
+              ? switchChatModel(state, model, sessionKey)
+              : Promise.resolve(false);
+          };
+          return renderChatModelAccountControl({
             owner: state,
             client,
             ownsScope: ownsRoute,
             selection: accountSelection,
-            modelAuthStatusResult: state.modelAuthStatusResult,
+            modelAuthStatusResult: canReadProfiles ? state.modelAuthStatusResult : undefined,
+            allowShared:
+              canReadProfiles &&
+              modelAccess.allowed &&
+              !cachedSessionStatePending &&
+              modelCatalogState.status === "ready" &&
+              !modelCatalogState.retired &&
+              selectedSession?.sharingRole !== "viewer",
+            route: entry,
+            sessionKey,
+            agentId: resolveChatAgentId(state),
+            adminIdentity: state.hello?.auth?.scopes?.includes("operator.admin"),
             model: accountModel,
             disabled:
               !modelAccess.allowed ||
@@ -299,12 +333,11 @@ export function renderChatPaneComposerControls(params: {
               state.chatStream !== null ||
               Boolean(state.chatModelSwitchPromises[sessionKey]),
             ownsSelection: () => ownsSelection() && state.chatAccountSelection === accountSelection,
-            onSelect: (account) =>
-              modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
-                ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
-                : Promise.resolve(false),
+            onSelect: (account) => selectProfile(account.authProfileId),
+            onSelectShared: selectProfile,
             onManage: onModelAccounts,
-          }),
+          });
+        },
         activeRunId: state.chatRunId,
         agentDefaultModel,
         connected: state.connected,

@@ -70,6 +70,12 @@ export type ModelAuthStatusResult = {
   /** Snapshot build time, ms since epoch. 0 = never loaded (UI fallback sentinel). */
   ts: number;
   providers: ModelAuthStatusProvider[];
+  accountTarget?: {
+    provider: string;
+    model: string;
+    runtime: string;
+    accounts: { profileId: string; ordinal?: number; displayName?: string; email?: string }[];
+  };
   /** Gateway deadline for reusing usage; not a polling schedule. */
   usageRefreshAt?: number;
   /** Missing preparation is unknown auth health, not a failed Gateway connection. */

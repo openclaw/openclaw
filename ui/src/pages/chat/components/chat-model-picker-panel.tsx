@@ -58,11 +58,7 @@ import { saveModelPickerFavoritesTab } from "./model-provider-order.ts";
 
 registerModelProviderAuthEnglish();
 
-type ChatModelPickerPanelProps = {
-  params: ChatModelPickerParams;
-};
-
-export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
+export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
   const modelAuthStatus = createMemo(() => panel.params.modelAuthStatusResult);
   const authProfileId = createMemo(() => panel.params.authProfileId);
   // Account headings are only needed inside the lazily mounted picker, not at Chat boot.
@@ -214,9 +210,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
           key: `account:${entry.value}`,
           list: "accounts",
           name: entry.label.toLocaleLowerCase(),
-          keywords: entry.description?.toLocaleLowerCase(),
+          keywords: [entry.group, entry.description].filter(Boolean).join(" ").toLocaleLowerCase(),
           providerLabel: "account",
-          reference: `account:${entry.value}`,
+          reference: entry.label,
           selected: entry.value === account.currentValue,
           hasShortcut: false,
           disabled: account.disabled || Boolean(entry.disabled),
@@ -227,14 +223,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   });
   const searchView =
     search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
-  const prefetchAccounts = () => {
-    const provider = state().activeProvider;
-    return search?.open() &&
-      (modelSelectionLocked() ||
-        (provider && searchView?.providerOpen(provider) && !searchView.filtering()))
-      ? panel.params.accountSection?.prefetch
-      : undefined;
-  };
+  const prefetchAccounts = () =>
+    search?.open() ? panel.params.accountSection?.prefetch : undefined;
   const activeAuth = createMemo(() =>
     activeModelAuthState(state().orderedProviderGroups, searchView),
   );

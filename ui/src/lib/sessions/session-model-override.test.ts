@@ -202,6 +202,44 @@ it.each(["resolve", "reject"])(
   },
 );
 
+it("keeps account pins on the wire but out of create, pending, and rollback previews", async () => {
+  const createdModel = "example/model@20260101";
+  const nextModel = "example/model@20260102@q4_k_m";
+  const pin = "example:person@example.test";
+  const pending = createDeferred<unknown>();
+  const dispatched = createDeferred();
+  const { sessions, request } = modelHarness({
+    "sessions.create": () => ({ key }),
+    "sessions.list": () => sessionsResult([], 1),
+    "sessions.patch": () => {
+      dispatched.resolve();
+      return pending.promise;
+    },
+  });
+  try {
+    await sessions.createResult({ agentId: "main", model: `${createdModel}@${pin}` });
+    expect(request).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({ model: `${createdModel}@${pin}` }),
+      expect.anything(),
+    );
+    expect(sessions.state.modelOverrides[key]).toBe(createdModel);
+    const operation = sessions.patch(key, { model: `${nextModel}@${pin}` });
+    await dispatched.promise;
+    expect(request).toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ model: `${nextModel}@${pin}` }),
+    );
+    expect(sessions.state.modelOverrides[key]).toBe(nextModel);
+    pending.reject(new Error("model rejected"));
+    await expect(operation).rejects.toThrow("model rejected");
+    expect(sessions.state.modelOverrides[key]).toBe(createdModel);
+  } finally {
+    pending.resolve({ ok: true, key, entry: {} });
+    sessions.dispose();
+  }
+});
+
 it("retains a confirmed patch without publishing its retired optimistic state", async () => {
   const stalePatch = createDeferred<unknown>();
   const { sessions, publish } = modelHarness({

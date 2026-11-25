@@ -51,6 +51,7 @@ describe("chat account selection", () => {
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
     modelAuthStatusResult?: ModelAuthStatusResult,
+    access: { allowShared?: boolean; adminIdentity?: boolean } = {},
   ) {
     const container = document.body.appendChild(document.createElement("div"));
     onTestFinished(() => container.remove());
@@ -61,16 +62,21 @@ describe("chat account selection", () => {
     });
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
+    const onSelectShared = vi.fn(async () => true);
     mountSolid(
       () => {
         const section = createMemo(() =>
           renderChatModelAccountControl({
             modelAuthStatusResult,
+            ...access,
+            onSelectShared,
             owner: state,
             client: state.client,
             ownsScope: () => current,
             selection: state.chatAccountSelection,
             model: "openai/gpt-5.5",
+            sessionKey: "main",
+            route: { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", available: true },
             disabled: false,
             onSelect,
             onManage,
@@ -90,6 +96,7 @@ describe("chat account selection", () => {
       state,
       onSelect,
       onManage,
+      onSelectShared,
       retire: () => {
         current = false;
       },
@@ -193,6 +200,63 @@ describe("chat account selection", () => {
     expect(view.onManage).toHaveBeenCalledOnce();
   });
 
+  it("separates shared and personal choices without exposing identity to a non-admin", async () => {
+    const personal = {
+      provider: "openai",
+      authProfileId: "openai:mine",
+      label: "My workspace",
+      authType: "oauth",
+      selected: false,
+    } as const;
+    const profileId = "openai:private@example.test";
+    const otherId = "openai:second@example.test";
+    const status: ModelAuthStatusResult = {
+      ts: 1,
+      accountTarget: {
+        provider: "openai",
+        model: "gpt-5.5",
+        runtime: "openclaw",
+        accounts: [
+          { profileId, ordinal: 1 },
+          { profileId: otherId, ordinal: 2 },
+        ],
+      },
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [profileId, otherId].map((id) => ({
+            profileId: id,
+            displayName: id,
+            email: id.slice(7),
+            type: "oauth",
+            status: "ok",
+          })),
+        },
+      ],
+    };
+    const view = mountAccountControl(
+      vi.fn(async (method) =>
+        method === "models.authStatus"
+          ? status
+          : { profileId: "owner", links: [], accounts: [personal] },
+      ),
+      { kind: "shared", authProfileId: profileId, label: profileId },
+      undefined,
+      { allowShared: true },
+    );
+    view.open();
+    await vi.waitFor(() => expect(view.container.textContent).toContain("My workspace"));
+    expect(view.container.textContent).toContain("Shared accounts");
+    expect(view.container.textContent).toContain("Your accounts");
+    expect(view.container.textContent).not.toContain("@example.test");
+    view.select(`shared:${otherId}`);
+    expect(view.onSelectShared).toHaveBeenCalledExactlyOnceWith(otherId);
+    view.select("account:openai:mine");
+    expect(view.onSelect).toHaveBeenCalledExactlyOnceWith(personal);
+  });
+
   it("retries a failed inventory explicitly after reopening the section", async () => {
     const request = vi
       .fn()
@@ -284,6 +348,7 @@ describe("chat account selection", () => {
           },
         ],
       },
+      { adminIdentity: true },
     );
     expect(view.container.querySelector(".chat-controls__account-trigger")?.textContent).toContain(
       "Personal",
