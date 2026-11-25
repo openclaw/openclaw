@@ -420,6 +420,7 @@ function renderSidebarMenus(
         const assignmentAccess = createMemo(() =>
           view.readSessionMutationAccess({
             method: "sessions.assignOwner",
+            missingScopeReasonKey: "sessionsView.assignPermissionDenied",
             params: {
               key: session().key,
               owner: { type: "human", id: selfUser()?.id ?? "profile" },

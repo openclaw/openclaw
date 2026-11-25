@@ -664,8 +664,8 @@ describe("backupVerifyCommand", () => {
     {
       name: "wrong database role",
       schema: `
-        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
-        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER, agent_id TEXT);
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 0, 'main');
       `,
       error: /has role agent; expected global/iu,
     },
@@ -716,8 +716,8 @@ describe("backupVerifyCommand", () => {
     const sqliteArchivePath = `${declaredStateAssetRoot}/posix/tmp/.openclaw/state/openclaw.sqlite`;
     const sqlitePayload = await createSqlitePayload((database) => {
       database.exec(`
-        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
-        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER, agent_id TEXT);
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 0, 'main');
       `);
     });
 

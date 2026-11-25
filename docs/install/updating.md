@@ -247,15 +247,13 @@ schema/config publication. Retries reuse their immutable originals rather than
 re-imaging changed state. A known no-upgrade trial records an empty plan.
 
 Under exclusive native-store custody, SQLite originals are checkpointed and
-closed before their main files are hard-linked as adjacent
-`*.pre-restore-<runId>` images. The checkpoint changes physical representation,
-not logical contents. The subsequent swap renames a different prepared inode
-over the live path, leaving the image immutable. WAL, SHM, journal and seal paths
-are explicit removals because committed frames are already in the main image.
-This hard-link rule is for rename-based publication, not in-place migration.
-Ordinary files and leaf symlinks retain their original contents and link targets.
-If the filesystem cannot create a hard link, preparation logs the byte-copy
-fallback and its cause; normal adjacent images need no additional database copy.
+closed before the candidate creates adjacent `*.pre-restore-<runId>` images.
+Each image has its own inode, so the previous Gateway can reopen the original
+database after legacy rollback. The candidate uses copy-on-write clones where
+supported. On other filesystems, allow space for a full additional copy of the
+images. WAL, SHM, journal and seal paths are explicit removals because the main
+image already contains the committed data. Ordinary files and leaf symlinks
+retain their original contents and link targets.
 
 Legacy `*.pre-<generation>` recovery remains unchanged while the launcher moves
 to the manifest reader. External-path restrictions above therefore still apply.
@@ -561,6 +559,13 @@ upgrades publish changed includes with the existing backed-up file swap. Changed
 config files and their Doctor backups are staged beside their destinations before
 the swap plan is published, including when an included file is on a separately
 mounted workspace and the root config is inside the state directory.
+Read-only config inputs and inputs below retained dependency-directory symlinks
+are copied into independent private files without changing their live permissions
+or contents. If a changed config cannot be published safely, including a
+single-file mount or a path omitted by the swap under a symlinked directory,
+startup refuses before publishing the database plan and leaves live state unchanged.
+Run `openclaw doctor --fix` before retrying; a single-file mount must also allow
+the config replacement.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on

@@ -755,7 +755,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   };
 
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean {
-    return this.sessionProjection.children.isExpanded(session.key);
+    return this.sessionProjection.children.isExpanded(
+      session.key,
+      Boolean(session.snapshot && session.containsActiveDescendant),
+    );
   }
 
   isSessionChildrenFullyShown(sessionKey: string): boolean {

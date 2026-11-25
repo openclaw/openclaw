@@ -261,9 +261,13 @@ export function hasEventScope(
   client: GatewayWsClient,
   event: string,
   explicitPluginScope?: GatewayPluginEventScope,
-  ownRunQuestion = false,
-  hasSessionReadContext?: () => boolean,
+  context: {
+    ownRunQuestion?: boolean;
+    hasSessionReadContext?: () => boolean;
+    participationApprovalRecipient?: (client: GatewayWsClient) => boolean;
+  } = {},
 ): boolean {
+  const { ownRunQuestion, hasSessionReadContext, participationApprovalRecipient } = context;
   if (
     client.internal?.publicationTransport ||
     client.connect.scopes?.some(isPublicationTransportScope)
@@ -284,6 +288,20 @@ export function hasEventScope(
   if (!required) {
     return false;
   }
+  const participationApproval =
+    participationApprovalRecipient !== undefined &&
+    (event === "exec.approval.requested" ||
+      event === "exec.approval.resolved" ||
+      event === "session.approval");
+  if (participationApproval) {
+    try {
+      if (!participationApprovalRecipient(client)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
   return (
     required.length === 0 ||
     (role === "operator" &&
@@ -296,7 +314,8 @@ export function hasEventScope(
             operatorScopeSatisfied(READ_SCOPE, scopes) ||
             hasSessionReadContext?.() === true),
       ) ||
-        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
+        (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes)) ||
+        participationApproval))
   );
 }
 
