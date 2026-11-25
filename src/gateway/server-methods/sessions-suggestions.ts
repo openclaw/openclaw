@@ -405,16 +405,14 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             const captureResponse: RespondFn = (...args) => {
               response = args;
             };
-            const label = suggestion.authorLabel ?? suggestion.authorId;
+            // The approver sends the turn; the author is credited for display only.
             const chatClient: GatewayClient = {
               ...client,
               internal: {
                 ...client.internal,
-                syntheticClient: true,
-                senderAttribution: {
+                suggestedBy: {
                   id: suggestion.authorId,
-                  identity: { type: "profile", id: suggestion.authorId },
-                  name: `Suggested by ${label}`,
+                  ...(suggestion.authorLabel ? { name: suggestion.authorLabel } : {}),
                 },
               },
             };

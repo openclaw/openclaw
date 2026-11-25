@@ -336,6 +336,32 @@ suite.define(() => {
     await expect(page.locator(".session-suggestion__text")).toHaveText("Try the focused change");
   });
 
+  it("shows an accepted suggestion as the approver's turn credited to its author", async () => {
+    const { page, gateway } = await openSuggestions("owner", {
+      presenceUsers: [presenceUser("owner", true), presenceUser("alice")],
+    });
+    await gateway.emitGatewayEvent("session.message", {
+      sessionKey: "main",
+      agentId: "main",
+      message: ownerMessage("why you no answer", {
+        id: "accepted-suggestion",
+        suggestedBy: { id: "alice", name: "Alice" },
+      }),
+    });
+    const group = page.locator(".chat-group.user", { hasText: "why you no answer" });
+    const credit = group.locator(".chat-message-source");
+    await expect(credit).toHaveText("Suggested by Alice");
+    await expect(group).not.toHaveClass(/chat-group--peer/);
+    await expect(group.locator(".chat-avatar")).not.toHaveText("SB");
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      const frame = await takeControlUiScreenshotFrame(page, group, [credit], {
+        animations: "disabled",
+      });
+      await writeFile(path.join(suite.artifactDir, "accepted-suggestion.png"), frame.png);
+      console.info("Accepted suggestion proof:", suite.artifactDir);
+    }
+  });
+
   it("keeps a long guest suggestion and its approval state on one line", async () => {
     const prompt =
       "Compare the two approaches in the release notes and explain which one keeps the migration simple for teams that already have a working setup.";
