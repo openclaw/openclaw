@@ -17,6 +17,7 @@ import {
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { computeBackoff } from "../../infra/backoff.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -41,7 +42,9 @@ import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { log } from "./logger.js";
 import { withTestAdmission } from "./run-orchestrator.test-support.js";
+import { makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -481,4 +484,72 @@ describe("embedded retry transcript ownership", () => {
       }
     },
   );
+
+  it("joins dispatched and recovery attempt ids through the production run composition", async () => {
+    const { target, run } = await createRun("attempt-identity", "gpt-5.6-luna", true);
+    const { resolveLogicalTurnContextEngines } = await import("../../context-engine/registry.js");
+    const compact = vi.fn(async () =>
+      makeCompactionSuccess({
+        summary: "Recovered context",
+        tokensBefore: 150_000,
+        tokensAfter: 80_000,
+      }),
+    );
+    const engine = {
+      info: { id: "legacy", name: "Legacy Context Engine" },
+      ingest: vi.fn(async () => ({ ingested: false })),
+      assemble: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
+        messages,
+        estimatedTokens: 0,
+      })),
+      compact,
+      dispose: vi.fn(async () => {}),
+    } satisfies ContextEngine;
+    const ref = { engine, registeredId: "legacy" };
+    vi.mocked(resolveLogicalTurnContextEngines).mockResolvedValueOnce({
+      configured: ref,
+      configuredId: "legacy",
+      fallback: ref,
+    });
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
+    vi.spyOn(log, "warn").mockImplementation(() => {});
+    runAttempt
+      .mockImplementationOnce(async (attempt) => {
+        assert(attempt.modelCallSequence, "The prepared run must own the shared sequence");
+        // Mirror attempt-stream's dispatched identity after six earlier model calls.
+        attempt.modelCallSequence.value = 7;
+        const overflow = buildEmbeddedRunnerAssistant({
+          stopReason: "error",
+          errorMessage: "request_too_large: Request size exceeds model context window",
+        });
+        return makeEmbeddedRunnerAttempt({
+          sessionIdUsed: target.sessionId,
+          assistantTexts: [],
+          messagesSnapshot: [],
+          lastAssistant: overflow,
+          currentAttemptAssistant: overflow,
+        });
+      })
+      .mockImplementationOnce(async (attempt) => {
+        expect(attempt.modelCallSequence).toEqual({ value: 7 });
+        attempt.modelCallSequence!.value = 8;
+        return makeEmbeddedRunnerAttempt({
+          sessionIdUsed: target.sessionId,
+          assistantTexts: ["Recovered."],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            content: [{ type: "text", text: "Recovered." }],
+          }),
+        });
+      });
+
+    await expect(run({ sessionPersistence: "detached" })).resolves.toMatchObject({
+      result: { payloads: [{ text: "Recovered." }] },
+    });
+    expect(compact).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `runId=${target.sessionId}-run sessionId=${target.sessionId} sessionKey=${target.sessionKey} attemptId=${target.sessionId}-run:model:7 retryAttemptId=${target.sessionId}-run:model:8`,
+      ),
+    );
+  });
 });

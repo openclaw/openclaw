@@ -9,6 +9,7 @@ import {
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
+import { log } from "./logger.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import { createRecoveryDefaults, createRecoveryOwner } from "./run.recovery.test-support.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
@@ -86,6 +87,18 @@ describe("timeout recovery", () => {
     });
     expect(await recoverEmbeddedRunTimeout(input)).toBe(false);
     expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("logs the prepared run's shared attempt and retry identities", async () => {
+    expect(await recoverEmbeddedRunTimeout(makeInput())).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "runId=run-1 sessionId=session-1 sessionKey=agent:main:session-1 attemptId=run-1:model:7",
+      ),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("attemptId=run-1:model:7 retryAttemptId=run-1:model:8"),
+    );
   });
 
   it.each([

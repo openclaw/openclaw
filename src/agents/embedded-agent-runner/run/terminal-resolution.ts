@@ -67,6 +67,7 @@ import {
   YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn-resolution.js";
 import type { RunEmbeddedAgentInternalParams as TerminalRunParams } from "./internal-params.js";
+import { modelAttemptLogContext, nextModelAttemptId } from "./model-attempt-log-context.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import {
   isEmbeddedRunTerminalAbort,
@@ -79,7 +80,7 @@ import {
   MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
   type EmbeddedRunTerminalRetryState,
 } from "./terminal-retry-state.js";
-import type { EmbeddedRunAttemptResult } from "./types.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const MAX_MISSING_ASSISTANT_RETRIES = 1;
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -93,6 +94,7 @@ type TerminalResolution =
 
 export async function resolveEmbeddedRunTerminal(input: {
   runParams: TerminalRunParams;
+  modelCallSequence?: EmbeddedRunAttemptParams["modelCallSequence"];
   prepared: ReturnType<typeof prepareEmbeddedRunTerminal>;
   retryState: EmbeddedRunTerminalRetryState;
   attempt: EmbeddedRunAttemptResult;
@@ -138,7 +140,8 @@ export async function resolveEmbeddedRunTerminal(input: {
 }): Promise<TerminalResolution> {
   const { runParams, attempt, retryState, sessionPromptState } = input;
   const replyExpectation = resolveReplyExpectation(runParams);
-  const runLogContext = `runId=${runParams.runId} sessionId=${runParams.sessionId}`;
+  const attemptIdentity = { ...runParams, modelCallSequence: input.modelCallSequence };
+  const runLogContext = modelAttemptLogContext(attemptIdentity);
   const modelLogContext = `${runLogContext} provider=${input.activeErrorContext.provider}/${input.activeErrorContext.model}`;
   const { externalAbort, promptError } = projectAgentRunAttemptTerminal(attempt.terminal);
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
@@ -297,7 +300,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     sessionPromptState.activateCompactionContinuation(COMPACTION_CONTINUATION_RETRY_INSTRUCTION);
     log.warn(
       `compaction interrupted visible final answer: ${runLogContext} ` +
-        `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
+        `compactions=${input.attemptCompactionCount} retryAttemptId=${nextModelAttemptId(attemptIdentity)} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
     return { action: "retry" };
   }

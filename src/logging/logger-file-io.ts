@@ -6,7 +6,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 
 const MAX_ROTATED_LOG_FILES = 5;
-const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_LOG_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function rotatedLogPath(file: string, index: number): string {
   const ext = path.extname(file);
@@ -57,10 +57,10 @@ export function rotateLogFile(file: string): boolean {
   }
 }
 
-function pruneOldRollingLogs(dir: string): void {
+function pruneOldRollingLogs(dir: string, retentionMs: number): void {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const cutoff = Date.now() - MAX_LOG_AGE_MS;
+    const cutoff = Date.now() - retentionMs;
     for (const entry of entries) {
       if (!entry.isFile()) {
         continue;
@@ -83,10 +83,14 @@ function pruneOldRollingLogs(dir: string): void {
   }
 }
 
-export function prepareFileLogTarget(file: string, rolling: boolean): void {
+export function prepareFileLogTarget(
+  file: string,
+  rolling: boolean,
+  retentionMs = DEFAULT_LOG_RETENTION_MS,
+): void {
   ensureLogDirectorySync(path.dirname(file));
   if (rolling) {
-    pruneOldRollingLogs(path.dirname(file));
+    pruneOldRollingLogs(path.dirname(file), retentionMs);
   }
 }
 
@@ -107,7 +111,7 @@ export function resolveDefaultFileLogTarget(file: string, root: DefaultFileLogRo
 
 export type FileLogIORequest =
   | { type: "resolveDefault"; file: string; root: DefaultFileLogRoot }
-  | { type: "prepare"; file: string; rolling: boolean }
+  | { type: "prepare"; file: string; rolling: boolean; retentionMs?: number }
   | { type: "size"; file: string }
   | { type: "append"; file: string; payload: string; rotate: boolean };
 export type FileLogIOResults = {
@@ -125,7 +129,7 @@ export async function executeFileLogIO(
     case "resolveDefault":
       return resolveDefaultFileLogTarget(request.file, request.root);
     case "prepare":
-      return prepareFileLogTarget(request.file, request.rolling);
+      return prepareFileLogTarget(request.file, request.rolling, request.retentionMs);
     case "size":
       try {
         return fs.statSync(request.file).size;

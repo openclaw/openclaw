@@ -41,6 +41,11 @@ export function createRecoveryDefaults(
   current: () => EmbeddedRunCompactionRecoveryInput,
 ) {
   return {
+    // Production owns the shared counter on the prepared run, not runParams.
+    runInput: {
+      modelCallSequence: { value: 7 },
+      hookContext: {},
+    } as EmbeddedRunCompactionRecoveryInput["runInput"],
     runParams: {
       runId: "run-1",
       sessionId: "session-1",

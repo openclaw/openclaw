@@ -74,6 +74,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { modelAttemptLogContext } from "./model-attempt-log-context.js";
 import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -171,7 +172,7 @@ export async function settleEmbeddedAttemptStream(input: {
       if (!input.isProbeSession) {
         log.warn(
           `compaction retry aggregate timeout (${aggregateTimeoutMs}ms): ` +
-            `proceeding with pre-compaction state runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+            `proceeding with pre-compaction state ${modelAttemptLogContext(attempt)}`,
         );
       }
     }

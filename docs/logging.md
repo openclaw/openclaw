@@ -42,7 +42,9 @@ The date uses the gateway host's local timezone. When `logs/` is unsafe or
 unavailable (and always on Windows), OpenClaw uses `tmp/openclaw-<uid>` under
 the same state directory instead (`tmp/openclaw` without a numeric user ID).
 It never falls back to another Gateway's logs. Dated log files are pruned after
-24 hours.
+24 hours by default. Set `logging.retentionDays` to a positive integer to keep
+them longer; retention applies when a rolling file target is prepared and on
+hot reload.
 
 After upgrading from the host-wide `/tmp/openclaw/` default, use `openclaw logs`
 to discover the active path or update external file collectors to the selected
@@ -57,15 +59,26 @@ active file, such as `openclaw-YYYY-MM-DD.1.log` or
 `openclaw-dev-YYYY-MM-DD.1.log`, and keeps writing to a fresh active log instead
 of suppressing diagnostics.
 
+Context-pressure and compaction recovery records carry `runId`, `sessionId`,
+`sessionKey`, and `attemptId`. The attempt id is `runId:model:N`, using the
+existing model-call sequence. Recovery records that schedule another model call
+also carry `retryAttemptId`; initial preflight recovery keeps the same target
+id, while a dispatched provider failure advances to the next id.
+
 You can override the path in `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "logging": {
-    "file": "/path/to/openclaw.log"
+    "file": "/path/to/openclaw-YYYY-MM-DD.log",
+    "retentionDays": 30
   }
 }
 ```
+
+The dated `openclaw-YYYY-MM-DD.log` filename shape selects rolling logs and
+enables `retentionDays`; an explicit non-dated filename does not use dated-file
+pruning.
 
 ## How to read logs
 

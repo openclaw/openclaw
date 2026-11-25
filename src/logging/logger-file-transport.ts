@@ -43,6 +43,7 @@ type FileLogTargetPreparation = {
   file: string;
   rolling: boolean;
   defaultRoot?: DefaultFileLogRootPreparation;
+  retentionMs?: number;
 };
 
 function resolveTarget(target: FileLogTargetPreparation, synchronous: true): string;
@@ -87,7 +88,7 @@ function prepareTarget(
   }
   if (synchronous) {
     try {
-      prepareFileLogTarget(resolveTarget(target, true), target.rolling);
+      prepareFileLogTarget(resolveTarget(target, true), target.rolling, target.retentionMs);
       target.prepared = true;
     } catch {}
     return;
@@ -98,6 +99,7 @@ function prepareTarget(
         type: "prepare",
         file,
         rolling: target.rolling,
+        retentionMs: target.retentionMs,
       }),
     )
     .then(() => {
@@ -517,9 +519,11 @@ export const fileLogTransport = resolveGlobalSingleton(
         file: string,
         rolling: boolean,
         defaultRoot: boolean | DefaultFileLogRootPreparation = false,
+        retentionMs?: number,
       ): FileLogTargetPreparation => ({
         file,
         rolling,
+        retentionMs,
         prepared: false,
         ...(defaultRoot
           ? {

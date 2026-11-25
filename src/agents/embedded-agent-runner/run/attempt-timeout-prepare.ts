@@ -9,6 +9,7 @@ import {
   resolveRunTimeoutDuringCompaction,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { modelAttemptLogContext } from "./model-attempt-log-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type ExecutionDeadline =
@@ -91,7 +92,7 @@ export function prepareEmbeddedAttemptTimeout(input: {
           if (!input.isProbeSession) {
             log.warn(
               `embedded run timeout reached during compaction; extending deadline: ` +
-                `runId=${attempt.runId} sessionId=${attempt.sessionId} extraMs=${input.compactionTimeoutMs}`,
+                `${modelAttemptLogContext(attempt)} extraMs=${input.compactionTimeoutMs}`,
             );
           }
           scheduleAbortTimer(input.compactionTimeoutMs, true);

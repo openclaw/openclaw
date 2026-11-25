@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../../llm/types.js";
+import { log } from "../logger.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { emptyAssistant, makeTerminalInput } from "./terminal-resolution.test-support.js";
 
@@ -95,4 +96,24 @@ it.each([false, true])("resolves incomplete turns with fallbackSafe=%s", async (
     action: "complete",
     result: { meta: { error: { kind: "incomplete_turn", fallbackSafe } } },
   });
+});
+
+it("uses the prepared run counter for compaction-continuation diagnostics", async () => {
+  const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  const input = makeTerminalInput({
+    assistant: emptyAssistant({ providerReplay }),
+    modelCallSequence: { value: 7 },
+    attemptOverrides: {
+      assistantTexts: [],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    retryState: { emptyResponseAttempts: 1 },
+  });
+  await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "attemptId=run:terminal-resolution:model:7 compactions=0 retryAttemptId=run:terminal-resolution:model:8",
+    ),
+  );
+  warn.mockRestore();
 });

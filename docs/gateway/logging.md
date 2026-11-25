@@ -58,6 +58,7 @@ of all workers. Startup logging never requests new worker samples.
 
 - Default rolling log files are under the selected state directory's `logs/` directory (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to `tmp/openclaw-<uid>` under the same state directory. On Windows it uses `tmp/openclaw` under that state directory. See [log locations and upgrade guidance](/logging#where-logs-live).
 - Active log files rotate at `logging.maxFileBytes` (default: 100 MB). Rotation keeps up to five numbered archives (`.1` through `.5`), and continues to write a fresh active file.
+- Dated files are pruned after 24 hours by default. Set `logging.retentionDays` to a positive integer to retain them longer.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
@@ -78,8 +79,8 @@ By default, logging retains runtime call-site metadata without probing source-ma
 files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
 it enables tslog's synchronous source-map lookups.
 
-With config hot reload enabled, changes to `logging.level`, `logging.file`, and
-`logging.maxFileBytes` apply to the next log record, including records from
+With config hot reload enabled, changes to `logging.level`, `logging.file`,
+`logging.maxFileBytes`, and `logging.retentionDays` apply to the next log record, including records from
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 

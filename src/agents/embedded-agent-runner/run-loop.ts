@@ -584,6 +584,7 @@ export async function runPreparedEmbeddedLoop(
         const terminalResolution = await resolveEmbeddedRunTerminal({
           ...finalizedTerminal,
           runParams: params,
+          modelCallSequence: input.modelCallSequence,
           retryState: terminalRetryState,
           activeErrorContext,
           modelApi: effectiveModel.api,

@@ -2,7 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { validateConfigObject } from "../config/validation-core.js";
 import type { LogLevel } from "./levels.js";
+import { formatLocalDate } from "./log-file-shared.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import {
   applyLoggingConfig,
@@ -96,6 +98,54 @@ it("applies new file size limits to existing children", async () => {
   const archive = path.join(path.dirname(file), `${path.basename(file, ".log")}.1.log`);
   expectLog(archive, "before smaller limit");
   expectLog(file, "after smaller limit");
+});
+
+it("applies dated-file retention changes to existing children", async () => {
+  const dir = path.dirname(paths.nextPath());
+  const oldDate = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const oldFile = path.join(dir, `openclaw-${oldDate}.log`);
+  fs.writeFileSync(oldFile, "{}\n");
+  const oldTime = (Date.now() - 4 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(oldFile, oldTime, oldTime);
+  const rollingFile = path.join(dir, "openclaw-YYYY-MM-DD.log");
+  const logger = child("dated-retention");
+
+  applyLoggingConfig({ level: "info", file: rollingFile, retentionDays: 30 });
+  logger.info("retain for thirty days");
+  await flushLogger();
+  expect(fs.existsSync(oldFile)).toBe(true);
+
+  applyLoggingConfig({ level: "info", file: rollingFile, retentionDays: 1 });
+  logger.info("retain for one day");
+  await flushLogger();
+  expect(fs.existsSync(oldFile)).toBe(false);
+});
+
+it("loads a latest-stable persisted config and keeps its one-day retention default", async () => {
+  const dir = path.dirname(paths.nextPath());
+  const oldDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const oldFile = path.join(dir, `openclaw-${oldDate}.log`);
+  fs.writeFileSync(oldFile, "{}\n");
+  const oldTime = (Date.now() - 2 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(oldFile, oldTime, oldTime);
+  const rollingFile = path.join(dir, "openclaw-YYYY-MM-DD.log");
+  const persisted = validateConfigObject({
+    logging: { level: "info", file: rollingFile },
+  });
+  expect(persisted.ok).toBe(true);
+  if (!persisted.ok) {
+    return;
+  }
+
+  applyLoggingConfig(persisted.config.logging);
+  child("latest-stable-upgrade").info("loaded without retentionDays");
+  await flushLogger();
+
+  expect(fs.existsSync(oldFile)).toBe(false);
+  expectLog(
+    path.join(dir, `openclaw-${formatLocalDate(new Date())}.log`),
+    "loaded without retentionDays",
+  );
 });
 
 it("leaves third-party loggers under their own policy", () => {

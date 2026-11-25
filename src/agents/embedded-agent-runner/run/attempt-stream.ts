@@ -58,6 +58,7 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { currentModelAttemptId } from "./model-attempt-log-context.js";
 import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
@@ -435,7 +436,10 @@ export function installEmbeddedAttemptStreamGuards(
       : {}),
     trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
-    nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
+    nextCallId: () => {
+      modelCallSequence.value += 1;
+      return currentModelAttemptId(attempt);
+    },
     ownerGeneration: callbacks.diagnosticOwner.generation,
     diagnosticOwner: callbacks.diagnosticOwner,
     onAgentEvent: attempt.onAgentEvent,

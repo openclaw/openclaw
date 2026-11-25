@@ -6,6 +6,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -26,6 +27,8 @@ import {
 const attempt = {
   provider: "test-provider",
   modelId: "test-model",
+  runId: "run-1",
+  modelCallSequence: { value: 0 },
   sessionFile: "/tmp/openclaw-attempt-preflight-test.jsonl",
   sessionId: "session-1",
   sessionKey: "agent:test:main",
@@ -289,6 +292,24 @@ describe("attempt prompt preflight", () => {
     },
   );
 
+  it("logs stable run/session/attempt identity for mid-turn recovery", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    await handleEmbeddedAttemptMidTurnPrecheck({
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      attempt: { ...attempt, modelCallSequence: { value: 4 }, contextTokenBudget: 1_000 },
+      request: { ...request, pressure: "overflow", route: "compact_only" },
+      sessionAgentId: "test",
+      sessionManager: SessionManager.inMemory(),
+      prePromptMessageCount: 4,
+      replaceSessionMessages: () => {},
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "runId=run-1 sessionId=session-1 sessionKey=agent:test:main attemptId=run-1:model:4",
+      ),
+    );
+  });
+
   it("keeps client recovery when V2 pending input exceeds the hard budget", async () => {
     const result = await preflight({
       providerCompactionAtRequestBoundary: true,
@@ -310,7 +331,9 @@ describe("attempt prompt preflight", () => {
       ...prompt,
     });
 
+    const info = vi.spyOn(log, "info").mockImplementation(() => {});
     const result = await preflight({
+      attempt: { ...attempt, modelCallSequence: { value: 4 } },
       contextTokenBudget: estimatedPromptTokens - 200 + reserveTokens,
       hookMessagesForCurrentPrompt: messages,
       includeBoundaryTimestamp: true,
@@ -327,5 +350,10 @@ describe("attempt prompt preflight", () => {
       preflightRecovery: undefined,
     });
     expect(messages).toEqual(messagesBefore);
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "runId=run-1 sessionId=session-1 sessionKey=agent:test:main attemptId=run-1:model:5",
+      ),
+    );
   });
 });

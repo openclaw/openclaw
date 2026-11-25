@@ -15,6 +15,7 @@ import {
 } from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { modelAttemptLogContext, nextModelAttemptLogContext } from "./model-attempt-log-context.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
@@ -25,7 +26,13 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 
 type AttemptPromptPreflightParams = Pick<
   EmbeddedRunAttemptParams,
-  "config" | "modelId" | "provider" | "sessionFile" | "sessionId" | "sessionKey"
+  | "config"
+  | "modelId"
+  | "modelCallSequence"
+  | "provider"
+  | "sessionFile"
+  | "sessionId"
+  | "sessionKey"
 > &
   Partial<Pick<EmbeddedRunAttemptParams, "runId">>;
 
@@ -83,7 +90,7 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
         `effectiveReserveTokens=${request.effectiveReserveTokens} ` +
         `prePromptMessageCount=${input.prePromptMessageCount} ` +
         (extra ? `${extra} ` : "") +
-        `sessionFile=${attempt.sessionFile}`,
+        `sessionFile=${attempt.sessionFile} ${modelAttemptLogContext(attempt, preflightRecovery)}`,
     );
   };
 
@@ -255,7 +262,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       `[context-pressure-diagnostic] admitted provider attempt for ` +
         `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +
         `estimatedPromptTokens=${preemptiveCompaction.estimatedPromptTokens} ` +
-        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve}`,
+        `promptBudgetBeforeReserve=${preemptiveCompaction.promptBudgetBeforeReserve} ` +
+        nextModelAttemptLogContext(attempt),
     );
   }
   return { ...input.state, contextBudgetStatus };

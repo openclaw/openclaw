@@ -28,6 +28,7 @@ import {
   resolveDefaultRollingLogFileName,
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { DEFAULT_LOG_RETENTION_MS } from "./logger-file-io.js";
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
@@ -50,6 +51,7 @@ type ResolvedSettings = {
   maxFileBytes: number;
 };
 type ResolvedRuntimeSettings = ResolvedSettings & {
+  retentionMs: number;
   rolling: boolean;
   defaultRoot?: boolean;
   target?: ReturnType<typeof fileLogTransport.prepareTarget>;
@@ -419,6 +421,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
       level: "silent",
       file: DEFAULT_LOG_FILE,
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      retentionMs: DEFAULT_LOG_RETENTION_MS,
       rolling: false,
     };
   }
@@ -431,6 +434,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
       level: "silent",
       file: resolveDefaultRollingLogFileName(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
+      retentionMs: DEFAULT_LOG_RETENTION_MS,
       rolling: true,
       defaultRoot: true,
     };
@@ -445,9 +449,10 @@ function resolveSettings(): ResolvedRuntimeSettings {
   const rolling = cfg?.file ? isLegacyRollingLogFilePath(cfg.file) : true;
   const file = resolveActiveLogFileWithMode(cfg?.file ?? resolveDefaultActiveLogFile(), rolling);
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
+  const retentionMs = resolveLogRetentionMs(cfg?.retentionDays);
   const defaultRoot =
     !cfg?.file && !(process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG === "1");
-  return { level, file, maxFileBytes, rolling, defaultRoot };
+  return { level, file, maxFileBytes, retentionMs, rolling, defaultRoot };
 }
 
 function getRuntimeFileTarget(settings: ResolvedRuntimeSettings) {
@@ -457,6 +462,7 @@ function getRuntimeFileTarget(settings: ResolvedRuntimeSettings) {
       file,
       settings.rolling,
       settings.target?.defaultRoot ?? settings.defaultRoot,
+      settings.retentionMs,
     );
   }
   return settings.target;
@@ -568,6 +574,13 @@ function buildLogger(): TsLogger<LogObj> {
   attachDiagnosticEventTransport(logger);
 
   return logger;
+}
+
+function resolveLogRetentionMs(raw: unknown): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw * 24 * 60 * 60 * 1000);
+  }
+  return DEFAULT_LOG_RETENTION_MS;
 }
 
 function resolveMaxLogFileBytes(raw: unknown): number {

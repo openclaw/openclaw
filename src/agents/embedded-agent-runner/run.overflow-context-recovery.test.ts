@@ -241,6 +241,26 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
+  it("logs run/session/attempt and retry identity for compaction success", async () => {
+    expect(await recoverEmbeddedRunOverflow(makeInput())).toEqual({ action: "retry" });
+    expect(mocks.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "runId=run-1 sessionId=session-1 sessionKey=agent:main:session-1 attemptId=run-1:model:7 retryAttemptId=run-1:model:8",
+      ),
+    );
+  });
+
+  it("logs run/session/attempt identity for compaction failure", async () => {
+    mocks.compact.mockResolvedValueOnce({ ok: false, compacted: false, reason: "guard_blocked" });
+    const result = await recoverEmbeddedRunOverflow(makeInput());
+    expect(result).toMatchObject({ action: "surface", kind: "compaction_failure" });
+    expect(mocks.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "runId=run-1 sessionId=session-1 sessionKey=agent:main:session-1 attemptId=run-1:model:7",
+      ),
+    );
+  });
+
   it.each([
     "400 Invalid 'reasoning_effort' value: 'off'. Supported values: none, minimal, low, medium, high, xhigh.",
     "400 Failed to apply prompt template. The model is loaded with context length of only 4096 tokens.",

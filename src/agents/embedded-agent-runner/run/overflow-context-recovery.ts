@@ -39,6 +39,10 @@ import {
 } from "./compaction-runtime.js";
 import { createRunRecoveryDiagId } from "./helpers.js";
 import {
+  modelAttemptLogContext,
+  retryModelAttemptLogContext,
+} from "./model-attempt-log-context.js";
+import {
   isNoRealConversationCompactionNoop,
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
@@ -196,6 +200,12 @@ async function recoverContextPressure(
   const errorText = contextOverflowError.text;
   const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
   const preflightRecovery = input.attempt.preflightRecovery;
+  const attemptIdentity = {
+    ...runParams,
+    modelCallSequence: input.runInput?.modelCallSequence,
+  };
+  const attemptLogContext = modelAttemptLogContext(attemptIdentity, preflightRecovery);
+  const retryAttemptLogContext = retryModelAttemptLogContext(attemptIdentity, preflightRecovery);
   const requiresTranscriptContinuation =
     preflightRecovery?.source === "mid-turn" || !isCurrentAttemptReplaySafe(input.attempt);
   if ((input.state.compactionRequestBudget?.fixedTokens ?? 0) >= contextTokenBudget) {
@@ -287,7 +297,7 @@ async function recoverContextPressure(
       `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
       `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
       `providerPayloadBytes=${providerPromptRejection?.byteWeight ?? "unknown"} ` +
-      `error=${truncateUtf16Safe(errorText, 200)}`,
+      `error=${truncateUtf16Safe(errorText, 200)} ${attemptLogContext}`,
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
@@ -300,7 +310,7 @@ async function recoverContextPressure(
     log.warn(
       `[context-overflow-recovery] provider request-size ceiling for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
         `livenessState=blocked suggestedAction=reset_or_new kind=${isCompactionFailure ? "compaction_failure" : "context_overflow"} ` +
-        `compaction=skipped retry=skipped`,
+        `compaction=skipped retry=skipped ${attemptLogContext}`,
     );
     return {
       action: "surface",
@@ -326,7 +336,7 @@ async function recoverContextPressure(
     input.markOwnedTranscriptRetry();
     input.state.overflowCompactionAttempts += 1;
     log.warn(
-      `${pressureDescription} persisted after in-attempt compaction (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
+      `${pressureDescription} persisted after in-attempt compaction (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); ${retryAttemptLogContext} retrying prompt without additional compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
     );
     return retryCurrentTranscript();
   }
@@ -338,7 +348,7 @@ async function recoverContextPressure(
   ) {
     input.state.overflowCompactionAttempts += 1;
     log.warn(
-      `${pressureDescription} detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
+      `${pressureDescription} detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); ${attemptLogContext} attempting auto-compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
     );
     const compaction = await compactEmbeddedRunForRecovery(input, {
       tokenBudget: preflightPromptBudget ?? input.contextTokenBudget,
@@ -361,7 +371,7 @@ async function recoverContextPressure(
       if (parkedWorkBlocksContinuation) {
         log.warn(
           `[context-overflow-recovery] compaction rotated ${previousSessionId} -> ${adoptedSession.id} ` +
-            `while nested tool work was parked; not continuing mid-turn for ${input.modelSelection.provider}/${input.modelSelection.model}`,
+            `while nested tool work was parked; not continuing mid-turn for ${input.modelSelection.provider}/${input.modelSelection.model}; ${attemptLogContext}`,
         );
       }
       if (input.contextEngine.maintain) {
@@ -399,7 +409,7 @@ async function recoverContextPressure(
       input.assertRecoveryActive();
       log.info(
         `[context-overflow-precheck] stale token state had no real conversation messages for ` +
-          `${input.modelSelection.provider}/${input.modelSelection.model}; resetting the context snapshot and retrying prompt`,
+          `${input.modelSelection.provider}/${input.modelSelection.model}; ${retryAttemptLogContext} resetting the context snapshot and retrying prompt`,
       );
       return retryCurrentTranscript();
     }
@@ -437,11 +447,11 @@ async function recoverContextPressure(
       input.assertRecoveryActive();
       if (parkedWorkBlocksContinuation) {
         log.warn(
-          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}, but parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
+          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}; ${attemptLogContext} parked nested tool work cannot follow the rotated session; surfacing overflow guidance`,
         );
       } else {
         log.info(
-          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
+          `${compactionOutcome} for ${input.modelSelection.provider}/${input.modelSelection.model}; ${retryAttemptLogContext} retrying prompt`,
         );
         input.markOwnedTranscriptRetry();
         if (requiresTranscriptContinuation) {
@@ -456,7 +466,7 @@ async function recoverContextPressure(
       failedCompactionReason = formatErrorMessage(compactResult.reason ?? "nothing to compact");
       compactionSkippedBenignly = isBenignCompactionSkipResult(compactResult);
       log.warn(
-        `auto-compaction failed for ${input.modelSelection.provider}/${input.modelSelection.model}: ${failedCompactionReason}`,
+        `auto-compaction failed for ${input.modelSelection.provider}/${input.modelSelection.model}: ${failedCompactionReason}; ${attemptLogContext}`,
       );
       const failure = compactResult.failure;
       const transientReason =
@@ -496,18 +506,18 @@ async function recoverContextPressure(
       input.state.toolResultTruncationAttempted = true;
       log.warn(
         `[context-overflow-recovery] Attempting tool result truncation for ${input.modelSelection.provider}/${input.modelSelection.model} ` +
-          `(contextWindow=${input.contextTokenBudget} tokens)`,
+          `(contextWindow=${input.contextTokenBudget} tokens) ${attemptLogContext}`,
       );
       const truncResult = await truncateToolResults();
       if (truncResult.truncated) {
         input.markOwnedTranscriptRetry();
         log.info(
-          `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+          `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt; ${retryAttemptLogContext}`,
         );
         return retryCurrentTranscript();
       }
       log.warn(
-        `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}`,
+        `[context-overflow-recovery] Tool result truncation did not help: ${truncResult.reason ?? "unknown"}; ${attemptLogContext}`,
       );
     }
   }
@@ -535,7 +545,7 @@ async function recoverContextPressure(
   if (!maintenance) {
     log.warn(
       `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
-        `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
+        `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind} ${attemptLogContext}`,
     );
   }
   return { action: "surface", kind, errorText: failureText, userText };

@@ -44,6 +44,7 @@ import {
   type IdleTimeoutBreakerState,
 } from "./idle-timeout-breaker.js";
 import { resolveReplayInvalidFlag } from "./incomplete-turn-resolution.js";
+import { retryModelAttemptLogContext } from "./model-attempt-log-context.js";
 import { handleRetryLimitExhaustion } from "./retry-limit.js";
 import type { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import {
@@ -417,6 +418,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     const retryingFromTranscript = preflightRecovery.source === "mid-turn";
     log.info(
       `[context-overflow-precheck] early recovery route=${preflightRecovery.route} completed for ${provider}/${modelId}; ` +
+        `${retryModelAttemptLogContext({ ...params, modelCallSequence: runInput.modelCallSequence }, preflightRecovery)} ` +
         (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
     );
     if (retryingFromTranscript) {

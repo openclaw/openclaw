@@ -7,6 +7,8 @@ export type LoggerSettings = {
   level?: LogLevel;
   file?: string;
   maxFileBytes?: number;
+  /** Days to retain dated rolling log files. Default: 1 (24 hours). */
+  retentionDays?: number;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
 };
