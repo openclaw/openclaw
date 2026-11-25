@@ -374,7 +374,7 @@ function* planSuspiciousConfigRead(
     // Preserve a configured rollback's restored config. If its gateway mode was
     // lost, keep the candidate so startup can refuse an incompatible recovery.
     if (
-      resolveGatewayMode(parsed) &&
+      current.gatewayMode &&
       prepared.candidate.config &&
       resolveFutureConfigActionBlock({
         action: "recover config",
