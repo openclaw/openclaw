@@ -31,7 +31,10 @@ function writeTestFiles(root: string, files: string[]): void {
   }
 }
 
-function discover(test: TestUserConfig | undefined, cwd: string): string[] {
+function discover(
+  test: Pick<TestUserConfig, "include" | "exclude"> | undefined,
+  cwd: string,
+): string[] {
   assert(test?.include, "Expected an explicit test inventory");
   // Match Vitest's globProjectFiles options without loading any test bodies or setup.
   return globSync(test.include, {

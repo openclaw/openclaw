@@ -10,8 +10,8 @@ import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { createDeferred, withinTest, withTestTimeout } from "../helpers/promise.js";
-import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
+import { runQaGatewayTestFixture } from "../helpers/qa-gateway-test-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
@@ -79,12 +79,15 @@ describe("frozen-target test exclusions", () => {
 
   it.skipIf(process.platform === "win32").for([false, true])(
     "retires command readers before restoration (escaped output: %s)",
-    async (escaped, { signal }) => {
+    async (escaped, context) => {
+      const { signal } = context;
       // An intentionally unjoined command owns its private namespace until the
       // independently observed reader exits; the ordinary temp tracker cannot remove it.
-      const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "frv-readers-"));
-      const deadline = Date.now() + DEFAULT_VITEST_TEST_TIMEOUT_MS;
-      const receipts = await openFixtureReceiptChannel();
+      let root: string | undefined;
+      let receipts: Awaited<ReturnType<typeof openFixtureReceiptChannel>> | undefined;
+      let readerExit: Promise<void> | undefined;
+      let pidFile = "";
+      let leaderFile = "";
       const cancel = new AbortController();
       let command: ReturnType<typeof runNodeScript> | undefined;
       const adapterExit = createDeferred<{ code: number | null; signal: string | null }>();
@@ -92,12 +95,15 @@ describe("frozen-target test exclusions", () => {
       let adapterStarted = false;
       let adapterPid: number | undefined;
       let expectedHandoffError: unknown;
-      const pidFile = path.join(root, "reader.json");
-      const leaderFile = path.join(root, "leader.pid");
-      const readerExit = receipts.waitForExit("reader");
-      void readerExit.catch(() => {});
-      await runQaGatewayFixture(
+      await runQaGatewayTestFixture(
+        context,
         async () => {
+          root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "frv-readers-"));
+          pidFile = path.join(root, "reader.json");
+          leaderFile = path.join(root, "leader.pid");
+          receipts = await openFixtureReceiptChannel();
+          readerExit = receipts.waitForExit("reader");
+          void readerExit.catch(() => {});
           createVitestResourceOwner(root);
           const config = "test/vitest/vitest.plugins.config.ts";
           const configPath = path.join(root, config);
@@ -262,34 +268,28 @@ reader.once("message", () => process.exit(0));
         },
         async () => {
           cancel.abort();
+          if (!root) {
+            return;
+          }
           try {
             let managedError: unknown;
-            receipts.release("reader", "admitted");
-            receipts.release("reader", "inspect");
-            receipts.release("reader", "exit");
+            receipts?.release("reader", "admitted");
+            receipts?.release("reader", "inspect");
+            receipts?.release("reader", "exit");
             if (command) {
-              const joined = await withTestTimeout(
-                command,
-                Math.max(1, deadline - Date.now()),
-                "FRV adapter did not join",
-              );
+              const joined = await command;
               managedError = joined.error;
             }
             if (adapterStarted) {
-              await withTestTimeout(
-                adapterClose.promise,
-                Math.max(1, deadline - Date.now()),
-                "FRV adapter did not close",
-              );
+              await adapterClose.promise;
               expect(adapterPid).toBeDefined();
               assertFixtureProcessGroupStopped(adapterPid!);
             }
             if (fs.existsSync(pidFile)) {
-              await withTestTimeout(
-                readerExit,
-                Math.max(1, deadline - Date.now()),
-                "FRV reader did not exit",
-              );
+              if (!readerExit) {
+                throw new Error("FRV reader exit observer was not acquired");
+              }
+              await readerExit;
               const identity = JSON.parse(fs.readFileSync(pidFile, "utf8")) as { group: number };
               assertFixtureProcessGroupStopped(identity.group);
             } else if (fs.existsSync(leaderFile)) {
@@ -303,10 +303,10 @@ reader.once("message", () => process.exit(0));
             if (managedError !== undefined && managedError !== expectedHandoffError) {
               throw managedError;
             }
-            await receipts.close();
+            await receipts?.close();
             fs.rmSync(root, { recursive: true, force: true });
           } catch (cause) {
-            await receipts.close();
+            await receipts?.close();
             throw new Error(`FRV fixture retained at ${root}: reader cleanup was not verified`, {
               cause,
             });

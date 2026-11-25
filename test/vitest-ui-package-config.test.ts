@@ -20,7 +20,12 @@ import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 type ExpectedTestConfig = {
   include?: string[];
   exclude?: string[];
-  browser?: { enabled?: boolean; provider?: BrowserProviderOption; instances?: unknown[] };
+  browser?: {
+    name?: string;
+    enabled?: boolean;
+    provider?: BrowserProviderOption;
+    instances?: unknown[];
+  };
   isolate?: boolean;
   name?: string;
   projects?: unknown[];
@@ -50,13 +55,11 @@ async function requireTestConfig(config: unknown): Promise<ExpectedTestConfig> {
     .test as ExpectedTestConfig;
 }
 async function projectConfigs(config: ViteUserConfig): Promise<ExpectedTestConfig[]> {
-  const projects: ExpectedTestConfig[] = [];
-  for (const candidate of config.test?.projects ?? []) {
-    const project = await candidate;
-    if (!project || typeof project !== "object") throw new Error("expected an inline UI project");
-    projects.push(await requireTestConfig({ root: config.root, ...project }));
-  }
-  return projects;
+  const { test } = await resolveConfig({ config: false }, config);
+  // Browser parents are hidden; ownership belongs to their expanded instances.
+  return test.resolvedProjects
+    .filter((entry) => !entry.hidden)
+    .map((entry) => entry.projectConfig);
 }
 const discover = (config: ExpectedTestConfig, packageRelative = false) =>
   globTestFiles(config.include ?? [], {
@@ -419,10 +422,12 @@ export default {
     const { default: config, createUiBrowserVitestConfig } = await import("../ui/vitest.config.ts");
     expect(resolveChromium).not.toHaveBeenCalled();
     const projects = await projectConfigs(config);
-    const browser = projects.find((project) => project.browser?.enabled);
+    const browsers = projects.filter(
+      (project) => project.browser?.enabled && project.browser.name === "chromium",
+    );
     const node = projects.find((project) => project.name === "unit-node");
     const root = await requireTestConfig(createUiVitestConfig());
-    const nativeFiles = discover(browser ?? {}, true);
+    const nativeFiles = browsers.flatMap((project) => discover(project, true));
     const nodeFiles = discover(node ?? {}, true).filter((file) =>
       /\.browser\.test\.tsx?$/u.test(file),
     );
@@ -431,6 +436,17 @@ export default {
       patterns.includes("ui/src/**/*.test.tsx"),
     );
     expect(nativeFiles).toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
+    if (patterns.includes("ui/src/**/*.test.tsx")) {
+      const isolatedFile = "ui/src/pages/chat/chat-pane-frame-updates.browser.test.tsx";
+      expect(
+        discover(browsers.find((project) => project.name === "chromium") ?? {}, true),
+      ).not.toContain(isolatedFile);
+      expect(
+        discover(browsers.find((project) => project.name === "chromium-mock-registry") ?? {}, true).filter(
+          (file) => file === isolatedFile,
+        ),
+      ).toHaveLength(1);
+    }
     expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
     expect(rootFiles).toEqual(expect.arrayContaining(nodeFiles));
