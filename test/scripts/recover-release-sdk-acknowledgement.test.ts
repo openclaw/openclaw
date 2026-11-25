@@ -152,6 +152,7 @@ globalThis.fetch = async (url) => {
   expect(result.status, result.stderr).toBe(error ? 1 : 0);
   if (error) {
     expect(result.stderr).toContain(error);
+    expect(result.stderr).toContain("Review the SDK evidence and rerun Docker-only recovery");
     expect(result.stdout).toBe("");
   } else {
     expect(result.stdout).toBe(acknowledgement);

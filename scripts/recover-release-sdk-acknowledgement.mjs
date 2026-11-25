@@ -131,6 +131,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.stdout.write(await recoverReleaseSdkAcknowledgement(process.env, manifest));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
+    console.error(
+      "Review the SDK evidence and rerun Docker-only recovery with the explicit plugin_sdk_api_acknowledgement instead of reuse.",
+    );
     process.exitCode = 1;
   }
 }

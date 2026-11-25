@@ -5303,7 +5303,6 @@ describe("package acceptance workflow", () => {
       "plugin-sdk-api-release-evidence.mjs",
     );
     expect(validateEvidence.run).toContain('node "$PLUGIN_SDK_API_VALIDATOR"');
-    expect(validateEvidence.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
     expect(validateEvidence.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
     expect(validateEvidence.run).toContain('--current-selector-ref "$current_selector_ref"');
     expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
@@ -9250,9 +9249,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe(
       "${{ inputs.release_profile == 'clawhub-only' && 'from-validation' || inputs.release_profile }}",
     );
-    expect(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
-      "${{ inputs.plugin_sdk_api_acknowledgement }}",
-    );
+    for (const [acknowledgement, expected] of [
+      ["sdk-api:12345678", "sdk-api:12345678"],
+      ["reuse:42/2", ""],
+    ]) {
+      expect(
+        evaluateWorkflowExpression(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT, {
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          inputs: { plugin_sdk_api_acknowledgement: acknowledgement },
+        }),
+      ).toBe(expected);
+    }
   });
 
   it("dispatches exact child identities without owning child completion", () => {

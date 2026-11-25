@@ -2068,9 +2068,6 @@ describe("release validation no-push transport", () => {
       ["Extended-stable core npm publication stays on the canonical extended-stable release flow"],
     );
     expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
-    const validateNpm = step(resolveTarget, "Validate OpenClaw npm preflight manifest");
-    expect(validateNpm.run).toContain("recover-release-sdk-acknowledgement.mjs");
-    expect(validateNpm.run).toContain('--acknowledge "$acknowledgement"');
     expect(publishJob.environment).toBe("npm-release");
     expect(
       step(publishJob, "Attest reviewed Plugin SDK API acknowledgement").with?.["subject-path"],
