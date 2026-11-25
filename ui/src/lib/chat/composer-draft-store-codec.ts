@@ -105,12 +105,17 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
       (selection.cyberAccessProgram !== undefined &&
         selection.cyberAccessProgram !== "standard" &&
         selection.cyberAccessProgram !== "daybreak_blue" &&
-        selection.cyberAccessProgram !== "daybreak_red") ||
-      (selection.daybreakAccessProgram !== undefined &&
-        selection.daybreakAccessProgram !== "daybreak_blue" &&
-        selection.daybreakAccessProgram !== "daybreak_red"))
+        selection.cyberAccessProgram !== "daybreak_red"))
   ) {
     record.modelSelection = undefined;
+  } else if (selection) {
+    record.modelSelection = {
+      agentId: selection.agentId,
+      model: selection.model,
+      agentRuntime: selection.agentRuntime,
+      thinkingLevel: selection.thinkingLevel,
+      cyberAccessProgram: selection.cyberAccessProgram,
+    };
   }
   record.mentions = readHumanMentions(record.text, record.mentions);
   // SAFETY: the complete stored shape and every attachment payload were validated above.

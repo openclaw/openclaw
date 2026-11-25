@@ -38,7 +38,7 @@ export async function withRequesterTestAuthority<T>(
       createCronCreatorAuthorityCapability(
         runId,
         { kind: "external", channel: "discord" },
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       ),
       "original requester authority",
     );

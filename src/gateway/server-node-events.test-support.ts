@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import type { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -46,7 +47,7 @@ const runtimeMocks = vi.hoisted(() => ({
       generation: "node-event-test-generation",
     }),
   ),
-  enqueueSessionEventForHost: vi.fn(() => ({
+  enqueueSessionEventForHost: vi.fn((): SessionEventReceipt => ({
     id: "node-event-test-receipt",
     cancel: () => true,
     accepted: Promise.resolve({ ok: true as const }),

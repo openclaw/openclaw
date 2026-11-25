@@ -359,9 +359,11 @@ describe("resident update launcher", () => {
 it("returns an absolute launcher path and never downgrades a newer frozen format", async () => {
   const { prefix, launcher } = await fixture("ready();");
   expect(await writeLauncher(path.relative(process.cwd(), prefix))).toBe(launcher);
-  const future = "// OpenClaw launcher format: 3\n";
-  await fs.writeFile(launcher, future);
-  await writeLauncher(prefix);
-  await writeGitReleaseLauncher(prefix);
-  expect(await fs.readFile(launcher, "utf8")).toBe(future);
+  for (const format of [3, Number.MAX_SAFE_INTEGER]) {
+    const content = `// OpenClaw launcher format: ${format}\n`;
+    await fs.writeFile(launcher, content);
+    await writeLauncher(prefix);
+    await writeGitReleaseLauncher(prefix);
+    expect(await fs.readFile(launcher, "utf8")).toBe(content);
+  }
 });

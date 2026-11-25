@@ -26,7 +26,7 @@ import {
   authorizeControlUiReadRequestOrReply,
   authorizeControlUiSessionOwnerReadRequestOrReply,
 } from "./http-utils.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
@@ -269,10 +269,15 @@ export async function handleProjectIconHttpRequest(
     return true;
   }
   const project = parsed.value
-    ? await resolveRequesterProject(opts.config, parsed.value, {
-        kind: "operator",
-        scopes: auth.operatorScopes,
-      })
+    ? await resolveRequesterProject(
+        opts.config,
+        parsed.value,
+        projectRequesterForProfile(
+          opts.config,
+          auth.operatorScopes,
+          auth.authenticatedUserProfile?.profileId,
+        ),
+      )
     : undefined;
   const root = localWorkspaceRoot(project?.repoRoot);
   const icon = root ? await resolveWorkspaceIcon(root) : null;

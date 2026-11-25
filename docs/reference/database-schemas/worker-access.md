@@ -66,6 +66,16 @@ worker checks the same physical database. Concurrent session creation and patch
 requests can consume that proof without revoking one another's pending handoffs.
 Explicit invalidation still retires the owner and refuses delayed publications.
 
+PostgreSQL agent read-only operations retain their admitted schema before opening
+the transaction. A concurrent first-use search extension can publish a new schema
+without making an already admitted chat-history or model-context read fail. The
+read releases those historical facts when its transaction ends, including failed
+startup. Current-row publication still requires the live schema and write receipts;
+historical schema facts never authorize publishing stale rows or replaying a turn.
+Shared-state reads still require current admission and preserve their existing
+publication waits, deadlines, and cancellation checks. Schemas, stored bytes,
+permissions, and update behavior are unchanged.
+
 Released session sharing, entry-predicate, and generation authorities drop their
 decoded rows even when a caller retains the inactive handle. Predicate comparison
 baselines last only until release; a late acknowledgement cannot restore them.

@@ -3,7 +3,7 @@ import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-iden
 import {
   inheritSessionEventToolPolicy,
   narrowSessionEventSettings,
-} from "../../auto-reply/reply/session-event-policy.js";
+} from "../../auto-reply/reply/session-event-policy-inheritance.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import {
   composeSessionSourceAssertion,
@@ -12,7 +12,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  TrustedAgentToolCaller,
+} from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { WorkerSessionTurnClaim } from "../../gateway/worker-environments/placement-record.js";
 import type { WorkerTurnExecutionIdentityCapability } from "../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -24,6 +27,7 @@ import {
   captureGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-context-binding.js";
+import { assertParticipationToolUser } from "../../security/dangerous-tools.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
 // Ambient trusted caller context for model-mediated Gateway tool calls.
@@ -205,7 +209,7 @@ export function createAdmittedGatewayToolCallerIdentity(
     receiptAuthority: composeReceiptAuthority(
       resolveAdmittedRunActiveAssertion(params.admittedRunContext) ??
         (() => {
-          throw new Error("agent tool caller authority is no longer active");
+          throw new Error("The agent run ended. Start a new turn to retry.");
         }),
       params.receiptAuthority,
     ),
@@ -224,6 +228,20 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+/** The requester a retained continuation re-entered, for its next agent admission. */
+export function readRetainedRequesterToolCaller(): TrustedAgentToolCaller | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  const selection = caller?.personalToolIdentityScoped ? caller.personalToolSelection : undefined;
+  return caller && selection
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        requesterOrigin: selection.requesterOrigin,
+        assertCurrent: selection.assertCurrent,
+      }
+    : undefined;
 }
 
 /** Selection is model input; only the turn's host-owned participants grant a target. */
@@ -259,6 +277,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
   if (!selection) {
     const participant =
       caller?.personalToolUser !== undefined ? resolveGatewayPersonalToolParticipant() : undefined;
+    assertParticipationToolUser(participant?.profileId, caller?.operatorAuthority);
     const selectedParticipant =
       participant?.profileId !== caller?.operatorAuthority?.profileId ? participant : undefined;
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
@@ -274,10 +293,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
         : selectedParticipant
           ? undefined
           : caller?.requesterOrigin,
-      assertCurrent: composeSessionSourceAssertion([
-        participant?.assertCurrent,
-        operatorAuthority?.assertCurrent,
-      ]),
+      assertCurrent: composeSessionSourceAssertion([participant?.assertCurrent]),
     });
     if (caller?.personalToolIdentityScoped) {
       caller.personalToolSelection = selection;
@@ -304,7 +320,6 @@ export function withGatewayToolOperatorContinuation<T>(
     return run();
   }
   const { operatorAuthority, requesterOrigin } = selection;
-  operatorAuthority?.assertCurrent();
   return runWithAsyncStore(
     gatewayToolCallerStorage,
     {
@@ -312,10 +327,11 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolParticipants: undefined,
       personalToolUser: undefined,
       personalToolIdentityScoped: true,
+      // The accepting collector holds this source; no participant is selected here.
       personalToolSelection: Object.freeze({
         operatorAuthority,
         requesterOrigin,
-        assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
+        assertCurrent: composeSessionSourceAssertion([]),
       }),
     },
     run,

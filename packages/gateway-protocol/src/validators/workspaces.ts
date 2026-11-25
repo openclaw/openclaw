@@ -22,6 +22,10 @@ export const validateTemplatesDraftsSaveParams = createProtocolValidator(
   S.TemplatesDraftsSaveParamsSchema,
   Checks.isTemplatesDraftsSaveParams,
 );
+export const validateTemplatesDraftsSignInParams = createProtocolValidator(
+  S.TemplatesDraftsSignInParamsSchema,
+  Checks.isTemplatesDraftsSignInParams,
+);
 export const validateTemplatesDraftsReviewParams = createProtocolValidator(
   S.TemplatesDraftsReviewParamsSchema,
   Checks.isTemplatesDraftsReviewParams,
@@ -125,6 +129,10 @@ export const validateProjectsMoveSessionOptionsParams = createProtocolValidator(
 export const validateProjectsMoveSessionParams = createProtocolValidator(
   S.ProjectsMoveSessionParamsSchema,
   Checks.isProjectsMoveSessionParams,
+);
+export const validateProjectsRenameParams = createProtocolValidator(
+  S.ProjectsRenameParamsSchema,
+  Checks.isProjectsRenameParams,
 );
 export const validateWorktreesListParams = createProtocolValidator(
   S.WorktreesListParamsSchema,

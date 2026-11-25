@@ -78,18 +78,12 @@ function eventGateway(
   snapshot: object,
   connection: Partial<ApplicationGateway["connection"]> = { gatewayUrl: "ws://gateway.test" },
 ) {
-  let listener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  const harness = createGatewayHarness(null);
+  harness.update(snapshot);
+  Object.assign(harness.gateway.connection, connection);
   return {
-    gateway: {
-      snapshot,
-      connection,
-      subscribe: () => () => undefined,
-      subscribeEvents: (next: NonNullable<typeof listener>) => {
-        listener = next;
-        return () => undefined;
-      },
-    } as unknown as ApplicationGateway,
-    emit: (event: string) => listener?.({ type: "event", event, payload: {} }),
+    gateway: harness.gateway,
+    emit: (event: string) => harness.emitEvent(event, {}),
   };
 }
 
@@ -736,7 +730,7 @@ describe("sidebar attention refresh ownership", () => {
       await waitForFast(() => expect(attention(element, "modelAuthExpired")).not.toBeNull());
 
       now = 200_000;
-      emit("cron");
+      emit("cron.inventory.changed");
       invalidateModelAuthStatusRequests(client);
       emit("chat.metadata.changed");
       await waitForFast(() =>
@@ -759,7 +753,7 @@ describe("sidebar attention refresh ownership", () => {
           request.mock.calls.filter(([method]) => method === "models.authStatus"),
         ).toHaveLength(3),
       );
-      emit("cron");
+      emit("cron.inventory.changed");
       expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
       switchedAuth.resolve(authStatus(2));
       await waitForFast(() => expect(authText(element)).toContain("writer"));

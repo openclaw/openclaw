@@ -45,6 +45,9 @@ async function setup(selection?: ApplicationContext["agentSelection"]) {
       const job = eventJob(overrides);
       harness.emitEvent("cron", { action, jobId: job.id, job });
     },
+    changed() {
+      harness.emitEvent("cron.inventory.changed", {});
+    },
   };
 }
 
@@ -67,8 +70,10 @@ it("updates the automation failure indicator through a minute of cron publicatio
   h.publish("removed");
   expect(store?.hasFailedAutomation).toBe(false);
   h.inventory("new");
-  h.publish("added", { id: "new", name: "new" });
-  await vi.advanceTimersByTimeAsync(0);
+  h.publish("finished", { id: "new", name: "new" });
+  expect(store?.hasFailedAutomation).toBe(false);
+  h.changed();
+  await vi.advanceTimersByTimeAsync(50);
   expect(store?.hasFailedAutomation).toBe(true);
   expect(h.calls()).toBe(initialCalls + 1);
 });
@@ -80,7 +85,10 @@ it("does not restore a removed job when its in-flight run publishes a final snap
   expect(store?.hasFailedAutomation).toBe(false);
   h.publish("finished");
   expect(store?.hasFailedAutomation).toBe(false);
-  await vi.advanceTimersByTimeAsync(0);
+  h.changed();
+  await vi.advanceTimersByTimeAsync(50);
+  expect(store?.hasFailedAutomation).toBe(false);
+  h.publish("finished");
   expect(store?.hasFailedAutomation).toBe(false);
   expect(h.calls()).toBe(2);
 });
@@ -98,14 +106,14 @@ it.each([null, "main"])(
     h.publish("finished", { agentId: undefined, name: "Inherited owner" });
     expect(store?.hasFailedAutomation).toBe(true);
     expect(h.calls()).toBe(1);
-    h.publish("added", { id: "other", agentId: "writer" });
-    await vi.advanceTimersByTimeAsync(0);
+    h.publish("finished", { id: "other", agentId: "writer" });
+    await vi.advanceTimersByTimeAsync(50);
     expect(store?.hasFailedAutomation).toBe(true);
-    expect(h.calls()).toBe(2);
+    expect(h.calls()).toBe(1);
     h.inventory();
-    h.publish("updated", { agentId: "writer" });
-    await vi.advanceTimersByTimeAsync(0);
+    h.changed();
+    await vi.advanceTimersByTimeAsync(50);
     expect(store?.hasFailedAutomation).toBe(false);
-    expect(h.calls()).toBe(3);
+    expect(h.calls()).toBe(2);
   },
 );

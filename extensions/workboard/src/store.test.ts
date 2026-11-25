@@ -993,7 +993,7 @@ describe("WorkboardStore", () => {
         { ownerId: "dispatcher" },
         { expectedAuthority, adoptWorkspaceAccess: { unrestricted: true } },
       ),
-      "card workspace authority changed before claim",
+      "card workspace or placement changed. Retry the claim.",
     );
     await expectStored(store, card.id, {
       status: "ready",

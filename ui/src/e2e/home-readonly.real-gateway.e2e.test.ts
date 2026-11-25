@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { CONTROL_UI_OPERATOR_SCOPES } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -63,7 +64,7 @@ suite.define(() => {
             email: "home-owner@example.test",
             name: "Home Owner",
             role: "owner",
-            scopes: ["operator.read", "operator.write", "operator.admin"],
+            scopes: [...CONTROL_UI_OPERATOR_SCOPES],
           },
           {
             email: "home-reader@example.test",

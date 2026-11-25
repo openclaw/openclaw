@@ -27,7 +27,6 @@ import {
 import {
   createStore,
   cronPage,
-  eventJob,
   inventoryRequest,
   startAuthenticatedStore,
   type CompactCronPage,
@@ -91,13 +90,6 @@ describe("sidebar attention source publication", () => {
       const calls = request.mock.calls.filter(([name]) => name === method);
       expect(calls, method).toHaveLength(count);
     }
-  }
-  function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
-    harness.emitEvent("cron", {
-      action: "finished",
-      jobId: "current",
-      job: eventJob({ id: "current" }),
-    });
   }
   function repeatEvent(emit: () => void) {
     for (let index = 0; index < 20; index++) {
@@ -229,11 +221,11 @@ describe("sidebar attention source publication", () => {
       expect(store?.hasFailedAutomation).toBe(true);
 
       failed = true;
-      harness.emitEvent("cron", {});
-      await vi.advanceTimersByTimeAsync(0);
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
       request.mockClear();
       harness.update(unavailable);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       harness.emitEvent("config.changed", {});
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(request).not.toHaveBeenCalled();
@@ -241,7 +233,7 @@ describe("sidebar attention source publication", () => {
 
       failed = false;
       harness.update({ restartPending: false, suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
       expectCalls(request, 1);
       expect(store?.hasFailedAutomation).toBe(true);
     },
@@ -277,7 +269,7 @@ describe("sidebar attention source publication", () => {
     expectCalls(request, 3);
     expect(modelAuthRequests(request)).toHaveLength(1);
     harness.emitEvent("config.changed", {});
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
     expectCalls(request, 4);
     harness.update({ phase: "reconnecting" });
     harness.update({ phase: "connected" });
@@ -354,7 +346,6 @@ describe("sidebar attention source publication", () => {
     const deferredImport = pending({ acknowledgedAtMs: 23 });
     const request = respond({
       "cron.list": () => cronPage("archive"),
-      "cron.status": () => ({ enabled: true, triggersEnabled: true, jobs: 1 }),
       "models.authStatus": () => emptyAuth(),
       "users.prefs.get": () => ({ status: "ok", entries: {} }),
       "cron.acknowledgeFailure": (params) =>
@@ -591,7 +582,7 @@ describe("sidebar attention source publication", () => {
           ? { ...cronPage("previous"), total: 2, hasMore: true, nextOffset: 1 }
           : cronPage("current");
       });
-      const { attention } = startAuthenticatedStore(request);
+      const { attention, emitEvent } = startAuthenticatedStore(request);
       store = attention;
       await waitForFast(() => expect(offsets).toEqual([0, 1]));
 
@@ -600,6 +591,7 @@ describe("sidebar attention source publication", () => {
       } else {
         attention.dispose();
       }
+      emitEvent("cron.inventory.changed", {});
       pendingAppend.resolve({ ...cronPage("changed"), total: 2, offset: 1 });
       await settleRefresh();
       expect(offsets).toEqual([0, 1]);
@@ -624,7 +616,7 @@ describe("sidebar attention source publication", () => {
     await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
 
     setVisibility("hidden");
-    repeatEvent(() => emitFinished(harness));
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
     expect(store.hasFailedAutomation).toBe(true);
     expectCalls(request, 1);
 
@@ -651,7 +643,7 @@ describe("sidebar attention source publication", () => {
     store = harness.attention;
     await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
 
-    harness.emitEvent("cron", {});
+    harness.emitEvent("cron.inventory.changed", {});
     await waitForFast(() => expectCalls(request, 3));
     expect(store.hasFailedAutomation).toBe(true);
     remaining.resolve({
@@ -691,12 +683,12 @@ describe("sidebar attention source publication", () => {
       await waitForFast(() => expect(authCalls).toBe(index + 2));
       containsLabel(`Current ${index}`);
     }
-    repeatEvent(() => harness.emitEvent("cron", {}));
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
     auth[2]!.resolve(missingAuth(now, "Cached auth"));
     await waitForFast(() => containsLabel("Cached auth"));
     expect(store.hasFailedAutomation).toBe(true);
     now += 60_002;
-    repeatEvent(() => harness.emitEvent("cron", {}));
+    repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
     await settleRefresh();
     document.dispatchEvent(new Event("visibilitychange"));
     expect(authCalls).toBe(3);
@@ -737,9 +729,8 @@ describe("sidebar attention source publication", () => {
     store = harness.attention;
     await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
     failing = true;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
-    expectCalls(request, 2);
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 2));
     expect(store.hasFailedAutomation).toBe(true);
   });
 
@@ -758,7 +749,7 @@ describe("sidebar attention source publication", () => {
       const publish = vi.fn();
       store.subscribe(publish);
       store.activate(SidebarAttentionStoreOwner);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
       if (boundary === "disconnect") {

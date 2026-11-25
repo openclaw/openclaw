@@ -6,7 +6,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { LINK_SOURCE } from "./link-source.js";
 import { ROLLBACK_SOURCE } from "./rollback-source.js";
 
-export const LAUNCHER_FORMAT = 3;
+const LAUNCHER_FORMAT = 3;
 // Both starts share the wall-clock ceiling; migration keeps the full allowance.
 export const TRIAL_BUDGET_MS = 20 * 60 * 1000;
 // A reported healthy host needed 496 seconds for agent preparation before ready.
@@ -14,7 +14,7 @@ const POST_UPGRADE_BUDGET_MS = 10 * 60 * 1000;
 
 // Frozen source: no release dependency can prevent recovery. The sole exception is the
 // best-effort Windows console binding, imported from the selected release with a timeout.
-export const LAUNCHER_SOURCE = String.raw`#!/usr/bin/env node
+const LAUNCHER_SOURCE = String.raw`#!/usr/bin/env node
 // OpenClaw launcher format: ${LAUNCHER_FORMAT}
 import fs from "node:fs";
 import path from "node:path";

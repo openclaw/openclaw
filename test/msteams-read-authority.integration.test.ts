@@ -860,9 +860,11 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         local ? { userId: requesterId } : { target, messageId },
       );
       const rejected = expect(result).rejects.toThrow(
-        stage === "turn-token" && route === "gateway"
-          ? "The message turn has ended. Start a new turn to retry."
-          : /no longer active|authority/i,
+        stage === "turn-token"
+          ? route === "gateway"
+            ? "The message turn has ended. Start a new turn to retry."
+            : "message action turn capability is no longer active"
+          : "Plugin msteams was reloaded during the read. Retry the action.",
       );
       if (heldToken) {
         await started.promise;

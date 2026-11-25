@@ -28,7 +28,6 @@ export function createPreparedSessionTargetAssertion(input: {
     | "attempt_inactive"
     | "session_identity_changed"
     | "target_changed"
-    | "source_authority_refused"
     | "scope_authority_refused";
   let refusalRecorded = false;
   const recordTargetRefusal = (reason: RefusalReason, field?: (typeof targetFields)[number]) => {
@@ -64,17 +63,9 @@ export function createPreparedSessionTargetAssertion(input: {
       throw new SessionWorkStartChangedError("Session target preparation outlived its attempt");
     }
   };
-  return composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
-    assertTargetCurrent();
-    try {
-      assertSource();
-    } catch (cause) {
-      recordTargetRefusal("source_authority_refused");
-      throw new SessionWorkStartChangedError("Session target preparation outlived its attempt", {
-        cause,
-      });
-    }
-    // Source callbacks can retire this attempt or replace its selected target.
+  // Admission checked the run's source once; here only Stop, the run lifetime and the
+  // selected target are current. Session row predicates still reach the writer.
+  return composeSessionSourceAssertion([assertActiveRun], () => {
     assertTargetCurrent();
     try {
       assertActiveRun.assertScopeCurrent();

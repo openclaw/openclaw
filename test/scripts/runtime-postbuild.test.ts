@@ -850,11 +850,11 @@ describe("previous release update compatibility", () => {
         ].join("\n"),
         ...(includePrivateWorker
           ? {
-              "state/openclaw-state-read.worker.js":
-                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-command.mjs":
-                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./openclaw-state-read-service-abcdefgh.mjs"); }\n',
-              "state/openclaw-state-read-service-abcdefgh.mjs":
+              "infra/shared-worker-host.worker.js":
+                '//#region src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-command.mjs":
+                '//#region src/daemon/inspect.ts\nexport async function inspect() { return await import("./shared-worker-host-service-abcdefgh.mjs"); }\n',
+              "infra/shared-worker-host-service-abcdefgh.mjs":
                 '//#region src/cli/update-cli/runner.ts\nexport function resolveRunner() { return "private worker"; }\n',
             }
           : {}),

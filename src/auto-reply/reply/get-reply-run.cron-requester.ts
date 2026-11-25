@@ -34,7 +34,7 @@ export function resolveReplyCronChannelRequester(
   });
 }
 
-/** Capture the original source once; queued admission may refresh its live owner check. */
+/** Capture the original source once; a queued start checks its admitted owner once more. */
 export function createReplyCronAuthorityFactory(
   context: object,
   params: Parameters<typeof resolveReplyCronChannelRequester>[1] & {
@@ -43,7 +43,9 @@ export function createReplyCronAuthorityFactory(
 ) {
   const authority = getCommandOwnerAuthority(context);
   const requester = resolveReplyCronChannelRequester(context, params);
-  if (!authority || !requester) {
+  // A linked owner manages by its profile's grant; an asserted owner has no grant (owner list).
+  const grant = authority?.operatorAuthority?.grant;
+  if (!authority || !requester || (grant && grant.automations !== "manage")) {
     return undefined;
   }
   const owner = {
@@ -52,14 +54,16 @@ export function createReplyCronAuthorityFactory(
     senderId: requester.senderId,
   };
   return (runId: string, isCurrentOwner = () => authority.isCurrent()) =>
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "external", channel: params.channel },
-      { source: "channel-owner", isCurrent: isCurrentOwner },
-      undefined,
-      requester,
-      { isCurrent: isCurrentOwner, ...owner },
-    );
+    isCurrentOwner()
+      ? createCronCreatorAuthorityCapability(
+          runId,
+          { kind: "external", channel: params.channel },
+          { source: "channel-owner" },
+          undefined,
+          requester,
+          owner,
+        )
+      : undefined;
 }
 
 /**
@@ -73,9 +77,11 @@ export function logReplyCronOwnerWithoutAuthority(
   const owner = getCommandOwnerAuthority(context);
   const reason = !owner?.channelPrincipal
     ? "ingress-identity-unbound"
-    : owner.isCurrent()
-      ? "ingress-identity-mismatch"
-      : "owner-revoked";
+    : !owner.isCurrent()
+      ? "owner-revoked"
+      : (owner.operatorAuthority?.grant.automations ?? "manage") !== "manage"
+        ? "grant-without-manage"
+        : "ingress-identity-mismatch";
   log.info("cron: owner turn without management authority", {
     channel: params.channel,
     accountId: normalizeAccountId(params.accountId),

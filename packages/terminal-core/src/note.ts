@@ -1,13 +1,13 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { iterateGraphemes, visibleWidth } from "./ansi.js";
-import { resolveNoteOutput } from "./note-output.js";
+import { areNotesSuppressedInScope, resolveNoteOutput } from "./note-output.js";
 import { stylePromptTitle } from "./prompt-style.js";
+
+export { withSuppressedNotes } from "./note-output.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
-const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
@@ -149,10 +149,7 @@ export function noteToStream(
   title: string | undefined,
   output: NodeJS.WriteStream,
 ) {
-  if (
-    suppressNotesStorage.getStore() === true ||
-    isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
-  ) {
+  if (areNotesSuppressedInScope() || isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
     return;
   }
   const columns = resolveNoteColumns(output.columns);
@@ -164,8 +161,4 @@ export function noteToStream(
 
 export function note(message: unknown, title?: string) {
   noteToStream(message, title, resolveNoteOutput());
-}
-
-export function withSuppressedNotes<T>(callback: () => T): T {
-  return suppressNotesStorage.run(true, callback);
 }

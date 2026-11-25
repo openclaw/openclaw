@@ -480,7 +480,7 @@ describe("exec approval signed agent runtime", () => {
 
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
-        message: expect.stringContaining("no longer active"),
+        message: expect.stringContaining("The approval run ended"),
       });
     });
   });

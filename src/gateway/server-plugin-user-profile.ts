@@ -39,7 +39,7 @@ export async function withTrustedPluginUserProfileIdentity<T>(
       method: "users.list",
       scope,
       resolveGatewayContext,
-      callerAuthorityError: "Profile identity caller authority is no longer active",
+      callerAuthorityError: "Profile identity request ended. Start a new request.",
     },
     async (_resolved, assertCaller) => {
       const profile = await prepareUserProfileIdentity(profileId, {}, emails);

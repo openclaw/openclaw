@@ -102,7 +102,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("uploads an actual archive, reviews, and installs persisted agent files", async () => {
+  it("reviews an actual archive and opens the saved agent chat after import", async () => {
     const owner = instance!;
     const source = path.join(owner.stateDir, "synthetic-upload");
     await mkdir(source, { recursive: true });
@@ -205,9 +205,11 @@ suite.define(() => {
       await capture("review.png", confirm);
       await confirm.click();
       expect(await receipts["templates.add.apply"].promise).toBe(true);
-      const success = page.getByText("Installed agent: upload-proof", { exact: true });
-      await expect.poll(() => success.isVisible()).toBe(true);
-      await capture("installed.png", success);
+      await page.waitForURL((target) => target.pathname === "/chat/upload-proof");
+      const greeting = page.getByText("Synthetic upload greeting.", { exact: true });
+      await greeting.waitFor();
+      expect(await dialog.isVisible()).toBe(false);
+      await capture("chat.png", greeting);
       const config = JSON.parse(await readFile(owner.configPath, "utf8"));
       const agent = config.agents.entries["upload-proof"];
       expect(agent).toBeTruthy();

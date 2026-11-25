@@ -37,6 +37,8 @@ export const updateDoctorMigrationContext = new AsyncLocalStorage<{
   assertMigrationCurrent?: () => void;
   backup?: DoctorMigrationBackup;
   fullBackups?: Map<string, DoctorMigrationFullBackup>;
+  /** The startup owner already retained the originals before this private Doctor pass. */
+  stateUpgradeLiveStateDir?: string;
 }>();
 
 export function hasUpdateDoctorMigrationCapture(): boolean {

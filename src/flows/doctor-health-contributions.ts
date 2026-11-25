@@ -501,6 +501,12 @@ async function selectPostActivationInspections(
   });
 }
 
+/** The serving release owns which advisory inspections can run after activation. */
+export async function resolvePostActivationInspectionCheckIds(): Promise<string[]> {
+  const inspections = await selectPostActivationInspections(resolveDoctorHealthContributions());
+  return [...new Set(inspections.flatMap(({ checks }) => checks.map((check) => check.id)))];
+}
+
 async function runDoctorHealthContributionList(
   ctx: DoctorHealthFlowContext,
   contributions: readonly DoctorHealthContribution[],

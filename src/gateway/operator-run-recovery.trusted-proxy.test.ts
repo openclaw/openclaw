@@ -2,12 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
@@ -119,7 +119,7 @@ describe("saved proxy-authenticated operator sources", () => {
       next.gateway!.auth!.identityScopes = {};
       changeConfig(next);
 
-      await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+      await expect(restoreSaved()).rejects.toThrow(OperatorRefusalError);
     }));
 });
 
@@ -193,7 +193,7 @@ it.each([
         expect(owner.requiredGeneration).toBe(generation);
         await expect(
           restoreGatewayQueuedOperatorRecovery({ source, context, assertCurrent() {} }),
-        ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+        ).rejects.toThrow(OperatorRefusalError);
         expectCurrent(admitted.authority);
       } finally {
         admitted.release();

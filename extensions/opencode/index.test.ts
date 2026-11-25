@@ -427,7 +427,7 @@ describe("opencode provider plugin", () => {
     await catalog({ resolveProviderApiKey, resolveProviderAuth });
 
     const marker = resolveProviderAuth.mock.results[0]?.value.apiKey;
-    expect(marker).toEqual(expect.stringContaining("opencode"));
+    expect(marker).toBe("oauth:opencode");
     expect(liveCatalog).toHaveBeenCalledExactlyOnceWith({
       apiKey: marker,
       discoveryApiKey: "console-access",

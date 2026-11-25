@@ -11,10 +11,7 @@ import type {
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
 import { isCronJobActiveFailure } from "../lib/cron-status.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../lib/cron/inventory-connection.ts";
+import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { createCronReadState } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
@@ -126,16 +123,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
         if (event.event === "openclawId.people.changed") {
           this.refreshOpenClawId();
         } else if (event.event === "cron") {
-          if (
-            !this.#applyCronEvent(event.payload) &&
-            !hasCronInventoryEvents(sources.gateway.snapshot)
-          ) {
-            this.#load(false);
-          }
+          this.#applyCronEvent(event.payload);
           if (document.visibilityState === "hidden") {
             this.#cronRefreshNeeded = true;
           }
-        } else if (isCronInventoryInvalidation(event, sources.gateway.snapshot)) {
+        } else if (isCronInventoryInvalidation(event)) {
           this.#load(false);
         } else if (
           modelAuthEventInvalidates(event, sources.agentSelection.state.selectedId ?? undefined)
@@ -315,7 +307,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
   }
 
-  #applyCronEvent(payload: unknown): boolean {
+  #applyCronEvent(payload: unknown): void {
     // A pending/partial inventory still needs its trailing read. Applying an event
     // there would let an older page overwrite it or certify missing rows.
     if (
@@ -329,14 +321,14 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       !isSidebarCronJob(payload.job) ||
       payload.jobId !== payload.job.id
     ) {
-      return false;
+      return;
     }
     const job = payload.job;
     const index = this.#cronJobs.findIndex((entry) => entry.id === job.id);
     // Events do not establish list membership: even All agents can be access-
     // filtered, and completion can carry a removed job's historical snapshot.
     if (index < 0) {
-      return false;
+      return;
     }
     if (payload.action === "removed") {
       this.#cronJobs.splice(index, 1);
@@ -346,7 +338,6 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       this.#cronJobs[index] = { id, enabled, state: { lastRunStatus, lastStatus, autoDisabled } };
     }
     this.onChange();
-    return true;
   }
 
   #load(refreshModelAuth = true, refreshCron = true): void {

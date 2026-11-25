@@ -397,13 +397,13 @@ describe("buildGatewayInstallPlan", () => {
     mocks.resolveGatewayProgramArguments.mockResolvedValue({
       programArguments: [bunPath, "/opt/openclaw/dist/index.js", "gateway"],
     });
-    await buildGatewayInstallPlan({ env: { HOME: isolatedHome }, port: 3000, runtime: "bun" });
-    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
-      env: { HOME: isolatedHome },
-      runtime: "bun",
-    });
+    const env = isolatedPlanEnv();
+    await buildGatewayInstallPlan({ env, port: 3000, runtime: "bun" });
+    expect(env).toEqual({ HOME: isolatedHome });
+    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({ env, runtime: "bun" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith({
+      env,
       port: 3000,
       allowUnconfigured: false,
       dev: false,

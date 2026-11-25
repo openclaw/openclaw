@@ -17,6 +17,7 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { LOCAL_HOST } from "../gateway/operator-admission.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -111,7 +112,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId,
-      senderIsOwner: opts.senderIsOwner !== false,
+      senderIsOwner: LOCAL_HOST.grant.owner,
       conversationReadOrigin: "direct-operator",
       broadcastAccountPlan,
       gateway: {

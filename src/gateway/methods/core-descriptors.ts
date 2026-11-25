@@ -678,6 +678,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["templates.drafts.read", "templates-drafts", "operator.admin", "2026.10"],
   ["templates.drafts.save", "templates-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["templates.drafts.review", "templates-drafts", "operator.admin", "2026.10"],
+  ["templates.drafts.signIn", "templates-drafts", "operator.admin", "2026.11"],
   [
     "templates.drafts.publish",
     "templates-drafts",

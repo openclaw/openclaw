@@ -10,7 +10,7 @@ import {
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { expectCount, expectVisible } from "./sidebar-assertions.test-support.ts";
-import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
+import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 import { setSidebarProofTheme } from "./sidebar-footer-proof.test-support.ts";
 
 type SidebarAttentionScopeFlowOptions = {
@@ -133,6 +133,26 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("desktop-automation-rail.png");
     await clock.click();
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await expectVisible(dot);
+
+    const pages = await openSidebarPages(page);
+    await pages.getByRole("link", { name: "Usage", exact: true }).click();
+    await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
+    const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
+    const selectScope = async (label: string, agentId: string | null) => {
+      await pageScope.locator(".agent-select__trigger").click();
+      await pageScope
+        .locator(".agent-select__option[data-agent-option]")
+        .filter({ hasText: label })
+        .click();
+      await expect.poll(() => pageScope.locator(".agent-select__label").textContent()).toBe(label);
+      await waitForCronScope(agentId);
+    };
+    await selectScope("All agents", null);
+    await expectVisible(dot);
+    await selectScope("Main", "main");
+    await expectCount(dot, 0);
+    await selectScope("Writer", "writer");
     await expectVisible(dot);
 
     const upstream = {

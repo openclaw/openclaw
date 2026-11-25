@@ -396,9 +396,9 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     // A -> B -> A metadata replacement models account-scoped rematerialization;
     // no credential selection, provider request, or operator state is involved.
     for (const [contextTokens, threshold] of [
-      [872_000, 654_000],
+      [872_000, 741_200],
       [64_000, 44_000],
-      [872_000, 654_000],
+      [872_000, 741_200],
     ] as const) {
       registry.registerProvider(provider, {
         api: "openai-responses",

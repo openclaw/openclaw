@@ -319,6 +319,7 @@ it("starts its PG bridge while the first command module is still loading", async
     namespace: "state_reader_fixture",
     storeId: "state-store",
     version: 29,
+    minReader: 29,
     capabilities: { serverMajor: 17, serverEncoding: "UTF8", clientEncoding: "UTF8" },
     catalog: [],
   };
