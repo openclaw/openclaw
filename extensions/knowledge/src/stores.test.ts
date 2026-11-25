@@ -720,3 +720,22 @@ it("several agents without a default: operators must choose; tools are unaffecte
   expect(((await query(f, "records_detail")) as Output<"records_detail">).total).toBe(1);
   expect((await f.service.status({}, f.as("main"))).store).toBe("unprovisioned");
 });
+
+it("explicit ownership: the configured system agent is the operator default", async () => {
+  const f = await fixture();
+  // Per-entry default markers do not apply under explicit ownership; the
+  // durable owner is agents.defaults.systemAgent, as for core operator work.
+  const config = f.host.config as typeof f.host.config & {
+    agents: { ownership?: "explicit"; defaults?: { systemAgent?: { agentId?: string } } };
+  };
+  for (const agent of config.agents.list) {
+    delete agent.default;
+  }
+  config.agents.ownership = "explicit";
+  config.agents.defaults = { systemAgent: { agentId: "research" } };
+  await f.save("research", "Research note");
+  expect((await f.snapshot()).defaultAgent).toBe("research");
+  const status = await f.service.status({}, f.reader);
+  expect(status.agent).toBe("research");
+  expect(status.store).toBe("ready");
+});

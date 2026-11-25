@@ -1,5 +1,8 @@
 import path from "node:path";
-import { listAgentIds, tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  listAgentIds,
+  tryResolveAgentOperationAgentId,
+} from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   maintenancePrincipal,
@@ -82,9 +85,11 @@ export class Stores {
     return listAgentIds(this.hostConfig());
   }
   /** The configured default agent, or undefined when several agents are
-   * configured without one (operators must then choose an agent explicitly). */
+   * configured without one (operators must then choose an agent explicitly).
+   * Uses the owner-aware resolver so `agents.defaults.systemAgent` designates
+   * the default under explicit ownership, as core operation defaults do. */
   defaultAgent(): string | undefined {
-    return tryResolveDefaultAgentId(this.hostConfig());
+    return tryResolveAgentOperationAgentId(this.hostConfig());
   }
   /** The membership Knowledge enforces: the registry's reconciled section. */
   membership(): Membership {
