@@ -1,16 +1,15 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  readTranscriptDisplayPosition,
-  type TranscriptDisplayPosition,
-} from "../../../../src/chat/transcript-display-position.ts";
+import type { TranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.ts";
 import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
   nativeHistoryMessageSourceId,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
-import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import {
+  nativeHistoryMessagePosition,
+  type ChatHistoryPagination,
+} from "./chat-history-pagination.ts";
 import {
   CHAT_HISTORY_OLDER_PAGE_LIMIT,
   requestOlderChatHistoryPage,
@@ -21,12 +20,6 @@ import {
   resolveChatHistoryPagination,
 } from "./chat-history-snapshot.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-
-function nativeHistoryMessagePosition(message: unknown) {
-  return readTranscriptDisplayPosition(
-    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
-  );
-}
 
 /** Display order can relocate activity; cursor coverage follows physical rows. */
 function oldestPositionedHistoryMessage(messages: unknown[]) {

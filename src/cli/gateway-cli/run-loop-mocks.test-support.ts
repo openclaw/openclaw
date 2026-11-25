@@ -5,7 +5,7 @@ import type { HostedGatewayStop } from "../../daemon/hosted-stop.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
-import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
+import type { waitForGatewayHttpReadiness } from "../daemon-cli/restart-health-probe.js";
 import {
   createCloseMock,
   createGatewayLogger,
@@ -48,7 +48,6 @@ vi.mock("node:fs/promises", async (original) => {
 type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
 type ManagedHandoff = typeof import("../../infra/update-managed-service-handoff.js");
 type RestartIntent = typeof import("../../infra/restart-intent.js");
-type RestartSentinel = typeof import("../../infra/restart-sentinel.js");
 const gatewayLog = createGatewayLogger();
 const cancelShutdownHardExitWatchdog = vi.fn(async () => {});
 const resettableMocks = {
@@ -95,12 +94,7 @@ const resettableMocks = {
   respawnGatewayProcessForUpdate: vi.fn<
     (_opts?: { env?: NodeJS.ProcessEnv }) => UpdateRespawnResultFixture
   >(() => ({ mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" })),
-  writeRestartSentinelIfUnchanged: vi.fn<RestartSentinel["writeRestartSentinelIfUnchanged"]>(
-    async () => null,
-  ),
-  readRestartSentinelReadOnly: vi.fn<RestartSentinel["readRestartSentinelReadOnly"]>(),
-  waitForGatewayHealthyRestart:
-    vi.fn<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>(),
+  waitForGatewayHttpReadiness: vi.fn<typeof waitForGatewayHttpReadiness>(),
   hasManagedProviderLocalServices: vi.fn(() => false),
   stopManagedProviderLocalServices: vi.fn(async () => {}),
 };
@@ -186,9 +180,9 @@ vi.mock("../../process/kill-tree.js", async (original) => ({
   ...(await original<typeof import("../../process/kill-tree.js")>()),
   killProcessTree,
 }));
-vi.mock("../daemon-cli/restart-health.js", async (original) => ({
-  ...(await original<typeof import("../daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: forward(() => m.waitForGatewayHealthyRestart),
+vi.mock("../daemon-cli/restart-health-probe.js", async (original) => ({
+  ...(await original<typeof import("../daemon-cli/restart-health-probe.js")>()),
+  waitForGatewayHttpReadiness: forward(() => m.waitForGatewayHttpReadiness),
 }));
 vi.mock("../../infra/gateway-lock.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-lock.js")>()),
@@ -245,9 +239,7 @@ vi.mock("../../infra/process-respawn.js", async (original) => ({
 }));
 // mock-isolation: Restart sentinel receipts must not read or write the runner's state.
 vi.mock("../../infra/restart-sentinel.js", () => ({
-  readRestartSentinelReadOnly: () => m.readRestartSentinelReadOnly(),
   markUpdateRestartSentinelFailure: forward(() => m.markUpdateRestartSentinelFailure),
-  writeRestartSentinelIfUnchanged: forward(() => m.writeRestartSentinelIfUnchanged),
 }));
 vi.mock("../../infra/restart-handoff.js", async (original) => ({
   ...(await original<typeof import("../../infra/restart-handoff.js")>()),
@@ -353,20 +345,6 @@ function expectRestartHandoffCall(expected: {
     ),
   });
 }
-const respawnHealth = (overrides: Partial<GatewayRestartResult> = {}): GatewayRestartResult => ({
-  runtime: { status: "running", pid: 7777 },
-  portUsage: { port: 18789, status: "busy", listeners: [{ pid: 7777 }], hints: [] },
-  healthy: true,
-  outcome:
-    overrides.waitOutcome === "still-starting"
-      ? "starting"
-      : overrides.healthy === false
-        ? "failed"
-        : "ready",
-  waitOutcome: "healthy",
-  staleGatewayPids: [],
-  ...overrides,
-});
 let gatewayWorkAdmissionActual: typeof import("../../process/gateway-work-admission.js");
 let supervisorEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 beforeEach(async () => {
@@ -391,8 +369,7 @@ beforeEach(async () => {
   supervisorEnvSnapshot = captureEnv(supervisorEnv);
   supervisorEnv.forEach(deleteTestEnvValue);
   m.consumeGatewaySuspendHandoff.mockReturnValue({ ok: true, value: false });
-  m.waitForGatewayHealthyRestart.mockResolvedValue(respawnHealth());
-  m.readRestartSentinelReadOnly.mockResolvedValue(null);
+  m.waitForGatewayHttpReadiness.mockResolvedValue({ healthz: 200, readyz: 200 });
   gatewayWorkAdmissionActual = await vi.importActual("../../process/gateway-work-admission.js");
   gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
   m.completeForegroundUpdateHandoffAfterClose.mockResolvedValue({ respawn: true });
@@ -416,7 +393,6 @@ export const runLoopFixture = {
   gatewayLog,
   killProcessTree,
   readCgroup,
-  respawnHealth,
   runLoopWithStart,
   spawnProcess,
   withRunningGateway,

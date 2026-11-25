@@ -16,7 +16,6 @@ import {
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
@@ -326,7 +325,7 @@ describe("cron method validation", () => {
     ["cron.get", false, "channel-owner", true],
     ["cron.update", false, "channel-owner", false],
     ["cron.run", false, "channel-owner", true],
-    ["cron.remove", true, "control-ui-admin", true],
+    ["cron.remove", true, "operator", true],
   ] as const)(
     "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
     async (method, closeAfterCommit, source, trusted) => {
@@ -338,16 +337,7 @@ describe("cron method validation", () => {
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         source === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: "local" },
-        source === "channel-owner"
-          ? {
-              source,
-              isCurrent: () =>
-                isConfiguredCommandOwner(getRuntimeConfig(), {
-                  channel: "discord",
-                  senderId: "owner-1",
-                }),
-            }
-          : { source },
+        { source },
       );
       const job = createCronJob({
         agentId: "telegram-agent",
@@ -1025,7 +1015,7 @@ describe("cron method validation", () => {
         const replay = await invokeCron(`cron.${method}`, params, { context, client });
         expectResponseError(replay.respond, {
           code: "INVALID_REQUEST",
-          messageIncludes: "Configured MCP cron authority is no longer active",
+          messageIncludes: "This run's MCP cron access has ended",
         });
         expect(committed).toHaveLength(1);
       } finally {
@@ -1045,7 +1035,7 @@ describe("cron method validation", () => {
     });
     expectResponseError(mismatch.respond, {
       code: "INVALID_REQUEST",
-      messageIncludes: "Configured MCP cron authority is no longer active",
+      messageIncludes: "This run's MCP cron access has ended",
     });
     expect(context.committedAdds).toHaveLength(0);
 
@@ -1086,7 +1076,7 @@ describe("cron method validation", () => {
       });
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "Configured MCP cron authority is no longer active",
+        messageIncludes: "This run's MCP cron access has ended",
       });
       expect(context.committedAdds).toHaveLength(0);
       expect(context.committedUpdates).toHaveLength(0);
@@ -1128,20 +1118,6 @@ describe("cron method validation", () => {
       expect(context.committedUpdates).toHaveLength(0);
     },
   );
-
-  it("checks a direct Cron caller again at the add commit boundary", async () => {
-    const context = createCronContext();
-    const result = await invokeCron("cron.add", agentTurnCronParams(), {
-      context,
-      hasCurrentClientAuthority: () => context.cron.add.mock.calls.length === 0,
-    });
-    expect(context.cron.add).toHaveBeenCalledOnce();
-    expect(context.committedAdds).toHaveLength(0);
-    expectResponseError(result.respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "Gateway caller authority is no longer active",
-    });
-  });
 
   it.each([
     ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],

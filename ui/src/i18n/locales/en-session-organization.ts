@@ -12,7 +12,6 @@ const enSessionOrganization = {
     subagentPrefix: en.sessionsView.subagentPrefix,
     automationPrefix: en.sessionsView.automationPrefix,
     actionRequiresConnection: en.sessionsView.actionRequiresConnection,
-    actionRequiresScope: en.sessionsView.actionRequiresScope,
     actionRequiresOwnership: en.sessionsView.actionRequiresOwnership,
     removePreservedWorktreeTitle: "Remove worktree {branch}?",
     deletePreservedReasons: {

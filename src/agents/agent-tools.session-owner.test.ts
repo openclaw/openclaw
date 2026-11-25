@@ -73,7 +73,6 @@ it("lists creation without operator authority while preserving explicit denies a
     profileId: "profile-requester",
     scopes: ["operator.sessions.write"],
     signal: new AbortController().signal,
-    assertCurrent: () => {},
   });
   const gateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({});
   expect(assemble().find((tool) => tool.name === "sessions_create")).toBeDefined();

@@ -245,7 +245,7 @@ describe("live generated-media completion", () => {
         isSourceSessionEffectsAllowed: () => sourceAllowed,
       };
       const pending = await deliverFixture("discord", params);
-      expect(pending).toMatchObject({ delivered: false, disposition: "session_queued" });
+      expect(pending).toMatchObject({ delivered: false, path: "queued" });
       expectNoExternalDelivery(callGateway, sendMessage);
       sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockImplementationOnce(() => {
         sourceAllowed = owner !== "retired";

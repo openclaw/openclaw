@@ -61,6 +61,7 @@ caption`,
     expect(saveMedia).toHaveBeenCalledExactlyOnceWith({
       url: photoUrl,
       maxBytes: expectedMaxBytes,
+      timeoutMs: 180_000,
       responseHeaderTimeoutMs: 120_000,
       readIdleTimeoutMs: 30_000,
       ssrfPolicy: undefined,
@@ -70,6 +71,27 @@ caption`,
       attachments: [attachment],
       unavailableCount: 0,
     });
+  });
+
+  it("cancels in-flight downloads when ingress work is aborted", async () => {
+    saveMedia.mockImplementation(
+      ({ requestInit }) =>
+        new Promise((_, reject) => {
+          const signal = requestInit?.signal;
+          signal?.throwIfAborted();
+          signal?.addEventListener("abort", () => reject(new Error("ingress work aborted")));
+        }),
+    );
+    const ingress = new AbortController();
+    const pending = downloadMessageImages(
+      [imageBlock(photoUrl), imageBlock("https://example.com/second.png")],
+      undefined,
+      ingress.signal,
+    );
+    await vi.waitFor(() => expect(saveMedia).toHaveBeenCalledOnce());
+    ingress.abort(new Error("ingress stalled"));
+
+    await expect(pending).resolves.toEqual({ attachments: [], unavailableCount: 2 });
   });
 
   it.each([

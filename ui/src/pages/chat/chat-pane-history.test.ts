@@ -2,7 +2,8 @@
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createComponent, createMemo, merge } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -36,8 +37,11 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
+  type ChatMessageCache,
+  type ChatSessionSnapshot,
   readChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { createSnapshotRecord } from "./session-snapshot-record.ts";
 import { agentEvent } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -86,50 +90,6 @@ function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPaginati
   return nextOffset === undefined
     ? { hasMore: false, totalMessages }
     : { hasMore: true, nextOffset, olderCursor: `older-${nextOffset}`, totalMessages };
-}
-
-function installHistoryObserver(intersect = true) {
-  const observe = vi.fn();
-  const disconnect = vi.fn();
-  const construct =
-    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
-  let rootMargin: string | undefined;
-  class FakeIntersectionObserver {
-    readonly root: IntersectionObserver["root"] | undefined;
-    constructor(
-      private readonly callback: IntersectionObserverCallback,
-      options?: IntersectionObserverInit,
-    ) {
-      rootMargin = options?.rootMargin;
-      this.root = intersect ? undefined : (options?.root ?? null);
-      construct(callback, this as unknown as IntersectionObserver);
-    }
-    disconnect() {
-      disconnect();
-    }
-    observe(target: Element) {
-      observe(target);
-      if (intersect) {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-    }
-  }
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-  return { observe, disconnect, construct, rootMargin: () => rootMargin };
-}
-
-function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
-  const sentinel = document.createElement("div");
-  sentinel.className = "chat-history-sentinel";
-  thread.append(sentinel);
-  pane.historySentinel = sentinel;
-  return sentinel;
 }
 
 it("passes only a proven profile viewer identity to transcript rendering", () => {
@@ -446,7 +406,7 @@ it("keeps a retry outcome when a tail refresh retires an earlier-history action"
   );
   const older = pane.loadOlderMessages();
   const tail = loadChatHistory(state);
-  pane.syncHistoryObserver();
+  pane.evaluateHistoryEdge();
   await tail;
   held.resolve(historyPage());
   await older;
@@ -481,19 +441,58 @@ it("fills a visible history tail once the viewport can fit it", async () => {
   Object.defineProperty(thread, "scrollHeight", { value: 400 });
   let clientHeight = 0;
   Object.defineProperty(thread, "clientHeight", { get: () => clientHeight });
-  const sentinel = appendSentinel(thread, pane);
   pane.append(thread);
   vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
-  const { observe } = installHistoryObserver();
-  pane.syncHistoryObserver();
+  pane.evaluateHistoryEdge();
   expect(request).not.toHaveBeenCalled();
   clientHeight = 200;
-  pane.syncHistoryObserver();
+  pane.evaluateHistoryEdge();
   clientHeight = 600;
-  pane.syncHistoryObserver();
+  pane.evaluateHistoryEdge();
+  pane.evaluateHistoryEdge();
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-  expect(observe).toHaveBeenCalledWith(sentinel);
   await vi.waitFor(() => expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]));
+});
+
+function scrollTo(pane: { handleTranscriptScroll: (event: Event) => void }, thread: HTMLElement) {
+  return (top: number) => {
+    thread.scrollTop = top;
+    const event = new Event("scroll");
+    Object.defineProperty(event, "target", { value: thread });
+    pane.handleTranscriptScroll(event);
+  };
+}
+
+it("starts exactly one load per upward reader intent on a short page", () => {
+  const { pane, state } = historyPane();
+  state.handleChatScroll = vi.fn();
+  const thread = appendChatThread(pane, { scrollHeight: 900, clientHeight: 600, scrollTop: 300 });
+  const load = vi.spyOn(pane, "loadOlderMessages").mockResolvedValue(true);
+  const scroll = scrollTo(pane, thread);
+  pane.transcriptScrollTop = 300;
+  scroll(200);
+  expect(load).toHaveBeenCalledExactlyOnceWith(true);
+  // The whole page sits inside the prefetch edge. Offsets keep publishing (layout corrections,
+  // the prepend anchor, a commit) without new reader input; none of them is another intent.
+  const maintenance = vi.spyOn(pane.transcript, "isMaintenanceScroll", "get");
+  maintenance.mockReturnValue(true);
+  for (const top of [260, 180, 220]) {
+    scroll(top);
+  }
+  maintenance.mockReturnValue(false);
+  scroll(220);
+  pane.evaluateHistoryEdge();
+  expect(load).toHaveBeenCalledOnce();
+});
+
+it("keeps the short-viewport fill one-shot", () => {
+  const { pane } = historyPane();
+  appendChatThread(pane, { scrollHeight: 400, clientHeight: 600 });
+  const load = vi.spyOn(pane, "loadOlderMessages").mockResolvedValue(true);
+  for (let commit = 0; commit < 4; commit += 1) {
+    pane.evaluateHistoryEdge();
+  }
+  expect(load).toHaveBeenCalledExactlyOnceWith(false);
 });
 
 it.each(["initial placement", "programmatic reveal"])(
@@ -511,7 +510,7 @@ it.each(["initial placement", "programmatic reveal"])(
     const event = new Event("scroll");
     Object.defineProperty(event, "target", { value: thread });
     pane.handleTranscriptScroll(event);
-    expect(pane.historyObserverArmed).toBe(false);
+    expect(pane.historyReaderIntent).toBe(false);
   },
 );
 
@@ -530,8 +529,6 @@ it.each([
       clientHeight: 500,
       scrollTop: 5500,
     });
-    appendSentinel(thread, pane);
-    installHistoryObserver();
     if (previous === 0) {
       thread.scrollTop = 0;
       const initial = new Event("scroll");
@@ -559,40 +556,31 @@ it("prefetches older history from upward intent well before the top edge", async
   const { pane, state, request } = historyPane();
   state.handleChatScroll = vi.fn();
   const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
-  appendSentinel(thread, pane);
-  const observer = installHistoryObserver();
-  pane.transcriptScrollTop = 900;
-  thread.scrollTop = 800;
-  const event = new Event("scroll");
-  Object.defineProperty(event, "target", { value: thread });
-  pane.handleTranscriptScroll(event);
+  const scroll = scrollTo(pane, thread);
+  pane.transcriptScrollTop = 1_400;
+  scroll(1_300);
+  expect(request).not.toHaveBeenCalled();
+  scroll(1_200);
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
   expectOlderRequest(request, state.sessionKey);
-  expect(observer.rootMargin()).toBe("1200px 0px 0px");
 });
 
-it("resumes an armed history observation after a row correction in the same gesture", async () => {
-  const { pane, request } = historyPane();
-  const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
-  appendSentinel(thread, pane);
-  const { construct } = installHistoryObserver(false);
-  const maintenance = vi.spyOn(pane.transcript, "isMaintenanceScroll", "get");
-  maintenance.mockReturnValue(false);
-  const event = new Event("scroll");
-  Object.defineProperty(event, "target", { value: thread });
-  pane.transcriptScrollTop = 900;
-  thread.scrollTop = 800;
-  pane.handleTranscriptScroll(event);
-  const [notify, observer] = construct.mock.calls[0]!;
-  maintenance.mockReturnValue(true);
-  notify([{ isIntersecting: true } as IntersectionObserverEntry], observer);
+it("loads when a layout correction, not the reader, lands a Home press at the edge", async () => {
+  const { pane, state, request } = historyPane();
+  state.handleChatScroll = vi.fn();
+  const thread = appendChatThread(pane, {
+    scrollHeight: 12_000,
+    clientHeight: 600,
+    scrollTop: 11_000,
+  });
+  const scroll = scrollTo(pane, thread);
+  pane.handleTranscriptHistoryIntent(new KeyboardEvent("keydown", { key: "Home" }));
+  // The native smooth scroll skips the prefetch band between two frames.
+  scroll(1_250);
   expect(request).not.toHaveBeenCalled();
-  maintenance.mockReturnValue(false);
-  thread.scrollTop = 700;
-  pane.handleTranscriptScroll(event);
-  expect(construct).toHaveBeenCalledTimes(2);
-  const [resume, replacement] = construct.mock.calls[1]!;
-  resume([{ isIntersecting: true } as IntersectionObserverEntry], replacement);
+  // A held row correction writes the rest of the way to the top.
+  vi.spyOn(pane.transcript, "isMaintenanceScroll", "get").mockReturnValue(true);
+  scroll(0);
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 });
 
@@ -674,23 +662,17 @@ it("keeps prefetch failures silent and retries reactively", async () => {
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
 });
 
-it("reuses an armed history observer and ignores its queued callback after reset", async () => {
+it("withdraws reader intent on a viewport reset", () => {
   const request = vi.fn();
   const { pane, state } = testPane(request);
   state.chatHistoryPagination = pagination(4, 2);
-  pane.historyObserverArmed = true;
-  const thread = appendChatThread(pane, { scrollHeight: 400, clientHeight: 200 });
-  const sentinel = appendSentinel(thread, pane);
-  const { observe, disconnect, construct } = installHistoryObserver(false);
-  pane.syncHistoryObserver();
-  pane.syncHistoryObserver();
-  expect(construct).toHaveBeenCalledOnce();
-  expect(observe).toHaveBeenCalledExactlyOnceWith(sentinel);
-  expect(disconnect).not.toHaveBeenCalled();
+  const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
+  thread.scrollTop = 2_000;
+  pane.handleTranscriptHistoryIntent(new KeyboardEvent("keydown", { key: "Home" }));
+  expect(pane.historyReaderIntent).toBe(true);
   pane.resetOlderMessagesViewport();
-  const [notify, observer] = construct.mock.calls[0]!;
-  notify([{ isIntersecting: true } as IntersectionObserverEntry], observer);
-  await Promise.resolve();
+  thread.scrollTop = 0;
+  pane.evaluateHistoryEdge();
   expect(request).not.toHaveBeenCalled();
 });
 
@@ -767,6 +749,67 @@ it.each([false, true])(
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[0]?.[1]).toMatchObject({ messageId: "source-2", limit: 1 });
     expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: "before-two" });
+  },
+);
+
+it.each(["disk", "memory"] as const)(
+  "recovers every source row after reopening a %s-trimmed display projection",
+  async (tier) => {
+    const text = tier === "memory" ? "x".repeat(160 * 1024) : "message";
+    const physical = Array.from({ length: 82 }, (_, index) => {
+      const seq = index + 1;
+      return {
+        ...nativeHistoryMessage(seq, text),
+        __openclaw: {
+          id: `source-${seq}`,
+          seq,
+          transcriptPosition: {
+            source: "history",
+            rawSeq: seq,
+            ...(seq === 8 ? { activity: { afterRawSeq: 1, scopeId: "tool", startOrder: 0 } } : {}),
+          },
+        },
+      };
+    });
+    const snapshot = {
+      messages: composeTranscriptDisplay(physical),
+      sessionId: "current",
+      deltaCursor: "persisted",
+      pagination: pagination(physical.length),
+    };
+    expect(nativeHistorySeq(snapshot.messages[1])).toBe(8);
+    const request = vi.fn(
+      async (_method: string, params: { messageId?: string; cursor?: string }) => {
+        if (params.messageId) {
+          const index = physical.findIndex((row) => row["__openclaw"].id === params.messageId);
+          expect(index).toBeGreaterThan(0);
+          return { messages: [physical[index]], olderCursor: String(index), sessionId: "current" };
+        }
+        return { messages: physical.slice(0, Number(params.cursor)), sessionId: "current" };
+      },
+    );
+    const { pane, state } = createNativeShowEarlierPane(request);
+    const target = { sessionKey: state.sessionKey };
+    let restored: ChatSessionSnapshot | null | undefined;
+    if (tier === "disk") {
+      restored = (await createSnapshotRecord(target.sessionKey, { savedAt: 1, snapshot }))?.record
+        .snapshot;
+    } else {
+      const cache: ChatMessageCache = new Map();
+      cacheChatSessionSnapshot(cache, state, target, snapshot);
+      restored = readChatSessionSnapshot(cache, state, target);
+    }
+    expect(restored?.pagination).toMatchObject({ hasMore: true, needsBoundary: true });
+    expect(restored?.deltaCursor).toBe("persisted");
+    applyChatCacheSnapshot(state, restored!);
+
+    await pane.loadOlderMessages();
+
+    expect(state.chatHistoryPagination.hasMore).toBe(false);
+    expect(state.chatMessages).toHaveLength(physical.length);
+    expect(new Set(state.chatMessages.map(nativeHistorySeq))).toEqual(
+      new Set(physical.map(nativeHistorySeq)),
+    );
   },
 );
 

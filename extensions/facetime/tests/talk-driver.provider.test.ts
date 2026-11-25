@@ -118,7 +118,6 @@ function startParams(overrides: Partial<Parameters<typeof startFaceTimeTalkDrive
     logger: { warn: vi.fn(), debug: vi.fn(), info: vi.fn(), error: vi.fn() },
     callUUID: "call-1",
     senderId: "caller@example.test",
-    senderIsOwner: true as const,
     captureBinary: "/forbidden-capture",
     onHangupRequested: vi.fn(async () => {}),
     ...overrides,

@@ -310,7 +310,11 @@ it("commits authoritative toggle state and advances an open editor revision", as
 
   const toggle = toggleCronJob(state, loadedJob, false);
   try {
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("cron.list", expect.anything()));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("cron.list", expect.anything(), {
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(request).toHaveBeenCalledWith("cron.status", {});
     expect(sent(request, "cron.update")).toMatchObject({
       id: loadedJob.id,

@@ -12,6 +12,23 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { DeferredPluginMigration } from "../../infra/deferred-plugin-migrations.js";
 import { commitPluginInstallRecordsOnly } from "../../plugins/install-record-commit.js";
+import type { PluginInstallBatchTarget } from "../../plugins/install-runtime-batch.js";
+import { hashStableJson } from "../../plugins/installed-plugin-index-hash.js";
+
+/** Project the records just published by the caller's continuously held lifecycle lease. */
+export function collectPluginReloadTargets(
+  previous: Record<string, PluginInstallRecord>,
+  current: Record<string, PluginInstallRecord>,
+): PluginInstallBatchTarget[] {
+  const targets: PluginInstallBatchTarget[] = [];
+  for (const [pluginId, record] of Object.entries(current)) {
+    const installHash = hashStableJson(record);
+    if (!previous[pluginId] || hashStableJson(previous[pluginId]) !== installHash) {
+      targets.push({ pluginId, installHash });
+    }
+  }
+  return targets;
+}
 
 /**
  * Hooks for publishing changed plugin records. The combined writer commits the install index

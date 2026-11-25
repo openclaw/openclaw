@@ -92,7 +92,9 @@ export async function resolveWhatsAppIngressAccess(params: {
     accountId: params.policy.account.accountId,
     identity: {
       key: "whatsapp-sender-phone",
-      kind: "phone",
+      // Baileys reads the sender from WhatsApp's authenticated stanza metadata (Noise-pinned
+      // linked-device session), never from message text or display names.
+      authentication: "verified",
       normalize: normalizeWhatsAppIngressPhone,
       sensitivity: "pii",
       entryIdPrefix: "whatsapp-entry",

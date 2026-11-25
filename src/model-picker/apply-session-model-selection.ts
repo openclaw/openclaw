@@ -13,6 +13,7 @@ import {
   type ModelVisibilityPolicy,
 } from "../agents/model-visibility-policy.js";
 import { resolveOperatorModelDefault } from "../agents/operator-model-policy.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   persistStickyModelSelectionBestEffort,
   type StickyModelSelectionDispatchOutcome,
@@ -147,12 +148,21 @@ export async function applySessionModelSelectionInternal(
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
-  const operatorScope = params.operatorAuthority
+  const invocation = params.operatorAuthority
     ? undefined
-    : (
-        await import("../gateway/operator-invocation-authority.js")
-      ).captureOperatorToolGatewayAuthority();
-  const operatorAuthority = params.operatorAuthority ?? operatorScope?.authority;
+    : await import("../gateway/operator-invocation-authority.js");
+  const operatorAuthority = params.operatorAuthority ?? invocation?.readOperatorToolRunAuthority();
+  let admissionError: string | undefined;
+  try {
+    if (!operatorAuthority && invocation?.hasOperatorToolGatewayAuthority()) {
+      admissionError = "Operator model selection requires original Gateway authority.";
+    }
+  } catch (error) {
+    admissionError = formatErrorMessage(error);
+  }
+  if (admissionError) {
+    return { status: "rejected", reason: "not-allowed", message: admissionError };
+  }
 
   const resetToDefault = params.request.resetToDefault === true;
   const policy =
@@ -177,7 +187,6 @@ export async function applySessionModelSelectionInternal(
     : params.request;
   const validateOperatorSelection = () => {
     try {
-      operatorScope?.assertCurrent();
       assertOperatorModelAllowed(operatorAuthority, selectedRef);
       return undefined;
     } catch (error) {
@@ -217,6 +226,10 @@ export async function applySessionModelSelectionInternal(
     sessionEntry: startingEntry,
     profileOverride: request.profileOverride,
     provider: request.provider,
+    previousProvider: startingEntry.agentRuntimeOverride
+      ? (resolveSessionModelRef(params.cfg, startingEntry, params.agentId)?.provider ??
+        params.currentProvider)
+      : undefined,
     model: request.model,
     catalog: params.thinkingCatalog ?? params.modelCatalog,
     thinkingPolicyRequired: hasPendingFollowupQueueWork([params.sessionKey]),
@@ -315,7 +328,6 @@ export async function applySessionModelSelectionInternal(
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       commitGuard: composeSessionSourceAssertion([
-        operatorScope?.assertCurrent,
         createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
       ]),
       validateCommit,
@@ -394,7 +406,6 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
     params.canPersistStickyModelSelection === true &&

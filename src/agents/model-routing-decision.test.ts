@@ -85,7 +85,9 @@ it.each(["close", "replace"] as const)(
     } else {
       admission.close();
     }
-    expect(() => record()).toThrow("admitted run authority is no longer active");
+    expect(() => record()).toThrow(
+      "This agent run is no longer active. Start a new turn to retry.",
+    );
     admission.close();
 
     expect(captured).toEqual([]);

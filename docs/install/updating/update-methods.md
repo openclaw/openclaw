@@ -19,6 +19,12 @@ An update request alone does not authorize switching installation methods.
 
 Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
+On Linux and macOS, when `openclaw update --channel stable` or
+`openclaw update --channel beta` switches a Git release installation back to npm,
+the update also moves its managed Gateway to the npm package if the update can
+verify and rewrite the service definition. A switch with `--no-restart` leaves
+the service definition alone. Git-to-Git release updates keep the Git launcher.
+
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
 and affected pre-existing per-agent database schema versions are unchanged and
@@ -434,6 +440,16 @@ manager, installation prefix, profile, and state/config overrides throughout.
 In a non-interactive shell, such as a script, `openclaw gateway stop` requires
 `--force`. For a custom supervisor or foreground Gateway, stop and start it
 through its owner instead of the `openclaw gateway` service commands.
+
+When a refusal or recovery message sends you here so that a newer CLI can run
+`openclaw update repair`, run that repair while the Gateway is still stopped:
+right after `openclaw doctor --fix`, before refreshing and starting the service.
+Recovering an interrupted update handoff counts a Gateway and its workers
+started within that handoff's recovery grace as possible handoff work, so repair
+can refuse with `Handoff descendants remain alive or unverified` and their PIDs.
+If you already started the Gateway, run `openclaw gateway stop`, then
+`openclaw update repair`, then `openclaw gateway start`; repair does not restart
+a Gateway that you stopped. See [`update repair`](/cli/update/repair-and-recovery#update-repair).
 
 Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin

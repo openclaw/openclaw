@@ -112,6 +112,20 @@
   filter: drop-shadow(0 0 4px rgba(244, 184, 64, 0.4));
 }
 
+/* The phone toolbar owns the title. Keep the visited count beside its description. */
+@media (max-width: 640px) {
+  openclaw-lobsterdex-page > .content-header--intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-2);
+
+    .page-subtitle {
+      margin-block-start: 0;
+    }
+  }
+}
+
 @media (max-width: 560px) {
   .lobsterdex-page__grid {
     grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));

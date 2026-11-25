@@ -20,6 +20,7 @@ export function assertGitHubPublicationWorkflowChangesAllowed(
 ): void {
   requester.assertCurrent();
   if (
+    requester.snapshot.participation ||
     !roleScopesAllow({
       role: "operator",
       requestedScopes: ["operator.write"],

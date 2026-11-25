@@ -36,10 +36,6 @@
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
-  background-image: var(--app-background-image);
-  background-position: center;
-  background-size: cover;
-  background-repeat: no-repeat;
 
   --shell-nav-expanded-width: 258px;
   --shell-nav-width: var(--shell-nav-expanded-width);
@@ -48,7 +44,6 @@
   --shell-chrome-controls-gap: 4px;
   /* Settings takeover and the main sidebar share the same bottom divider geometry. */
   --shell-sidebar-footer-height: 53px;
-  --rail-band: var(--mac-band, var(--openclaw-native-titlebar-height, 52px));
   --shell-native-titlebar-controls-inset: var(--openclaw-native-controls-inset, 92px);
   --shell-native-titlebar-controls-width: 60px;
   --shell-content-leading-inset: 20px;
@@ -85,13 +80,6 @@
   /* Route chrome changes atomically; only explicit sidebar resizing animates. */
   transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
   overflow: hidden;
-}
-
-/* Once personal background placement is explicit, only its enabled pane renderer
-   may use artwork. None/custom must not resurrect theme images on Settings or
-   on an independently disabled surface, even before a pane has mounted. */
-.shell[data-background-managed] {
-  background-image: none;
 }
 
 .control-ui-environment-stripe {
@@ -322,13 +310,10 @@ html.openclaw-native-macos.openclaw-native-web-chrome
      unified 52pt needs 87px. Updated apps supply the measured native inset. */
   --shell-native-titlebar-controls-inset: var(
     --openclaw-native-controls-inset,
-    clamp(80px, calc(var(--openclaw-native-titlebar-height, 52px) + 40px), 87px)
+    clamp(80px, calc(var(--rail-header-height) + 40px), 87px)
   );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
-  /* Trim the empty space below the controls without moving AppKit's centerline. */
-  --mac-trim: 4px;
-  --mac-band: calc(var(--openclaw-native-titlebar-height, 52px) - var(--mac-trim));
   --shell-titlebar-inset: max(
     12px,
     calc(
@@ -345,7 +330,7 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   &::after {
     position: absolute;
     z-index: 30;
-    inset: var(--mac-band) 0 0 var(--shell-nav-rail-width, 0px);
+    inset: var(--rail-header-height) 0 0 var(--shell-nav-rail-width, 0px);
     border-radius: var(--radius-lg) var(--radius-lg) 0 var(--radius-lg);
     box-shadow:
       0 0 0 var(--radius-lg) var(--sidebar-rail-surface),
@@ -365,14 +350,17 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
   .shell-nav {
     min-height: 0;
-    padding-top: var(--mac-band);
+    padding-top: var(--rail-header-height);
     background-color: var(--sidebar-rail-surface);
-    border-image: linear-gradient(transparent var(--mac-band), var(--resize-handle-rest-color) 0) 0
-      1;
+    border-image: linear-gradient(
+        transparent var(--rail-header-height),
+        var(--resize-handle-rest-color) 0
+      )
+      0 1;
   }
 
   .sidebar-resizer {
-    margin-top: var(--mac-band);
+    margin-top: var(--rail-header-height);
   }
 
   .settings-sidebar__header {
@@ -385,34 +373,30 @@ html.openclaw-native-macos.openclaw-native-web-chrome
     border-radius: 0;
   }
 
+  /* Chat loading shares the native band and its window-control clearance. */
+  .content--workbench .lazy-view-state--route[data-chat] .loading-skeleton__header {
+    height: var(--rail-header-height);
+    padding-left: var(--shell-titlebar-inset);
+    border-bottom: 0;
+    background: var(--sidebar-rail-surface);
+
+    > .loading-skeleton__avatar {
+      display: none;
+    }
+  }
+
   .macos-titlebar-controls__button svg {
-    width: 16px;
-    height: 16px;
+    width: var(--macos-titlebar-glyph-size, 16px);
+    height: var(--macos-titlebar-glyph-size, 16px);
   }
 
   .shell-chrome-controls {
     display: none;
   }
 
-  /* Explicit personal backgrounds keep their existing pane renderer. Only the
-     default theme artwork follows the inset conversation surface. */
-  &:not([data-background-managed]) {
-    .sidebar-region > [data-region="main"] {
-      background-color: var(--sidebar-rail-surface);
-    }
-
-    .chat-main__conversation-frame {
-      background-color: var(--bg-content, var(--bg));
-      background-image: var(--app-background-image);
-      background-position: center;
-      background-size: cover;
-      background-repeat: no-repeat;
-    }
-  }
-
   /* New session has no chat header, but keeps the same native titlebar surface. */
   .content--new-session .new-session-page::before {
-    flex: 0 0 var(--mac-band);
+    flex: 0 0 var(--rail-header-height);
     margin-inline: calc(0px - var(--content-inline-padding));
     background: var(--sidebar-rail-surface);
     content: "";
@@ -420,33 +404,31 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   }
 
   .content--new-session .new-session-page__scroll {
-    padding-top: max(
-      0px,
-      calc(clamp(44px, 5vh, 52px) - var(--openclaw-native-titlebar-height, 52px))
-    );
+    padding-top: max(0px, calc(clamp(44px, 5vh, 52px) - var(--rail-header-height)));
   }
 
   .new-session-page__incognito-rail {
-    top: calc((var(--openclaw-native-titlebar-height, 52px) - var(--rail-header-action-size)) / 2);
+    top: calc((var(--rail-header-height) - var(--rail-header-action-size)) / 2);
   }
   /* Keep the native drag band outside page scrollports, including Settings. */
-  background-image:
-    linear-gradient(var(--sidebar-rail-surface) var(--mac-band), transparent var(--mac-band)),
-    var(--app-background-image);
+  background-image: linear-gradient(
+    var(--sidebar-rail-surface) var(--rail-header-height),
+    transparent var(--rail-header-height)
+  );
 
   .content--plugin-embed .plugin-tab-embed {
-    margin-top: var(--mac-band);
+    margin-top: var(--rail-header-height);
   }
 
   .content:not(.content--chat, .content--custodian, .content--workboard, .content--plugin-embed) {
-    /* This scrollport already starts below chrome; don't reserve the toolbar again. */
-    --page-toolbar-padding: 0px;
-    margin-top: var(--mac-band);
-    padding-top: max(0px, calc(var(--settings-content-block-start-padding, 0px) - var(--mac-band)));
-
-    &::-webkit-scrollbar-track {
-      margin-top: var(--radius-lg);
-    }
+    margin-top: var(--rail-header-height);
+    padding-top: max(
+      0px,
+      calc(
+        var(--settings-content-block-start-padding, var(--rail-header-height)) -
+          var(--rail-header-height)
+      )
+    );
   }
 }
 
@@ -466,6 +448,17 @@ html.openclaw-native-macos.openclaw-native-web-chrome
 
 .macos-titlebar-controls__button:disabled {
   opacity: 0.38;
+}
+
+.macos-titlebar-sidebar-toggle {
+  --macos-titlebar-glyph-size: 18px;
+  --icon-button-glyph: var(--macos-titlebar-glyph-size);
+}
+
+/* A full divider marks an open sidebar without a persistent selected pill. */
+.macos-titlebar-sidebar-toggle[aria-expanded="false"] .macos-sidebar-open,
+.macos-titlebar-sidebar-toggle:not([aria-expanded="false"]) .macos-sidebar-closed {
+  display: none;
 }
 
 .shell--mobile-nav .macos-titlebar-controls {
@@ -1628,10 +1621,13 @@ div.shell.shell--onboarding {
   margin-inline-start: calc(var(--sidebar-lead) + 5px);
 }
 
-.sidebar-session-tree__loading {
-  min-height: var(--sidebar-session-row-min-height);
-  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
-  clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
+.sidebar-view-loading__rows {
+  pointer-events: none;
+}
+
+.sidebar-session-tree__loading .skeleton-line {
+  height: 10px;
+  max-inline-size: 12rem;
 }
 
 .sidebar-session-tree__show-more {
@@ -2225,7 +2221,8 @@ div.shell.shell--onboarding {
 }
 
 /* Automations section: New automation and Run history, then grouped rows with a byline. */
-.sidebar-automations {
+.sidebar-automations,
+.sidebar-view-loading__rows {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -3789,12 +3786,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   min-height: 0;
 }
 
-@media (forced-colors: active), (prefers-contrast: more) {
-  .shell {
-    background-image: none;
-  }
-}
-
 .content-header {
   display: flex;
   align-items: flex-end;
@@ -3825,7 +3816,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
    under the row. */
 .shell:not(.shell--mobile-nav):not(.shell--settings) .content:not(.content--chat) {
   --page-toolbar-height: 52px;
-  --page-toolbar-padding: var(--page-toolbar-height);
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
@@ -3932,7 +3922,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
      hosts float chrome there; on the web the rail holds those controls. */
   :is(html.openclaw-native-macos, html.openclaw-native-nav)
     &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-padding) + var(--page-toolbar-clearance) + 16px);
+    padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
   html.openclaw-native-nav & {
@@ -3956,7 +3946,7 @@ html.openclaw-native-web-chrome
   );
 
   &:not(.content--toolbar-header, .content--plugin-embed) {
-    padding-top: calc(var(--page-toolbar-padding) + 16px);
+    padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }
 

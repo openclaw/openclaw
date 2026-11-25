@@ -1,12 +1,14 @@
-import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Match, onSettled, Show, Switch } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
 import {
   HARNESS_UPDATE_REQUIRED_CODE,
   type RunFailureCause,
 } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
-import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../../components/provider-icon-data.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
@@ -15,11 +17,6 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import type { FailedMessageEditSource } from "../failed-message-edit.ts";
-import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
-
-// Failure facts and continuation stay eager; only this optional action is deferred.
-const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edit-button.tsx"));
 
 let nextPanelId = 0;
 // A rejected key or billing problem is fixed under Models, not by another attempt.
@@ -44,11 +41,11 @@ export function ChatRunFailureNotice(props: {
   feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
   cause?: RunFailureCause;
+  /** The cause provider's presentation from the chat's model catalog. */
+  presentation?: Pick<ProviderPresentation, "providerName">;
   repeatCount?: number;
   onRetry?: () => void;
   onStartNewSession?: () => void;
-  editSource?: FailedMessageEditSource;
-  onFocusComposer?: () => void;
 }) {
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
@@ -58,7 +55,7 @@ export function ChatRunFailureNotice(props: {
   const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
   const title = () =>
     t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
-      provider: providerDisplayLabel(props.cause?.provider ?? ""),
+      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
     });
   const app = useOptionalApplication();
   const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
@@ -164,58 +161,48 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
-        <Show when={props.editSource}>
-          <Loading fallback={null}>
-            <ChatFailedMessageEditButton
-              source={props.editSource}
-              confirm={openChatRewindConfirmation}
-              onFocusComposer={props.onFocusComposer}
-            />
-          </Loading>
-        </Show>
-        <Show when={openModels()}>
-          {(provider) => (
+        <Switch>
+          <Match when={openModels()}>
+            {(provider) => (
+              <button
+                type="button"
+                class="btn primary btn--sm chat-run-failure__retry"
+                onClick={() =>
+                  app?.navigate("model-providers", {
+                    search: `?provider=${encodeURIComponent(provider())}`,
+                  })
+                }
+              >
+                {t("chat.recovery.openModels")}
+              </button>
+            )}
+          </Match>
+          <Match when={startNewSession()}>
             <button
               type="button"
               class="btn primary btn--sm chat-run-failure__retry"
-              onClick={() =>
-                app?.navigate("model-providers", {
-                  search: `?provider=${encodeURIComponent(provider())}`,
-                })
-              }
+              onClick={() => props.onStartNewSession?.()}
             >
-              {t("chat.recovery.openModels")}
+              {t("chat.recovery.startNewSession")}
             </button>
-          )}
-        </Show>
-        <Show when={startNewSession()}>
-          <button
-            type="button"
-            class="btn primary btn--sm chat-run-failure__retry"
-            onClick={() => props.onStartNewSession?.()}
-          >
-            {t("chat.recovery.startNewSession")}
-          </button>
-        </Show>
-        <Show when={props.onRetry}>
-          <button
-            type="button"
-            class={[
-              "btn btn--sm chat-run-failure__retry",
-              { primary: !openModels() && !startNewSession() },
-            ]}
-            onClick={() => props.onRetry?.()}
-          >
-            <Icon name="refresh" />
-            {t("chat.recovery.tryAgain")}
-          </button>
-        </Show>
-        <Show when={props.feedback} fallback={<ReportIssueLink />}>
+          </Match>
+          <Match when={props.onRetry}>
+            <button
+              type="button"
+              class="btn primary btn--sm chat-run-failure__retry"
+              onClick={() => props.onRetry?.()}
+            >
+              <Icon name="refresh" />
+              {t("chat.recovery.tryAgain")}
+            </button>
+          </Match>
+        </Switch>
+        <Show when={props.feedback}>
           {(feedback) => (
             <PluginSurface
               surface="run-failure-feedback"
               props={feedback()}
-              renderDefault={ReportIssueLink}
+              renderDefault={() => null}
             />
           )}
         </Show>

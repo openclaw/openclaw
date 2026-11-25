@@ -132,7 +132,8 @@ export function renderProviderStatus(card: ModelProviderCard, result?: ModelsPro
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   // A successful catalog lists models; it does not prove inference access.
-  const checked = result && probeStatus(result);
+  // No inference was attempted without a model; keep the known setup status.
+  const checked = result && result.status !== "no_model" && probeStatus(result);
   if (checked && checked.kind !== "ok") {
     return <SettingsStatus {...checked} />;
   }

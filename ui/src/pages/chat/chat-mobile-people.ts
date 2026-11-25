@@ -1,5 +1,6 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SessionParticipant } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
+import type { GatewaySessionRow, SessionMembersListEvidenceResult } from "../../api/types.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
@@ -22,15 +23,44 @@ export type ChatMobilePeople = {
   owner?: ChatMobilePerson;
   participants: readonly ChatMobilePerson[];
   unlistedParticipantCount: number;
-  participantsComplete: boolean;
 };
+
+type SessionPeopleFacts = Pick<
+  GatewaySessionRow,
+  "createdActor" | "owner" | "participants" | "expandedParticipants" | "participantCount"
+>;
+
+/** Membership and participation are separate facts; People presents their identity union. */
+export function projectSessionPeople(
+  session: SessionPeopleFacts | undefined,
+  sharing?: SessionMembersListEvidenceResult,
+): SessionParticipant[] {
+  const memberIds = new Set(sharing?.members.map((member) => member.identityId));
+  const people = new Map<string, SessionParticipant>();
+  for (const person of [
+    session?.owner?.actor,
+    session?.createdActor,
+    ...(session?.expandedParticipants ?? session?.participants ?? []),
+    ...(sharing?.identities.filter((identity) => memberIds.has(identity.id)) ?? []),
+  ]) {
+    if (!person?.identity) {
+      continue;
+    }
+    const key = sessionParticipantIdentityKey(person.identity);
+    const previous = people.get(key);
+    people.set(key, {
+      identity: person.identity,
+      label: person.label ?? previous?.label,
+      avatarUrl: person.avatarUrl ?? previous?.avatarUrl,
+    });
+  }
+  return [...people.values()];
+}
 
 /** Presentation only. Session, presence and composer owners retain their lifecycles. */
 export function projectChatMobilePeople(input: {
-  session: Pick<
-    GatewaySessionRow,
-    "createdActor" | "owner" | "participants" | "expandedParticipants" | "participantCount"
-  >;
+  session: SessionPeopleFacts;
+  sharing?: SessionMembersListEvidenceResult;
   /** The pane key used by the native viewer-presence owner, not a row alias. */
   sessionKey: string;
   /** Unfiltered native presence projection: include self, owner and participants. */
@@ -94,12 +124,13 @@ export function projectChatMobilePeople(input: {
   const owner = actor(input.session.owner?.actor, "owner");
   const roleKeys = new Set([creator?.key, owner?.key]);
   const participants = new Map<string, ChatMobilePerson>();
-  const recordedParticipantKeys = new Set<string>();
-  for (const participant of input.session.expandedParticipants ??
-    input.session.participants ??
-    []) {
+  const recordedParticipantKeys = new Set(
+    (input.session.expandedParticipants ?? input.session.participants ?? []).map((participant) =>
+      sessionParticipantIdentityKey(participant.identity),
+    ),
+  );
+  for (const participant of projectSessionPeople(input.session, input.sharing)) {
     const key = sessionParticipantIdentityKey(participant.identity);
-    recordedParticipantKeys.add(key);
     const value = person(key, {
       identity: participant.identity,
       id: participant.identity.id,
@@ -135,9 +166,6 @@ export function projectChatMobilePeople(input: {
     creator: creator?.key === owner?.key ? undefined : creator,
     owner,
     participants: [...participants.values()],
-    participantsComplete:
-      input.session.participantCount !== undefined &&
-      input.session.participantCount <= recordedParticipantKeys.size,
     unlistedParticipantCount: Math.max(
       0,
       (input.session.participantCount ?? 0) - recordedParticipantKeys.size,

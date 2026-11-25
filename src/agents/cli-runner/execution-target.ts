@@ -22,7 +22,10 @@ export function attachCliReplyBackend(
   cancel: () => void,
   capabilities?: Pick<
     ReplyBackendHandle,
-    "messageInjectionV2" | "supportsTranscriptCommitWait" | "turnStatus"
+    | "messageInjectionV2"
+    | "supportsTranscriptCommitWait"
+    | "turnStatus"
+    | "supportsQueueMessageImages"
   >,
 ) {
   if (!params.replyOperation) {
@@ -42,6 +45,10 @@ export function attachCliReplyBackend(
     ...capabilities,
     get turnStatus() {
       return capabilities?.turnStatus;
+    },
+    // The runtime registers its input sink after attach; read its image support at admission.
+    get supportsQueueMessageImages() {
+      return capabilities?.supportsQueueMessageImages;
     },
   };
   params.replyOperation.attachBackend(handle);

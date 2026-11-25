@@ -42,6 +42,15 @@ export function raiseChildOomScore(pid: number | undefined): void {
   }
 }
 
+/** Off the caller's event loop, for long-lived Gateway helpers spawned during requests. */
+export function raiseChildOomScoreInBackground(pid: number | undefined): void {
+  if (pid === undefined) {
+    return;
+  }
+  // Best effort, like the shell shim: /proc may be unavailable or the child already gone.
+  void fs.promises.writeFile(`/proc/${pid}/oom_score_adj`, "1000").catch(() => {});
+}
+
 /** Native spawn semantics with the shared Linux child OOM policy. */
 export function spawnOomScoreAdjusted(
   command: string,

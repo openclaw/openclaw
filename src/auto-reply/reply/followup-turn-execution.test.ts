@@ -16,7 +16,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
@@ -57,7 +56,7 @@ function executeTestTurn(
 }
 
 describe("executeFollowupTurn", () => {
-  it("records preflight failure on source receipts without changing newer runner state", async () => {
+  it("keeps preflight ownership on source receipts without changing newer runner state", async () => {
     const receipts: ReplyOperationRunState[] = [{}, {}];
     const newerReceipt: ReplyOperationRunState = {};
     const turn = createTurn();
@@ -71,8 +70,10 @@ describe("executeFollowupTurn", () => {
       },
     });
 
-    expect(receipts.map(resolveReplyOperationAgentTurn)).toEqual(["failed", "failed"]);
-    expect(resolveReplyOperationAgentTurn(newerReceipt)).toBeUndefined();
+    for (const receipt of receipts) {
+      expect(receipt.agentTurnOwner).toBe(turn.operation);
+    }
+    expect(newerReceipt).toEqual({});
     expect(state.execute).not.toHaveBeenCalled();
   });
 
@@ -534,7 +535,7 @@ describe("executeFollowupTurn lifecycle", () => {
             : { text: "" },
       });
       expect(fail).toHaveBeenCalledWith("run_failed", failure);
-      expect(resolveReplyOperationAgentTurn(receipt)).toBe("failed");
+      expect(receipt.agentTurnOwner).toBe(operation);
     },
   );
 

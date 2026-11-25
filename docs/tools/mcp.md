@@ -226,6 +226,10 @@ Online CLI login supports both configured and plugin-declared shared OAuth serve
 
 To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
 
+### A stdio server needs a new sign-in
+
+A server that manages its own credentials, such as a local stdio server, can ask for a new sign-in through MCP URL-mode elicitation. OpenClaw declares URL mode on every connection. When a tool call sends a URL request, or fails with a URL elicitation error (`-32042`), the owner sees a sign-in button for that address in a direct chat: **Sign in** on a card below the reply in the Control UI, with the destination domain shown on the card, or a `Connect <server>` button on the reply in other channels. OpenClaw never opens the address itself, and the address stays out of the model's text. The request is answered `cancel` at once because the button arrives with the reply. After signing in, ask again. Group chats, other senders, and turns that have handled untrusted content get no link. Form-mode requests still need the [MCP Apps host](/cli/mcp/apps).
+
 ### Changes do not reach an active agent
 
 `openclaw mcp reload` refreshes runtimes owned by the current CLI process. A Gateway or agent running elsewhere needs its own reload, config publish, or restart.

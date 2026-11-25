@@ -64,6 +64,12 @@ describe("jsdom native API boundary", () => {
     expect(result.stdout).toBe("00017f80ff");
   });
 
+  it("encodes high bytes and offset views as hex", () => {
+    const bytes = new Uint8Array([0, 0x7f, 0x80, 0xab, 0xff, 1, 2, 3, 4, 0x90]);
+    expect(bytes.toHex()).toBe("007f80abff0102030490");
+    expect(bytes.subarray(2).toHex()).toBe("80abff0102030490");
+  });
+
   it("keeps event identity in nested iframe windows", () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);

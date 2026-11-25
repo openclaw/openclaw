@@ -166,3 +166,22 @@ it("captures workspace environment labels before later environment changes", () 
     workspaceDir: "/tmp/workspace",
   });
 });
+
+it("captures fallback labels without consulting a profile store path when there are no profile IDs", () => {
+  const source = vi.fn(() => "/synthetic/unused.sqlite");
+  const labels = prepareModelCatalogAuthLabels({
+    config: { auth: { order: { openai: [] } } },
+    agentDir: "/synthetic/agent",
+    get authStorePath() {
+      return source();
+    },
+    env: {},
+    store: authStore(),
+    providers: ["openai", "anthropic"],
+  });
+  expect(source).not.toHaveBeenCalled();
+  expect([...labels.values()]).toEqual([
+    { all: "missing", apiKey: "missing" },
+    { all: "missing", apiKey: "missing" },
+  ]);
+});

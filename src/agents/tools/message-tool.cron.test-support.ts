@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitScheduledOccurrence } from "../../cron/execution-context-admission.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
 import { CronService } from "../../cron/service.js";
 import { saveCronStore } from "../../cron/store.js";
@@ -38,6 +39,8 @@ export async function withCronMessageRun<T>(
     defaultAgentId: "main",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
+    admitScheduledOccurrence: ({ job: stored }) =>
+      admitScheduledOccurrence({ cfg, job: stored, agentId: "main", trigger: "cron" }),
     runIsolatedAgentJob: async (execution) => {
       const { preparedRunAdmission, messageActionTurnCapability, close } = prepareCronRunAdmission({
         ...scope,

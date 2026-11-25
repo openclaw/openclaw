@@ -11,6 +11,7 @@ struct ChatInlineNarrationRegressionTests {
         let exec = Self.work("exec")
         let source = [first, read, second, exec, answer]
         let rows = Self.project(source)
+        #expect(rows.count == 2 && rows.first.flatMap(Self.workID) != nil)
         #expect(rows.compactMap { row -> String? in
             if case let .message(message) = row { return ChatMessageVisibleText.visibleText(in: message) }
             return nil
@@ -26,6 +27,7 @@ struct ChatInlineNarrationRegressionTests {
         let work = Self.work("read")
         let before = Self.project([work, answer])
         let after = Self.project([Self.work("older"), work, answer])
+        #expect(before.compactMap(Self.workID).count == 1)
         #expect(before.compactMap(Self.workID) == after.compactMap(Self.workID))
     }
 
@@ -48,9 +50,12 @@ struct ChatInlineNarrationRegressionTests {
     }
 
     private static func work(_ id: String) -> OpenClawChatMessage {
-        OpenClawChatMessage(role: "assistant", content: [
-            .init(type: "toolCall", id: id, name: "read"),
-            .init(type: "tool_result", text: "Recorded result", id: id),
-        ], timestamp: nil)
+        OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                .init(type: "toolCall", id: id, name: "read"),
+                .init(type: "tool_result", text: "Recorded result", id: id),
+            ],
+            timestamp: nil)
     }
 }

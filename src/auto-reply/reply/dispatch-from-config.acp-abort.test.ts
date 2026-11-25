@@ -33,7 +33,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 import { prepareReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -662,64 +661,60 @@ describe("dispatchReplyFromConfig ACP abort", () => {
   );
 
   it.each([
-    { abort: "abortByUser", expected: "cancelled" },
-    { abort: "abortForRestart", expected: "cancelled" },
-    { abort: "supersede", expected: "superseded" },
-  ] as const)(
-    "records $abort before an abort-insensitive resolver settles",
-    async ({ abort, expected }) => {
-      const hold = holdWork();
-      const runState: ReplyOperationRunState = {};
-      const { dispatcher, dispatch: dispatchPromise } = startDispatch("agent:main:resolver-abort", {
-        context: { BodyForAgent: "hang in resolver" },
-        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-        replyResolver: async (_resolverCtx, options) => {
-          await hold.wait();
-          try {
-            await options?.onToolResult?.({ text: "late tool should not send" });
-            await options?.onBlockReply?.({ text: "late block should not send" });
-            const [plan] = createStructuredOutboundPayloadPlan([
-              { text: "late prepared block should not send" },
-            ]);
-            if (!plan || !options?.onPreparedBlockReply) {
-              throw new Error("Prepared block callback unavailable");
-            }
-            await options.onPreparedBlockReply(plan);
-            return { text: "late final should not send" };
-          } finally {
-            hold.returned.resolve();
+    { abort: "abortByUser" },
+    { abort: "abortForRestart" },
+    { abort: "supersede" },
+  ] as const)("records $abort before an abort-insensitive resolver settles", async ({ abort }) => {
+    const hold = holdWork();
+    const runState: ReplyOperationRunState = {};
+    const { dispatcher, dispatch: dispatchPromise } = startDispatch("agent:main:resolver-abort", {
+      context: { BodyForAgent: "hang in resolver" },
+      replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
+      replyResolver: async (_resolverCtx, options) => {
+        await hold.wait();
+        try {
+          await options?.onToolResult?.({ text: "late tool should not send" });
+          await options?.onBlockReply?.({ text: "late block should not send" });
+          const [plan] = createStructuredOutboundPayloadPlan([
+            { text: "late prepared block should not send" },
+          ]);
+          if (!plan || !options?.onPreparedBlockReply) {
+            throw new Error("Prepared block callback unavailable");
           }
-        },
-      });
+          await options.onPreparedBlockReply(plan);
+          return { text: "late final should not send" };
+        } finally {
+          hold.returned.resolve();
+        }
+      },
+    });
 
-      await hold.started.promise;
-      const operation = getSessionControllerOperation("agent:main:resolver-abort");
-      try {
-        expect(operation?.[abort]()).toBe(true);
-        if (abort === "supersede") {
-          expect(operation?.result).toMatchObject({
-            kind: "aborted",
-            code: "aborted_for_supersession",
-          });
-        }
-        if (abort === "abortForRestart") {
-          await expect(dispatchPromise).rejects.toBe(operation?.abortSignal.reason);
-        } else {
-          await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
-        }
-        expect(runState.agentTurnOwner).toBe(operation);
-        expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-      } finally {
-        hold.release.resolve();
-        await hold.returned.promise;
-        await waitForSessionRunIdle("agent:main:resolver-abort");
+    await hold.started.promise;
+    const operation = getSessionControllerOperation("agent:main:resolver-abort");
+    try {
+      expect(operation?.[abort]()).toBe(true);
+      if (abort === "supersede") {
+        expect(operation?.result).toMatchObject({
+          kind: "aborted",
+          code: "aborted_for_supersession",
+        });
       }
+      if (abort === "abortForRestart") {
+        await expect(dispatchPromise).rejects.toBe(operation?.abortSignal.reason);
+      } else {
+        await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+      }
+      expect(runState.agentTurnOwner).toBe(operation);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    } finally {
+      hold.release.resolve();
+      await hold.returned.promise;
+      await waitForSessionRunIdle("agent:main:resolver-abort");
+    }
 
-      expectNoReplies(dispatcher);
-      expect(listActiveSessionRunKeys()).toEqual([]);
-    },
-  );
+    expectNoReplies(dispatcher);
+    expect(listActiveSessionRunKeys()).toEqual([]);
+  });
 
   it("treats a resolver AbortError after dispatch abort as a handled dispatch", async () => {
     const { promise: resolverStartedPromise, resolve: resolverStarted } = createDeferred();

@@ -161,9 +161,13 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
-  const childCount = createMemo(
-    () => session().snapshot?.childCount ?? session().childSessionKeys.length,
-  );
+  const childCount = createMemo(() => {
+    const row = session();
+    // Flat references (such as pinned Home) can have child keys without a sidebar branch.
+    return row.childLoadParentKeys?.length
+      ? (row.snapshot?.childCount ?? row.childSessionKeys.length)
+      : 0;
+  });
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.groups.put",

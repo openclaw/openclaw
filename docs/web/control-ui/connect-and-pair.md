@@ -71,7 +71,7 @@ If the Gateway denies the upgrade because it exceeds your assigned operator role
 - Direct loopback needs no shared secret only when `gateway.auth.mode: "none"` is explicitly configured. That disables gateway auth and is not the recommended Control UI setup. Tailscale Serve and trusted-proxy modes can avoid a pasted shared secret only when their respective identity checks succeed.
 - Tailscale Serve can skip the pairing round trip for Control UI operator sessions when `gateway.auth.allowTailscale: true`, Tailscale identity verifies, and the browser presents its device identity. Device-less browsers and node-role connections still follow the normal device checks.
 - Direct Tailnet binds and LAN browser connects still require explicit approval. Browser profiles without device identity cannot use loopback auto-approval.
-- Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing.
+- Each browser profile generates a unique device ID, so switching browsers or clearing browser data requires re-pairing. On HTTPS and loopback origins, simultaneous first visits in the same profile share that identity. On non-loopback plain HTTP, connect one tab before opening others; cross-tab identity coordination requires the browser's secure-context Web Locks API.
 - Private windows and browser profiles that discard site data on exit, including Firefox Never remember history, also discard the stored device identity and per-device token. They will appear as a new browser after each restart; use a persistent browser profile to stay paired, and remove stale entries with `openclaw devices remove <deviceId>` when the paired-device list grows.
 
 </Note>
