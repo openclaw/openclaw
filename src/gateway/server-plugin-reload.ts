@@ -20,7 +20,6 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
-import { reverifyReloadedPluginPayloads } from "../plugins/runtime-degraded-state.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -40,6 +39,7 @@ import {
   createPluginReloadDiagnostics,
 } from "./server-plugin-reload-cleanup.js";
 import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
+import { reverifyReloadedPluginPayloads } from "./server-plugin-reload-quarantine.js";
 import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
