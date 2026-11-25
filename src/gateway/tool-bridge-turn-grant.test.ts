@@ -23,18 +23,14 @@ import { roleClient } from "./session-sharing.test-utils.js";
 // Team incidents R11/R12: "message failed" / "github_publish failed: missing scope: operator.write".
 // The agent tool reaches the Gateway through the in-process bridge with the turn grant's scopes,
 // for a Control UI turn (the person's socket is the request scope) and a channel turn (no socket).
-// The Gateway method then decides from that grant; a member's refusal names the action and the
-// next step instead of a scope id.
+// The Gateway method then decides from that grant: these write actions reach owner and admin, and
+// a member's refusal names the tool and the next step instead of a scope id.
 const ROLE_SCOPES = {
   owner: ["operator.admin"],
   admin: ["operator.admin"],
   member: ["operator.read", "operator.sessions.write"],
 } as const;
 type Principal = keyof typeof ROLE_SCOPES;
-const MEMBER_REFUSAL =
-  "Your role on this Gateway does not allow this message action. Ask a Gateway admin to do it, or to add the permission to your role. Do not retry.";
-// message.action is a write method; sessions.github.action is session-bound and its handler
-// (github-publication-actions.ts) refuses a member's inspect/merge from the same grant.
 const TOOLS = [
   ["message", "message.action", { action: "channel-info", channel: "discord" }],
   ["github_publish", "sessions.github.action", { action: "inspect", sessionKey: "agent:main:x" }],
@@ -143,8 +139,12 @@ describe("agent tools reach the Gateway with the turn grant", () => {
             : await run();
         expect(prepared?.authority.scopes).toEqual(ROLE_SCOPES[principal]);
         expect(result.details).toEqual(
-          principal === "member" && toolName === "message"
-            ? { status: "error", tool: "message", error: MEMBER_REFUSAL }
+          principal === "member"
+            ? {
+                status: "error",
+                tool: toolName,
+                error: `Your role on this Gateway does not allow this ${toolName} action. Ask a Gateway admin to do it, or to add the permission to your role. Do not retry.`,
+              }
             : { reached: true },
         );
       } finally {

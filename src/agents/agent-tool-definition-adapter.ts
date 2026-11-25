@@ -72,7 +72,6 @@ function buildToolExecutionErrorResult(params: {
   cause?: unknown;
 }): AgentToolResult<unknown> {
   const permissionMissing = readNodePermissionError(params.cause);
-  // A Gateway scope refusal is a role decision: say what was refused and who can change it.
   return jsonResult({
     status: "error",
     tool: params.toolName,
