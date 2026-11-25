@@ -209,8 +209,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(ownershipOf(index).resolveReload("installed")).toEqual({
       ok: false,
       error:
-        `Plugin "installed" loads from plugins.load.paths (${localDir}), which overrides its installed package "installed". ` +
-        "Refreshing the plugin registry keeps that override. To maintain the installed package, remove the path from plugins.load.paths, then retry.",
+        `Plugin "installed" at ${localDir} comes from plugins.load.paths and overrides its installed package "installed". ` +
+        "Refreshing the plugin registry keeps that override. To maintain the installed package, remove the plugins.load.paths entry that selects this plugin, then retry.",
     });
   });
 });
