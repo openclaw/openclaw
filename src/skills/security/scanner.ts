@@ -9,14 +9,7 @@ import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { statIfExists } from "../../infra/path-existence.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import {
-  CHILD_PROCESS_MODULE,
-  collectBindingEdges,
-  ENDS_WITH_CHILD_PROCESS_MODULE_CALL,
-  resolveCapabilityReferences,
-  type BindingEdge,
-  type CapabilityReferenceSpec,
-} from "./capability-references.js";
+import { collectCapabilityCalls } from "./capability-references.js";
 
 const LITERAL_SECRET_PATTERN =
   /\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{35})(?![A-Za-z0-9_-])|-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----\r?\n(?=(?:[A-Za-z0-9+/=]\r?\n?){48,}-----END \1-----)(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----/;
@@ -216,45 +209,10 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
   },
 ];
 
-const CHILD_PROCESS_EXEC_METHODS = new Set([
-  "exec",
-  "execSync",
-  "spawn",
-  "spawnSync",
-  "execFile",
-  "execFileSync",
-]);
-
-// Line rules that also report calls through bindings derived from their capability.
-const CAPABILITY_REFERENCE_RULES = new Map<string, CapabilityReferenceSpec>([
-  [
-    "dangerous-exec",
-    {
-      context: /child_process/,
-      values: [],
-      namespaces: [CHILD_PROCESS_MODULE],
-      members: CHILD_PROCESS_EXEC_METHODS,
-    },
-  ],
-  [
-    "dynamic-code-execution",
-    {
-      context: /\b(?:eval|Function)\b/,
-      values: ["eval", "Function"],
-      namespaces: ["globalThis", "global", "window"],
-      members: new Set(["eval", "Function"]),
-    },
-  ],
-]);
-
 // Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
-function isBenignMemberExecMatch(
-  line: string,
-  match: RegExpExecArray,
-  namespaceAliases: Set<string>,
-): boolean {
+function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
   // group 1 = direct call command, group 2 = computed-member command.
   const command = match[1] ?? match[2];
   if (!command) {
@@ -273,13 +231,8 @@ function isBenignMemberExecMatch(
   } else {
     return false;
   }
-  if (receiverText && ENDS_WITH_CHILD_PROCESS_MODULE_CALL.test(receiverText)) {
-    return false;
-  }
   const receiver = receiverText?.match(/(\w+)\s*$/)?.[1];
-  return (
-    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-  );
+  return !receiver || !LITERAL_NAMESPACE_RECEIVERS.has(receiver);
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -373,20 +326,12 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
 
-  let bindingEdges: BindingEdge[] | undefined;
+  const capabilityCalls = collectCapabilityCalls(source);
 
   for (const rule of LINE_RULES) {
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
-    const referenceSpec = CAPABILITY_REFERENCE_RULES.get(rule.ruleId);
-    const references =
-      referenceSpec?.context.test(heuristicSource) === true
-        ? resolveCapabilityReferences(
-            (bindingEdges ??= collectBindingEdges(heuristicSource)),
-            referenceSpec,
-          )
-        : undefined;
 
     let acceptedMatches = 0;
     let omittedMatches = 0;
@@ -416,10 +361,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       );
       const literalMatchIndexes = new Set<number>();
       for (const match of matches) {
-        if (
-          rule.ruleId === "dangerous-exec" &&
-          isBenignMemberExecMatch(line, match, references?.namespaces ?? new Set())
-        ) {
+        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;
         }
 
@@ -435,8 +377,8 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       }
 
       // Aliases follow literal matches; don't emit a call twice if both patterns match.
-      for (const call of references ? line.matchAll(references.calls) : []) {
-        if (!literalMatchIndexes.has(call.index)) {
+      for (const column of capabilityCalls.get(rule.ruleId)?.get(i + 1) ?? []) {
+        if (!literalMatchIndexes.has(column)) {
           addFinding(line, i + 1);
         }
       }

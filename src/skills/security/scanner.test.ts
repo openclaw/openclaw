@@ -162,7 +162,7 @@ describe("scanSource", () => {
   });
 
   it("follows bindings from child_process, eval, and Function to their calls", () => {
-    const cases: Array<[string, string]> = [
+    const cases: Array<[string, string, number?]> = [
       ["dangerous-exec", 'const { ["exec"]: r } = require("child_process");\nr("id");'],
       ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod.exec;\nr("id");'],
       ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod;\nr.exec("id");'],
@@ -179,6 +179,14 @@ describe("scanSource", () => {
       ["dangerous-exec", 'const run: Runner = require("child_process").execSync;\nrun("id");'],
       ["dangerous-exec", 'require("child_process").exec("id");'],
       ["dangerous-exec", 'const tasks = { run: require("child_process").exec };\ntasks.run("id");'],
+      [
+        "dangerous-exec",
+        'const m = require("child_process");\nconst box = { exec: m.exec };\nconst r = box.exec;\nr("id");',
+      ],
+      [
+        "dangerous-exec",
+        'const m = require("child_process");\nconst box = {};\nbox["exec"] = m.exec;\nconst { exec: r } = box;\nr("id");',
+      ],
       ["dynamic-code-execution", 'const f = eval;\nf("1+1");'],
       ["dynamic-code-execution", 'const f = globalThis.eval;\nf("1+1");'],
       ["dynamic-code-execution", 'const { eval: g } = globalThis;\ng("1+1");'],
@@ -187,11 +195,23 @@ describe("scanSource", () => {
       ["dynamic-code-execution", 'const F = Function;\nconst h = new F("return 1");'],
       ["dynamic-code-execution", 'const F = globalThis.Function;\nconst h = new F("return 1");'],
       ["dynamic-code-execution", 'let g;\ng = window;\ng["eval"]("1+1");'],
+      [
+        "dynamic-code-execution",
+        'const box = { eval };\nconst other = box;\nconst r = other.eval;\nr("1+1");',
+      ],
+      ["dynamic-code-execution", 'const r = eval;\nr\n("1+1");', 2],
+      [
+        "dynamic-code-execution",
+        'const box = { run: eval };\nfunction safe() { box.run = x => x; }\nbox.run("1+1");',
+      ],
     ];
-    for (const [ruleId, source] of cases) {
+    for (const [ruleId, source, expectedLine] of cases) {
       const findings = scanSource(source, "plugin.ts").filter((f) => f.ruleId === ruleId);
       expect(findings, source).toEqual([
-        expect.objectContaining({ severity: "critical", line: source.split("\n").length }),
+        expect.objectContaining({
+          severity: "critical",
+          line: expectedLine ?? source.split("\n").length,
+        }),
       ]);
     }
   });
@@ -203,9 +223,42 @@ describe("scanSource", () => {
       'const calc = { evaluate: (x) => x };\nconst f = calc.evaluate;\nf("1");',
       'const { evaluate } = globalThis;\nconst F = MyFunction;\nnew F(evaluate("x"));',
       'const proto = Function.prototype;\nif (x == eval) proto("x");',
+      'const dangerous = { run: eval };\nconst safe = { run: x => x };\nsafe.run("ok");',
+      'const dangerous = { run: eval };\nconst safe = { run: x => x };\nconst r = safe.run;\nr("ok");',
+      'const r = eval;\nfunction safe(r) { r("ok"); }',
+      'const r = eval;\n{ const r = x => x; r("ok"); }',
+      'function safe(eval) { const r = eval; r("ok"); }',
+      'function safe(globalThis) { const r = globalThis.eval; r("ok"); }',
+      'let r = eval;\nr = x => x;\nr("ok");',
+      'const box = { run: eval };\nbox.run = x => x;\nbox.run("ok");',
+      'let box = { run: eval };\nbox = { run: x => x };\nbox.run("ok");',
+      'const m = require("child_process");\nconst box = { run: m.exec };\nconst safe = { run: x => x };\nsafe.run("ok");',
+      'const m = require("child_process");\nconst r = m.exec;\nfunction safe(r) { r("ok"); }',
+      'const m = require("child_process");\nlet r = m.exec;\nr = x => x;\nr("ok");',
+      'const m = require("child_process" && "harmless");\nconst r = m.exec;\nr("ok");',
+      'let r = x => x;\nfunction example() { r = eval; }\nr("ok");',
     ]) {
       expect(scanSource(source, "plugin.ts"), source).toEqual([]);
     }
+  });
+
+  it("keeps fenced examples independent and reports original call locations", () => {
+    const source = [
+      "# Examples",
+      "",
+      "```js",
+      "const run = eval;",
+      'run("1+1");',
+      "```",
+      "",
+      "```ts",
+      "const run = (x: string) => x;",
+      'run("ok");',
+      "```",
+    ].join("\n");
+    expect(scanSource(source, "SKILL.md")).toEqual([
+      expect.objectContaining({ ruleId: "dynamic-code-execution", line: 5 }),
+    ]);
   });
 
   it("does not flag a computed exec-style call on a non-child_process object", () => {

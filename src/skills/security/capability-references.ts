@@ -1,183 +1,316 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { escapeRegExp } from "../../shared/regexp.js";
+import { createRequire } from "node:module";
+import type { Binding, Scope } from "@babel/traverse";
+import type * as t from "@babel/types";
 
-const IDENT = String.raw`[A-Za-z_$][\w$]*`;
-// A name, optionally with one `.member` or `["member"]` access.
-const REFERENCE = String.raw`${IDENT}(?:\s*\.\s*${IDENT}|\s*\[\s*["']${IDENT}["']\s*\])?`;
-// The reference must end the expression: `x = mod.exec` binds, `x = mod.exec(...)` does not.
-const REFERENCE_END = String.raw`(?![\w$])(?!\s*[.[(\`])`;
-const ASSIGNED_REFERENCE = String.raw`=(?![=>])\s*(?:await\s+)?(${REFERENCE})${REFERENCE_END}`;
-const NAME_ASSIGNMENT = new RegExp(String.raw`(?<![\w$.])(${IDENT})\s*${ASSIGNED_REFERENCE}`, "g");
-const TYPED_NAME_ASSIGNMENT = new RegExp(
-  String.raw`\b(?:const|let|var)\s+(${IDENT})\s*:[^=;{}()]{1,120}?${ASSIGNED_REFERENCE}`,
-  "g",
-);
-const MEMBER_ASSIGNMENT = new RegExp(
-  String.raw`(?:\.\s*(${IDENT})|\[\s*["'](${IDENT})["']\s*\])\s*${ASSIGNED_REFERENCE}`,
-  "g",
-);
-const DESTRUCTURING = new RegExp(String.raw`\{([^{}]*)\}\s*${ASSIGNED_REFERENCE}`, "g");
-const OBJECT_ENTRY = new RegExp(
-  String.raw`(?<=[{,]\s*)(?:(${IDENT})|["'](${IDENT})["']|\[\s*["'](${IDENT})["']\s*\])\s*:\s*(${REFERENCE})${REFERENCE_END}(?=\s*[,}])|(?<=[{,]\s*)(${IDENT})(?=\s*[,}])`,
-  "g",
-);
-
-// `require(...)`, `import(...)` and `import x = require(...)` whose argument holds a
-// child_process string literal, e.g. `require(["child_process"][0])`.
-const CHILD_PROCESS_MODULE_CALL = String.raw`(?:require|import)\s*\(\s*[^()]{0,80}?["'\`](?:node:)?child_process["'\`][^()]{0,80}?\)`;
-const CHILD_PROCESS_MODULE_CALLS = new RegExp(CHILD_PROCESS_MODULE_CALL, "g");
-const CHILD_PROCESS_IMPORTS =
-  /\bimport\s*([^;'"]{1,500}?)\s*from\s*["'](?:node:)?child_process["']/g;
-export const ENDS_WITH_CHILD_PROCESS_MODULE_CALL = new RegExp(
-  String.raw`${CHILD_PROCESS_MODULE_CALL}\s*$`,
-);
-// Stands for the child_process module object while bindings are collected.
-export const CHILD_PROCESS_MODULE = "$child_process$";
-
-export type CapabilityReferenceSpec = {
-  /** Skip binding analysis unless the source mentions the capability. */
-  context: RegExp;
-  /** Global names holding the capability; the rule pattern reports their direct calls. */
-  values: readonly string[];
-  /** Objects whose `members` are the capability. */
-  namespaces: readonly string[];
-  members: ReadonlySet<string>;
+const require = createRequire(import.meta.url);
+const PROCESS_METHODS = new Set([
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+]);
+const GLOBAL_OBJECTS = new Set(["globalThis", "global", "window"]);
+const CODE_FUNCTIONS = new Set(["eval", "Function"]);
+type ObjectValue = Map<string, Value | undefined>;
+type Value = "process-module" | "global-object" | "process-call" | "code-call" | ObjectValue;
+type State = {
+  bindings: Map<Binding | string, Value | undefined>;
+  properties: Map<ObjectValue, Map<string, Value | undefined>>;
+  parent?: State;
 };
 
-/** `target` receives `source` (`name` or `name.member`); member targets are property names. */
-export type BindingEdge = { target: string; member: boolean; source: string };
+type CallMatches = Map<string, Map<number, Set<number>>>;
 
-type CapabilityReferences = {
-  namespaces: Set<string>;
-  /** Matches calls through derived bindings; reports the callee or member start. */
-  calls: RegExp;
-};
+// Only literal strings and literal array lookups are evaluated, never inspected code.
+function staticString(node: t.Node | null | undefined): string | undefined {
+  if (node?.type === "StringLiteral") {
+    return node.value;
+  }
+  if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+    return node.quasis[0]?.value.cooked ?? undefined;
+  }
+  if (
+    node?.type === "MemberExpression" &&
+    node.computed &&
+    node.object.type === "ArrayExpression" &&
+    node.property.type === "NumericLiteral"
+  ) {
+    const element = node.object.elements[node.property.value];
+    return element?.type === "StringLiteral" ? element.value : undefined;
+  }
+  return undefined;
+}
 
-function normalizeReference(reference: string): string {
-  return reference.replace(/\s+/g, "").replace(/\[["']([^"']+)["']\]/, ".$1");
+function propertyName(
+  node: t.ObjectProperty | t.ObjectMethod | t.MemberExpression | t.OptionalMemberExpression,
+): string | undefined {
+  const key =
+    node.type === "ObjectProperty" || node.type === "ObjectMethod" ? node.key : node.property;
+  return !node.computed && key.type === "Identifier" ? key.name : staticString(key);
+}
+
+function isProcessModule(name: string | undefined): boolean {
+  return name === "child_process" || name === "node:child_process";
 }
 
 /**
- * Collects simple bindings for capability provenance. This is a bounded heuristic, not
- * JavaScript evaluation: a name bound to a capability anywhere counts in the whole file
- * (no block scope, shadowing, or later reassignment), references follow one member level,
- * and computed names, call/apply/bind, and cross-file flows are not followed.
+ * Bounded, source-order capability analysis using lexical bindings and object identity.
+ * Functions are inspected independently; their writes do not execute in the enclosing scope.
+ * This does not interpret branches/loops, call arguments/returns, arbitrary computed values,
+ * call/apply/bind, prototypes, or cross-file flows. Unparseable fragments retain literal rules.
  */
-export function collectBindingEdges(source: string): BindingEdge[] {
-  const analysisSource = source
-    .replace(CHILD_PROCESS_IMPORTS, (_match, clause: string) => {
-      const bindings = clause.match(
-        new RegExp(String.raw`^(?:(${IDENT})\s*,?\s*)?(?:\*\s*as\s+(${IDENT})|(\{[^}]*\}))?$`),
-      );
-      return [bindings?.[1], bindings?.[2], bindings?.[3]]
-        .filter(Boolean)
-        .map((binding) => `${binding} = ${CHILD_PROCESS_MODULE};`)
-        .join(" ");
-    })
-    .replace(CHILD_PROCESS_MODULE_CALLS, CHILD_PROCESS_MODULE);
-  const edges: BindingEdge[] = [];
-  const add = (target: string | undefined, member: boolean, reference: string | undefined) => {
-    if (target && reference) {
-      edges.push({ target, member, source: normalizeReference(reference) });
-    }
-  };
-  for (const pattern of [NAME_ASSIGNMENT, TYPED_NAME_ASSIGNMENT]) {
-    for (const match of analysisSource.matchAll(pattern)) {
-      add(match[1], false, match[2]);
-    }
+export function collectCapabilityCalls(source: string): CallMatches {
+  const matches: CallMatches = new Map();
+  if (!/child_process|\b(?:eval|Function)\b/.test(source)) {
+    return matches;
   }
-  for (const match of analysisSource.matchAll(MEMBER_ASSIGNMENT)) {
-    add(match[1] ?? match[2], true, match[3]);
-  }
-  for (const match of analysisSource.matchAll(DESTRUCTURING)) {
-    const object = normalizeReference(expectDefined(match[2], "destructured source"));
-    if (object.includes(".")) {
-      continue;
-    }
-    for (const rawSpec of expectDefined(match[1], "destructured specifiers").split(",")) {
-      const spec = rawSpec.replace(/[=][\s\S]*$/, "").trim();
-      const rest = spec.match(new RegExp(String.raw`^\.\.\.\s*(${IDENT})$`));
-      if (rest) {
-        add(rest[1], false, object);
-        continue;
-      }
-      // `key`, `key: name`, `["key"]: name` (CJS) or `key as name` (ESM).
-      const renamed = spec.match(
-        new RegExp(
-          String.raw`^(?:\[\s*)?["']?(${IDENT})["']?(?:\s*\])?(?:\s*(?::|\bas\b)\s*(${IDENT}))?$`,
-        ),
-      );
-      if (renamed?.[1]) {
-        add(renamed[2] ?? renamed[1], false, `${object}.${renamed[1]}`);
-      }
-    }
-  }
-  for (const match of analysisSource.matchAll(OBJECT_ENTRY)) {
-    add(match[1] ?? match[2] ?? match[3] ?? match[5], true, match[4] ?? match[5]);
-  }
-  return edges;
-}
+  const { parse }: typeof import("@babel/parser") = require("@babel/parser");
+  const { default: traverse }: typeof import("@babel/traverse") = require("@babel/traverse");
 
-// Follow bindings from the capability's global names and modules; unrelated names must not match.
-export function resolveCapabilityReferences(
-  edges: readonly BindingEdge[],
-  spec: CapabilityReferenceSpec,
-): CapabilityReferences {
-  const values = new Set(spec.values);
-  const namespaces = new Set(spec.namespaces);
-  const storedMembers = new Set<string>();
-  const edgesByName = new Map<string, BindingEdge[]>();
-  const edgesByMember = new Map<string, BindingEdge[]>();
-  const index = (map: Map<string, BindingEdge[]>, key: string, edge: BindingEdge) => {
-    const list = map.get(key);
-    if (list) {
-      list.push(edge);
-    } else {
-      map.set(key, [edge]);
-    }
-  };
-  for (const edge of edges) {
-    const [name = "", member] = edge.source.split(".");
-    index(edgesByName, name, edge);
-    if (member) {
-      index(edgesByMember, member, edge);
-    }
-  }
-  const pending = [...values, ...namespaces].flatMap((name) => edgesByName.get(name) ?? []);
-  for (let edge = pending.pop(); edge; edge = pending.pop()) {
-    const [name = "", member] = edge.source.split(".");
-    const isValue = member
-      ? (namespaces.has(name) && spec.members.has(member)) || storedMembers.has(member)
-      : values.has(name);
-    if (edge.member) {
-      // Watched members already have receiver-aware handling in the rule pattern.
-      if (isValue && !spec.members.has(edge.target) && !storedMembers.has(edge.target)) {
-        storedMembers.add(edge.target);
-        pending.push(...(edgesByMember.get(edge.target) ?? []));
+  function analyze(code: string, startLine: number, startIndex: number): void {
+    let file: t.File;
+    try {
+      file = parse(code, {
+        sourceType: "unambiguous",
+        plugins: ["typescript", "jsx"],
+        allowReturnOutsideFunction: true,
+        allowUndeclaredExports: true,
+        createImportExpressions: true,
+        startLine,
+        startIndex,
+        startColumn: 0,
+      });
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof RangeError) {
+        return;
       }
-      continue;
+      throw error;
     }
-    const bindings = isValue ? values : !member && namespaces.has(name) ? namespaces : undefined;
-    if (bindings && !bindings.has(edge.target)) {
-      bindings.add(edge.target);
-      pending.push(...(edgesByName.get(edge.target) ?? []));
+    let state: State = { bindings: new Map(), properties: new Map() };
+    const objects = new WeakMap<t.ObjectExpression, ObjectValue>();
+
+    function readBinding(key: Binding | string): Value | undefined {
+      for (let current: State | undefined = state; current; current = current.parent) {
+        if (current.bindings.has(key)) {
+          return current.bindings.get(key);
+        }
+      }
+      if (typeof key === "string") {
+        if (CODE_FUNCTIONS.has(key)) {
+          return "code-call";
+        }
+        if (GLOBAL_OBJECTS.has(key)) {
+          return "global-object";
+        }
+      }
+      return undefined;
     }
+    function readProperty(object: Value | undefined, name: string | undefined): Value | undefined {
+      if (name === undefined) {
+        return undefined;
+      }
+      if (object === "process-module") {
+        return PROCESS_METHODS.has(name) ? "process-call" : undefined;
+      }
+      if (object === "global-object") {
+        return CODE_FUNCTIONS.has(name) ? readBinding(name) : undefined;
+      }
+      if (!(object instanceof Map)) {
+        return undefined;
+      }
+      for (let current: State | undefined = state; current; current = current.parent) {
+        const properties = current.properties.get(object);
+        if (properties?.has(name)) {
+          return properties.get(name);
+        }
+      }
+      return object.get(name);
+    }
+    function value(node: t.Node | null | undefined, scope: Scope, depth = 0): Value | undefined {
+      if (!node || depth > 32) {
+        return undefined;
+      }
+      switch (node.type) {
+        case "Identifier":
+          return readBinding(scope.getBinding(node.name) ?? node.name);
+        case "AwaitExpression":
+          if (node.argument.type === "ImportExpression") {
+            return isProcessModule(staticString(node.argument.source))
+              ? "process-module"
+              : undefined;
+          }
+          return value(node.argument, scope, depth + 1);
+        case "TSAsExpression":
+        case "TSTypeAssertion":
+        case "TSNonNullExpression":
+        case "ParenthesizedExpression":
+          return value(node.expression, scope, depth + 1);
+        case "SequenceExpression":
+          return value(node.expressions.at(-1), scope, depth + 1);
+        case "MemberExpression":
+        case "OptionalMemberExpression":
+          return readProperty(value(node.object, scope, depth + 1), propertyName(node));
+        case "CallExpression":
+          return node.callee.type === "Identifier" &&
+            node.callee.name === "require" &&
+            !scope.getBinding("require") &&
+            isProcessModule(staticString(node.arguments[0]))
+            ? "process-module"
+            : undefined;
+        case "ObjectExpression":
+          return objects.get(node);
+        default:
+          return undefined;
+      }
+    }
+    function assign(node: t.Node, next: Value | undefined, scope: Scope): void {
+      if (node.type === "Identifier") {
+        state.bindings.set(scope.getBinding(node.name) ?? node.name, next);
+      } else if (node.type === "ObjectPattern") {
+        for (const entry of node.properties) {
+          if (entry.type === "ObjectProperty") {
+            assign(entry.value, readProperty(next, propertyName(entry)), scope);
+          }
+        }
+      } else if (node.type === "AssignmentPattern") {
+        assign(node.left, next ?? value(node.right, scope), scope);
+      } else if (node.type === "MemberExpression" || node.type === "OptionalMemberExpression") {
+        const object = value(node.object, scope);
+        const name = propertyName(node);
+        if (object instanceof Map && name !== undefined) {
+          let properties = state.properties.get(object);
+          if (!properties) {
+            state.properties.set(object, (properties = new Map()));
+          }
+          properties.set(name, next);
+        }
+      }
+    }
+    traverse(file, {
+      Function: {
+        enter() {
+          state = { bindings: new Map(), properties: new Map(), parent: state };
+        },
+        exit() {
+          if (state.parent) {
+            state = state.parent;
+          }
+        },
+      },
+      ImportDeclaration(path) {
+        if (!isProcessModule(path.node.source.value) || path.node.importKind === "type") {
+          return;
+        }
+        for (const specifier of path.node.specifiers) {
+          const imported =
+            specifier.type === "ImportSpecifier"
+              ? specifier.imported.type === "Identifier"
+                ? specifier.imported.name
+                : specifier.imported.value
+              : undefined;
+          assign(
+            specifier.local,
+            specifier.type === "ImportSpecifier"
+              ? specifier.importKind !== "type" && imported && PROCESS_METHODS.has(imported)
+                ? "process-call"
+                : undefined
+              : "process-module",
+            path.scope,
+          );
+        }
+      },
+      TSImportEqualsDeclaration(path) {
+        const reference = path.node.moduleReference;
+        if (
+          reference.type === "TSExternalModuleReference" &&
+          isProcessModule(staticString(reference.expression))
+        ) {
+          assign(path.node.id, "process-module", path.scope);
+        }
+      },
+      ObjectExpression: {
+        exit(path) {
+          const object: ObjectValue = new Map();
+          for (const entry of path.node.properties) {
+            if (entry.type === "ObjectProperty" || entry.type === "ObjectMethod") {
+              const name = propertyName(entry);
+              if (name !== undefined) {
+                object.set(
+                  name,
+                  entry.type === "ObjectProperty" ? value(entry.value, path.scope) : undefined,
+                );
+              }
+            }
+          }
+          objects.set(path.node, object);
+        },
+      },
+      VariableDeclarator: {
+        exit(path) {
+          assign(path.node.id, value(path.node.init, path.scope), path.scope);
+        },
+      },
+      AssignmentExpression: {
+        exit(path) {
+          assign(
+            path.node.left,
+            path.node.operator === "=" ? value(path.node.right, path.scope) : undefined,
+            path.scope,
+          );
+        },
+      },
+      "CallExpression|OptionalCallExpression|NewExpression": {
+        exit(path) {
+          if (
+            !path.isCallExpression() &&
+            !path.isOptionalCallExpression() &&
+            !path.isNewExpression()
+          ) {
+            return;
+          }
+          const capability = value(path.node.callee, path.scope);
+          if (capability !== "process-call" && capability !== "code-call") {
+            return;
+          }
+          const callee = path.node.callee;
+          const location = path.isNewExpression()
+            ? path.node.loc?.start
+            : (callee.type === "MemberExpression" || callee.type === "OptionalMemberExpression"
+                ? callee.property
+                : callee
+              ).loc?.start;
+          if (!location) {
+            return;
+          }
+          const rule = capability === "process-call" ? "dangerous-exec" : "dynamic-code-execution";
+          let lines = matches.get(rule);
+          if (!lines) {
+            matches.set(rule, (lines = new Map()));
+          }
+          let columns = lines.get(location.line);
+          if (!columns) {
+            lines.set(location.line, (columns = new Set()));
+          }
+          columns.add(location.column);
+        },
+      },
+    });
   }
 
-  const union = (names: Iterable<string>) => [...names].map(escapeRegExp).join("|");
-  const calls: string[] = [];
-  const aliases = [...values].filter((name) => !spec.values.includes(name));
-  if (aliases.length > 0) {
-    calls.push(String.raw`(?<![\w$.])(?:${union(aliases)})\s*\(`);
+  // Markdown examples are independent programs; preserve original finding lines and columns.
+  const fences = [
+    ...source.matchAll(/^ {0,3}(`{3,}|~{3,})[^\n]*\n([\s\S]*?)^ {0,3}\1[ \t]*\r?$/gm),
+  ];
+  if (fences.length === 0) {
+    analyze(source, 1, 0);
+  } else {
+    for (const fence of fences) {
+      const body = fence[2] ?? "";
+      const start = fence.index + fence[0].indexOf("\n") + 1;
+      analyze(body, source.slice(0, start).split("\n").length, start);
+    }
   }
-  if (storedMembers.size > 0) {
-    const stored = union(storedMembers);
-    calls.push(String.raw`(?<=\.\s*)(?:${stored})\s*\(`);
-    calls.push(String.raw`(?<=\[\s*)["'](?:${stored})["']\s*\]\s*\(`);
-  }
-  const receivers = union(namespaces);
-  const members = union(spec.members);
-  calls.push(String.raw`(?<=(?<![\w$.])(?:${receivers})\s*\.\s*)(?:${members})\s*\(`);
-  calls.push(String.raw`(?<=(?<![\w$.])(?:${receivers})\s*\[\s*)["'](?:${members})["']\s*\]\s*\(`);
-  return { namespaces, calls: new RegExp(calls.join("|"), "g") };
+  return matches;
 }
