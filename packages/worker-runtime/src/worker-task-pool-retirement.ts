@@ -457,8 +457,17 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     },
     clearIdle,
     idle,
-    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>, critical = false) {
+    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>, message: unknown) {
+      // PROTOTYPE: a capped start publishes a shared counter so one idle worker leaves, not all.
+      const evict =
+        typeof message === "object" && message !== null && "evict" in message
+          ? (message.evict as { remaining: number })
+          : undefined;
+      const critical = message === true || evict !== undefined;
       for (const slot of slots) {
+        if (evict && evict.remaining <= 0) {
+          return;
+        }
         if (
           !slot.task &&
           !slot.retiring &&
@@ -467,6 +476,9 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
           isWorkerIdleForPressure(slot.idleSince, critical) &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
+          if (evict) {
+            evict.remaining--;
+          }
           void retire(slot, "memory_pressure").catch(() => undefined);
         }
       }

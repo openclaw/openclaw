@@ -120,7 +120,12 @@ export function initializeWorkerMemoryBudget(
     hasSharedHost: () => state.hasSharedHost(),
     startWaitMs: leanPrototype.startWaitMs,
     maxPoolWorkers: leanPrototype.maxPoolWorkers,
-    relievePressure: () => memoryPressure.publish(true),
+    // PROTOTYPE: under the worker cap one idle worker makes room; pools subscribe in dispatch
+    // order, so the least recently used pool gives up its worker first.
+    relievePressure: () =>
+      memoryPressure.publish(
+        leanPrototype.maxPoolWorkers === undefined ? true : { evict: { remaining: 1 } },
+      ),
   });
   const pressurePercent = leanPrototype.pressurePercent;
   if (pressurePercent !== undefined) {
