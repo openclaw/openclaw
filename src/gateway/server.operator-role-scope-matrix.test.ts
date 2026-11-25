@@ -366,7 +366,7 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
           )
         : await settled(sendChatAndWait(connected.client, ownKey, marker, 20_000));
       if (readerAssignment) {
-        expect(sent).toEqual({ ok: false, error: "missing scope: operator.write" });
+        expect(sent).toEqual({ ok: false, error: `Session "${ownKey}" was not found.` });
       }
       return {
         scopes: connected.scopes,
