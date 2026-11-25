@@ -311,6 +311,44 @@ describe("Gateway install PATH preservation", () => {
     expect(findings).toEqual([]);
     expect(plan.environment.PATH).toBe(testCase.expectedPath);
   });
+
+  it.each([
+    {
+      name: "an unchanged runtime whose directory is not first",
+      previousNode: "/opt/homebrew/bin/node",
+      nextNode: "/opt/homebrew/bin/node",
+      existingPath: "/Users/test/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin",
+      nextPath: "/opt/homebrew/bin:/Users/test/.local/bin:/opt/homebrew/sbin:/usr/bin:/bin",
+      expectedPath: "/Users/test/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin",
+    },
+    {
+      name: "a moved runtime directory that still leads",
+      previousNode: "/opt/node-a/bin/node",
+      nextNode: "/opt/node-b/bin/node",
+      existingPath: "/opt/node-a/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin",
+      nextPath: "/opt/node-b/bin:/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin",
+      expectedPath: "/opt/node-b/bin:/Users/test/.local/bin:/opt/homebrew/bin:/usr/bin",
+    },
+  ])("keeps macOS PATH precedence through install-plan audit: $name", async (testCase) => {
+    mocks.buildServiceEnvironment.mockReturnValue({ PATH: testCase.nextPath, TMPDIR: "/tmp" });
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: [testCase.nextNode, "/opt/openclaw/dist/index.js", "gateway"],
+    });
+    const existingCommand = {
+      programArguments: [testCase.previousNode, "/opt/openclaw/dist/index.js", "gateway"],
+      environment: { PATH: testCase.existingPath },
+    };
+    const plan = await buildPlan({
+      platform: "darwin",
+      existingCommand,
+      existingEnvironment: existingCommand.environment,
+    });
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(existingCommand, plan, "darwin", findings);
+
+    expect(findings).toEqual([]);
+    expect(plan.environment.PATH).toBe(testCase.expectedPath);
+  });
 });
 
 describe("Gateway allocator startup environment", () => {
