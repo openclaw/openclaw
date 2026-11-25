@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 
 export type ConsultParams = Parameters<
-  typeof import("../../talk/agent-consult-runtime.js").consultRealtimeVoiceAgent
+  typeof import("../../talk/agent-consult-runtime.js").consultRealtimeVoiceAgentWithAnswerMedia
 >[0];
 
 export function deferred<T>() {

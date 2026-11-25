@@ -40,7 +40,7 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 }));
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentWithAnswerMedia: mocks.consultRealtimeVoiceAgent,
 }));
 vi.mock("../../talk/agent-run-control.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-run-control.js")>()),

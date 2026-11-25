@@ -15,7 +15,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import { consultRealtimeVoiceAgentWithAnswerMedia } from "./agent-consult-runtime.js";
 import {
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -86,11 +86,11 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   };
 }
 
-type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
+type ConsultParams = Parameters<typeof consultRealtimeVoiceAgentWithAnswerMedia>[0];
 type TestRuntime = ReturnType<typeof createAgentRuntime>["runtime"];
 
 function runConsult(runtime: TestRuntime, params: Partial<ConsultParams> = {}) {
-  return consultRealtimeVoiceAgent({
+  return consultRealtimeVoiceAgentWithAnswerMedia({
     agentRuntime: runtime as never,
     cfg: {},
     logger: { warn: vi.fn() },
@@ -435,6 +435,93 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] agent consult produced no answer: agent returned no speakable text",
     );
+  });
+
+  it("hands consult media to its delivery owner before releasing the run", async () => {
+    const warn = vi.fn();
+    const cleanup = vi.fn();
+    const media = { mediaUrls: ["/workspace/comic.png"] };
+    const { runtime } = createAgentRuntime([
+      setReplyPayloadMetadata(
+        { mediaUrl: "/workspace/earlier.png" },
+        { precedingInputAnswer: true },
+      ),
+      media,
+    ]);
+    const deliverAnswerMedia = vi.fn(async () => {
+      expect(cleanup).not.toHaveBeenCalled();
+      return "attached" as const;
+    });
+
+    const mediaOnly = await runConsult(runtime, {
+      logger: { warn },
+      onRunStarted: () => ({ cleanup }),
+      deliverAnswerMedia,
+    });
+
+    expect(deliverAnswerMedia).toHaveBeenCalledOnce();
+    expect(deliverAnswerMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^voice-consult-/),
+        sessionId: expect.any(String),
+        payloads: [media],
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(mediaOnly).toEqual({ text: "I've put that in the chat." });
+    expect(warn).not.toHaveBeenCalled();
+
+    // A refused attachment is never announced as delivered.
+    const refused = await runConsult(createAgentRuntime([media]).runtime, {
+      logger: { warn },
+      deliverAnswerMedia: async () => "refused",
+    });
+    expect(refused).toEqual({ text: "I couldn't put that in the chat." });
+    expect(warn).not.toHaveBeenCalled();
+
+    // Channels without a chat surface keep the existing no-answer fallback.
+    const withoutOwner = await runConsult(createAgentRuntime([media]).runtime, {
+      logger: { warn },
+      fallbackText: "Let me verify that first.",
+    });
+    expect(withoutOwner).toEqual({ text: "Let me verify that first." });
+  });
+
+  it("keeps cancellation during media delivery a cancellation", async () => {
+    const warn = vi.fn();
+    const controller = new AbortController();
+    const { runtime } = createAgentRuntime([{ mediaUrls: ["/workspace/comic.png"] }]);
+
+    const consult = runConsult(runtime, {
+      logger: { warn },
+      abortSignal: controller.signal,
+      deliverAnswerMedia: async ({ abortSignal }) => {
+        controller.abort(new Error("voice session closed"));
+        abortSignal.throwIfAborted();
+        return "attached" as const;
+      },
+    });
+
+    await expect(consult).rejects.toMatchObject({ name: "AbortError" });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not log media delivery failure details", async () => {
+    const warn = vi.fn();
+    const { runtime } = createAgentRuntime([
+      { text: "Here it is.", mediaUrls: ["/private/a.png"] },
+    ]);
+
+    const result = await runConsult(runtime, {
+      logger: { warn },
+      deliverAnswerMedia: async () => {
+        throw new Error("cannot read /private/a.png");
+      },
+    });
+
+    expect(result).toEqual({ text: "Here it is." });
+    expect(warn).toHaveBeenCalledWith("[talk] agent consult media could not be delivered to chat");
   });
 
   it("returns a yielded acknowledgement immediately without waiting for a visible final", async () => {
