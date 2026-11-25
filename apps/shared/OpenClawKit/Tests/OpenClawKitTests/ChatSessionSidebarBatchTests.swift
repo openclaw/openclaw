@@ -325,6 +325,8 @@ struct ChatSessionSidebarBatchTests {
         } catch { Issue.record("An acknowledged drop was reported as failed: \(error)") }
         #expect(methods == ["users.prefs.get", "users.prefs.set", "users.prefs.get"])
         #expect(batch.notices.isEmpty)
+        // A lost refresh must not disable pin edits for the unchanged signed-in profile.
+        #expect(connection.pinProfile.verified)
         switch refresh {
         case .newerOrder: #expect(batch.sidebarEntries == external)
         case .unavailable: #expect(batch.sidebarEntries == accepted)

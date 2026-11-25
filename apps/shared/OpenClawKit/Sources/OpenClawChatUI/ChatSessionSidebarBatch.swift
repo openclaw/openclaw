@@ -44,9 +44,10 @@ final class ChatSidebarPinProfile {
     {
         self.readRevision += 1
         let revision = self.readRevision
+        // A lost read keeps the last verified profile; only a definitive reply changes it.
+        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
         var savedKeys: Set<String>?
         defer { if self.readRevision == revision { self.savedKeys = savedKeys } }
-        let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
         if reply.status == "no_durable_identity" {
             guard forDisplay else { throw URLError(.userAuthenticationRequired) }
             return []

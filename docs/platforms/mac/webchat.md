@@ -224,8 +224,10 @@ countdown. Undo can restore threads that were successfully archived, without
 changing your personal pin order. If Archive cleared a shared pin, Undo creates
 a fresh shared pin unless a later edit superseded it. If the Gateway has already
 removed the working copy, choose **Restore** beside the failure to recreate it
-from the retained snapshot. Restore does not re-pin the thread. On connections
-without Undo, use **Threads… → Archived** to restore it.
+from the retained snapshot. Restore does not re-pin the thread. On a
+personal-pin connection without Undo, use **Threads… → Archived** to restore it.
+With an older Gateway that does not support personal pins, the existing Undo
+still appears and can restore the shared pin that the same Archive cleared.
 
 A confirmed restore returns the thread to Active without changing the current
 conversation. Changing filters or agents does not cancel Undo; reconnecting does.

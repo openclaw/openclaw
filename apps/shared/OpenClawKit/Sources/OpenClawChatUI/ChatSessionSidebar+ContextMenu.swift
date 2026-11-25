@@ -81,6 +81,11 @@ private struct ChatSessionSidebarRowMenu: View {
                         agentID: self.session.agentId)
                 }
                 .disabled(!self.actions.canTogglePin(self.session, at: self.now))
+                if self.actions.connection?.supportsPersonalPins == false,
+                   let reason = OpenClawPersonalPinError.unsupportedGateway.errorDescription
+                {
+                    Text(reason)
+                }
             }
             // Snooze shares Pin's root-session eligibility.
             if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild), !self.session.isArchived,
