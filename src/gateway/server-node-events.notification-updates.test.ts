@@ -5,6 +5,7 @@ import type {
   SessionEventOutcome,
   SessionEventReceipt,
 } from "../auto-reply/reply/session-event-contract.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { handleNodeEvent } from "./server-node-events.js";
 
@@ -15,7 +16,11 @@ const {
   enqueueSessionEventForHost: handoff,
   loadSessionEntry: lookupSession,
 } = runtimeMocks;
+const realQueue = await vi.importActual<typeof import("../infra/system-events.js")>(
+  "../infra/system-events.js",
+);
 
+const sessionKey = "agent:ops:main";
 const cancelled: SessionEventOutcome = {
   status: "cancelled",
   executionStarted: false,
@@ -39,26 +44,52 @@ function phone(nodeId: string) {
 
 beforeEach(() => {
   resetGatewayWorkAdmission();
-  enqueue.mockReset().mockImplementation((text: string) => ({ id: "node-event", text }));
+  resetSystemEventsForTest();
+  // The real session queue, so replacement is checked by what stays pending, not by arguments.
+  enqueue.mockReset().mockImplementation(realQueue.enqueueSystemEventEntry);
   handoff.mockClear();
-  lookupSession.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+  lookupSession.mockImplementation((key: string) => buildSessionLookup(key));
 });
 
 describe("notification updates of one key", () => {
-  it("replace the pending posted update, and leave removals appended", async () => {
-    const { notify } = phone("node");
+  it("keep only the newest pending update of one phone's notification", async () => {
+    const { notify } = phone("phone-a");
+    for (const kb of [13, 26, 39]) {
+      await notify({ text: `Received ${kb} KB` });
+    }
+
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification posted (node=phone-a key=ongoing): Received 39 KB",
+    ]);
+  });
+
+  it("never replace another phone's pending update that shares the key", async () => {
+    const a = phone("phone-a");
+    const b = phone("phone-b");
+    await a.notify({ text: "A 1" });
+    await b.notify({ text: "B 1" });
+    await a.notify({ text: "A 2" });
+
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification posted (node=phone-b key=ongoing): B 1",
+      "Notification posted (node=phone-a key=ongoing): A 2",
+    ]);
+  });
+
+  it("keep a pending removal when a newer update of the key arrives", async () => {
+    const { notify } = phone("phone-a");
     await notify({ text: "Received 13 KB" });
     await notify({ change: "removed" });
+    await notify({ text: "Received 26 KB" });
 
-    expect(enqueue.mock.calls.map(([, options]) => options.replace)).toEqual([true, undefined]);
+    expect(peekSystemEvents(sessionKey)).toEqual([
+      "Notification removed (node=phone-a key=ongoing)",
+      "Notification posted (node=phone-a key=ongoing): Received 26 KB",
+    ]);
   });
 
   it("do not report a superseded update as undelivered", async () => {
     const firstSettled = createDeferred<SessionEventOutcome>();
-    enqueue
-      .mockReturnValueOnce({ id: "update-1" })
-      .mockReturnValueOnce({ id: "update-2" })
-      .mockReturnValueOnce({ id: "other-1" });
     handoff
       .mockImplementationOnce(() => receipt("receipt-1", firstSettled.promise))
       .mockImplementationOnce(() => receipt("receipt-2", new Promise(() => {})))

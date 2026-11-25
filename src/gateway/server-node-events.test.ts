@@ -621,7 +621,10 @@ describe("notifications changed events", () => {
       const { notify } = nodeFixture();
       await notify({ change, packageName, sessionKey: requestedKey });
 
-      const routing = { sessionKey, contextKey: "notification:notif" };
+      const routing = {
+        sessionKey,
+        contextKey: `${change === "removed" ? "notification-removed" : "notification"}:node:notif`,
+      };
       expect(enqueue).toHaveBeenCalledWith(
         `Notification ${change} (node=node key=notif${packageName ? ` package=${packageName}` : ""})`,
         expect.objectContaining(routing),

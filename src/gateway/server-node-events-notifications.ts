@@ -35,6 +35,14 @@ const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 // pending occurrence of its key, so an older occurrence that settles as cancelled was superseded.
 const latestNotificationOccurrences = new Map<string, string | undefined>();
 
+// Android notification keys are unique per device only, so the node is part of the identity:
+// one phone's update never replaces another phone's pending event. Removals keep their own
+// context, so a newer posted update never drops a removal the agent has not seen yet.
+function notificationContextKey(nodeId: string, key: string, change: "posted" | "removed") {
+  const scope = change === "removed" ? "notification-removed" : "notification";
+  return `${scope}:${encodeURIComponent(nodeId)}:${key}`;
+}
+
 export async function handleNodeNotificationEvent(
   ctx: NodeEventContext,
   nodeId: string,
@@ -120,7 +128,7 @@ export async function handleNodeNotificationEvent(
   const eventOptions = withSystemEventOwner(
     {
       sessionKey,
-      contextKey: `notification:${key}`,
+      contextKey: notificationContextKey(nodeId, key, change),
       deliveryContext: expectedTarget.deliveryContext,
       // A newer posted state of one notification supersedes its still-pending earlier state.
       ...(change === "posted" ? { replace: true } : {}),
