@@ -42,12 +42,17 @@ struct SidebarGatewayPresentation {
         }
     }
 
-    /// The control's spoken state. Online is the normal state, so it says nothing, as it shows nothing.
+    /// Online keeps its green dot: on this control the connection is a signal worth showing even when it is fine.
+    func showsOnlineDot(isSwitching: Bool) -> Bool {
+        !self.entries.isEmpty && !isSwitching && self.state == .connected
+    }
+
+    /// The control's spoken state, one for each mark it shows, online included.
     func accessibilityStatus(isSwitching: Bool) -> String {
         if self.entries.isEmpty { return "" }
         if isSwitching { return String(localized: "Connecting") }
         switch self.state {
-        case .connected: return ""
+        case .connected: return String(localized: "Online")
         case .connecting: return String(localized: "Connecting")
         case .disconnected: return String(localized: "Offline")
         case .error: return self.problemText ?? String(localized: "Needs attention")
@@ -132,7 +137,7 @@ struct SidebarGatewayPicker: View {
 
     @ViewBuilder
     private var controlLabel: some View {
-        // Online shows the antenna alone; only an exception carries a mark, told apart by shape:
+        // Each state has its own mark, told apart by shape as well as color: a green dot when online,
         // a spinner while connecting, a slashed antenna when offline, a warning badge on an error.
         let state = self.presentation.entries.isEmpty ? GatewayDisplayState.connected : self.presentation.state
         ZStack {
@@ -151,7 +156,13 @@ struct SidebarGatewayPicker: View {
                         : OpenClawSidebarPalette.text)
                     .frame(width: 22, height: 22)
                     .overlay(alignment: .topTrailing) {
-                        if state == .error {
+                        if self.presentation.showsOnlineDot(isSwitching: self.isSwitching) {
+                            Circle()
+                                .fill(OpenClawBrand.ok)
+                                .frame(width: 8, height: 8)
+                                .overlay(Circle().stroke(OpenClawSidebarPalette.background, lineWidth: 1.5))
+                                .offset(x: 3, y: -2)
+                        } else if state == .error {
                             Image(systemName: "exclamationmark.circle.fill")
                                 .font(.system(size: 11, weight: .bold))
                                 .symbolRenderingMode(.palette)
