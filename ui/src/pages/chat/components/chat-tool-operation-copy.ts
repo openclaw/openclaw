@@ -430,13 +430,17 @@ export function catalogToolOperation(
           : "checked";
     }
   }
-  const query =
-    name === "web_search" && typeof args?.query === "string"
-      ? truncateUtf16WithEllipsis(
-          args.query.replace(/[\s\p{Cc}\p{Bidi_Control}]+/gu, " ").trim(),
-          120,
-        )
-      : undefined;
+  // Searches and page reads stay distinguishable by what they looked for.
+  const input =
+    (name === "web_search" || name === "memory_search") && typeof args?.query === "string"
+      ? args.query
+      : name === "wiki_get" && typeof args?.lookup === "string"
+        ? args.lookup
+        : undefined;
+  const query = input
+    ? truncateUtf16WithEllipsis(input.replace(/[\s\p{Cc}\p{Bidi_Control}]+/gu, " ").trim(), 120) ||
+      undefined
+    : undefined;
   const label = t(
     `chat.toolCards.operationLabels.${name}.${operation}.${phase}${query ? "WithQuery" : ""}`,
     query ? { query } : undefined,
@@ -445,7 +449,9 @@ export function catalogToolOperation(
     name === "nodes" && operation === "describe"
       ? describedNodeName(args?.node, card.details)
       : addressed?.name;
-  const named = target ? t("chat.toolCards.namedOperation", { action: label, name: target }) : label;
+  const named = target
+    ? t("chat.toolCards.namedOperation", { action: label, name: target })
+    : label;
   // A publication receipt qualifies a completed call; the row's outcome slot covers the rest.
   return qualifier
     ? { label: t(`chat.toolCards.${qualifier}`, { action: named }) }

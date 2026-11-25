@@ -32,6 +32,9 @@ const enChatToolOperations = {
             action: "Search memory",
             running: "Searching memory",
             done: "Searched memory",
+            actionWithQuery: "Search memory for “{query}”",
+            runningWithQuery: "Searching memory for “{query}”",
+            doneWithQuery: "Searched memory for “{query}”",
           },
         },
         memory_get: {
@@ -379,6 +382,9 @@ const enChatToolOperations = {
             action: "Read wiki page",
             running: "Reading wiki page",
             done: "Read wiki page",
+            actionWithQuery: "Read wiki page “{query}”",
+            runningWithQuery: "Reading wiki page “{query}”",
+            doneWithQuery: "Read wiki page “{query}”",
           },
         },
         wiki_lint: {

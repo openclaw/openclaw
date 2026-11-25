@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { contract as knowledge } from "../../../../../extensions/knowledge/src/contract.js";
 import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
 import { projectCatalogItemForDisplay } from "../../../../../src/chat/session-catalog-display.js";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { contract as knowledge } from "../../../../../extensions/knowledge/src/contract.js";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 import { catalogToolOperation } from "./chat-tool-operation-copy.ts";
 
@@ -272,6 +272,24 @@ it.each([
       { expanded: false },
     );
     expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
+  },
+);
+
+it.each([
+  ["memory_search", "query", ["release checklist", "travel plans"], "Searched memory for"],
+  ["wiki_get", "lookup", ["projects/openclaw", "people/alex"], "Read wiki page"],
+] as const)(
+  "keeps two %s calls distinguishable by their %s",
+  async (name, field, values, prefix) => {
+    const titles = [];
+    for (const value of values) {
+      const container = await mountCard(
+        { id: `${name}-${value}`, name, args: { [field]: value }, completed: true },
+        { expanded: false },
+      );
+      titles.push(text(container, ".chat-tool-row__title"));
+    }
+    expect(titles).toEqual(values.map((value) => `${prefix} “${value}”`));
   },
 );
 
