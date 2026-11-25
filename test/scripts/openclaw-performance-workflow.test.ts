@@ -309,6 +309,7 @@ describe("OpenClaw performance workflow", () => {
       options: [
         "kova",
         "vitest-pair",
+        "node-cache-diagnostics",
         "gateway-concurrency",
         "gateway-memory-caps",
         "gateway-cold-turn-calibration",
@@ -348,6 +349,84 @@ describe("OpenClaw performance workflow", () => {
     expect(upload.with?.name).not.toContain("inputs.");
     expect(upload.with?.["if-no-files-found"]).toBe("error");
     expect(upload.with?.["retention-days"]).toBe(30);
+  });
+
+  it("isolates native cache diagnostics from live, publishing, and release jobs", () => {
+    const workflow = readWorkflow();
+    const context = {
+      eventName: "workflow_dispatch",
+      inputs: {
+        mode: "node-cache-diagnostics",
+        dispatch_id: "full-release-validation-cache-diagnostics",
+        publish_reports: true,
+        live_openai_candidate: true,
+        deep_profile: true,
+      },
+      releaseRunnerGroup: "release-only",
+    } as const;
+    for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+      expect(evaluateWorkflow(job.if, context), name).toBe(name === "node_cache_diagnostics");
+    }
+    const job = workflow.jobs?.node_cache_diagnostics;
+    expect(job?.needs).toBeUndefined();
+    expect(job?.env).toBeUndefined();
+    expect(evaluateWorkflowRunner(job?.["runs-on"], context)).toBe("ubuntu-24.04");
+    expect(job?.["timeout-minutes"]).toBe(5);
+    expect(job?.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(job)).not.toMatch(/secrets\.|pnpm|npm install|cache\/restore/u);
+    const checkout = findStep("Checkout diagnostic helper", "node_cache_diagnostics");
+    expect(checkout.with).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      "fetch-depth": 1,
+      "persist-credentials": false,
+    });
+    const setup = findStep("Set up diagnostic Node", "node_cache_diagnostics");
+    expect(setup.with).toEqual({
+      "node-version": "24.22.1",
+      "check-latest": false,
+      "package-manager-cache": false,
+    });
+    const run = findStep("Qualify native Node cache diagnostics", "node_cache_diagnostics");
+    expect(run.env).toEqual({
+      NODE_CACHE_DIAGNOSTIC_OUTPUT: "${{ runner.temp }}/node-cache-diagnostics",
+      TARGET_REF: "${{ inputs.target_ref }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(run.run).toContain('"$TARGET_REF" != "$WORKFLOW_SHA"');
+    expect(run.run).toContain('"$(git rev-parse HEAD)" != "$WORKFLOW_SHA"');
+    expect(run.run).toContain("--mode node-cache-diagnostics");
+    const finalize = findStep("Finalize diagnostic artifact", "node_cache_diagnostics");
+    const upload = findStep("Upload diagnostic artifact", "node_cache_diagnostics");
+    expect(finalize.env?.NODE_CACHE_DIAGNOSTIC_OUTPUT).toBe(
+      "${{ runner.temp }}/node-cache-diagnostics",
+    );
+    expect(finalize.if).toBe("${{ always() }}");
+    expect(upload.if).toBe("${{ always() }}");
+    expect(upload.with?.name).toBe(
+      "node-cache-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
+    expect(upload.with?.path).toBe("${{ runner.temp }}/node-cache-diagnostics");
+    expect(upload.with?.["retention-days"]).toBe(30);
+  });
+
+  posixIt("refuses a mismatched diagnostic target before running Node", () => {
+    const root = tempDirs.make("node-cache-diagnostic-target-");
+    const marker = join(root, "node-ran");
+    writeFileSync(join(root, "node"), `#!/bin/sh\ntouch '${marker}'\n`);
+    chmodSync(join(root, "node"), 0o755);
+    const run = findStep("Qualify native Node cache diagnostics", "node_cache_diagnostics");
+    const result = runWorkflowCommand("bash", ["-c", run.run ?? ""], {
+      env: {
+        ...process.env,
+        PATH: `${root}:${process.env.PATH}`,
+        TARGET_REF: "a".repeat(40),
+        WORKFLOW_SHA: "b".repeat(40),
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("requires the exact workflow checkout and target_ref");
+    expect(existsSync(marker)).toBe(false);
   });
 
   posixIt("retains a terminal manifest when slash-containing refs fail validation", () => {
