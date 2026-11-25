@@ -273,6 +273,22 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun displayMathRecognizesBareCarriageReturnsBetweenProseAndEquation() {
+    for ((open, close) in listOf("$$" to "$$", "\\[" to "\\]")) {
+      val source = "First note.\r\r$open\ra^2\r+b^2\r$close\r\rResult follows."
+
+      assertEquals(
+        listOf(
+          ChatMarkdownSourceBlock.Markdown("First note."),
+          ChatMarkdownSourceBlock.Math("a^2\n+b^2"),
+          ChatMarkdownSourceBlock.Markdown("Result follows."),
+        ),
+        segmentChatMarkdown(source, isStreaming = false),
+      )
+    }
+  }
+
+  @Test
   fun displayMathIgnoresFencedAndInlineCode() {
     val fenced = "```tex\n$$\nx + y\n$$\n```"
     val inline = "`$$ x + y $$`"
@@ -323,7 +339,8 @@ class ChatMarkdownTest {
 
   @Test
   fun oversizedDisplayMathUsesCodeFallback() {
-    val latex = "é".repeat(CHAT_MATH_MAX_BYTES / 2 + 1)
+    // The authored CRLF puts the payload one UTF-8 byte over the limit.
+    val latex = "é".repeat(CHAT_MATH_MAX_BYTES / 2 - 1) + "\r\nx"
 
     assertEquals(
       listOf(ChatMarkdownSourceBlock.MathFallback(latex)),
