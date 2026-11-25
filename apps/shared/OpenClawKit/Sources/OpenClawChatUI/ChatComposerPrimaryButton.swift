@@ -10,7 +10,6 @@ extension OpenClawChatComposer {
             role: self.phonePrimaryRole,
             send: .init(
                 isEnabled: self.canSendMessage,
-                isSending: self.viewModel.isSending,
                 isReplyRunning: self.viewModel.pendingRunCount > 0,
                 fill: self.sendButtonFill,
                 disabledFill: self.disabledSendButtonFill,
@@ -19,6 +18,7 @@ extension OpenClawChatComposer {
                 queueModes: self.inputModel?.sendModeChoices ?? [],
                 action: { self.sendDraftIfEnabled(queueMode: $0) }),
             stop: .init(
+                canStop: self.viewModel.pendingRunCount > 0,
                 isAborting: self.viewModel.isAborting,
                 ink: self.stopButtonForeground,
                 fill: self.stopButtonFill,
@@ -55,7 +55,8 @@ extension OpenClawChatComposer {
             hasDraftToSend: self.viewModel.hasDraftToSend,
             canSendDraft: self.canSendMessage,
             hasStoppableReply: self.viewModel.pendingRunCount > 0,
-            isSending: self.viewModel.isSending,
+            hasReplyRunningElsewhere: self.viewModel.hasAdvertisedLiveRun ||
+                self.viewModel.hasActiveSessionRunWithoutChatSnapshot,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive,
             hasTalkControl: self.talkControl != nil)
@@ -77,7 +78,6 @@ extension OpenClawChatComposer {
 struct ChatComposerPrimaryButton: View {
     struct Send {
         let isEnabled: Bool
-        let isSending: Bool
         /// A reply is running, so Send stands where Stop would be.
         let isReplyRunning: Bool
         let fill: Color
@@ -89,6 +89,8 @@ struct ChatComposerPrimaryButton: View {
     }
 
     struct Stop {
+        /// False while the running reply is not one this client can abort yet.
+        let canStop: Bool
         let isAborting: Bool
         let ink: Color
         let fill: Color
@@ -118,7 +120,7 @@ struct ChatComposerPrimaryButton: View {
                 .overlay {
                     Circle().strokeBorder(Color.white.opacity(self.borderOpacity), lineWidth: 1)
                 }
-                .opacity(self.role == .stop && !self.isStopArmed ? 0.35 : 1)
+                .opacity(self.role == .stop && (!self.isStopArmed || !self.stop.canStop) ? 0.35 : 1)
                 .frame(width: self.controlSize, height: self.controlSize)
                 .contentShape(Rectangle())
                 .animation(self.reduceMotion ? nil : .snappy(duration: 0.2), value: self.role)
@@ -180,7 +182,8 @@ struct ChatComposerPrimaryButton: View {
 
     @ViewBuilder
     private var glyph: some View {
-        if self.isBusy {
+        // Only Stop shows progress; a send never turns the button into a spinner.
+        if self.role == .stop, self.stop.isAborting {
             ProgressView().controlSize(.mini).tint(self.ink)
         } else if self.role == .talk, let talkControl, talkControl.isEnabled {
             ChatTalkButtonGlyph(control: talkControl)
@@ -196,14 +199,6 @@ struct ChatComposerPrimaryButton: View {
         }
     }
 
-    private var isBusy: Bool {
-        switch self.role {
-        case .send: self.send.isSending
-        case .stop: self.stop.isAborting
-        case .talk: false
-        }
-    }
-
     private var isDisabled: Bool {
         switch self.role {
         case .talk:
@@ -212,7 +207,7 @@ struct ChatComposerPrimaryButton: View {
         case .send:
             return !self.send.isEnabled
         case .stop:
-            return self.stop.isAborting || !self.isStopArmed
+            return !self.stop.canStop || self.stop.isAborting || !self.isStopArmed
         }
     }
 
