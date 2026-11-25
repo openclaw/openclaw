@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   DOWNLOAD_ARTIFACT_V8,
   readCiWorkflow,
+  testNodeExecPath,
   type WorkflowStep,
 } from "./ci-workflow.test-support.js";
 
@@ -183,6 +185,106 @@ function rejectsManifest(
 }
 
 describe("iOS screenshot evidence", () => {
+  it.skipIf(process.platform === "win32")(
+    "runs the production reducer CLI with only its three-file import closure",
+    () => {
+      const workflow = readCiWorkflow();
+      const reducer = workflow.jobs["ios-screenshot-evidence"].steps.find(
+        (step: WorkflowStep) => step.id === "reduce_screenshot_evidence",
+      ) as WorkflowStep;
+      const { root, input } = collected();
+      const workspace = path.join(root, "workspace");
+      for (const file of [
+        "scripts/ios-screenshot-evidence.mjs",
+        "scripts/lib/direct-run.mjs",
+        "scripts/lib/ios-test-results.mjs",
+      ]) {
+        const destination = path.join(workspace, ".ci-harness", file);
+        fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.copyFileSync(file, destination);
+      }
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.symlinkSync(testNodeExecPath, path.join(bin, "node"));
+      const forbiddenLog = path.join(root, "package-manager.log");
+      for (const command of ["pnpm", "npm", "npx", "corepack"]) {
+        fs.writeFileSync(
+          path.join(bin, command),
+          '#!/bin/sh\necho invoked >> "$FORBIDDEN_LOG"\nexit 97\n',
+          { mode: 0o755 },
+        );
+      }
+      const nodeVersion = spawnSync(testNodeExecPath, ["--version"], {
+        encoding: "utf8",
+      });
+      expect(nodeVersion.status, nodeVersion.stderr).toBe(0);
+      const expected = {
+        ...provenance(),
+        tooling: { ...provenance().tooling, node: nodeVersion.stdout.trim() },
+      };
+      for (const family of ["iphone", "ipad-13", "watch"] as const) {
+        updateManifest(input, family, (manifest) => {
+          manifest.tooling.node = expected.tooling.node;
+        });
+      }
+      const reference = path.join(root, "reference");
+      reduceAll(input, reference, expected);
+      const received = path.join(workspace, "apps/ios/build/ScreenshotEvidenceInputs");
+      const run = () =>
+        spawnSync("/bin/bash", ["-e", "-o", "pipefail", "-c", reducer.run ?? ""], {
+          cwd: workspace,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:/usr/bin:/bin`,
+            NODE_OPTIONS: "",
+            NODE_PATH: "",
+            FORBIDDEN_LOG: forbiddenLog,
+            RUN_ID: expected.runId,
+            RUN_ATTEMPT: String(expected.runAttempt),
+            TARGET_SHA: expected.targetSha,
+            WORKFLOW_SHA: expected.workflowSha,
+            IOS_SCREENSHOT_XCODE_VERSION: expected.tooling.xcode,
+            IOS_SCREENSHOT_FASTLANE_VERSION: expected.tooling.fastlane,
+          },
+        });
+      fs.cpSync(input, received, { recursive: true });
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expectOutputCounts(workspace);
+      const manifest = "apps/ios/build/ScreenshotEvidence/manifest.json";
+      expect(fs.readFileSync(path.join(workspace, manifest), "utf8")).toBe(
+        fs.readFileSync(path.join(reference, manifest), "utf8"),
+      );
+      for (const failure of ["digest", "future", "mixed"] as const) {
+        fs.rmSync(received, { recursive: true });
+        fs.cpSync(input, received, { recursive: true });
+        if (failure === "digest") {
+          const png = path.join(
+            familyDirectory(received, "watch"),
+            "screenshots/Apple Watch Ultra 3 (49mm)-01-now-face.png",
+          );
+          fs.appendFileSync(png, "changed");
+        } else {
+          updateManifest(received, "watch", (item) => {
+            item.runAttempt = failure === "future" ? expected.runAttempt + 1 : 1;
+          });
+        }
+        const rejected = run();
+        expect(rejected.status, `${failure}: ${rejected.stderr}`).toBe(1);
+        expect(rejected.stderr).toContain(
+          failure === "digest"
+            ? "digest mismatch"
+            : failure === "future"
+              ? "workflow run attempt"
+              : "mixes evidence from different workflow run attempts",
+        );
+      }
+      expect(fs.existsSync(forbiddenLog)).toBe(false);
+      expect(fs.existsSync(path.join(workspace, "node_modules"))).toBe(false);
+    },
+  );
+
   it("reduces the workflow's single named artifact extraction layout", () => {
     const workflow = readCiWorkflow();
     const download = workflow.jobs["ios-screenshot-evidence"].steps.find(
