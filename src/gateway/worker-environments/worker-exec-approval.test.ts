@@ -211,7 +211,7 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     for (const [dir, marker] of [
       [admitted, "worker-approved"],
       [other, "wrong-tool"],
-    ]) {
+    ] as const) {
       await fs.mkdir(dir);
       await fs.writeFile(path.join(dir, "worker-marker"), `#!/bin/sh\necho ${marker}\n`, {
         mode: 0o755,

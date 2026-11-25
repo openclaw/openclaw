@@ -27,4 +27,5 @@
 # OPENCLAW_LAUNCHER_IPC marks a Gateway started by the release launcher; OPENCLAW_RELEASE_LAUNCHER_FORWARDED stops a converted install's entry from forwarding twice.
 # OPENCLAW_NATIVE_APP_ROOT and OPENCLAW_NATIVE_STAGED_ROOT (#197437) are the Windows packaging launcher's native-redirect roots, pinned from Gateway startup for the managed GitHub credential child.
 # OPENCLAW_NODE_WORKER_EXECUTION carries launcher-selected settings to its dedicated worker.
-467
+# OPENCLAW_WORKER_TOOL_DATA supplies node-selected public data to local tools.
+468
