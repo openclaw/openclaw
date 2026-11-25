@@ -4,13 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import {
   createNodeTestShardBundles,
-  createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
 } from "../scripts/lib/ci-node-test-plan.mts";
 import {
   listPrExemptRuntimeTestFiles,
   RELEASE_ONLY_UI_TEST_FILES,
 } from "../scripts/lib/ci-test-tier-policy.mts";
+import { createUiTestShardGroups } from "../scripts/lib/ci-ui-test-plan.mts";
 import {
   createExtensionTestShards,
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
