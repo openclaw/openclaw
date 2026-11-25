@@ -35,14 +35,27 @@ const original = {
   ...integrity,
   ...worker,
   finishAgentSchemaMigration: helpers.finishAgentSchemaMigration,
+  ensureSessionReactionsSchemaInTransaction: helpers.ensureSessionReactionsSchemaInTransaction,
 };
 const configuredBaseline = Number(
   process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE ?? target - 1,
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type FixtureStep = "step" | "callback" | "unsupported";
+type FixtureStep = "step" | "callback" | "unsupported" | "same-version";
 let fixtureBulkStep: FixtureStep | undefined;
+let sameVersionRepairObserved = false;
 const forbiddenSql = "UPDATE transcript_events SET event_json=event_json WHERE 0";
+
+function readBaselineSchema(version: number): string {
+  const filename = process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE_SCHEMA;
+  if (filename) {
+    return fs.readFileSync(filename, "utf8");
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE) {
+    throw new Error("Selected migration qualification requires frozen fork-point DDL");
+  }
+  return getOpenClawAgentMigrationSchema(version);
+}
 
 function writeMigrationReceipt(facts: Record<string, unknown>) {
   const filename = process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT;
@@ -108,6 +121,16 @@ beforeEach(() => {
       original.runSqliteIntegrityCheckInWorkerSync(...args),
     ),
   );
+  vi.spyOn(helpers, "ensureSessionReactionsSchemaInTransaction").mockImplementation((db) => {
+    const pending = !db
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='session_reactions'")
+      .get();
+    original.ensureSessionReactionsSchemaInTransaction(db);
+    if (fixtureBulkStep === "same-version" && pending) {
+      sameVersionRepairObserved = true;
+      db.exec(forbiddenSql);
+    }
+  });
   vi.spyOn(helpers, "finishAgentSchemaMigration").mockImplementation((...args) => {
     if (fixtureBulkStep === "step") {
       args[0].exec(forbiddenSql);
@@ -138,8 +161,9 @@ afterEach(() => {
 });
 afterAll(() => observer.dispose());
 
-async function migrate(bulk: FixtureStep | undefined, baseline: number) {
+async function migrate(bulk: FixtureStep | undefined, baseline: number, schemaSql: string) {
   fixtureBulkStep = bulk;
+  sameVersionRepairObserved = false;
   expect(Number.isInteger(baseline) && baseline > 0 && baseline <= target).toBe(true);
   return withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
@@ -147,7 +171,7 @@ async function migrate(bulk: FixtureStep | undefined, baseline: number) {
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
     {
       using db = new DatabaseSync(pathname);
-      db.exec(getOpenClawAgentMigrationSchema(baseline));
+      db.exec(schemaSql);
       seedVersion(db, baseline);
       db.exec(`INSERT INTO session_nodes(session_key,current_session_id,entry_json,entry_valid,updated_at)
           VALUES ('agent:main:test','test','{"sessionId":"test","updatedAt":1,"visibility":"shared","delivery":{"kind":"none"}}',1,1);
@@ -208,6 +232,7 @@ it("enforces bulk-data access on the real main migration chain with its integrit
   const { observation, range, receipt } = await migrate(
     process.env.OPENCLAW_UPGRADE_SURVIVOR_BULK_FIXTURE_STEP === "1" ? "step" : undefined,
     configuredBaseline,
+    readBaselineSchema(configuredBaseline),
   );
   writeMigrationReceipt({ ...range, ...receipt });
   assertMigrationBulkSafe(observation, range);
@@ -215,7 +240,11 @@ it("enforces bulk-data access on the real main migration chain with its integrit
 it.each(["step", "callback"] as const)(
   "rejects a real WHERE 0 fixture %s around the finalizer",
   async (location) => {
-    const { observation, range, receipt } = await migrate(location, target - 1);
+    const { observation, range, receipt } = await migrate(
+      location,
+      target - 1,
+      getOpenClawAgentMigrationSchema(target - 1),
+    );
     expect(receipt.violations).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ table: "transcript_events", store: "agent/main" }),
@@ -228,7 +257,11 @@ it.each(["step", "callback"] as const)(
 it("retains sanitized coverage evidence and rethrows the original observation failure", async () => {
   const filename = path.join(tempDirs.make("bulk-coverage-"), "receipt.json");
   vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BULK_RECEIPT", filename);
-  const failure = await migrate("unsupported", target - 1).then(
+  const failure = await migrate(
+    "unsupported",
+    target - 1,
+    getOpenClawAgentMigrationSchema(target - 1),
+  ).then(
     () => undefined,
     (error: unknown) => error,
   );
@@ -252,4 +285,49 @@ it("retains sanitized coverage evidence and rethrows the original observation fa
   for (const statement of receipt.observation.statements) {
     expect(statement).not.toHaveProperty("databasePath");
   }
+});
+
+it("rejects bulk work in a same-version additive repair from frozen baseline DDL", async () => {
+  const filename = path.join(tempDirs.make("same-version-baseline-"), "schema.sql");
+  {
+    using previous = new DatabaseSync(":memory:");
+    previous.exec(getOpenClawAgentMigrationSchema(target));
+    previous.exec("DROP TABLE session_reactions");
+    const shadows = new Set(
+      previous
+        .prepare("PRAGMA table_list")
+        .all()
+        .flatMap((row) =>
+          row.type === "shadow" && typeof row.name === "string" ? [row.name] : [],
+        ),
+    );
+    const ddl = previous
+      .prepare(
+        "SELECT tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*' ORDER BY rowid",
+      )
+      .all()
+      .flatMap((row) =>
+        typeof row.sql === "string" &&
+        typeof row.tbl_name === "string" &&
+        !shadows.has(row.tbl_name)
+          ? [row.sql]
+          : [],
+      )
+      .join(";\n");
+    fs.writeFileSync(filename, `${ddl};\n`);
+  }
+  vi.stubEnv("OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE_SCHEMA", filename);
+  const { observation, range, receipt } = await migrate(
+    "same-version",
+    target,
+    readBaselineSchema(target),
+  );
+  expect(sameVersionRepairObserved).toBe(true);
+  expect(range).toMatchObject({ fromVersion: target, toVersion: target });
+  expect(receipt.violations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ table: "transcript_events", sql: forbiddenSql }),
+    ]),
+  );
+  expect(() => assertMigrationBulkSafe(observation, range)).toThrow(/bulk-data/u);
 });

@@ -54,6 +54,11 @@ function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
       git("show", `${head}:src/state/openclaw-state-db-schema-version.ts`),
     ),
   };
+  const baselineSchema = path.join(directory, "previous-agent-schema.sql");
+  fs.writeFileSync(
+    baselineSchema,
+    execFileSync("git", ["show", `${base}:src/state/openclaw-agent-schema.sql`], { cwd: repo }),
+  );
   execFileSync(
     process.execPath,
     [
@@ -67,6 +72,8 @@ function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
       env: {
         ...process.env,
         GIT_COMMIT: head,
+        OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA: base,
+        OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE_SCHEMA: baselineSchema,
         OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE: String(previous.openclaw.schemaVersions.agent),
       },
       stdio: "inherit",
