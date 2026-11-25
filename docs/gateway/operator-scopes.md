@@ -694,8 +694,9 @@ it is assigned to nobody until an administrator chooses who gets it. The operato
 talk scopes with all agents and writable shared sessions. The viewer preset
 allows all agents and viewable shared sessions but grants only
 `operator.sessions.read`: conversation browsing, not logs, `users.list`, or general
-Gateway diagnostics. The guest preset grants `operator.sessions.write`, all agents,
-viewable shared sessions, and `sandbox: "required"`. Operator remains the default
+Gateway diagnostics. The guest preset grants `operator.sessions.read` and `operator.sessions.write`,
+all agents, `sandbox: "required"`, and other people's sessions only when invited,
+up to Send (`maxInvitedAccess: "send"`). Operator remains the default
 invite role. These are editable definitions; custom member roles may
 include `operator.admin` and pairing scopes with no built-in ceiling.
 

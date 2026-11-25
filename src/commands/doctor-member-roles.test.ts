@@ -407,9 +407,9 @@ for (const accepted of [false, true]) {
         admin: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
         viewer,
         guest: {
-          sessions: { others: "view" },
+          sessions: { others: "invited", maxInvitedAccess: "send" },
           agents: "*",
-          scopes: ["operator.sessions.write"],
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
           sandbox: "required",
         },
       },

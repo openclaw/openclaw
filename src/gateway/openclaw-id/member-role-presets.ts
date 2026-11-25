@@ -36,9 +36,9 @@ const MEMBER_ROLE_PRESETS: Record<
     scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
   },
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited", maxInvitedAccess: "send" },
     agents: "*",
-    scopes: [SESSION_WRITE_SCOPE],
+    scopes: [SESSION_READ_SCOPE, SESSION_WRITE_SCOPE],
     sandbox: "required",
   },
   viewer: {

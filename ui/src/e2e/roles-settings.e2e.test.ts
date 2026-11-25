@@ -145,7 +145,11 @@ suite.define(() => {
       await page.getByRole("region", { name: "Unsaved changes" }).waitFor();
       await proof(page, "roles-editor-unsaved");
       const before = (await gateway.getRequests("config.patch")).length;
+      await gateway.setMethodDelay("config.patch", 1500);
       await page.getByRole("button", { name: "Save", exact: true }).click();
+      const saving = page.locator(".roles-savebar button[aria-busy='true']");
+      await expect.poll(() => saving.textContent()).toContain("Saving…");
+      expect(await saving.locator(".btn__spinner").count()).toBe(1);
       await expect
         .poll(async () => (await gateway.getRequests("config.patch")).length)
         .toBe(before + 1);

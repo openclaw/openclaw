@@ -26,10 +26,9 @@ export type RoleDialog =
   | { kind: "delete"; role: string }
   | { kind: "enable-default"; role: string };
 
-const PRESETS: readonly RolePreset[] = ["guest", "collaborator", "operator", "admin", "blank"];
+const PRESETS: readonly RolePreset[] = ["guest", "operator", "admin", "blank"];
 const PRESET_KEYS: Record<RolePreset, string> = {
   guest: "presetGuest",
-  collaborator: "presetCollaborator",
   operator: "presetOperator",
   admin: "presetAdmin",
   blank: "presetBlank",
@@ -217,7 +216,7 @@ function ErrorAlert(props: { roles: RolesState }) {
 
 function CreateRoleDialog(props: DialogProps) {
   const flow = useCreate(props);
-  const [preset, setPreset] = createSignal<RolePreset>("collaborator");
+  const [preset, setPreset] = createSignal<RolePreset>("guest");
   const [name, setName] = createSignal("");
   const problem = createMemo(() => nameError(name(), flow.taken));
   return (

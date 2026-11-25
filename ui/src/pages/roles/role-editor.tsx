@@ -564,9 +564,13 @@ export function RoleEditor(props: {
             type="button"
             class="btn btn--sm primary"
             disabled={!editable() || issues().length > 0}
+            aria-busy={props.roles.busy() ? "true" : undefined}
             onClick={() => void save()}
           >
-            {t("rolesPage.save")}
+            <Show when={props.roles.busy()}>
+              <span class="btn__spinner" aria-hidden="true" />{" "}
+            </Show>
+            {props.roles.busy() ? t("rolesPage.saving") : t("rolesPage.save")}
           </button>
         </div>
       </Show>
