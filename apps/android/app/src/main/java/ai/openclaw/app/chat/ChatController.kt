@@ -4555,11 +4555,11 @@ class ChatController internal constructor(
                 _transcriptAnchor.value =
                   ChatTranscriptAnchorState(
                     sessionKey = sessionKey,
-                    newestItemId = nextMessages.lastOrNull()?.id,
+                    newestItemId = nextMessages.lastOrNull()?.recapAnchorId,
                     completedEndedAt =
                       if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
                     completedNewestItemId =
-                      if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+                      if (completionSettled) history.messages.lastOrNull()?.recapAnchorId else previousAnchor?.completedNewestItemId,
                   )
                 _sessionId.value = history.sessionId
                 history.sessionId?.let { sessionId ->
@@ -8802,6 +8802,10 @@ internal fun parseChatCommands(root: JsonObject?): List<ChatCommandEntry> {
     )
   }
 }
+
+// Use the same entry across session switches. Optimistic and unkeyed messages only have a local ID.
+private val ChatMessage.recapAnchorId: String
+  get() = entryId ?: id
 
 /**
  * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
