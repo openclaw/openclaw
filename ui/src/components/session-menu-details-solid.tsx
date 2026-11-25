@@ -84,7 +84,9 @@ export function useSessionMenuDetails(
           ]
             .join(" ")
             .toLocaleLowerCase(),
-        ).normalize("NFC").includes(term),
+        )
+          .normalize("NFC")
+          .includes(term),
       ),
     );
   });

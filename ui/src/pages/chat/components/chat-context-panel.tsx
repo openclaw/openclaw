@@ -90,7 +90,8 @@ function ContextList(props: {
   let search: HTMLInputElement | undefined;
   const long = () => props.entries.length > 20;
   const groups = createMemo(() => {
-    const needle = long() && all() ? foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC") : "";
+    const needle =
+      long() && all() ? foldSearchCase(query().trim().toLocaleLowerCase()).normalize("NFC") : "";
     let remaining = long() && !all() ? 8 : Infinity;
     return (props.groups ?? [{ key: "", entries: props.entries }])
       .map((group) => {
@@ -98,9 +99,9 @@ function ContextList(props: {
           .filter(
             (entry) =>
               !needle ||
-              foldSearchCase((entry.name + " " + (entry.path ?? "")).toLocaleLowerCase()).normalize("NFC").includes(
-                needle,
-              ),
+              foldSearchCase((entry.name + " " + (entry.path ?? "")).toLocaleLowerCase())
+                .normalize("NFC")
+                .includes(needle),
           )
           .slice(0, remaining);
         remaining -= entries.length;

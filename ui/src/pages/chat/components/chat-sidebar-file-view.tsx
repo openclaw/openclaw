@@ -59,7 +59,9 @@ export function computeFileMatches(content: string, query: string): number[] {
   return content
     .split(/\r\n?|\n/)
     .flatMap((line, index) =>
-      foldSearchCase(line.toLocaleLowerCase()).normalize("NFC").includes(normalizedQuery) ? [index + 1] : [],
+      foldSearchCase(line.toLocaleLowerCase()).normalize("NFC").includes(normalizedQuery)
+        ? [index + 1]
+        : [],
     );
 }
 
