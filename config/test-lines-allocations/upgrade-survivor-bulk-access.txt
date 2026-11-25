@@ -1,0 +1,13 @@
+# Class A stage 2: 581 net test lines against origin/main 1bec22471a;
+# allocate exactly the excess above the unchanged 400-line allowance.
+# upgrade-survivor-sqlite-observer.test.ts (233): real native authorization,
+# cached execution/iterator provenance, callback restoration, process escapes,
+# unsupported APIs, and the unmodified named binding in a fresh ESM process.
+# upgrade-survivor-bulk-access.test.ts (188): independent catalog/authorization
+# policy, constant DDL versus floor rises, staging lineage, triggers and FTS.
+# upgrade-survivor-migration-chain.test.ts (156): the real leased maintenance
+# owner and unchanged integrity functions, with forbidden SQL before finalization.
+# Existing runtime/artifact guard tables grow four lines to retain Node routing
+# and sanitized evidence. Removed the overlapping classifier integrity-only case;
+# these three remaining boundaries detect different failures, not duplicate paths.
+181

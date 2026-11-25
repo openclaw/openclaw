@@ -135,6 +135,9 @@ describe("CI runtime job inventory", () => {
     [nodeOnly, bothHosts],
     [nodeOnly, "test/scripts/vitest-pair-benchmark.test.ts"],
     [gitRelease, bothHosts],
+    ["test/scripts/upgrade-survivor-sqlite-observer.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-bulk-access.test.ts", bothHosts],
+    ["test/scripts/upgrade-survivor-migration-chain.test.ts", bothHosts],
   ])(
     "keeps Node-only %s and both-host %s coverage in a mixed bun-all group",
     (nodeContract, bothHost) => {

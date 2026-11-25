@@ -54,6 +54,24 @@ function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
       git("show", `${head}:src/state/openclaw-state-db-schema-version.ts`),
     ),
   };
+  execFileSync(
+    process.execPath,
+    [
+      "scripts/run-vitest.mjs",
+      "run",
+      "test/scripts/upgrade-survivor-migration-chain.test.ts",
+      "--maxWorkers=1",
+    ],
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        GIT_COMMIT: head,
+        OPENCLAW_UPGRADE_SURVIVOR_BULK_BASELINE: String(previous.openclaw.schemaVersions.agent),
+      },
+      stdio: "inherit",
+    },
+  );
   const tree = path.join(directory, "previous-source");
   fs.mkdirSync(tree);
   const archive = path.join(directory, "previous-source.tar");

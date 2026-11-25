@@ -2076,6 +2076,7 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/migration-bulk-access.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json",
       ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log",
