@@ -9257,6 +9257,7 @@ test "$package_manager" = "pnpm@12.1.0"
         evaluateWorkflowExpression(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT, {
           repository: "openclaw/openclaw",
           runAttempt: 1,
+          eventName: "workflow_dispatch",
           inputs: { plugin_sdk_api_acknowledgement: acknowledgement },
         }),
       ).toBe(expected);
