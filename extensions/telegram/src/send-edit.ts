@@ -101,10 +101,8 @@ export async function editMessageTelegram(
       const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
 
-      // Reply markup semantics:
-      // - buttons === undefined → don't send reply_markup (keep existing)
-      // - buttons is [] (or filters to empty) → send { inline_keyboard: [] } (remove)
-      // - otherwise → send built inline keyboard
+      // To keep a known keyboard, the caller must resend its complete button rows.
+      // Omit reply_markup when buttons are absent. Empty rows request removal.
       const replyMarkup =
         opts.buttons === undefined
           ? undefined
