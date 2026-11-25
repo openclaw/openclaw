@@ -10962,6 +10962,32 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("reports missing decision provider coverage before setup and continues the native shard", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const step = workflowStep(job, "Report missing decision provider coverage");
+    const names = job.steps!.map((entry) => entry.name);
+    expect(names.indexOf(step.name)).toBeGreaterThan(names.indexOf("Checkout selected ref"));
+    expect(names.indexOf(step.name)).toBeLessThan(names.indexOf("Setup Node environment"));
+    expect(step.if).toBe(
+      "steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'",
+    );
+
+    const root = tempDirs.make("decision-live-coverage-");
+    const run = (env: NodeJS.ProcessEnv) => runWorkflowShellScript(step.run!, { cwd: root, env });
+    expect(run({})).toMatchObject({ status: 0, stdout: "" });
+    mkdirSync(join(root, "test"));
+    writeFileSync(join(root, "test", "decision-index-providers.live.test.ts"), "");
+    expect(run({})).toMatchObject({ status: 0, stdout: expect.stringContaining("::warning") });
+    for (const key of [
+      "CELERIS_API_KEY",
+      "FASTINO_API_KEY",
+      "NACE_API_KEY",
+      "PERPLEXITY_API_KEY",
+    ]) {
+      expect(run({ [key]: "fixture" })).toMatchObject({ status: 0, stdout: "" });
+    }
+  });
+
   it("uploads native live reports and sanitized owned evidence after failures", () => {
     const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
     const run = workflowStep(job, "Run ${{ matrix.label }}");
