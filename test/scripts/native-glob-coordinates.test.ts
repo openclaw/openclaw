@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { convertPathToPattern } from "tinyglobby";
 import { afterEach, expect, it } from "vitest";
-import { resolveTestRuntime } from "../../scripts/lib/test-runtime.mts";
 import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "../../scripts/run-vitest.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -129,7 +128,7 @@ it.skipIf(process.platform === "win32").each(["cjs", "esm"])(
 
 it("preserves Windows drive and filename case in native test admission", async ({ signal }) => {
   const directory = tempDirs.make("native-glob-admission-");
-  const runtime = resolveTestRuntime(process.env);
+  const runtime = process.versions.bun ? "bun" : "node";
   fs.symlinkSync(
     fs.realpathSync(path.join(root, "node_modules")),
     path.join(directory, "node_modules"),
@@ -214,8 +213,7 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
       });
       const observed = path.join(directory, "observed.jsonl");
       const seed = "test/scripts/native-glob-seed.test.ts";
-      const runtime = resolveTestRuntime(process.env);
-      expect(Boolean(process.versions.bun)).toBe(runtime === "bun");
+      const runtime = process.versions.bun ? "bun" : "node";
       const source = (generation: number, inSource = false) => {
         const body = `it('generation ${generation}',()=>{
           expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});
@@ -300,7 +298,10 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
         }};
       `,
       );
-      const env = testRunnerFixtureEnv({ OPENCLAW_VITEST_RUNTIME: runtime });
+      const env = testRunnerFixtureEnv({
+        OPENCLAW_VITEST_RUNTIME: runtime,
+        ...(runtime === "bun" ? { OPENCLAW_BUN_PATH: process.execPath } : {}),
+      });
       const handle = spawnWatchedVitestProcess({
         pnpmArgs: [
           "exec",

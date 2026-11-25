@@ -40,7 +40,9 @@ export function captureOwnGitHubPullRequestReader(
     };
   }
   if (!profileId) {
-    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+    throw new Error(
+      "This conversation has no Gateway operator identity, so it cannot inspect PRs. Ask from your own Gateway profile, or ask an admin to link this channel account to it.",
+    );
   }
   const profile = captureResidentUserProfileAccess(profileId);
   const accountIds = () => {
@@ -55,7 +57,7 @@ export function captureOwnGitHubPullRequestReader(
   const admittedIds = accountIds();
   if (!admittedIds.length && !publication) {
     throw new Error(
-      "Link a verified GitHub account on the configured host before inspecting your PR.",
+      "Link your GitHub account once in the Control UI under Settings → Profile → Identity, on the configured GitHub host, then retry the inspection.",
     );
   }
   return {

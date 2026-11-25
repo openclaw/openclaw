@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, lazy, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -48,10 +48,6 @@ import type {
 import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
-
-const ImageInspectionGroup = lazy(() => import("./chat-image-inspection-group.tsx"), {
-  export: "ImageInspectionGroup",
-});
 
 function prepareActivityGroup(
   opts: NativeMessageGroupOptions,
@@ -556,22 +552,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { data: Ac
                 </Show>
               }
             >
-              <Show
-                when={segment().lifecycle}
-                fallback={
-                  <Show
-                    when={segment().imageInspection && segment().entries.length > 1}
-                    fallback={entries()}
-                  >
-                    <ImageInspectionGroup
-                      groups={segment().entries.flatMap((entry) =>
-                        entry.message ? [entry.message.group] : [],
-                      )}
-                      options={props.options}
-                    />
-                  </Show>
-                }
-              >
+              <Show when={segment().lifecycle} fallback={entries()}>
                 <LifecycleOperations
                   kind={segment().lifecycle!}
                   operations={segment().entries.flatMap((entry) =>

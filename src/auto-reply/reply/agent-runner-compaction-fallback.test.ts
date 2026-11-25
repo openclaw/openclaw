@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { isCompactionSummaryRequest } from "../../../test/helpers/compaction-summary-request.js";
@@ -45,7 +46,7 @@ it.each([false, true])(
       let largestPrompt = 0;
       let publishedBeforeSummary = 0;
       let rateLimitedAfterSummary = false;
-      const requests: Array<{ body: string; input: unknown[] }> = [];
+      const requests: Array<{ body: string; input: unknown[]; tokens: number }> = [];
       const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
       await writeFile(reportPath, "Project evidence row.\n".repeat(1_800));
@@ -86,7 +87,7 @@ it.each([false, true])(
             );
             return;
           }
-          requests.push({ body, input: wire.input });
+          requests.push({ body, input: wire.input, tokens });
           if (isCompactionSummaryRequest(body)) {
             summaryRequests += 1;
             if (midTurn) {
@@ -332,7 +333,27 @@ it.each([false, true])(
         expect(summaryRequests).toBe(summariesAfterFirstTurn);
         expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
         if (midTurn) {
-          expect(largestPrompt).toBeLessThan(800_000);
+          // The warm summary request is the request that crossed the shared trigger plus one
+          // instruction: it exceeds the trigger by at most one tool round and that instruction.
+          const trigger = resolveCompactionThreshold({
+            contextWindowTokens: contextWindow,
+            reserveTokensFloor: 0,
+          });
+          const summaryAt = requests.findIndex((request) =>
+            isCompactionSummaryRequest(request.body),
+          );
+          const beforeSummary = requests.slice(0, summaryAt);
+          const toolRound = Math.max(
+            ...beforeSummary
+              .slice(1)
+              .map((request, index) => request.tokens - beforeSummary[index]!.tokens),
+          );
+          const instruction = Math.ceil(
+            JSON.stringify(requests[summaryAt]!.input.at(-1)).length / 4,
+          );
+          expect(largestPrompt).toBeLessThan(
+            Math.min(contextWindow, trigger + toolRound + instruction),
+          );
         }
       } finally {
         await waitForSessionMaintenance(sessionKey);

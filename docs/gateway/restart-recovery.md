@@ -757,6 +757,17 @@ turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
 
+When the requester's access has ended (its saved grant or access record is gone,
+or its profile was deleted), startup settles that child's delivery once instead of
+retrying it at every restart. The run record keeps
+the result with the delivery marked discarded. The requesting chat, and no other,
+gets one notice: "A background task's result couldn't be delivered because the
+access it ran under has ended." Results whose latest recorded time (result capture,
+end, or delivery attempt; creation time only when nothing later exists) is more
+than 7 days old settle without a notice; the Gateway logs one count per recovery
+pass. Any other failure, including other refusals, an unavailable access policy or
+a busy database, leaves the delivery pending for the next restart.
+
 If shutdown interrupts the requester after a captured child result was committed
 to its transcript, that result is already delivered. The Gateway resumes the
 interrupted requester turn under fresh authority with its normal restart input,

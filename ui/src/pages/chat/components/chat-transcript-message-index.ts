@@ -399,11 +399,13 @@ export function projectTranscriptIndex(
       // Settled items keep their identity across unrelated live-tail changes.
       // Reactions replace their map; active and continuation rows never enter this memo.
       const revision = rowRevisions(item, [key, props.messageReactions], () => {
-        const messages = groups.flatMap((group) =>
-          group.messages.map(({ message }) => [
-            message && typeof message === "object" ? messageRevision(message) : message,
-            props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
-          ]),
+        const messages = groups.flatMap<unknown>((group) =>
+          group.compaction
+            ? [group.compaction]
+            : group.messages.map(({ message }) => [
+                message && typeof message === "object" ? messageRevision(message) : message,
+                props.messageReactions?.get(persistedMessageEntryId(message) ?? "") ?? [],
+              ]),
         );
         const content = JSON.stringify(
           item.kind === "agent-run-frame"

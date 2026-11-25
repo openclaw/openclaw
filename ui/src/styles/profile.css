@@ -1,6 +1,10 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+openclaw-profile-page [id^="settings-profile-"] {
+  scroll-margin-block-start: var(--space-4);
+}
+
 .profile-discord-reservation {
   display: none;
 }
@@ -176,11 +180,6 @@
   flex: none;
 }
 
-/* A typed credential id reads from its start. */
-.settings-row__control .model-accounts-form input.settings-input:not(.picker-select__search) {
-  text-align: start;
-}
-
 /* A provider and its account stay on one line on phones; the picker truncates long labels. */
 @media (max-width: 640px) {
   :is(.shell--settings, .shell--embed-settings)
@@ -197,11 +196,6 @@
 
 .model-accounts-error .settings-row__desc {
   color: var(--danger);
-}
-
-/* A name reads from its start; settings numbers and short values stay end-aligned. */
-.settings-row__control .identity-name-control input.settings-input:not(.picker-select__search) {
-  text-align: start;
 }
 
 /* A handle reads as plain text in the meta line; a long one truncates, full handle in its title. */

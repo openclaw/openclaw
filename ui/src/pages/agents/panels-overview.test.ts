@@ -28,6 +28,27 @@ const contextValue = (container: HTMLElement, label: string) =>
   Array.from(container.querySelectorAll("dt"))
     .find((term) => term.textContent?.trim() === label)
     ?.nextElementSibling?.textContent?.trim();
+function openAdvanced(container: Element) {
+  container
+    .querySelector<HTMLButtonElement>('[data-models-more-settings][aria-expanded="false"]')
+    ?.click();
+  flush();
+}
+function openChain(container: HTMLElement, label = "Fallback model") {
+  openAdvanced(container);
+  overviewRow(container, label)
+    ?.querySelector<HTMLButtonElement>(".model-settings__edit-chain")!
+    .click();
+  flush();
+}
+function segments(container: Element, group = "Effort") {
+  return Array.from(
+    container.querySelectorAll<HTMLInputElement>(
+      `[role="radiogroup"][aria-label="${group}"] input`,
+    ),
+  );
+}
+const segmentLabel = (radio: HTMLInputElement) => radio.closest("label")?.textContent?.trim();
 const overviewRow = (container: HTMLElement, label: string) =>
   Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
     (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === label,
@@ -102,6 +123,32 @@ function renderOverview(agent: Record<string, unknown> = {}) {
   return { container, onSelectPanel };
 }
 
+it("shares the Models row order and opens advanced choices without changing config", () => {
+  const onModelChange = vi.fn();
+  const container = renderAgents({ configForm: agentConfig({}), overview: { onModelChange } });
+  const rows = () =>
+    [
+      ...container.querySelectorAll(
+        ".agent-overview .model-providers__defaults .settings-row__title",
+      ),
+    ].map(
+      (title) =>
+        title.querySelector(".model-providers__label-with-help > span")?.textContent ??
+        title.textContent,
+    );
+  expect(rows()).toEqual(["Model", "Effort", "Speed", "More settings"]);
+  container.querySelector<HTMLButtonElement>("[data-models-more-settings]")!.click();
+  flush();
+  expect(rows().slice(4)).toEqual([
+    "Fallback model",
+    "Subagent model",
+    "Utility model",
+    "Utility fallback model",
+    "Decision model",
+  ]);
+  expect(onModelChange).not.toHaveBeenCalled();
+});
+
 it("shows Overview context as rows that open their owning tabs", async () => {
   const { container, onSelectPanel } = renderOverview();
   await waitForSolid(() =>
@@ -110,7 +157,7 @@ it("shows Overview context as rows that open their owning tabs", async () => {
     ),
   );
   expect(container.querySelector(".settings-kv")).toBeNull();
-  const primaryModel = overviewRow(container, "Primary model");
+  const primaryModel = overviewRow(container, "Model");
   assert(primaryModel);
   expect(primaryModel.querySelector(".model-picker")).not.toBeNull();
   expect(primaryModel.querySelector(".settings-row__value")).toBeNull();
@@ -124,7 +171,7 @@ it("shows Overview context as rows that open their owning tabs", async () => {
 
 it("leaves out facts and settings the agent does not have", () => {
   const { container } = renderOverview();
-  expect(overviewRow(container, "Thinking default")).toBeUndefined();
+  expect(segments(container).map((radio) => radio.value)).toEqual([""]);
   expect(overviewRow(container, "Runtime")).toBeUndefined();
 });
 
@@ -157,22 +204,18 @@ it("edits the agent's thinking default from the levels its model accepts", () =>
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.disabled).toBe(false);
-  expect(Array.from(select.options, (option) => option.textContent)).toEqual([
+  const radios = segments(container);
+  expect(radios.map(segmentLabel)).toEqual([
     "Inherit default (Extra high)",
     "Off",
     "Low",
     "High",
     "Extra high",
   ]);
-  expect(select.value).toBe("");
-  select.value = "high";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(radios[0]).toMatchObject({ checked: true, disabled: false });
+  radios.find((radio) => radio.value === "high")!.click();
   expect(onThinkingDefaultChange).toHaveBeenLastCalledWith("beta", "high");
-  select.value = "";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
+  radios[0]!.click();
   expect(onThinkingDefaultChange).toHaveBeenLastCalledWith("beta", null);
 });
 
@@ -190,11 +233,12 @@ it("keeps a saved thinking default the model no longer offers", () => {
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.value).toBe("max");
-  expect(select.options[0]?.textContent).toBe("Inherit default (Low)");
-  expect(select.selectedOptions[0]).toMatchObject({ textContent: "Maximum", disabled: true });
+  const radios = segments(container);
+  const selected = radios.find((radio) => radio.checked)!;
+  expect(selected.value).toBe("max");
+  expect(segmentLabel(radios[0]!)).toBe("Inherit default (Low)");
+  expect(segmentLabel(selected)).toBe("Maximum");
+  expect(selected.disabled).toBe(true);
 });
 
 it("names the level clearing an override resolves to, not the global default", () => {
@@ -218,10 +262,10 @@ it("names the level clearing an override resolves to, not the global default", (
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.value).toBe("medium");
-  expect(select.options[0]?.textContent).toBe("Inherit default (High)");
+  const radios = segments(container);
+  const selected = radios.find((radio) => radio.checked)!;
+  expect(selected.value).toBe("medium");
+  expect(segmentLabel(radios[0]!)).toBe("Inherit default (High)");
 });
 
 it("edits the thinking default while the model catalog restricts model choices", () => {
@@ -237,10 +281,10 @@ it("edits the thinking default while the model catalog restricts model choices",
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.value).toBe("high");
-  expect(select.disabled).toBe(false);
+  const radios = segments(container);
+  const selected = radios.find((radio) => radio.checked)!;
+  expect(selected.value).toBe("high");
+  expect(selected.disabled).toBe(false);
 });
 
 it("names no inherited level when a restricted roster omits it", () => {
@@ -258,10 +302,10 @@ it("names no inherited level when a restricted roster omits it", () => {
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.value).toBe("medium");
-  expect(select.options[0]?.textContent).toBe("Inherit default");
+  const radios = segments(container);
+  const selected = radios.find((radio) => radio.checked)!;
+  expect(selected.value).toBe("medium");
+  expect(segmentLabel(radios[0]!)).toBe("Inherit default");
 });
 
 it("shows the resolved thinking level, disabled, until config is readable", () => {
@@ -275,10 +319,10 @@ it("shows the resolved thinking level, disabled, until config is readable", () =
       },
     }),
   });
-  const select = overviewRow(container, "Thinking default")?.querySelector("select");
-  assert(select);
-  expect(select.disabled).toBe(true);
-  expect(select.selectedOptions[0]?.textContent).toBe("High");
+  const radios = segments(container);
+  const selected = radios.find((radio) => radio.checked)!;
+  expect(selected.disabled).toBe(true);
+  expect(segmentLabel(selected)).toBe("High");
 });
 
 it("edits models without a Save or Reload of its own", () => {
@@ -320,7 +364,7 @@ const catalog = [
   { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
   { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
-] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
+] as const satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
 
 function renderFallbacks(canUpdateConfig = true) {
   const onModelFallbacksChange = vi.fn();
@@ -331,6 +375,7 @@ function renderFallbacks(canUpdateConfig = true) {
     access: { canUpdateConfig },
     overview: { modelCatalog: catalog, onModelFallbacksChange },
   });
+  openChain(container);
   const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
   assert(field, "Missing fallback field");
   return { field, input: field.querySelector<HTMLInputElement>("input"), onModelFallbacksChange };
@@ -380,7 +425,35 @@ it("keeps the full model ids in title for truncated controls", async () => {
       ),
     ).toContain(primary),
   );
+  openChain(container);
   expect(container.querySelector(".multi-select__chip")?.getAttribute("title")).toBe(fallback);
+});
+
+it.each([
+  [
+    "the default subagent model",
+    { subagents: { model: inheritedAgentModel } },
+    {},
+    `Inherit default (${inheritedAgentModel})`,
+  ],
+  ["plain inheritance without a default", {}, {}, "Inherit default"],
+  ["its own subagent model", {}, { subagents: { model: existingFallback } }, "Claude Sonnet 4.6"],
+] as const)("shows %s and edits the agent's subagent model", async (_, defaults, beta, shown) => {
+  const onSubagentModelChange = vi.fn();
+  const container = renderAgents({
+    configForm: agentConfig(defaults, beta),
+    overview: { modelCatalog: catalog, onSubagentModelChange },
+  });
+  openAdvanced(container);
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLButtonElement>("#agent-subagent-model")!;
+  expect(picker.textContent).toContain(shown);
+  await choosePickerValue(picker, nextFallback);
+  expect(onSubagentModelChange).toHaveBeenLastCalledWith("beta", nextFallback);
+  if ("subagents" in beta) {
+    await choosePickerValue(picker, "__openclaw_inherit_subagent__");
+    expect(onSubagentModelChange).toHaveBeenLastCalledWith("beta", null);
+  }
 });
 
 it.each([
@@ -388,7 +461,7 @@ it.each([
     "its own utility model and fallbacks",
     { utilityModel: { primary: existingFallback, fallbacks: [nextFallback] } },
     "Claude Sonnet 4.6",
-    `This agent's utility fallbacks: ${nextFallback}`,
+    nextFallback,
   ],
   ["an unavailable own utility model", { utilityModel: "retired/small" }, "retired/small", null],
   ["the inherited utility model", {}, `Inherit default (${inheritedAgentModel})`, null],
@@ -398,16 +471,108 @@ it.each([
     configForm: agentConfig({ utilityModel: inheritedAgentModel }, beta),
     overview: { modelCatalog: catalog, onUtilityModelChange },
   });
+  openAdvanced(container);
   await updatePickers(container);
   const picker = container.querySelector<HTMLButtonElement>("#agent-utility-model")!;
   expect(picker.textContent).toContain(shown);
-  const row = picker.closest(".settings-row")!;
-  expect(row.textContent?.includes("utility fallbacks")).toBe(fallbackNote !== null);
   if (fallbackNote) {
-    expect(row.textContent).toContain(fallbackNote);
+    openChain(container, "Utility fallback model");
+    expect(
+      container
+        .querySelector(".agent-utility-fallbacks .multi-select__chip")
+        ?.getAttribute("data-value"),
+    ).toBe(fallbackNote);
   }
   await choosePickerValue(picker, "");
   expect(onUtilityModelChange).toHaveBeenLastCalledWith("beta", "");
   await choosePickerValue(picker, nextFallback);
   expect(onUtilityModelChange).toHaveBeenLastCalledWith("beta", nextFallback);
+});
+
+it("keeps inherited speed separate from Off and offers the current model’s supported speeds", () => {
+  const onFastModeDefaultChange = vi.fn();
+  const container = renderAgents({
+    configForm: agentConfig(
+      { model: inheritedAgentModel, fastModeDefault: "ultrafast" },
+      { fastModeDefault: false },
+    ),
+    overview: {
+      modelCatalog: [
+        { ...catalog[0], available: true, supportsFastMode: true, serviceTiers: ["ultrafast"] },
+      ],
+      onFastModeDefaultChange,
+    },
+  });
+  const radios = segments(container, "Speed");
+  expect(radios.map((radio) => radio.value)).toEqual(["", "auto", "on", "ultrafast", "off"]);
+  expect(radios.find((radio) => radio.checked)?.value).toBe("off");
+  expect(segmentLabel(radios[0]!)).toBe("Inherit default (Ultrafast)");
+  expect(onFastModeDefaultChange).not.toHaveBeenCalled();
+  radios[0]!.click();
+  expect(onFastModeDefaultChange).toHaveBeenLastCalledWith("beta", null);
+  radios.find((radio) => radio.value === "on")!.click();
+  expect(onFastModeDefaultChange).toHaveBeenLastCalledWith("beta", true);
+  const inherited = renderAgents({
+    configForm: agentConfig({ fastModeDefault: false }),
+    overview: { onFastModeDefaultChange },
+  });
+  const inheritedRadios = segments(inherited, "Speed");
+  expect(segmentLabel(inheritedRadios.find((radio) => radio.checked)!)).toBe(
+    "Inherit default (Off)",
+  );
+  inheritedRadios.find((radio) => radio.value === "off")!.click();
+  expect(onFastModeDefaultChange).toHaveBeenLastCalledWith("beta", false);
+});
+
+it.each(["model", "utilityModel"] as const)(
+  "edits the first %s fallback without truncating the chain and can restore inheritance",
+  async (field) => {
+    const onChange = vi.fn();
+    const label = field === "model" ? "Fallback model" : "Utility fallback model";
+    const tail = "retired/tail";
+    const container = renderAgents({
+      configForm: agentConfig(
+        { [field]: { fallbacks: ["global/backup"] } },
+        { [field]: { fallbacks: [existingFallback, tail] } },
+      ),
+      overview: {
+        modelCatalog: catalog,
+        onModelFallbacksChange: onChange,
+        onUtilityFallbacksChange: onChange,
+      },
+    });
+    await updatePickers(container);
+    const picker = overviewRow(container, label)!.querySelector<HTMLButtonElement>(
+      ".picker-select__trigger",
+    )!;
+    expect(picker.textContent).toContain("Claude Sonnet");
+    await choosePickerValue(picker, nextFallback);
+    expect(onChange).toHaveBeenLastCalledWith("beta", [nextFallback, tail]);
+    await choosePickerValue(picker, "");
+    expect(onChange).toHaveBeenLastCalledWith("beta", []);
+    await choosePickerValue(picker, "__openclaw_inherit_fallback__");
+    expect(onChange).toHaveBeenLastCalledWith("beta", null);
+  },
+);
+
+it("uses the new model's capabilities while the roster still describes the previous primary", () => {
+  const container = renderAgents({
+    configForm: agentConfig({}, { model: nextFallback }),
+    overview: { modelCatalog: [{ ...catalog[2], thinkingLevels: [{ id: "low", label: "low" }] }] },
+    readData: () => ({
+      ...data,
+      agentsList: {
+        ...data.agentsList!,
+        agents: [
+          {
+            id: "beta",
+            model: { primary: inheritedAgentModel },
+            thinkingLevels,
+            thinkingDefault: "high",
+          },
+        ],
+      },
+    }),
+  });
+  expect(segments(container).map(segmentLabel)).toEqual(["Inherit default", "Low"]);
 });

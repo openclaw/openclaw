@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import {
   footprintLayout,
   mountedVirtualizer,
   phases,
   scheduledCallbacks,
 } from "./chat-transcript-layout.test-support.ts";
-import { projectTranscriptRows } from "./chat-transcript-message-index.ts";
+import { projectTranscriptIndex, projectTranscriptRows } from "./chat-transcript-message-index.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -43,6 +44,27 @@ it("invalidates a warmed tool row height while retaining its identity", () => {
   expect(compacted[0]).toMatchObject({ key: tool.key, revision, compactActivity: true });
   expect(compacted[1]).toBe(standalone);
   expect(projectTranscriptRows(neighbors, [], true)).toBe(compacted);
+
+  const toolGroup = {
+    ...compaction,
+    compaction: undefined,
+    messages: [{ key: "read", message: { role: "toolResult" }, hasVisibleContent: false }],
+  };
+  const index = (groups: MessageGroup[]) => {
+    const row = projectTranscriptIndex(
+      { transcriptItems: [{ ...activity, groups }], continuations: new Map(), searchActive: false },
+      new Map(),
+      { assistantName: "Assistant" },
+    ).rows[0];
+    if (row?.kind !== "item") {
+      throw new Error("Expected an activity row");
+    }
+    return row;
+  };
+  const before = index([toolGroup]);
+  const after = index([toolGroup, compaction]);
+  expect(after.key).toBe(before.key);
+  expect(after.revision).not.toBe(before.revision);
 });
 
 describe("transcript layout callbacks", () => {

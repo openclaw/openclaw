@@ -693,6 +693,16 @@ export function resolveInProcessGatewayDispatch(
     context,
     delegatedToolPolicyHandoffId,
     isWebchatConnect,
+    // A scoped plugin RPC may narrow its client during preparation. Bind the
+    // source handler here while its exact pre-narrowing client is still known.
+    parentHttpRequestAuthority:
+      useScopedClient &&
+      options?.disableSyntheticClient &&
+      scope?.gatewayMethodDispatchAllowed &&
+      !client.internal?.syntheticClient &&
+      !client.internal?.authenticatedOperator
+        ? scope.readRequestAuthority?.bind(undefined, scope.client)
+        : undefined,
     operatorSourceClient: operatorRunAuthority
       ? { ...client, internal: { ...client.internal, operatorRunAuthority } }
       : inheritedOperatorAuthority

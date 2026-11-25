@@ -5,7 +5,6 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { ChatProjection, TurnInsertionBounds } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn, isInterSessionMessage } from "./chat-turn-boundary.ts";
@@ -49,9 +48,9 @@ export function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean
   return readAssistantStreamSegmentIdentity(message) !== undefined;
 }
 
-export function optionalRunIdentity(value: unknown): { runId: string } | undefined {
+export function optionalRunIdentity(value: unknown) {
   const runId = normalizeOptionalString(value);
-  return runId ? { runId } : undefined;
+  return runId ? { runId, boundaryId: `send:${runId}` } : undefined;
 }
 
 export function optionalBoundaryIdentity(value: unknown): { boundaryId: string } | undefined {
@@ -121,10 +120,9 @@ export function createRunTurnLookup(items: ChatItem[]) {
           previousInput.beforeKey = item.key;
         }
         previousInput = { afterKey: item.key };
-        const sendId =
-          item.kind === "message" ? readSessionMessageIdentity(item.message)?.sendId : null;
-        if (sendId) {
-          inputs.set(sendId, previousInput);
+        const identity = item.kind === "message" ? readSessionMessageIdentity(item.message) : null;
+        if (identity?.sendId) {
+          inputs.set(identity.sendId, previousInput);
         }
         const target = item.kind === "message" ? persistedSteerTargetRunId(item.message) : null;
         for (const [owner, interval] of open) {
@@ -133,7 +131,7 @@ export function createRunTurnLookup(items: ChatItem[]) {
             open.delete(owner);
           }
         }
-        const owner = item.kind === "message" ? userTurnRunId(item.message) : null;
+        const owner = identity?.role === "user" ? identity.runId : null;
         for (const id of [owner, target]) {
           if (id && !bounds.has(id)) {
             const interval = { afterKey: item.key };
@@ -160,7 +158,7 @@ export function createRunTurnLookup(items: ChatItem[]) {
       return byInput.get(afterUserSendId)!;
     }
     messages ??= items.map((item) => (item.kind === "message" ? item.message : null));
-    const interval = knownStreamCausalInterval(messages, { runId }, afterUserSendId);
+    const interval = knownStreamCausalInterval(messages, runId, afterUserSendId);
     const ceiling = interval
       ? items.find(
           (item, index) =>
@@ -190,6 +188,7 @@ export function resolveRunInsertionBounds(
   runId: unknown,
   currentRunId: string | null | undefined,
   currentTurnBounds: TurnInsertionBounds | null,
+  firstHistoryItem: Extract<ChatItem, { kind: "message" }> | undefined,
 ): TurnInsertionBounds | null {
   if (typeof runId !== "string" || !runId.trim()) {
     return currentRunId != null ? currentTurnBounds : null;
@@ -200,6 +199,14 @@ export function resolveRunInsertionBounds(
   }
   if (runBounds || currentRunId == null) {
     return runBounds;
+  }
+  // A resumed run may not have a history row yet. No older turn can precede
+  // the native opening request, even when the continuation has a different ID.
+  if (firstHistoryItem && firstHistoryItem.key === currentTurnBounds?.afterKey) {
+    const first = readSessionMessageIdentity(firstHistoryItem.message);
+    if (first?.role === "user" && !first.isImported && first.sequence === 1) {
+      return currentTurnBounds;
+    }
   }
   // Legacy rows may lack the user-run identity needed for exact bounds. Keep
   // them ordered before the current prompt instead of attaching them to it.

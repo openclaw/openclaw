@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { merge } from "solid-js";
 import { currentThemeBranding } from "../../../app/theme-branding.ts";
 import { i18n } from "../../../i18n/index.ts";
@@ -693,14 +692,13 @@ export function projectChatTranscript(
     isLoading,
     showLoadingSkeleton,
     searchOpen: search.open,
-    renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
+    renderRows: (header: TranscriptHeader | null = null) => {
       transcript.layout.ready = !props.loading;
       return transcript.render(
         transcriptRows,
         renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
-        overlay,
         header,
         props.transcriptVisible ?? true,
         props.applicationContext,

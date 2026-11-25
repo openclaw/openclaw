@@ -133,6 +133,7 @@ export async function prepareWorkerTurnPrompt(params: {
     setup,
     bootstrap,
     remoteWorkspace: true,
+    workerPlacement: true,
     referencePaths: { docsPath: null, sourcePath: null },
     activeContextEngine: params.contextEngine,
     capabilityToolNames,

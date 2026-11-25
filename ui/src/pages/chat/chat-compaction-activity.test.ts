@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
-import { message } from "./chat-thread-fixtures.test-support.ts";
+import { message, nativeMessage, pendingText } from "./chat-thread-fixtures.test-support.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
@@ -16,7 +16,7 @@ it("keeps two compactions in their run with distinct keys across live, settlemen
   const startedAt = 3000;
   const itemId = "compact-item";
   const messages = [
-    message("user", "Read the release notes", 1000),
+    nativeMessage("user", "Read the release notes", 1000, { runId, seq: 1 }),
     {
       role: "assistant",
       timestamp: 1500,
@@ -26,11 +26,15 @@ it("keeps two compactions in their run with distinct keys across live, settlemen
     },
     marker("prior", runId, "prior-item"),
   ];
-  const terminal = [...messages, marker("persisted", runId, itemId, startedAt)];
+  const persisted = marker("persisted", runId, itemId, startedAt);
+  const savings = { tokensBefore: 756_078, tokensAfter: 80_609 };
+  Object.assign(persisted["__openclaw"], savings);
+  const terminal = [...messages, persisted];
   const complete = { phase: "complete" as const, runId, itemId, startedAt, completedAt: 4000 };
   const live = buildItems({
     messages,
     runId,
+    pendingInputs: [pendingText("Follow up later", 2500)],
     compactionStatus: { ...complete, phase: "active", completedAt: null },
   });
   const settled = buildItems({ messages: terminal, runId, compactionStatus: complete });
@@ -44,7 +48,9 @@ it("keeps two compactions in their run with distinct keys across live, settlemen
   expect(new Set(keys).size).toBe(2);
   expect(rows(settled).map((row) => row.key)).toEqual(keys);
   expect(rows(reload).map((row) => row.key)).toEqual(keys);
+  expect(rows(settled)).toMatchObject([{}, { ...savings, label: "Compacted context" }]);
   expect(rows(settled).map((row) => row.durationMs)).toEqual([undefined, 1000]);
+  expect(settled.some((item) => item.kind === "divider")).toBe(false);
 });
 
 it("shows an idle manual operation once with tools hidden and does not claim the prior run", () => {

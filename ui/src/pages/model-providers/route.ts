@@ -2,7 +2,6 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ModelProvidersData, ModelProvidersCatalogData } from "./load.ts";
-import type { ModelProviderLogin } from "./login-controller.ts";
 
 export type ModelProvidersRouteData = {
   /** Gateway source that owned the route preload. */
@@ -22,24 +21,6 @@ export type ModelProvidersRouteData = {
   provider?: string;
   pluginId?: string;
 };
-
-export function modelConnectAction(
-  pluginId: string | null,
-  loginBusy: boolean,
-  open: ModelProviderLogin["open"],
-  search: HTMLInputElement | undefined,
-): (() => void) | undefined {
-  if (pluginId) {
-    return loginBusy ? undefined : () => void open(undefined, { pluginId });
-  }
-  if (pluginId === "" && search) {
-    return () => {
-      search.scrollIntoView({ block: "center" });
-      search.focus({ preventScroll: true });
-    };
-  }
-  return undefined;
-}
 
 async function loadModelProvidersRouteData(
   context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
