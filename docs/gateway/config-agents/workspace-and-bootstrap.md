@@ -204,10 +204,12 @@ budget proportionally across the sections by actual bounded character size. Dete
 rounding preserves stable output. Truncation is UTF-safe and includes a marker.
 
 The built-in `openclaw/small` profile uses an 11,500-character aggregate limit
-for the four managed workspace files. This is a rough 2,900-token proxy at four
-characters per token, not an exact tokenizer limit or a limit on the complete
-provider request. `BOOTSTRAP.md`, `BOOT.md`, memory, conversation history,
-skills, and tool schemas keep their separate controls and lifecycle rules.
+for the content OpenClaw prepares from these four workspace files. This is a
+rough 2,900-token proxy at four characters per token, not an exact tokenizer
+limit or a limit on the complete provider request. Codex applies its own
+settings to project-local instructions it loads natively, outside the profile's
+per-file and aggregate limits. `BOOTSTRAP.md`, `BOOT.md`, memory, conversation
+history, skills, and tool schemas keep their separate controls and lifecycle rules.
 
 ## Bootstrap truncation notice
 

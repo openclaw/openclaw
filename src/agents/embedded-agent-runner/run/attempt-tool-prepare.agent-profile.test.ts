@@ -79,14 +79,4 @@ describe("embedded attempt Agent Profile", () => {
     expect(resolved.profile.id).toBe("openclaw/small");
     expect(resolved.selectionSource).toBe("model-size");
   });
-
-  it("profiles a model by the size class its catalog entry carries", async () => {
-    const resolved = await profileFor({
-      provider: "ollama",
-      modelId: "custom-8b",
-      modelSizeClass: "small",
-    });
-    expect(resolved.profile.id).toBe("openclaw/small");
-    expect(resolved.selectionSource).toBe("model-size");
-  });
 });

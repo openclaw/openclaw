@@ -403,6 +403,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
   const detailed = sub === "detail" || sub === "deep";
+  const { agentProfile } = report;
   const workspaceContextLines = report.workspaceContext
     ? [
         `Agent Profile workspace context: ${formatInt(report.workspaceContext.injectedChars)} / ${formatInt(report.workspaceContext.totalMaxChars)} chars; ${formatInt(report.workspaceContext.truncatedChars)} chars removed`,
@@ -422,6 +423,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    ...(agentProfile
+      ? [`Agent Profile: ${agentProfile.id} (selection source: ${agentProfile.selectionSource})`]
+      : []),
     ...workspaceContextLines,
     sandboxLine,
     systemPromptLine,

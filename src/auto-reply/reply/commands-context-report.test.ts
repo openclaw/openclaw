@@ -36,6 +36,7 @@ function makeParams(
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
+    agentProfile?: NonNullable<SessionEntry["systemPromptReport"]>["agentProfile"];
     workspaceContext?: NonNullable<
       NonNullable<SessionEntry["systemPromptReport"]>["workspaceContext"]
     >;
@@ -75,6 +76,7 @@ function makeParams(
         sandbox: { mode: "off", sandboxed: false },
         systemPrompt: { chars: 1_000, projectContextChars: 500, nonProjectContextChars: 500 },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
+        ...(options?.agentProfile ? { agentProfile: options.agentProfile } : {}),
         ...(options?.workspaceContext ? { workspaceContext: options.workspaceContext } : {}),
         injectedWorkspaceFiles: [
           {
@@ -275,8 +277,19 @@ describe("buildContextReply", () => {
     );
   });
 
+  it.each(["list", "detail"])("shows the stored run profile in %s output", async (mode) => {
+    const result = await buildContextReply(
+      makeParams(`/context ${mode}`, false, {
+        cfg: { agents: { defaults: { agentProfileId: "openclaw/base" } } },
+        agentProfile: { id: "openclaw/small", selectionSource: "model-size" },
+      }),
+    );
+    expect(result.text).toContain("Agent Profile: openclaw/small (selection source: model-size)");
+  });
+
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
+    expect(result.text).not.toContain("Agent Profile:");
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
