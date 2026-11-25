@@ -1,5 +1,6 @@
 import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import * as runTools from "./agent-loop-run-tools.js";
 import {
   commitInputMessages,
   createStreamedSteeringConfig,
@@ -53,7 +54,7 @@ import {
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
-import { appendRunContextTool, captureAgentToolInputScope } from "./tool-execution-context.js";
+import { captureAgentToolInputScope } from "./tool-execution-context.js";
 import {
   TOOL_REPEAT_LIMIT_CODE,
   createToolRepeatState,
@@ -235,7 +236,7 @@ async function runLoop(
 
       if (prepareContinuation) {
         const prepare = prepareContinuation;
-        const update = await prepare(state.context);
+        const update = runTools.keepLoaded(await prepare(state.context), state.context);
         state.context = {
           ...state.context,
           systemPrompt: update.systemPrompt,
@@ -404,7 +405,7 @@ async function runLoop(
       });
       prepareContinuation = nextTurnSnapshot?.prepareContinuation;
       if (nextTurnSnapshot) {
-        state.context = nextTurnSnapshot.context ?? state.context;
+        state.context = runTools.keepLoaded(nextTurnSnapshot.context, state.context);
         const nextModel = nextTurnSnapshot.model ?? config.model;
         const nextThinkingLevel = nextTurnSnapshot.thinkingLevel ?? config.thinkingLevel;
         const shouldResolveReasoning =
@@ -809,7 +810,7 @@ async function prepareToolCallEntry(
           ? { hasPending: () => inputQueue.peek().length > 0, subscribe: subscribeInput }
           : undefined,
       toolCall: preparation.toolCall,
-      loadTool: (tool) => appendRunContextTool(batch.currentContext, tool),
+      loadTool: (tool) => runTools.load(batch.currentContext, tool),
       hasUnobservedAsyncToolResults:
         batch.hasUnobservedAsyncToolResults ||
         batch.assistantMessage.content
@@ -852,9 +853,7 @@ async function resolveToolCallTool(
           `Deferred tool resolver returned "${resolvedTool.name}" for requested "${toolCall.name}"`,
         );
       }
-      tool = resolvedTool;
-      // Make the recovered tool visible to later provider continuations in this run.
-      appendRunContextTool(batch.currentContext, tool);
+      tool = runTools.append(batch.currentContext, resolvedTool);
     }
     resolution = { kind: "resolved", ...(tool ? { tool } : {}) };
   } catch (error) {

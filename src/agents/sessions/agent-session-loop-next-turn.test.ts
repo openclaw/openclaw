@@ -205,6 +205,13 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       index === 1 ? toolStream(model, "lookup") : textStream(model),
     );
     const { session } = await createTestSession({ customTools: [lookup] });
+    // Like the embedded runner, resend the session's own tool list on every continuation.
+    session.agent.prepareNextTurn = async () => ({
+      prepareContinuation: (context) => ({
+        systemPrompt: context.systemPrompt,
+        tools: session.agent.state.tools.slice(),
+      }),
+    });
     await session.prompt("look it up");
     expect(requests).toHaveLength(2);
     expect(requests[0]?.tools).not.toContain("loaded_later");

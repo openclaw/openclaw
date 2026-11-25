@@ -2,7 +2,6 @@
 import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
 import { setInternalToolRepeatPolicy } from "../../../packages/agent-core/src/internal-hooks.js";
-import { isRunLoadedTool } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
@@ -93,22 +92,13 @@ function createSessionPrepareNextTurnWithContext(
     lastSessionPrompt = sessionPrompt;
     lastSessionTools = sessionTools.slice();
 
-    const baseContext = previousSnapshot?.context
+    const nextContext = previousSnapshot?.context
       ? { ...previousSnapshot.context }
       : {
           ...turn.context,
           systemPrompt: sessionPromptChanged ? sessionPrompt : turn.context.systemPrompt,
           tools: sessionToolsChanged ? sessionTools.slice() : turn.context.tools?.slice(),
         };
-    // A tool the run loaded for itself (a looked-up or resolved deferred tool) stays for its later requests.
-    const runLoaded = (turn.context.tools ?? []).filter(
-      (tool) =>
-        isRunLoadedTool(tool) && !baseContext.tools?.some((kept) => kept.name === tool.name),
-    );
-    const nextContext =
-      runLoaded.length > 0
-        ? { ...baseContext, tools: [...(baseContext.tools ?? []), ...runLoaded] }
-        : baseContext;
 
     return {
       ...previousSnapshot,
