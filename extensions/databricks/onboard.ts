@@ -3,22 +3,23 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import {
-  DATABRICKS_DEFAULT_MODEL_REF,
-  DATABRICKS_MODEL_CATALOG,
+  getDatabricksDefaultModelRef,
+  getDatabricksModelCatalog,
   resolveDatabricksBaseUrl,
 } from "./models.js";
 
 export function applyDatabricksConnectionConfig(cfg: OpenClawConfig, host: string): OpenClawConfig {
-  const baseUrl = resolveDatabricksBaseUrl(host);
+  const baseUrl = resolveDatabricksBaseUrl(host, cfg.models?.providers?.databricks?.baseUrl);
   if (!baseUrl) {
     throw new Error("Invalid Databricks workspace host. Expected an HTTPS workspace URL.");
   }
+  const defaultModelRef = getDatabricksDefaultModelRef(baseUrl);
   return applyProviderConnectionConfig(cfg, {
     providerId: "databricks",
     api: "openai-completions",
     baseUrl,
-    catalogModels: () => structuredClone(DATABRICKS_MODEL_CATALOG),
-    aliases: [{ modelRef: DATABRICKS_DEFAULT_MODEL_REF, alias: "Databricks" }],
-    primaryModelRef: DATABRICKS_DEFAULT_MODEL_REF,
+    catalogModels: () => getDatabricksModelCatalog(baseUrl),
+    aliases: [{ modelRef: defaultModelRef, alias: "Databricks" }],
+    primaryModelRef: defaultModelRef,
   });
 }

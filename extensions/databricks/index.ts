@@ -15,10 +15,11 @@ import {
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  applyDatabricksServingCompat,
   buildDatabricksModelDefinition,
-  DATABRICKS_DEFAULT_MODEL_REF,
-  DATABRICKS_MODEL_CATALOG,
   DATABRICKS_PROVIDER_ID,
+  getDatabricksDefaultModelRef,
+  getDatabricksModelCatalog,
   normalizeDatabricksHost,
   resolveDatabricksBaseUrl,
 } from "./models.js";
@@ -34,7 +35,7 @@ function configuredBaseUrl(ctx: ProviderCatalogContext): string | undefined {
 }
 
 function buildDatabricksRuntimeModel(modelId: string, baseUrl: string): ProviderRuntimeModel {
-  const model = buildDatabricksModelDefinition(modelId);
+  const model = buildDatabricksModelDefinition(modelId, baseUrl);
   const input = (model.input ?? ["text"]).filter(
     (kind): kind is "text" | "image" => kind === "text" || kind === "image",
   );
@@ -93,6 +94,7 @@ async function runInteractive(ctx: ProviderAuthContext) {
     promptMessage: "Enter Databricks token",
     missingInputMessage: "Missing Databricks token.",
   });
+  const configPatch = applyDatabricksConnectionConfig(ctx.config, host);
   return {
     profiles: [
       {
@@ -105,8 +107,8 @@ async function runInteractive(ctx: ProviderAuthContext) {
         ),
       },
     ],
-    configPatch: applyDatabricksConnectionConfig(ctx.config, host),
-    defaultModel: DATABRICKS_DEFAULT_MODEL_REF,
+    configPatch,
+    defaultModel: getDatabricksDefaultModelRef(configPatch.models?.providers?.databricks?.baseUrl),
   };
 }
 
@@ -184,11 +186,16 @@ export default definePluginEntry({
               baseUrl,
               api: "openai-completions",
               apiKey: auth.apiKey,
-              models: structuredClone(DATABRICKS_MODEL_CATALOG),
+              models: getDatabricksModelCatalog(baseUrl),
             },
           };
         },
       },
+      // Configured models skip dynamic discovery. Use the final model-level route in both paths.
+      normalizeResolvedModel: ({ model }) =>
+        model.api === "openai-completions"
+          ? applyDatabricksServingCompat(model, model.baseUrl)
+          : undefined,
       resolveDynamicModel: (ctx) => {
         const baseUrl =
           ctx.providerConfig?.baseUrl ?? resolveDatabricksBaseUrl(process.env[HOST_ENV_VAR]);

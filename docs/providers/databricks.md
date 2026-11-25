@@ -78,6 +78,41 @@ Requests are sent to Databricks' unified OpenAI-compatible endpoint, so the same
 OpenClaw provider works across Databricks-backed Anthropic, OpenAI, Gemini, and
 Databricks-hosted models supported by that API.
 
+## Workspace Model Serving
+
+For standard workspace serving endpoints, set the existing provider `baseUrl`
+before running token onboarding:
+
+```json5
+{
+  models: {
+    providers: {
+      databricks: {
+        baseUrl: "https://dbc-example.cloud.databricks.com/serving-endpoints",
+        api: "openai-completions",
+        models: [],
+      },
+    },
+  },
+}
+```
+
+Set `DATABRICKS_HOST` to the workspace URL and run the same `databricks-token`
+onboarding flow. Onboarding keeps the `/serving-endpoints` route and uses
+`databricks/databricks-claude-sonnet-4-5` as the default when no primary model is
+configured. If you change `DATABRICKS_HOST`, onboarding updates the workspace
+while keeping this route.
+
+Select custom chat endpoints as `databricks/<endpoint-name>`. The endpoint name
+is sent unchanged in the Chat Completions `model` field. Existing model entries
+and primary model selections are preserved. See Databricks'
+[OpenAI-compatible serving examples](https://docs.databricks.com/aws/en/machine-learning/foundation-models/external-models).
+
+This route does not support route-optimized custom endpoints. Those endpoints
+require their dedicated URL and endpoint-scoped service-principal OAuth M2M
+tokens; workspace tokens and PATs are not interchangeable with those credentials.
+See [query route-optimized endpoints](https://docs.databricks.com/aws/en/machine-learning/model-serving/query-route-optimization).
+
 ## Production authentication
 
 Databricks personal access tokens work for development. For production,
