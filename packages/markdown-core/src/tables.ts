@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import MarkdownIt, { type Env, type MarkdownIt as MarkdownItParser } from "markdown-it";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { mergeStyleSpans } from "./ir-spans.js";
 import { getMarkdownTableSource, markdownToIRWithMeta, type MarkdownStyleSpan } from "./ir.js";
 import { renderMarkdownWithMarkers } from "./render.js";
@@ -7,6 +8,7 @@ import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-lay
 import type { MarkdownTableMode } from "./types.js";
 
 let rowLabelParser: MarkdownItParser | undefined;
+let rowLabelSourceParser: MarkdownItParser | undefined;
 
 function makeRowLabelParser() {
   const parser = new MarkdownIt();
@@ -63,11 +65,14 @@ function labelRuns(markdown: string, parser: MarkdownItParser, env: Env, addBold
   return runs;
 }
 
-function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): string {
-  // Prefer the authored spelling whenever the outer strong preserves every run.
-  const runs = labelRuns(markdown, parser, env, true);
-  const wrapped = labelRuns(`**${markdown}**`, parser, env, false);
-  if (
+function matchesLabel(
+  runs: LabelRun[],
+  label: string,
+  parser: MarkdownItParser,
+  env: Env,
+): boolean {
+  const wrapped = labelRuns(label, parser, env, false);
+  return (
     runs.length === wrapped.length &&
     runs.every((run, i) => {
       const actual = wrapped[i];
@@ -79,10 +84,39 @@ function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): 
         actual.text === run.text
       );
     })
-  ) {
-    return markdown;
-  }
+  );
+}
 
+// Cut at whitespace between top-level inline constructs. A link, code span, or
+// emphasis spanning multiple words stays together. All slices refer to the cell source.
+function rowLabelSlices(markdown: string, env: Env): string[] {
+  if (!/\s/u.test(markdown)) {
+    return [markdown];
+  }
+  // Use the same emphasis boundaries as markdownToIR when locating source
+  // ranges. CommonMark can pair a CJK star with one in a later word.
+  const parser = (rowLabelSourceParser ??= makeRowLabelParser().use(markdownItCjkFriendly));
+  const slices: string[] = [];
+  let start = 0;
+  let offset = 0;
+  for (const token of parser.parseInline(markdown, env)[0]?.children ?? []) {
+    const spelling = token.nesting ? token.markup : token.content;
+    if (!markdown.startsWith(spelling, offset)) {
+      return [markdown];
+    }
+    if (token.level === 0 && token.type === "text") {
+      for (const space of spelling.matchAll(/\s+/gu)) {
+        const end = offset + space.index;
+        slices.push(markdown.slice(start, end), space[0]);
+        start = end + space[0].length;
+      }
+    }
+    offset += spelling.length;
+  }
+  return offset === markdown.length ? [...slices, markdown.slice(start)] : [markdown];
+}
+
+function renderLabelRuns(runs: LabelRun[], compact: boolean): string {
   const italic: MarkdownStyleSpan[] = [];
   const strike: MarkdownStyleSpan[] = [];
   let text = "";
@@ -95,7 +129,7 @@ function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): 
     const beforeOpen = (after?.italic && !run.italic) || (after?.struck && !run.struck);
     const start = text.length;
     text +=
-      afterClose || beforeOpen
+      !compact && (afterClose || beforeOpen)
         ? run.text.replace(/[^\s\p{P}\p{S}]+/gu, (word, offset: number) =>
             (afterClose && offset === 0) || (beforeOpen && offset + word.length === run.text.length)
               ? `**${word}**`
@@ -110,16 +144,51 @@ function rowLabelContent(markdown: string, parser: MarkdownItParser, env: Env): 
     }
   }
   // A strike spanning several italic or plain runs stays open across all of them.
+  const marker = compact ? "*" : "_";
   return renderMarkdownWithMarkers(
     { text, styles: [...mergeStyleSpans(italic), ...mergeStyleSpans(strike)], links: [] },
     {
       styleMarkers: {
-        italic: { open: "_", close: "_" },
+        italic: { open: marker, close: marker },
         strikethrough: { open: "~~", close: "~~" },
       },
       escapeText: (value) => value,
     },
   );
+}
+
+function renderRowLabel(markdown: string, parser: MarkdownItParser, env: Env): string {
+  const runs = labelRuns(markdown, parser, env, true);
+  const original = `**${markdown}**`;
+  if (matchesLabel(runs, original, parser, env)) {
+    return original;
+  }
+
+  const slices = rowLabelSlices(markdown, env);
+  if (slices.length === 1) {
+    return `**${renderLabelRuns(runs, false)}**`;
+  }
+  const content = slices
+    .map((slice) => {
+      if (!slice.includes("**")) {
+        return slice;
+      }
+      const local = labelRuns(slice, parser, env, true);
+      if (matchesLabel(local, `**${slice}**`, parser, env)) {
+        return slice;
+      }
+      const compact = renderLabelRuns(local, true);
+      return matchesLabel(local, `**${compact}**`, parser, env)
+        ? compact
+        : renderLabelRuns(local, false);
+    })
+    .join("");
+  const bold = `**${content}**`;
+  if (matchesLabel(runs, bold, parser, env)) {
+    return bold;
+  }
+  const alternate = `__${content}__`;
+  return matchesLabel(runs, alternate, parser, env) ? alternate : bold;
 }
 
 /** Convert only parsed table ranges; unrelated Markdown retains its original source bytes. */
@@ -169,9 +238,10 @@ export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode)
               const env = value.includes("[")
                 ? (references ??= referenceEnvironment(markdown, parser))
                 : {};
-              value = rowLabelContent(value, parser, env);
+              value = renderRowLabel(value, parser, env);
+            } else {
+              value = `**${value}**`;
             }
-            value = `**${value}**`;
           }
           rendered += value;
         },

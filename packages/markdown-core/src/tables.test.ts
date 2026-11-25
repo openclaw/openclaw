@@ -84,6 +84,38 @@ describe("convertMarkdownTables", () => {
     expect(rendered.endsWith(references)).toBe(true);
   });
 
+  it.each([
+    ["pre**fix** 前*斜体：*后", "prefix 前斜体：后", ["斜体："]],
+    ["前*斜体：*后 x**a**_b_", "前斜体：后 xab", ["斜体：", "b"]],
+    ["前*斜体：*后 x*old***a**_b_", "前斜体：后 xoldab", ["斜体：", "old", "b"]],
+    ["x*old***a**_b_ 前*斜体：*后", "xoldab 前斜体：后", ["old", "b", "斜体："]],
+  ] as const)("preserves CJK emphasis and neighboring spans in %s", (label, visible, italic) => {
+    const rendered = convertMarkdownTables(
+      `| Name | Price |\n| --- | --- |\n| ${label} | 4 |`,
+      "bullets",
+    );
+    expect(rendered).toContain("前*斜体：*后");
+    const { text, styles } = ir.markdownToIR(rendered);
+    expect(text).toBe(visible + "\n• Price: 4");
+    expect(
+      styles
+        .filter((range) => range.style === "italic")
+        .map(({ start, end }) => text.slice(start, end)),
+    ).toEqual(italic);
+    expect(styles).toContainEqual({ style: "bold", start: 0, end: visible.length });
+  });
+
+  it("preserves a bare URL for consumers that linkify after table conversion", () => {
+    const url = "https://example.com/a_b";
+    const rendered = convertMarkdownTables(
+      `| Name | Price |\n| --- | --- |\n| pre**fix** ${url} | 4 |`,
+      "bullets",
+    );
+    expect(new MarkdownIt({ linkify: true }).render(rendered)).toBe(
+      `<p><strong>prefix <a href="${url}">${url}</a></strong>\n• Price: 4</p>\n`,
+    );
+  });
+
   it("keeps both italic runs around intraword strong in the row label", () => {
     const rendered = convertMarkdownTables(
       "| Name | Price |\n| --- | --- |\n| x*old***a**_b_ | 4 |",
