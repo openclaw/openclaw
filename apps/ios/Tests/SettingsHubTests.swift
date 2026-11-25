@@ -29,26 +29,42 @@ struct SettingsHubTests {
     }
 
     @Test func `Account header names the person and adds the email only when it is not the name`() throws {
-        let request = SettingsAccount.Request(ownerID: "owner", authorityGeneration: 1, isConnected: true)
-        func account(_ profile: String) -> SettingsAccount? {
-            SettingsAccount(request: request, selfProfile: Data(#"{"profile":\#(profile)}"#.utf8))
+        func profile(_ json: String) -> SettingsAccount.Answer {
+            SettingsAccount.Answer(selfProfile: Data(#"{"profile":\#(json)}"#.utf8))
         }
-        let named = try #require(account(#"""
+        let named = try #require(profile(#"""
         {"id":"p1","displayName":" Avery Quinn ","emails":["avery@example.test"],
          "githubIdentity":{"login":"avery","profileUrl":"u","avatarUrl":"a"},"hasAvatar":false}
-        """#))
+        """#).profile)
         #expect(named.name == "Avery Quinn")
         #expect(named.detail == "avery@example.test")
         #expect(named.initials == "AQ")
-        let login = try #require(account(
-            #"{"id":"p1","displayName":null,"emails":[],"githubIdentity":{"login":"avery"}}"#))
+        let login = try #require(profile(
+            #"{"id":"p1","displayName":null,"emails":[],"githubIdentity":{"login":"avery"}}"#).profile)
         #expect(login.name == "avery")
         #expect(login.detail == nil)
-        let email = try #require(account(#"{"id":"p1","displayName":"","emails":["avery@example.test"]}"#))
+        let email = try #require(profile(#"{"id":"p1","displayName":"","emails":["avery@example.test"]}"#).profile)
         #expect(email.name == "avery@example.test")
         #expect(email.detail == nil)
         // A token-only owner profile has nothing to show, so there is no header.
-        #expect(account(#"{"id":"gateway-owner","displayName":null,"emails":[],"githubIdentity":null}"#) == nil)
+        #expect(profile(#"{"id":"gateway-owner","displayName":null,"emails":[],"githubIdentity":null}"#) == .empty)
+        #expect(SettingsAccount.Answer(selfProfile: Data("{}".utf8)) == .unreadable)
+    }
+
+    @Test func `Account header shape hint follows readable answers per Gateway`() throws {
+        let suite = "SettingsHubTests.accountShape.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == nil)
+        SettingsAccount.remember(
+            .profile(.init(name: "Avery Quinn", detail: "avery@example.test")), gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .nameAndDetail)
+        // A failed read keeps the last answer; an empty profile stops reserving space.
+        SettingsAccount.remember(.unreadable, gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .nameAndDetail)
+        SettingsAccount.remember(.empty, gatewayID: "gw-a", defaults: defaults)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-a", defaults: defaults) == .empty)
+        #expect(SettingsAccount.lastShape(gatewayID: "gw-b", defaults: defaults) == nil)
     }
 
     @Test func `Access cookie resource rule admits only the Gateway authority`() async throws {

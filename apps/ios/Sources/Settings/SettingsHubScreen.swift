@@ -49,8 +49,8 @@ struct SettingsHubScreen: View {
 
     private var root: some View {
         List {
-            if let account = self.visibleAccount {
-                Section { SettingsAccountHeader(account: account) }
+            if let slot = self.accountSlot {
+                Section { SettingsAccountHeader(profile: slot.profile, reservesDetail: slot.reservesDetail) }
             }
 
             Section {
@@ -129,27 +129,45 @@ struct SettingsHubScreen: View {
         SettingsAccount.Request(
             ownerID: self.appModel.chatViewModelOwnerID,
             authorityGeneration: self.appModel.operatorAuthorityGeneration,
-            isConnected: self.appModel.isOperatorGatewayConnected && !self.appModel.isLocalGatewayFixtureEnabled)
+            gatewayID: self.appModel.connectedGatewayID,
+            isConnected: self.appModel.isOperatorGatewayConnected &&
+                !self.appModel.isLocalGatewayFixtureEnabled && !self.appModel.isAppleReviewDemoModeEnabled)
     }
 
-    private var visibleAccount: SettingsAccount? {
-        guard let account, account.request == self.accountRequest, account.request.isConnected else { return nil }
-        return account
+    /// The header slot is decided before the list draws, so nothing below it moves: a known
+    /// profile shows at once; an unknown one reserves the header's height with a still placeholder,
+    /// unless this Gateway's last answer had nothing to show. While the app is still reaching its
+    /// active Gateway (right after launch, the connection state flickers) the slot holds too; with
+    /// no active Gateway, a connection problem, the fixture or demo mode there is no slot.
+    private var accountSlot: (profile: SettingsAccount.Profile?, reservesDetail: Bool)? {
+        let request = self.accountRequest
+        if !request.isConnected {
+            guard request.gatewayID != nil, self.appModel.lastGatewayProblem == nil,
+                  !self.appModel.isLocalGatewayFixtureEnabled, !self.appModel.isAppleReviewDemoModeEnabled
+            else { return nil }
+        } else if let account, account.request == request {
+            return account.profile.map { ($0, false) }
+        }
+        switch SettingsAccount.lastShape(gatewayID: request.gatewayID) {
+        case .empty: return nil
+        case .nameAndDetail: return (nil, true)
+        case .name, nil: return (nil, false)
+        }
     }
 
     /// Identity is scoped to the admitted operator connection, including same-host account changes.
     private func refreshAccount(_ request: SettingsAccount.Request) async {
         guard request.isConnected, request == self.accountRequest, !Task.isCancelled else { return }
         let gateway = self.appModel.operatorSession
-        guard let route = await gateway.currentRoute(),
-              let data = try? await gateway.request(method: "users.self", params: [:], ifCurrentRoute: route),
-              !Task.isCancelled,
-              await gateway.currentRoute() == route,
-              request == self.accountRequest
-        else { return }
-        let account = SettingsAccount(request: request, selfProfile: data)
+        guard let route = await gateway.currentRoute() else { return }
+        let data = try? await gateway.request(method: "users.self", params: [:], ifCurrentRoute: route)
+        guard !Task.isCancelled, await gateway.currentRoute() == route, request == self.accountRequest else { return }
+        // A failed read shows no header this time but leaves the saved hint alone.
+        let answer = data.map(SettingsAccount.Answer.init(selfProfile:)) ?? .unreadable
+        let account = SettingsAccount(request: request, profile: answer.profile)
         self.account = account
         SettingsAccount.cached = account
+        SettingsAccount.remember(answer, gatewayID: request.gatewayID)
     }
 
     /// The connection row names the host and stays quiet while everything works; only an
@@ -643,7 +661,56 @@ struct SettingsAccount: Equatable {
     struct Request: Equatable {
         let ownerID: String
         let authorityGeneration: UInt64
+        let gatewayID: String?
         let isConnected: Bool
+    }
+
+    struct Profile: Equatable {
+        let name: String
+        let detail: String?
+
+        var initials: String {
+            self.name.split(whereSeparator: \.isWhitespace)
+                .prefix(2)
+                .compactMap(\.first)
+                .map(String.init)
+                .joined()
+                .uppercased()
+        }
+    }
+
+    /// What one `users.self` read gave.
+    enum Answer: Equatable {
+        case profile(Profile)
+        /// The profile has no name, login or email (a token-only owner).
+        case empty
+        case unreadable
+
+        init(selfProfile data: Data) {
+            guard let profile = try? JSONDecoder().decode(SelfProfile.self, from: data).profile else {
+                self = .unreadable
+                return
+            }
+            let email = profile.emails?.lazy.compactMap(\.trimmedNonEmpty).first
+            let login = profile.githubIdentity?.login.trimmedNonEmpty
+            guard let name = profile.displayName?.trimmedNonEmpty ?? login ?? email else {
+                self = .empty
+                return
+            }
+            self = .profile(Profile(name: name, detail: email == name ? nil : email))
+        }
+
+        var profile: Profile? {
+            guard case let .profile(profile) = self else { return nil }
+            return profile
+        }
+    }
+
+    /// The header's shape from this Gateway's last answer, so the first frame can reserve it.
+    enum Shape: String {
+        case empty
+        case name
+        case nameAndDetail
     }
 
     private struct SelfProfile: Decodable {
@@ -660,64 +727,107 @@ struct SettingsAccount: Equatable {
         let profile: Profile
     }
 
-    /// Last profile read for a request, so reopening Settings does not shift the list when it lands.
+    /// Last answer for a request, so reopening Settings draws the header on its first frame.
     @MainActor static var cached: SettingsAccount?
 
     let request: Request
-    let name: String
-    let detail: String?
+    let profile: Profile?
 
-    init?(request: Request, selfProfile data: Data) {
-        guard let profile = try? JSONDecoder().decode(SelfProfile.self, from: data).profile else { return nil }
-        let email = profile.emails?.lazy.compactMap(\.trimmedNonEmpty).first
-        guard let name = profile.displayName?.trimmedNonEmpty ?? profile.githubIdentity?.login.trimmedNonEmpty ?? email
-        else { return nil }
-        self.request = request
-        self.name = name
-        self.detail = email == name ? nil : email
+    private static func shapeKey(_ gatewayID: String) -> String {
+        "settings.accountHeader.shape." + gatewayID
     }
 
-    var initials: String {
-        self.name.split(whereSeparator: \.isWhitespace)
-            .prefix(2)
-            .compactMap(\.first)
-            .map(String.init)
-            .joined()
-            .uppercased()
+    static func lastShape(gatewayID: String?, defaults: UserDefaults = .standard) -> Shape? {
+        gatewayID.flatMap { defaults.string(forKey: self.shapeKey($0)) }.flatMap(Shape.init(rawValue:))
+    }
+
+    /// Keeps only the shape (never the name or email) of a readable answer.
+    static func remember(_ answer: Answer, gatewayID: String?, defaults: UserDefaults = .standard) {
+        guard let gatewayID else { return }
+        let shape: Shape
+        switch answer {
+        case .unreadable: return
+        case .empty: shape = .empty
+        case let .profile(profile): shape = profile.detail == nil ? .name : .nameAndDetail
+        }
+        defaults.set(shape.rawValue, forKey: self.shapeKey(gatewayID))
     }
 }
 
 /// Account header in the place of the iOS Settings account row. There is no profile screen to
-/// open on iPhone yet, so it is a plain header: no chevron, no tap.
+/// open on iPhone yet, so it is a plain header: no chevron, no tap. Until the profile is known it
+/// draws the same layout as a still, faint placeholder, and the profile fades in over it.
 private struct SettingsAccountHeader: View {
-    let account: SettingsAccount
+    let profile: SettingsAccount.Profile?
+    let reservesDetail: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .title2) private var avatarSize = 60.0
+    @ScaledMetric(relativeTo: .title2) private var placeholderWidth = 140.0
+
+    /// The chat skeleton's tone.
+    private static let skeleton = Color.primary.opacity(0.07)
 
     var body: some View {
-        let layout = self.dynamicTypeSize.isAccessibilitySize
+        ZStack(alignment: .leading) {
+            self.placeholder
+                .opacity(self.profile == nil ? 1 : 0)
+                .accessibilityHidden(true)
+            if let profile {
+                self.content(profile)
+                    .transition(.opacity)
+            }
+        }
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.2), value: self.profile)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("SettingsHub.Account")
+    }
+
+    private var layout: AnyLayout {
+        self.dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
             : AnyLayout(HStackLayout(spacing: 14))
-        layout {
-            Text(verbatim: self.account.initials)
+    }
+
+    private func content(_ profile: SettingsAccount.Profile) -> some View {
+        self.layout {
+            Text(verbatim: profile.initials)
                 .font(OpenClawType.avatar(size: 24))
                 .foregroundStyle(.white)
                 .frame(width: self.avatarSize, height: self.avatarSize)
                 .background(Color(uiColor: .systemGray).gradient, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: self.account.name)
+                Text(verbatim: profile.name)
                     .font(OpenClawType.title3SemiBold)
                     .foregroundStyle(.primary)
-                if let detail = self.account.detail {
+                if let detail = profile.detail {
                     Text(verbatim: detail)
                         .font(SettingsType.description)
                         .foregroundStyle(SettingsInk.secondary)
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityIdentifier("SettingsHub.Account")
+    }
+
+    /// Same fonts and stack as the header, so it takes the header's exact height: a circle and
+    /// one bar where the name goes; the email line, when the last answer had one, is kept blank.
+    private var placeholder: some View {
+        self.layout {
+            Circle()
+                .fill(Self.skeleton)
+                .frame(width: self.avatarSize, height: self.avatarSize)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: " ")
+                    .font(OpenClawType.title3SemiBold)
+                    .frame(width: self.placeholderWidth, alignment: .leading)
+                    .background(Capsule().fill(Self.skeleton).padding(.vertical, 6))
+                if self.reservesDetail {
+                    Text(verbatim: " ")
+                        .font(SettingsType.description)
+                }
+            }
+        }
     }
 }
