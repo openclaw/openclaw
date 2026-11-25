@@ -2062,6 +2062,11 @@ jobs:
           set -euo pipefail
           # Runtime shape and README were checked before sealing. Exact registry
           # byte equality carries that proof forward without installing tooling.
+          if [[ "$DEFER_VISIBILITY" == "true" ]]; then
+            # The release parent owns the full readback window; defer early so
+            # its job budget is not spent waiting on this child.
+            export OPENCLAW_NPM_READBACK_TIMEOUT_MS=900000
+          fi
           node scripts/plugin-npm-prepared-release.mjs registry \
             --package-name "$PACKAGE_NAME" --version "$PACKAGE_VERSION" \
             --publish-tag "$PUBLISH_TAG" --route "$PUBLISH_ROUTE" \
