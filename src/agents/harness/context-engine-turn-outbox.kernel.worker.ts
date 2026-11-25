@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { sql } from "kysely";
 import {
   readClosedTranscriptTurnInDatabase,
@@ -99,6 +100,13 @@ function writeContextEngineTurnOutboxPayload(
         existingPayload.boundary.terminal.entryId === params.payload.boundary.terminal.entryId);
     if (transitionMatches) {
       if (params.payload.state === "ready" && existingPayload.state === "accepted") {
+        // Publication cannot revise the effective prompt budget fixed at acceptance.
+        if (
+          asFiniteNumber(params.payload.runtimeContext?.tokenBudget) !==
+          asFiniteNumber(existingPayload.runtimeContext?.tokenBudget)
+        ) {
+          throw new Error(`context-engine advancement key collision: ${advancementKey}`);
+        }
         // Publication cannot replace or erase the source committed at acceptance.
         payloadJson = JSON.stringify({
           ...params.payload,

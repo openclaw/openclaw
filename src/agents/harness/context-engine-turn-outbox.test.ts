@@ -164,6 +164,42 @@ async function createTranscript(sessionId: string, content = "current") {
 }
 
 describe("context-engine turn outbox", () => {
+  it.each([
+    [180_000, 64_000, true],
+    [undefined, 64_000, true],
+    [180_000, undefined, true],
+    [180_000, 180_000, false],
+    [undefined, undefined, false],
+    [undefined, Number.NaN, false],
+    [Number.NaN, undefined, false],
+    [0, 0, false],
+  ] as const)(
+    "keeps the accepted effective budget %s when publishing %s",
+    (accepted, published, rejects) => {
+      const database = createDatabase();
+      const payload = createPayload(database.path, "budget-collision");
+      const owner = { database, engineId: "test" };
+      enqueueContextEngineTurnIntent({ ...owner, admission: payload.boundary.admission });
+      acceptContextEngineTurnIntent({
+        ...owner,
+        boundary: payload.boundary,
+        runtimeContext: { tokenBudget: accepted },
+      });
+      const before = readPayload(database, "budget-collision");
+      const publish = () =>
+        enqueueContextEngineTurnCommit({
+          ...owner,
+          payload: { ...payload, runtimeContext: { tokenBudget: published } },
+        });
+      if (rejects) {
+        expect(publish).toThrow("context-engine advancement key collision: budget-collision");
+        expect(readPayload(database, "budget-collision")).toEqual(before);
+      } else {
+        expect(publish).not.toThrow();
+        expect(readPayload(database, "budget-collision")).toMatchObject({ state: "ready" });
+      }
+    },
+  );
   it.each(["unchanged", "rewrite", "branch", "reset"] as const)(
     "validates the committed terminal receipt at consumption after %s",
     async (change) => {
