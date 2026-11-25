@@ -1,5 +1,6 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { foldSearchCase } from "../../../../src/shared/search-case.js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
@@ -121,7 +122,9 @@ const buildQuerySuggestions = (
       return [];
   }
   return candidates
-    .filter((candidate) => normalizeLowercaseStringOrEmpty(candidate).includes(value))
+    .filter((candidate) =>
+      foldSearchCase(normalizeLowercaseStringOrEmpty(candidate)).includes(foldSearchCase(value)),
+    )
     .slice(0, 6)
     .map((candidate) => ({
       label: `${key}:${candidate}`,
