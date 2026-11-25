@@ -22,10 +22,16 @@ export async function requestLogsTail(
     return await callGatewayFromCliWithTransport("logs.tail", opts, params, extra);
   }
   if (follow.request) {
-    return await follow.request("logs.tail", params, {
-      timeoutMs: parseTimeoutMsWithFallback(opts.timeout ?? undefined, 30_000),
-      signal: extra.signal,
-    });
+    // A failed poll retires the connection; the follow retry path reconnects.
+    return await follow
+      .request("logs.tail", params, {
+        timeoutMs: parseTimeoutMsWithFallback(opts.timeout ?? undefined, 30_000),
+        signal: extra.signal,
+      })
+      .catch((error: unknown) => {
+        follow.close?.();
+        throw error;
+      });
   }
   const firstResult = Promise.withResolvers<unknown>();
   // Keep the connection after its first response; only connecting has a deadline.
