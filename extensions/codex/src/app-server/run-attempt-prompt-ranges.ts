@@ -1,4 +1,30 @@
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexProjectedContextRange } from "./context-engine-projection.js";
+
+/**
+ * An earlier fallback candidate may have frozen this turn's model text. Send those exact
+ * bytes in place of this attempt's request, inbound and hook text, as embedded fallbacks do.
+ */
+export function applyCodexFrozenPrompt(
+  params: Pick<
+    EmbeddedRunAttemptParamsV2,
+    "prompt" | "skipPreparedUserTurnMessage" | "userTurnTranscriptRecorder"
+  >,
+  promptText: string,
+  promptBuild: { prompt: string; promptInputRange?: CodexProjectedContextRange },
+): { prompt: string; promptInputRange?: CodexProjectedContextRange; promptText: string } {
+  const frozen = params.skipPreparedUserTurnMessage
+    ? undefined
+    : params.userTurnTranscriptRecorder?.getPersistedMessage?.()?.["__openclaw"]
+        ?.modelPromptProjection?.text;
+  if (frozen === undefined) {
+    return { ...promptBuild, promptText };
+  }
+  // Projected history ends with the current request; only that tail is replaced.
+  const request = promptText.endsWith(params.prompt) ? params.prompt : params.prompt.trim();
+  const prompt = promptText.slice(0, promptText.length - request.length) + frozen;
+  return { prompt, promptInputRange: { start: 0, end: prompt.length }, promptText: prompt };
+}
 
 /**
  * Locate the input, projected context, and current request inside the decorated turn

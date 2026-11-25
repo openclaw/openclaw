@@ -15,6 +15,7 @@ import {
   tempDir,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { getRequestInputText } from "./run-attempt.context-engine.test-support.js";
 import {
   appendSqliteHistoryMessage,
   attachSqliteSessionTarget,
@@ -105,16 +106,20 @@ it("keeps a projection an earlier embedded fallback attempt froze", async () => 
   const frozen = "embedded attempt context\n\nhello";
   await recorder.captureModelPromptProjection!(frozen, () => {});
   params.userTurnTranscriptRecorder = recorder;
+  params.prompt = `[Retry after the previous model attempt failed or timed out]\n\n${params.prompt}`;
   await bindProductionHarnessHostCapabilitiesForTest(params);
-  let dispatchProjection: unknown;
-  const harness = createStartedThreadHarness(async (method) => {
-    if (method === "turn/start") {
-      dispatchProjection = recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection;
-    }
-  });
+  const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(params);
   await run.waitForTurnAccepted();
   await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
   await run;
-  expect(dispatchProjection).toEqual({ version: 1, text: frozen });
+  const sentText = getRequestInputText(harness);
+  // Codex sends the frozen bytes, not its own retry marker or re-run hook context.
+  expect(sentText.endsWith(frozen)).toBe(true);
+  expect(sentText).not.toContain("codex attempt context");
+  expect(sentText).not.toContain("Retry after");
+  expect(recorder.getPersistedMessage?.()?.["__openclaw"]?.modelPromptProjection).toEqual({
+    version: 1,
+    text: frozen,
+  });
 });

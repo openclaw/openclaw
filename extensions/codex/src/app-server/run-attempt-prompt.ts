@@ -33,7 +33,10 @@ import {
   resolveCodexPromptContinuity,
   selectCodexStaleBindingDelta,
 } from "./run-attempt-prompt-continuity.js";
-import { resolveCodexShiftedPromptRanges } from "./run-attempt-prompt-ranges.js";
+import {
+  applyCodexFrozenPrompt,
+  resolveCodexShiftedPromptRanges,
+} from "./run-attempt-prompt-ranges.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
@@ -387,12 +390,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       continuity: (reportedContinuity = resolveContinuity()),
     });
   const decorateCodexTurnPromptText = (
-    promptBuildResult: {
-      prompt: string;
-      promptInputRange?: { start: number; end: number };
-    },
+    promptBuild: Parameters<typeof applyCodexFrozenPrompt>[2],
     includeWorkspaceReferences = true,
   ) => {
+    const promptBuildResult = applyCodexFrozenPrompt(params, promptState.promptText, promptBuild);
     const turnPromptText = prependCodexOpenClawPromptContext(
       promptBuildResult.prompt,
       buildOpenClawPromptContext(includeWorkspaceReferences),
@@ -403,10 +404,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       },
     );
     const projectedRanges = resolveCodexShiftedPromptRanges({
-      prompt: promptBuildResult.prompt,
-      promptInputRange: promptBuildResult.promptInputRange,
+      ...promptBuildResult,
       turnPromptText,
-      promptText: promptState.promptText,
       promptContextRange: promptState.promptContextRange,
     });
     const preservedRange =
