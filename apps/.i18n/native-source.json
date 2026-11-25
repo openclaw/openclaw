@@ -1131,6 +1131,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.0102e81a57d2e118","source":"%@ tokens used"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.31a51cac63324c00","source":"Remove attachment: %@"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.917772b14e17ab21","source":"Thread cost %@"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bbbc693d37d1e48d","source":"Voice note"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.9c6efa7dff0eea8e","source":"Context usage"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/CleanChatComposerControls.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.c7b0c6e40fb8acd0","source":"Record Voice Note"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageDisclosure.kt","kind":"ui-call","surface":"android","id":"native.android.ac8c57eb3bdcc541","source":"Loading full message…"},

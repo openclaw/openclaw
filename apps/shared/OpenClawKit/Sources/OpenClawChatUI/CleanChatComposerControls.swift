@@ -342,7 +342,19 @@ struct OpenClawChatAttachmentsStrip: View {
     let attachments: [OpenClawPendingAttachment]
     let onRemove: @MainActor (OpenClawPendingAttachment.ID) -> Void
 
+    /// On iPhone the tiles sit straight on the draft, whose own top inset is the gap below them.
+    static var spacingToDraft: CGFloat {
+        #if os(iOS)
+        0
+        #else
+        8
+        #endif
+    }
+
     var body: some View {
+        #if os(iOS)
+        ChatAttachmentThumbnailRail(attachments: self.attachments, onRemove: self.onRemove)
+        #else
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(self.attachments, id: \OpenClawPendingAttachment.id) { attachment in
@@ -397,8 +409,237 @@ struct OpenClawChatAttachmentsStrip: View {
                 }
             }
         }
+        #endif
     }
 }
+
+#if os(iOS)
+/// The Control UI's pending attachments on a phone (`ui/src/styles/chat/composer.css`, `.chat-attachments-preview`
+/// and `.chat-attachment-*`): an image is a 56 pt square, anything else a 56 pt card with its icon, name and
+/// type, and a round remove badge sits on each top-trailing corner. The row scrolls and fades at a clipped edge.
+enum ChatAttachmentRailMetrics {
+    static let tileSize: CGFloat = 56
+    static let tileRadius: CGFloat = 14
+    /// Three times the 6 pt attachment block inset, which leaves room for the badges between tiles.
+    static let gap: CGFloat = 18
+    /// Twice the block inset above the tiles. Below them the editor keeps its own top inset, so the tiles
+    /// take the place of the surface's top edge and the text keeps the rhythm it has without attachments.
+    static let topInset: CGFloat = 12
+    static let badgeSize: CGFloat = 20
+    /// The badge's center sits this far in from the tile's top and trailing edges.
+    static let badgeCenterInset: CGFloat = 4
+    static let badgeHitSize: CGFloat = CleanChatComposerMetrics.controlTouchSize
+    /// How far the badge's touch target reaches past the tile; the rail keeps that much room inside its clip.
+    static let badgeOverhang: CGFloat = badgeHitSize / 2 - badgeCenterInset
+    static let fileIconSize: CGFloat = 40
+    static let fileCardMinWidth: CGFloat = 168
+    static let fileCardMaxWidth: CGFloat = 216
+    static let edgeFade: CGFloat = 48
+}
+
+private struct ChatAttachmentThumbnailRail: View {
+    let attachments: [OpenClawPendingAttachment]
+    let onRemove: @MainActor (OpenClawPendingAttachment.ID) -> Void
+    @State private var scroll = ChatAttachmentRailScroll()
+
+    var body: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: metrics.gap) {
+                ForEach(self.attachments, id: \OpenClawPendingAttachment.id) { attachment in
+                    ChatAttachmentTile(
+                        attachment: attachment,
+                        maxCardWidth: self.scroll.viewportWidth > 0
+                            ? max(
+                                metrics.fileCardMinWidth,
+                                self.scroll.viewportWidth - 2 * CleanChatComposerMetrics.editorInlineInset)
+                            : .infinity)
+                    {
+                        self.onRemove(attachment.id)
+                    }
+                }
+            }
+            // The tiles start on the draft's leading edge; the badges' touch targets stay inside the clip.
+            .padding(.leading, CleanChatComposerMetrics.editorInlineInset)
+            .padding(.trailing, CleanChatComposerMetrics.editorInlineInset + metrics.badgeOverhang)
+            .padding(.top, metrics.badgeOverhang)
+        }
+        .onScrollGeometryChange(for: ChatAttachmentRailScroll.self) { geometry in
+            ChatAttachmentRailScroll(
+                viewportWidth: geometry.containerSize.width,
+                clipsLeading: geometry.contentOffset.x > 0.5,
+                clipsTrailing: geometry.contentOffset.x + geometry.containerSize.width
+                    < geometry.contentSize.width - 0.5)
+        } action: { _, scroll in
+            self.scroll = scroll
+        }
+        .mask { self.edgeFadeMask }
+        // The badge targets may reach a few points above the surface, as the Control UI's do.
+        .padding(.top, metrics.topInset - metrics.badgeOverhang)
+    }
+
+    /// The Control UI eases across most of a tile so a partly visible image does not read as a hard border.
+    private var edgeFadeMask: some View {
+        HStack(spacing: 0) {
+            if self.scroll.clipsLeading {
+                Self.fade(startPoint: .leading, endPoint: .trailing)
+            }
+            Rectangle()
+            if self.scroll.clipsTrailing {
+                Self.fade(startPoint: .trailing, endPoint: .leading)
+            }
+        }
+    }
+
+    private static func fade(startPoint: UnitPoint, endPoint: UnitPoint) -> some View {
+        let width = ChatAttachmentRailMetrics.edgeFade
+        return LinearGradient(
+            stops: [
+                .init(color: .clear, location: 4 / width),
+                .init(color: .black.opacity(0.12), location: 12 / width),
+                .init(color: .black.opacity(0.5), location: 24 / width),
+                .init(color: .black.opacity(0.88), location: 36 / width),
+                .init(color: .black, location: 1),
+            ],
+            startPoint: startPoint,
+            endPoint: endPoint)
+            .frame(width: width)
+    }
+}
+
+private struct ChatAttachmentRailScroll: Equatable {
+    var viewportWidth: CGFloat = 0
+    var clipsLeading = false
+    var clipsTrailing = false
+}
+
+struct ChatAttachmentTile: View {
+    let attachment: OpenClawPendingAttachment
+    let maxCardWidth: CGFloat
+    let onRemove: @MainActor () -> Void
+    @ScaledMetric(relativeTo: .caption) private var cardMinWidth = ChatAttachmentRailMetrics.fileCardMinWidth
+    @ScaledMetric(relativeTo: .caption) private var cardMaxWidth = ChatAttachmentRailMetrics.fileCardMaxWidth
+
+    private var isImage: Bool {
+        self.attachment.mimeType.hasPrefix("image/") && self.attachment.preview != nil
+    }
+
+    private var isVoiceNote: Bool {
+        self.attachment.mimeType.hasPrefix("audio/") && self.attachment.durationSeconds != nil
+    }
+
+    var body: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        let shape = RoundedRectangle(cornerRadius: metrics.tileRadius, style: .continuous)
+        self.content
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+            // The tile, not the overflowing fill of a wide photo, is the VoiceOver frame.
+            .contentShape(.accessibility, shape)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(self.isVoiceNote ? Text("Voice note") : Text(verbatim: self.attachment.fileName))
+            .accessibilityValue(self.isImage ? Text(verbatim: "") : Text(verbatim: self.detail))
+            .accessibilityAddTraits(self.isImage ? .isImage : [])
+            .overlay(alignment: .topTrailing) { self.removeButton }
+            .help(self.attachment.fileName)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        if self.isImage, let preview = self.attachment.preview {
+            OpenClawPlatformImageFactory.image(preview)
+                .resizable()
+                .scaledToFill()
+                .frame(width: metrics.tileSize, height: metrics.tileSize)
+        } else {
+            HStack(spacing: 10) {
+                self.fileIcon
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.isVoiceNote ? String(localized: "Voice note") : self.attachment.fileName)
+                        .font(OpenClawChatTypography.caption.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(verbatim: self.detail)
+                        .font(OpenClawChatTypography.caption2)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .foregroundStyle(OpenClawChatTheme.assistantText)
+            }
+            .padding(.leading, 7)
+            .padding(.trailing, 13)
+            .padding(.vertical, 7)
+            .frame(
+                minWidth: min(self.cardMinWidth, self.maxCardWidth),
+                maxWidth: min(self.cardMaxWidth, self.maxCardWidth),
+                minHeight: metrics.tileSize,
+                alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var fileIcon: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        let iconShape = RoundedRectangle(cornerRadius: metrics.tileRadius - 8, style: .continuous)
+        if self.attachment.mimeType.hasPrefix("video/"), let poster = self.attachment.preview {
+            OpenClawPlatformImageFactory.image(poster)
+                .resizable()
+                .scaledToFill()
+                .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
+                .clipShape(iconShape)
+                .overlay {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(.black.opacity(0.6), in: Circle())
+                }
+        } else {
+            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                mimeType: self.attachment.mimeType,
+                fileName: self.attachment.fileName))
+                .font(.system(size: 16))
+                .foregroundStyle(OpenClawChatTheme.muted)
+                .frame(width: metrics.fileIconSize, height: metrics.fileIconSize)
+        }
+    }
+
+    private var detail: String {
+        Self.detail(for: self.attachment)
+    }
+
+    /// The type as the Control UI labels it (the extension in capitals) and the size; a voice note's length.
+    static func detail(for attachment: OpenClawPendingAttachment) -> String {
+        if attachment.mimeType.hasPrefix("audio/"), let duration = attachment.durationSeconds {
+            return openClawVoiceNoteDurationLabel(duration)
+        }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(attachment.data.count), countStyle: .file)
+        let fileExtension = (attachment.fileName as NSString).pathExtension.uppercased()
+        return fileExtension.isEmpty ? size : "\(fileExtension) · \(size)"
+    }
+
+    private var removeButton: some View {
+        let metrics = ChatAttachmentRailMetrics.self
+        return Button(action: self.onRemove) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(OpenClawChatTheme.muted)
+                .frame(width: metrics.badgeSize, height: metrics.badgeSize)
+                .background(OpenClawChatTheme.composerField, in: Circle())
+                .overlay(Circle().strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 1, y: 1)
+                .frame(width: metrics.badgeHitSize, height: metrics.badgeHitSize)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .offset(x: metrics.badgeOverhang, y: -metrics.badgeOverhang)
+        .accessibilityLabel(String(
+            format: String(localized: "Remove attachment: %@"), self.attachment.fileName))
+    }
+}
+#endif
 
 #if !os(macOS)
 #if canImport(UIKit)

@@ -701,29 +701,32 @@ struct OpenClawChatComposer: View {
 
     private var cleanComposerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if self.style == .standard, !self.viewModel.attachments.isEmpty {
-                self.attachmentsStrip
-                    #if os(iOS)
-                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                        .padding(.top, CleanChatComposerMetrics.footerBlockInset)
-                    #endif
-            }
-
+            #if os(iOS)
+            // As in the Control UI, notices come first and the attachments sit straight on the draft.
             self.composerContextRows
-                #if os(iOS)
-                    .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+            #endif
+
+            VStack(alignment: .leading, spacing: OpenClawChatAttachmentsStrip.spacingToDraft) {
+                if self.style == .standard, !self.viewModel.attachments.isEmpty {
+                    self.attachmentsStrip
+                }
+
+                #if !os(iOS)
+                self.composerContextRows
                 #endif
 
-            if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
-                OpenClawVoiceNoteRecordingRow(
-                    recorder: voiceNoteControl.recorder,
-                    embedded: true)
-                    #if os(iOS)
-                        .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-                        .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
-                    #endif
-            } else {
-                self.editor
+                if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                    OpenClawVoiceNoteRecordingRow(
+                        recorder: voiceNoteControl.recorder,
+                        embedded: true)
+                        #if os(iOS)
+                            .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
+                            .padding(.vertical, CleanChatComposerMetrics.footerBlockInset)
+                        #endif
+                } else {
+                    self.editor
+                }
             }
         }
         #if os(iOS)
