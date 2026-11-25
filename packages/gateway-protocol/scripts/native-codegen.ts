@@ -47,6 +47,10 @@ export function assertNativeProtocolContract(
   if (language !== "swift") {
     return;
   }
+  const pluginControlUiModule = source.match(/public struct PluginControlUiModule:[^}]+/u)?.[0];
+  if (!pluginControlUiModule?.includes("public let uicapabilities: [PluginUiCapability]?")) {
+    throw new Error("Swift PluginControlUiModule must use an optional array of PluginUiCapability");
+  }
   const schemas: Record<string, TSchema> = ProtocolSchemas;
   for (const [name, schema] of Object.entries(schemas)) {
     if (IsObject(schema) && !source.includes(`public struct ${name}:`)) {
