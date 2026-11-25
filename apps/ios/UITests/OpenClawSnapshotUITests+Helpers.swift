@@ -480,9 +480,21 @@ extension OpenClawSnapshotUITests {
         // Typing can move historical replies off-screen; tap visible text without activating an action.
         let transcript = try self.chatTranscript(in: app)
         let actionQueries = [transcript.buttons, transcript.links]
+        // The header and the composer float over the transcript, and XCUI still reports text under
+        // them as hittable: tap only text between them, where a tap reaches the transcript.
+        let headerControls = ["RootTabs.Sidebar.Show", "chat-agent-identity"]
+            .map { app.descendants(matching: .any)[$0].firstMatch }
+        let headerBottom = headerControls
+            .filter(\.exists)
+            .map(\.frame.maxY)
+            .max() ?? transcript.frame.minY
+        let composer = app.descendants(matching: .any)["chat-composer-surface"].firstMatch
+        let composerTop = composer.exists ? composer.frame.minY : transcript.frame.maxY
         let dismissalText = try XCTUnwrap(
             transcript.staticTexts.allElementsBoundByIndex.first { candidate in
                 guard candidate.isHittable,
+                      candidate.frame.minY >= headerBottom,
+                      candidate.frame.maxY <= composerTop,
                       !candidate.buttons.firstMatch.exists,
                       !candidate.links.firstMatch.exists
                 else {
