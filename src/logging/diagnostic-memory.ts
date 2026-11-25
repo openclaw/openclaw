@@ -2,12 +2,12 @@ import { channel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import { totalmem } from "node:os";
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
-import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-event-snapshot.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { freezeOwnedDiagnosticSnapshot } from "../infra/diagnostic-value-snapshot.js";
 import { getSessionRowSelectionMetrics } from "../infra/gateway-work-metrics.js";
 import { getOldGenerationAfterGcBytes } from "../infra/gc-observer.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
