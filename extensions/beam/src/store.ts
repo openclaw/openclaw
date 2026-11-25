@@ -196,7 +196,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
         throw new Error("Beam requires worker-owned plugin state operations");
       }
       const operation = store.createOperation<BeamPublicationOperations>(
-        [store, handoffs, writes, images],
+        [store, handoffs, images, writes],
         {
           moduleName: "publication-operation-api.js",
           exportName: "executeBeamPublication",

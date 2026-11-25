@@ -227,7 +227,9 @@ export function persistBeamUpload(
     createdAt: existing?.createdAt ?? receivedAt,
     receivedAt,
   } satisfies BeamStoredSession;
-  tx.set(0, upload.beamId, session);
+  // Both upload protocols use store 2 for images. Evict the exact snapshot's image
+  // even when a text-only publication takes its last catalog slot.
+  tx.set(0, upload.beamId, session, { evictSameKeysFrom: 2 });
   if (!wire && snapshot && "presentationDigest" in snapshot && snapshot.presentationDigest) {
     // A committed legacy upload replaces the entire snapshot, including its preview.
     tx.delete(2, upload.beamId);

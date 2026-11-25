@@ -120,7 +120,7 @@ export async function persistentBeamTestStore() {
     resetPluginStateStoreForTests();
     await state.cleanup();
   };
-  return { keyedStore, handoffStore, writeStore, store, close };
+  return { keyedStore, handoffStore, writeStore, imageStore, store, close };
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");

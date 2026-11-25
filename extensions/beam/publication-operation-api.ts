@@ -98,7 +98,7 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   const fingerprint = JSON.stringify(
     input.image ? [ifMatch, digest, input.image.digest] : [ifMatch, digest],
   );
-  const [prior] = tx.lookupMany<PublishReceipt>([{ store: 2, key: receiptKey }]);
+  const [prior] = tx.lookupMany<PublishReceipt>([{ store: 3, key: receiptKey }]);
   if (prior) {
     if (prior.fingerprint !== fingerprint) {
       return "request_identity_conflict";
@@ -131,7 +131,7 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
       : undefined;
   const now = Date.now();
   const expiries = guestKey
-    ? (tx.lookupMany<number[]>([{ store: 2, key: guestKey }])[0] ?? []).filter(
+    ? (tx.lookupMany<number[]>([{ store: 3, key: guestKey }])[0] ?? []).filter(
         (expiresAt) => expiresAt > now,
       )
     : [];
@@ -162,9 +162,9 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     }
     // Publish the media and its owning snapshot together. An unsuccessful write leaves neither visible.
     if (input.image) {
-      tx.set(3, upload.beamId, input.image);
+      tx.set(2, upload.beamId, input.image);
     } else if (row?.presentationDigest) {
-      tx.delete(3, upload.beamId);
+      tx.delete(2, upload.beamId);
     }
     [current] = tx.lookupMany<BeamStoredSession>([{ store: 0, key: upload.beamId }]);
   }
@@ -182,9 +182,9 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     disposition: unchanged ? "unchanged" : "applied",
   };
   if (guestKey) {
-    tx.set(2, guestKey, [...expiries, now + BEAM_RETENTION_MS]);
+    tx.set(3, guestKey, [...expiries, now + BEAM_RETENTION_MS]);
   }
-  tx.set(2, receiptKey, {
+  tx.set(3, receiptKey, {
     fingerprint,
     result,
   } satisfies PublishReceipt);
