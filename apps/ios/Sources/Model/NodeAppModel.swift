@@ -385,13 +385,6 @@ final class NodeAppModel {
     private let execApprovalNotificationLogger = Logger(
         subsystem: "ai.openclawfoundation.app",
         category: "ExecApprovalNotification")
-    enum CameraHUDKind {
-        case photo
-        case recording
-        case success
-        case error
-    }
-
     private enum AuxiliaryAudioCapture: Equatable {
         case cameraClip
         case screenRecording
@@ -511,7 +504,6 @@ final class NodeAppModel {
     var openChatRequestID: Int = 0
     @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
     private(set) var pendingLiveVoiceStart = false
-    var liveVoiceStartError: String?
     var newChatRequestID: Int = 0
     // RootTabs has one chat destination; keep its acknowledgement here so recreating
     // that destination cannot replay a request that the prior view already handled.
@@ -646,8 +638,6 @@ final class NodeAppModel {
     private var talkPermissionUpgradeReconnectGeneration: UInt64 = 0
     private var lastTalkPermissionReconnectAttemptAt: Date?
     private var voiceWakeSyncTask: Task<Void, Never>?
-    @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
-    @ObservationIgnored private var cameraHUDOwnerID: String?
     private let gatewayHealthMonitor = GatewayHealthMonitor()
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
@@ -1171,8 +1161,6 @@ final class NodeAppModel {
     private static let preferredCameraFacingKey = "camera.preferredFacing"
     private static let foregroundResumeHealthTimeoutSeconds = 1
 
-    var cameraHUDText: String?
-    var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
     var screenRecordActive: Bool = false
     private(set) var watchMessagingStatus = WatchMessagingStatus(
@@ -2399,14 +2387,14 @@ final class NodeAppModel {
         do {
             return try await self.performServiceInvoke(req, gatewayStableID: gatewayStableID)
         } catch is CancellationError {
-            if command.hasPrefix("camera.") {
-                self.clearCameraHUD(ownerID: req.id)
-            }
             return Self.failedInvokeResponse(req, code: .unavailable, message: "node invoke cancelled")
         } catch {
             if command.hasPrefix("camera.") {
-                let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.updateCameraHUD(ownerID: req.id, text: text, kind: .error, autoHideSeconds: 2.2)
+                // The agent asked for the camera, so the person may not be looking at the chat.
+                self.toasts.post(OpenClawToast(
+                    String(localized: "Couldn’t use the camera."),
+                    systemImage: "camera",
+                    kind: .error))
             }
             return Self.failedInvokeResponse(req, code: .unavailable, message: error.localizedDescription)
         }
@@ -2571,7 +2559,6 @@ final class NodeAppModel {
             }
             return try Self.successfulInvokeResponse(req, payload: Payload(devices: devices))
         case OpenClawCameraCommand.snap.rawValue:
-            showCameraHUD(ownerID: req.id, text: "Taking photo…", kind: .photo)
             self.cameraFlashNonce &+= 1
             let params = (try? Self.decodeParams(OpenClawCameraSnapParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraSnapParams()
@@ -2595,7 +2582,7 @@ final class NodeAppModel {
                 width: res.width,
                 height: res.height))
             try Task.checkCancellation()
-            updateCameraHUD(ownerID: req.id, text: "Photo captured", kind: .success, autoHideSeconds: 1.6)
+            self.toasts.post(OpenClawToast(String(localized: "Photo taken"), systemImage: "camera"))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         case OpenClawCameraCommand.clip.rawValue:
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
@@ -2603,7 +2590,6 @@ final class NodeAppModel {
 
             let includeAudio = params.includeAudio ?? true
             let defaultFacing = self.preferredCameraFacing
-            showCameraHUD(ownerID: req.id, text: "Recording…", kind: .recording)
             let res = try await self.withForegroundCapture(
                 audioOwner: includeAudio ? .cameraClip : nil)
             {
@@ -2625,7 +2611,7 @@ final class NodeAppModel {
                 durationMs: res.durationMs,
                 hasAudio: res.hasAudio))
             try Task.checkCancellation()
-            updateCameraHUD(ownerID: req.id, text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
+            self.toasts.post(OpenClawToast(String(localized: "Video recorded"), systemImage: "video"))
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return Self.unknownInvokeResponse(req)
@@ -3312,52 +3298,6 @@ extension NodeAppModel {
         self.setPreferredCameraFacing(self.preferredCameraFacing == .front ? .back : .front)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
-
-    private func showCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDOwnerID = ownerID
-
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-            self.cameraHUDText = text
-            self.cameraHUDKind = kind
-        }
-
-        guard let autoHideSeconds else { return }
-        self.cameraHUDDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
-            guard self.cameraHUDOwnerID == ownerID else { return }
-            withAnimation(.easeOut(duration: 0.25)) {
-                self.cameraHUDText = nil
-                self.cameraHUDKind = nil
-            }
-            self.cameraHUDOwnerID = nil
-            self.cameraHUDDismissTask = nil
-        }
-    }
-
-    private func updateCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.showCameraHUD(ownerID: ownerID, text: text, kind: kind, autoHideSeconds: autoHideSeconds)
-    }
-
-    private func clearCameraHUD(ownerID: String) {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDDismissTask = nil
-        self.cameraHUDOwnerID = nil
-        self.cameraHUDText = nil
-        self.cameraHUDKind = nil
-    }
 }
 
 extension NodeAppModel {
@@ -3399,16 +3339,23 @@ extension NodeAppModel {
         guard self.pendingLiveVoiceStart, isSceneActive else { return }
         // Consume before admission: finishing onboarding must not start a forgotten request.
         self.pendingLiveVoiceStart = false
-        self.liveVoiceStartError = nil
         guard !isOnboardingPresented, hasGatewayConfiguration else {
-            self.liveVoiceStartError = String(localized: "Connect to your Gateway, then run Start Live Voice again.")
+            self.toasts.post(OpenClawToast(
+                String(localized: "Connect to start Live Voice."),
+                systemImage: "mic.slash",
+                kind: .warning))
             return
         }
         self.openChat(sessionKey: self.chatSessionKey)
         guard !self.talkMode.isEnabled else { return }
         self.setTalkEnabled(true)
         if !self.talkMode.isEnabled {
-            self.liveVoiceStartError = self.talkMode.statusText
+            // Start Live Voice from Shortcuts or Siri stays the other way to try again.
+            self.toasts.post(OpenClawToast(
+                String(localized: "Couldn’t start Live Voice."),
+                systemImage: "mic.slash",
+                kind: .error,
+                action: .tryAgain { [weak self] in self?.requestLiveVoiceStart() }))
         }
     }
 
