@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -21,6 +22,7 @@ import {
   nativeVoice,
   readVoiceOptions,
   realtimeModelPicker,
+  realtimeProviderPicker,
   setTalkRealtimeConfig,
   type TalkMutationHarnessOptions,
 } from "./talk.test-support.tsx";
@@ -86,7 +88,9 @@ async function selectMutation(
     expect(
       field === "model"
         ? modelPicker(harness.page)
-        : harness.page.querySelector('input[type="radio"]'),
+        : (realtimeProviderPicker(harness.page)?.params.options.find(
+            (option) => option.value === value,
+          ) ?? null),
     ).not.toBeNull(),
   );
   if (field === "model") {
@@ -112,28 +116,31 @@ async function readyTalk(options: TalkMutationHarnessOptions = {}) {
   return harness;
 }
 
-it("keeps Reply unchecked and disabled until split mode resolves without saving a preference", async () => {
+it("only shows the Reply chime in split mode without saving a preference", async () => {
   const { page: connectedPage, runtimeConfig } = createTalkMutationHarness();
   const page = mountTalkPage(connectedPage.context, {});
-  const reply = () => page.querySelector<HTMLInputElement>('input[aria-label="Ready for reply"]');
+  const reply = () =>
+    [...page.querySelectorAll<HTMLLabelElement>("label")]
+      .find((label) => label.textContent?.trim() === "Ready for reply")
+      ?.querySelector("input");
   const setItem = vi.spyOn(Storage.prototype, "setItem");
-  await waitForSolid(() => expect(reply()).toMatchObject({ disabled: true, checked: false }));
-  reply()?.click();
+  await waitForSolid(() => expect(reply()).toBeUndefined());
 
   setTalkRealtimeConfig(page, { mode: "stt-tts" });
   await waitForSolid(() => expect(reply()).toMatchObject({ disabled: false, checked: true }));
 
   setTalkRealtimeConfig(page, { mode: "realtime" });
-  await waitForSolid(() => expect(reply()).toMatchObject({ disabled: true, checked: false }));
+  await waitForSolid(() => expect(reply()).toBeUndefined());
   expect(setItem).not.toHaveBeenCalled();
   expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
 });
 
 it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
-  expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
-  expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
+  expect(page.querySelectorAll("select").length).toBeGreaterThan(0);
+  expect([...page.querySelectorAll("select")].every((select) => select.disabled)).toBe(true);
   expect(modelPicker(page)?.querySelector("button")?.disabled).toBe(true);
+  expect(realtimeProviderPicker(page)?.params.disabled).toBe(true);
 });
 
 it("commits provider-local model ids without qualifying them", async () => {
@@ -177,9 +184,6 @@ it.each([
           : { id: "other", voices, activeVoices: ["active-only"], modelFamilySettings: undefined },
     });
     expect(readVoiceOptions(page)).toEqual(["", ...voices]);
-    expect(
-      [...page.querySelectorAll<HTMLOptionElement>("select option")].map((option) => option.value),
-    ).toEqual(["", ...voices]);
     if (kind === "provider") {
       expect(page.textContent).not.toContain(t("talkPage.gptLive.hint"));
     }
@@ -201,7 +205,9 @@ describe("Talk catalog boundaries", () => {
     await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
     expect(page.textContent).toContain("catalog temporarily unavailable");
     expect(page.textContent).not.toContain(t("talkPage.status.unavailableHint"));
-    expect(page.textContent).toContain("gpt-realtime-2.1");
+    expect(page.querySelector<HTMLInputElement>('input[aria-label="Model"]')?.value).toBe(
+      "gpt-realtime-2.1",
+    );
     expect(triggerInput(page)).toBe(input);
 
     window.dispatchEvent(new Event("focus"));
@@ -363,7 +369,7 @@ describe("Talk device and voice wake settings", () => {
     await tick();
     expect(triggerAlert(page)).toBeNull();
     await tick(400);
-    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+    expect(page.querySelector(".settings-row__value[role='status']")?.textContent).toBe("Saved");
     expect(triggerInput(page)).toBe(input);
     expect(document.activeElement).toBe(input);
   });
@@ -386,12 +392,12 @@ describe("Talk device and voice wake settings", () => {
     await tick();
     expectFocused(input, "second phrase");
     expect(triggerAlert(page)).toBeNull();
-    expect(page.querySelector("[role='status']")?.textContent).toBe("Saving…");
+    expect(page.querySelector(".settings-row__value[role='status']")?.textContent).toBe("Saving…");
     expectTriggerWrite(voiceWakeRequest, "second phrase");
     second.resolve({ triggers: ["second phrase"] });
     await tick();
     expect(input.value).toBe("second phrase");
-    expect(page.querySelector("[role='status']")?.textContent).toBe("Saved");
+    expect(page.querySelector(".settings-row__value[role='status']")?.textContent).toBe("Saved");
   });
 
   it("leaves Talk while a trigger write is unresolved", async () => {
@@ -797,4 +803,244 @@ describe("TalkSettingsPage realtime transport mutation", () => {
       }
     },
   );
+});
+
+describe("Talk settings page revamp", () => {
+  it("shows the Gateway's route under Provider only when the catalog reports one", async () => {
+    const withRoute = await readyTalk({
+      providerOption: { authRoute: "chatgpt-sign-in" } as never,
+      model: null,
+      defaultModel: "gpt-live-1-codex",
+    });
+    await waitForSolid(() =>
+      expect(withRoute.page.textContent).toContain(
+        `${t("talkPage.provider.routeSignIn")} · gpt-live-1-codex`,
+      ),
+    );
+    cleanupSolid();
+    document.body.replaceChildren();
+    const withoutRoute = await readyTalk();
+    expect(withoutRoute.page.textContent).not.toContain(t("talkPage.provider.routeSignIn"));
+    expect(withoutRoute.page.textContent).not.toContain(t("talkPage.provider.routeApiKey"));
+  });
+
+  it("offers the Talk transcription provider only when the Gateway schema has the key", async () => {
+    const stt = (page: HTMLElement) =>
+      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((picker) =>
+        picker.params.options.some((option) => option.value === "media-understanding"),
+      );
+    const schema = {
+      properties: { talk: { properties: { transcription: { properties: { provider: {} } } } } },
+    };
+    const { page } = await readyTalk({ schema });
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    await waitForSolid(() => expect(stt(page)).toBeDefined());
+    cleanupSolid();
+    document.body.replaceChildren();
+    const old = await readyTalk();
+    old.page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    flush();
+    expect(stt(old.page)).toBeUndefined();
+  });
+
+  it("keeps Voice notes in Live, and moves Talk's own listening rows to the collapsed card", async () => {
+    const schema = {
+      properties: { talk: { properties: { transcription: { properties: { provider: {} } } } } },
+    };
+    const { page } = await readyTalk({ schema });
+    const rowsIn = (root: ParentNode) =>
+      [...root.querySelectorAll(".settings-row__title")].map((row) => row.textContent);
+    const open = () =>
+      [...page.querySelectorAll("details")].filter(
+        (d) => d.querySelector("summary")?.textContent === t("talkPage.revamp.split"),
+      );
+    const outside = () => {
+      const copy = page.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll("details").forEach((d) => d.remove());
+      return rowsIn(copy);
+    };
+    await waitForSolid(() =>
+      expect(outside()).toContain(t("talkPage.transcription.voiceNotesTitle")),
+    );
+    expect(open()).toHaveLength(1);
+    expect(rowsIn(open()[0]!)).toContain(t("talkPage.revamp.speechLocale"));
+    expect(outside()).not.toContain(t("talkPage.revamp.speechLocale"));
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    await waitForSolid(() => expect(outside()).toContain(t("talkPage.revamp.speechLocale")));
+    expect(outside()).toContain(t("talkPage.transcription.voiceNotesTitle"));
+    const live = [...page.querySelectorAll("details")].find(
+      (d) => d.querySelector("summary")?.textContent === t("talkPage.voiceSection.title"),
+    );
+    expect(live).toBeDefined();
+    expect(rowsIn(live!)).not.toContain(t("talkPage.transcription.voiceNotesTitle"));
+  });
+
+  it("shows readiness in the mode card and lists configured agents with the default named", async () => {
+    const { page } = await readyTalk();
+    const modeCard = () =>
+      [...page.querySelectorAll("section.settings-section")].find(
+        (section) => section.querySelector("h2")?.textContent === t("talkPage.revamp.modeSection"),
+      );
+    await waitForSolid(() =>
+      expect(modeCard()?.textContent).toContain(t("talkPage.revamp.hearingVoice")),
+    );
+    expect(modeCard()?.textContent).toContain(t("talkPage.status.ready"));
+    // The Live card no longer repeats the status.
+    expect(
+      [...page.querySelectorAll(".settings-row__title")].map((row) => row.textContent),
+    ).not.toContain("Status");
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    await waitForSolid(() =>
+      expect(modeCard()?.textContent).toContain(t("talkPage.transcription.title")),
+    );
+    expect(modeCard()?.textContent).toContain(t("talkPage.revamp.voice"));
+    const agent = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (picker) => picker.params.label === t("talkPage.revamp.agent"),
+    );
+    expect(agent?.params.options.map((option) => option.label)).toEqual([
+      t("talkPage.revamp.agentDefault", { agent: "Main" }),
+      "Main",
+      "Helper",
+    ]);
+  });
+
+  it("writes and clears the Talk transcription provider from the picker", async () => {
+    const schema = {
+      properties: { talk: { properties: { transcription: { properties: { provider: {} } } } } },
+    };
+    const { page, runtimeConfig } = await readyTalk({ schema });
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    const picker = () =>
+      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+        candidate.params.options.some((option) => option.value === "media-understanding"),
+      );
+    await waitForSolid(() => expect(picker()).toBeDefined());
+    picker()!.params.onChange("media-understanding");
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["talk", "transcription", "provider"],
+      "media-understanding",
+    );
+    picker()!.params.onChange("");
+    expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith([
+      "talk",
+      "transcription",
+      "provider",
+    ]);
+  });
+
+  it("blocks Voice provider choices the Gateway would reject", async () => {
+    const { page } = await readyTalk();
+    page.configObject = {
+      talk: {
+        realtime: { mode: "stt-tts" },
+        provider: "a",
+        providers: { a: {}, b: {} },
+      },
+    };
+    const voice = () =>
+      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+        candidate.params.options.some((option) => option.value === "tts-local-cli"),
+      );
+    await waitForSolid(() => expect(voice()).toBeDefined());
+    const byValue = (value: string) =>
+      voice()!.params.options.find((option) => option.value === value);
+    // Two entries: unsetting the provider is invalid, and so is a provider outside the map.
+    expect(byValue("")?.disabled).toBe(true);
+    expect(byValue("tts-local-cli")?.disabled).not.toBe(true);
+  });
+
+  it("keeps Model and Speaker voice editable when the catalog cannot list them", async () => {
+    // A saved provider the catalog does not know.
+    const unlisted = createTalkMutationHarness({ provider: "acme-voice", model: "acme-1" });
+    const input = (label: string) =>
+      unlisted.page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+    await waitForSolid(() => expect(input("Model")?.value).toBe("acme-1"));
+    input("Model")!.value = "acme-2";
+    input("Model")!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(unlisted.runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["talk", "realtime", "model"],
+      "acme-2",
+    );
+    input("Speaker voice")!.value = "river";
+    input("Speaker voice")!.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(unlisted.runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["talk", "realtime", "speakerVoice"],
+      "river",
+    );
+  });
+
+  it("offers an unlisted model through the picker's custom entry", async () => {
+    const { page, runtimeConfig } = await readyTalk();
+    await waitForSolid(() => expect(realtimeModelPicker(page)).not.toBeNull());
+    expect(realtimeModelPicker(page)?.params.options.map((option) => option.label)).toContain(
+      t("talkPage.model.custom"),
+    );
+    realtimeModelPicker(page)!.params.onChange("brand-new-model");
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["talk", "realtime", "model"],
+      "brand-new-model",
+    );
+  });
+
+  it("keeps transcription-only mode selectable from any mode", async () => {
+    const { page, runtimeConfig } = await readyTalk();
+    const mode = () =>
+      [...page.querySelectorAll("select")].find(
+        (select) => select.getAttribute("aria-label") === t("talkPage.revamp.mode"),
+      )!;
+    expect([...mode().options].map((option) => option.value)).toContain("transcription");
+    mode().value = "transcription";
+    mode().dispatchEvent(new Event("change", { bubbles: true }));
+    expect(runtimeConfig.patchForm).toHaveBeenCalledWith(
+      ["talk", "realtime", "mode"],
+      "transcription",
+    );
+  });
+
+  it("shows the general text-to-speech route when no Talk speech provider is chosen", async () => {
+    const { page } = await readyTalk({
+      catalogRequest: (_index, catalog) => ({ ...catalog, speech: { providers: [] } }),
+    });
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    await waitForSolid(() =>
+      expect(page.textContent).toContain(t("talkPage.revamp.generalSpeech")),
+    );
+    expect(page.textContent).not.toContain(
+      `${t("talkPage.revamp.voice")}${t("talkPage.status.notReady")}`,
+    );
+  });
+
+  it("shows saved booleans as On or Off, not Default", async () => {
+    const { page } = await readyTalk();
+    page.configObject = {
+      talk: { realtime: { mode: "stt-tts" }, interruptOnSpeech: false, consultFastMode: true },
+    };
+    const interrupt = () =>
+      [...page.querySelectorAll("select")].find(
+        (select) => select.getAttribute("aria-label") === t("talkPage.revamp.interrupt"),
+      );
+    await waitForSolid(() => expect(interrupt()?.value).toBe("false"));
+  });
+
+  it("never names the Talk speech provider as the general text-to-speech route", async () => {
+    const { page } = await readyTalk({
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        speech: {
+          ready: true,
+          activeProvider: "elevenlabs",
+          providers: [{ id: "elevenlabs", label: "ElevenLabs", configured: true }],
+        },
+      }),
+    });
+    page.configObject = { talk: { realtime: { mode: "stt-tts" } } };
+    const voice = () =>
+      [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find((candidate) =>
+        candidate.params.options.some((option) => option.value === "tts-local-cli"),
+      );
+    await waitForSolid(() => expect(voice()).toBeDefined());
+    const fallback = voice()!.params.options.find((option) => option.value === "");
+    expect(fallback?.description).toBe(t("talkPage.revamp.defaultSpeech"));
+    expect(fallback?.description).not.toContain("ElevenLabs");
+  });
 });

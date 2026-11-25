@@ -72,3 +72,84 @@ export function talkProviderRejectsTransport(
 ): boolean {
   return transports !== undefined && transports.length > 0 && !transports.includes(transport);
 }
+
+/** True when the config schema declares the key path, so an older Gateway is never sent it. */
+export function talkSchemaHasKey(schema: unknown, path: readonly string[]): boolean {
+  let node = readRecord(schema);
+  for (const key of path) {
+    node = readRecord(readRecord(node?.properties)?.[key]);
+    if (!node) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Keys the curated Talk controls own; the schema editor under Advanced shows the rest.
+const CURATED_TALK_KEYS = [
+  "agentId",
+  "speechLocale",
+  "consultThinkingLevel",
+  "consultFastMode",
+  "provider",
+  "silenceTimeoutMs",
+  "interruptOnSpeech",
+  "transcription",
+];
+const CURATED_REALTIME_KEYS = [
+  "mode",
+  "provider",
+  "model",
+  "speakerVoice",
+  "transport",
+  "vadThreshold",
+  "silenceDurationMs",
+  "prefixPaddingMs",
+  "reasoningEffort",
+  "instructions",
+  "brain",
+  "consultRouting",
+];
+
+const talkSettingsSchemas = new WeakMap<object, unknown>();
+
+function withoutKeys(properties: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(Object.entries(properties).filter(([key]) => !keys.includes(key)));
+}
+
+/** The `talk` schema minus every key a curated control already edits. */
+export function talkSettingsSchema(schema: unknown): unknown {
+  const root = readRecord(schema);
+  const talk = readRecord(readRecord(root?.properties)?.talk);
+  const talkProperties = readRecord(talk?.properties);
+  if (!root || !talk || !talkProperties) {
+    return schema;
+  }
+  const hit = talkSettingsSchemas.get(root);
+  if (hit !== undefined) {
+    return hit;
+  }
+  const realtime = readRecord(talkProperties.realtime);
+  const realtimeProperties = readRecord(realtime?.properties);
+  const narrowed = {
+    ...root,
+    properties: {
+      talk: {
+        ...talk,
+        properties: {
+          ...withoutKeys(talkProperties, CURATED_TALK_KEYS),
+          ...(realtime && realtimeProperties
+            ? {
+                realtime: {
+                  ...realtime,
+                  properties: withoutKeys(realtimeProperties, CURATED_REALTIME_KEYS),
+                },
+              }
+            : {}),
+        },
+      },
+    },
+  };
+  talkSettingsSchemas.set(root, narrowed);
+  return narrowed;
+}

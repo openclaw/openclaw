@@ -66,8 +66,19 @@ export function realtimeModelPicker(page: HTMLElement): SelectPicker | null {
   );
 }
 
+export function realtimeProviderPicker(page: HTMLElement): SelectPicker | null {
+  return (
+    [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (picker) =>
+        picker.params.label === t("talkPage.provider.title") &&
+        picker.closest("section")?.querySelector("h2")?.textContent ===
+          t("talkPage.voiceSection.title"),
+    ) ?? null
+  );
+}
+
 export function readVoiceOptions(page: HTMLElement): string[] {
-  return [...page.querySelectorAll("select option")].map(
+  return [...page.querySelectorAll(`select[aria-label="${t("talkPage.voice.title")}"] option`)].map(
     (option) => option.getAttribute("value") ?? "",
   );
 }
@@ -81,7 +92,11 @@ export function expectVoiceState(page: TalkPageElement, options: string[], unsup
   expect(page.textContent?.includes(t("talkPage.voice.unsupportedDefault"))).toBe(unsupported);
 }
 
-export function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
+export function mountTalkPage(
+  context: ApplicationContext,
+  initialConfig: Record<string, unknown>,
+  schema?: unknown,
+) {
   const page: TalkPageElement = Object.assign(document.createElement("div"), {
     context,
     configObject: initialConfig,
@@ -94,13 +109,11 @@ export function mountTalkPage(context: ApplicationContext, initialConfig: Record
       picker.params.onChange(value ?? "");
     },
     changeProvider: (value: string | null) => {
-      const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
-        (entry) => entry.value === (value ?? ""),
-      );
-      if (!input) {
+      const picker = realtimeProviderPicker(page);
+      if (!picker?.params.options.some((option) => option.value === (value ?? ""))) {
         throw new Error("Talk provider choice is unavailable");
       }
-      input.click();
+      picker.params.onChange(value ?? "");
     },
   });
   const [config, setConfig] = createSignal(initialConfig);
@@ -108,7 +121,13 @@ export function mountTalkPage(context: ApplicationContext, initialConfig: Record
   const provider = createSolidApplicationContextProvider(context);
   const retired = new Promise<void>(() => {});
   const view = mountSolid(
-    () => <TalkSettingsPage configObject={config()} presentationRetired={() => retired} />,
+    () => (
+      <TalkSettingsPage
+        configObject={config()}
+        schema={schema}
+        presentationRetired={() => retired}
+      />
+    ),
     { container: page, wrapper: provider.wrapper },
   );
   const remove = page.remove.bind(page);
@@ -163,6 +182,7 @@ export async function mountTalkSettingsRoutes(initialContext: ApplicationContext
 export type TalkMutationHarnessOptions = {
   configSaving?: boolean;
   speakerVoice?: string | null;
+  schema?: unknown;
   providerOption?: Partial<TalkCatalogResult["realtime"]["providers"][number]>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability;
   voiceWakeRequest?: (
@@ -305,11 +325,23 @@ export function createTalkMutationHarness(options: TalkMutationHarnessOptions = 
     nativeDeviceSettings: options.nativeDeviceSettings ?? null,
     gateway,
     runtimeConfig,
+    agents: {
+      subscribe: () => () => {},
+      state: {
+        agentsList: {
+          defaultId: "main",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "helper", name: "Helper" },
+          ],
+        },
+      },
+    },
     ...(options.navigate
       ? { navigate: options.navigate, settingsAgentSelection: { set: vi.fn() } }
       : {}),
   } as unknown as ApplicationContext;
-  const page = mountTalkPage(context, configForm);
+  const page = mountTalkPage(context, configForm, options.schema);
   return {
     page,
     request,

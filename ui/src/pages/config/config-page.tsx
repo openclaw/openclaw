@@ -22,6 +22,7 @@ import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts"
 import { mcpSettingsSchema, readMcpAppsEnabled } from "./mcp-schema.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
+import { talkSettingsSchema } from "./talk-schema.ts";
 import { preloadConfigSection } from "./view-lazy.ts";
 import { ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -96,11 +97,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
         </>
       );
     case "talk":
-      return (
-        <>
-          {t("subtitles.talk")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
-        </>
-      );
+      return <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />;
     default:
       return subtitleForRoute(pageId);
   }
@@ -215,7 +212,8 @@ function ConfigBody(props: {
           presentationRetired={props.config.presentationRetired}
           configObject={props.configObject}
           mutationDisabled={props.state.mutationDisabled()}
-          buildEditor={() => editor("talk", t("tabs.talk"))}
+          schema={config().schema}
+          buildEditor={() => editor("talk", t("tabs.talk"), talkSettingsSchema(config().schema))}
         />
       </Show>
       <Show when={props.pageId === "mcp"}>

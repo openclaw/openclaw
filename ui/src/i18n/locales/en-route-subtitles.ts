@@ -38,7 +38,7 @@ const enRouteSubtitles = {
     mcp: "Connect and manage MCP servers that provide tools to OpenClaw.",
     memory: "Choose how OpenClaw stores, searches, and maintains agent memory.",
     search: "Choose how agents search the web and check provider health.",
-    talk: "Realtime voice: provider, model, and speaker voice.",
+    talk: "Voice conversations",
     infrastructure: "Manage the Gateway, browser, and device service.",
     labs: "Labs contains experimental capabilities that may change, break, or disappear between releases.",
     updates: "Release channel, automatic updates, and current update status.",

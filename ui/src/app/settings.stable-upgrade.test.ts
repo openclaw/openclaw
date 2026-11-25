@@ -159,27 +159,6 @@ it.each(["stable", "personal-pins"])(
   },
 );
 
-it("defaults the Talk chime preferences on for stable settings and keeps explicit opt-outs", () => {
-  expect(JSON.parse(localStorage.getItem(settingsKey) ?? "{}")).not.toHaveProperty(
-    "talkChimeStart",
-  );
-  expect(loadSettings()).toMatchObject({
-    talkChimeStart: true,
-    talkChimeEnd: true,
-    talkChimeReply: true,
-  });
-  patchSettings({ talkChimeEnd: false });
-  expect(loadSettings()).toMatchObject({
-    talkChimeStart: true,
-    talkChimeEnd: false,
-    talkChimeReply: true,
-    themeMode: "light",
-    locale: "de",
-  });
-  patchSettings({ navWidth: 340 });
-  expect(loadSettings().talkChimeEnd).toBe(false);
-});
-
 // Captured by running the v2026.11.8 release writer (commit 2d4ab292114): patchSettings with
 // themeMode light, locale de and navWidth 320 on wss://gateway.example.
 const v20261108Settings =
