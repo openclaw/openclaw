@@ -27,6 +27,9 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
+    agents: { type: "string" },
+    "sessions-per-agent": { type: "string" },
+    "count-frozen": { type: "boolean", default: false },
     operations: { type: "string", default: "4000" },
     "yield-ms": { type: "string", default: "1" },
     "start-at": { type: "string", default: "0" },
@@ -41,8 +44,11 @@ const { values } = parseArgs({
     "queue-wait-ms": { type: "string", default: "0" },
   },
 });
-const integer = (name: "operations" | "yield-ms" | "start-at" | "queue-wait-ms", min: number) =>
-  parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
+const integer = (
+  name: "operations" | "yield-ms" | "start-at" | "queue-wait-ms" | "agents" | "sessions-per-agent",
+  min: number,
+  fallback = min,
+) => parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback });
 const operations = integer("operations", 1);
 const yieldMs = integer("yield-ms", 0);
 const startAt = integer("start-at", 0);
@@ -60,8 +66,12 @@ for (const directory of ["home", "tmp"]) {
   mkdirSync(path.join(stateDir, directory));
 }
 const configPath = path.join(stateDir, "openclaw.json");
+const agents = ["main", "work"];
+for (let index = 2; index < integer("agents", 2); index++) {
+  agents.push(`work-${index}`);
+}
 const cfg: OpenClawConfig = {
-  agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+  agents: { ownership: "explicit", entries: Object.fromEntries(agents.map((id) => [id, {}])) },
   plugins: { enabled: false },
 };
 writeFileSync(configPath, JSON.stringify(cfg));
@@ -112,10 +122,9 @@ const [
   import("../../src/gateway/server-methods/sessions-subscriptions.js"),
 ]);
 
-const agents = ["main", "work"] as const;
-const sessionsPerAgent = values.adopted ? 5000 : 2500;
+const sessionsPerAgent = integer("sessions-per-agent", 16, values.adopted ? 5000 : 2500);
 const sessionCount = agents.length * sessionsPerAgent;
-const catalogAgents = values["empty-catalogs"] ? [] : values.adopted ? [agents[0]] : agents;
+const catalogAgents = values["empty-catalogs"] ? [] : values.adopted ? ["main"] : agents;
 const adoptionPluginId = "synthetic-main";
 const adoptionHostId = "synthetic:main";
 const adoptionsPerAgent = 16;
@@ -205,6 +214,12 @@ let providerRevisions = 0;
 let adoptedCalls = 0;
 let adoptionSourceReads = 0;
 let captureGolden = false;
+let planningRows = 0;
+let planningSelections = 0;
+let frozenCatalogs = 0;
+let frozenRows = 0;
+let lastCountedCatalog: object | undefined;
+const countedRows = new WeakSet<object>();
 const lastRevisions = new Map<string, object | undefined>();
 const entryGoldens = new Map<string, string>();
 const nativeSessions = agents.flatMap((agentId) =>
@@ -233,6 +248,18 @@ for (const agentId of catalogAgents) {
       assert.ok(sessionEntries?.entriesForCatalog, "Handler must supply the planning snapshot");
       const all = sessionEntries.entriesForCatalog();
       assert.equal(all.length, sessionCount);
+      if (values["count-frozen"] && lastCountedCatalog !== all) {
+        lastCountedCatalog = all;
+        assert.ok(Object.isFrozen(all));
+        frozenCatalogs++;
+        for (const row of all) {
+          if (!countedRows.has(row)) {
+            assert.ok(Object.isFrozen(row));
+            countedRows.add(row);
+            frozenRows++;
+          }
+        }
+      }
       const entries = adoption ? all : sessionEntries.entriesForAgent(agentId);
       if (!adoption) {
         assert.equal(entries.length, sessionsPerAgent);
@@ -325,6 +352,15 @@ try {
     );
   }
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+  const selectEntries = projection.selectEntries;
+  projection.selectEntries = (query, prepared) => {
+    const rows = selectEntries(query, prepared);
+    if (query?.agentId && query.sortBy === null && !query.key && !query.parentSessionKey) {
+      planningSelections++;
+      planningRows += rows.length;
+    }
+    return rows;
+  };
   const prepareSelection = projection.prepareSelection;
   projection.prepareSelection = (...args) => {
     selectionPreparations++;
@@ -444,6 +480,10 @@ try {
   const adoptionSourceReadsBefore = adoptionSourceReads;
   const projectionAcquisitionsBefore = projectionAcquisitions;
   const selectionPreparationsBefore = selectionPreparations;
+  const planningRowsBefore = planningRows;
+  const planningSelectionsBefore = planningSelections;
+  const frozenCatalogsBefore = frozenCatalogs;
+  const frozenRowsBefore = frozenRows;
   const responseSequence = createHash("sha256");
   const latency: number[] = [];
   const handlerCpu: number[] = [];
@@ -611,6 +651,14 @@ try {
     adoptionSourceReads: adoptionSourceReads - adoptionSourceReadsBefore,
     projectionAcquisitions: projectionAcquisitions - projectionAcquisitionsBefore,
     selectionPreparations: selectionPreparations - selectionPreparationsBefore,
+    planningRows: planningRows - planningRowsBefore,
+    planningSelections: planningSelections - planningSelectionsBefore,
+    ...(values["count-frozen"]
+      ? {
+          frozenCatalogs: frozenCatalogs - frozenCatalogsBefore,
+          frozenRows: frozenRows - frozenRowsBefore,
+        }
+      : {}),
     queuedStarts,
   };
   assert.equal(counts.providerCalls, operations * catalogAgents.length);
