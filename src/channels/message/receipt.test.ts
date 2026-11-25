@@ -92,7 +92,12 @@ describe("createMessageReceiptFromOutboundResults", () => {
       sentAt: 123,
     };
     const aggregate = createMessageReceiptFromOutboundResults({ results: [{ receipt: observed }] });
-    const restored: MessageReceipt = JSON.parse(JSON.stringify(aggregate));
+    const serialized = JSON.stringify(aggregate);
+    const restored: MessageReceipt = JSON.parse(serialized);
+    expect(restored.parts.map((part) => [part.platformMessageId, part.nativeReplyAbsent])).toEqual([
+      ["a", true],
+      ["b", true],
+    ]);
     const legacy = createMessageReceiptFromOutboundResults({
       results: ["c", "d"].map((messageId) => ({ channel: "zalouser", messageId })),
     });

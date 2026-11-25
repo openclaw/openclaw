@@ -167,7 +167,9 @@ describe("Telegram send recovery conformance over HTTP", () => {
         reply?.toString(),
         reply === undefined ? true : undefined,
       ]);
-      expect(placement(reported.flatMap(({ receipt }) => receipt?.parts ?? []))).toEqual(expected);
+      expect(placement(reported.flatMap((delivery) => delivery.receipt?.parts ?? []))).toEqual(
+        expected,
+      );
       expect(placement(receipt.parts)).toEqual(expected);
       expect(receipt.parts.map((part) => part.index)).toEqual(replies.map((_, index) => index));
     },
