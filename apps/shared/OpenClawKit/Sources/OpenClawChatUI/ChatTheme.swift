@@ -278,6 +278,13 @@ public enum OpenClawChatTheme {
         #endif
     }
 
+    #if os(iOS)
+    /// The chat canvas for UIKit surfaces that sit on it (the image viewer).
+    static var canvasUIColor: UIColor {
+        UIColor { $0.userInterfaceStyle == .dark ? IOSPalette.darkCanvas : IOSPalette.lightCanvas }
+    }
+    #endif
+
     static var composerBackground: AnyShapeStyle {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)

@@ -11,14 +11,14 @@ import UIKit
 enum ChatMediaImageDecoder {
     static let maximumThumbnailPixels = 2048
 
-    static func decode(_ data: Data) -> OpenClawPlatformImage? {
+    static func decode(_ data: Data, maxPixelSize: Int = maximumThumbnailPixels) -> OpenClawPlatformImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0
         else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: self.maximumThumbnailPixels,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
             kCGImageSourceShouldCacheImmediately: true,
         ]
         guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
@@ -103,6 +103,8 @@ struct ChatMediaImageAttachment: View {
     let artifactId: String
     let label: String
     let resolverReady: Bool
+    /// The message's images, so the viewer can page through them. Empty means just this one.
+    let gallery: [ChatImageViewerItem]
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
     #if os(iOS)
     /// The source's pixel size, when the Gateway sends it.
@@ -115,7 +117,9 @@ struct ChatMediaImageAttachment: View {
 
     @State private var state: LoadState
     @State private var retryGeneration = 0
+    #if os(macOS)
     @State private var showsFullImage = false
+    #endif
 
     init(
         artifactId: String,
@@ -123,11 +127,13 @@ struct ChatMediaImageAttachment: View {
         width: Int?,
         height: Int?,
         resolverReady: Bool,
+        gallery: [ChatImageViewerItem] = [],
         load: @escaping @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?)
     {
         self.artifactId = artifactId
         self.label = label
         self.resolverReady = resolverReady
+        self.gallery = gallery
         self.load = load
         #if os(iOS)
         if let width, let height, width > 0, height > 0 {
@@ -171,22 +177,30 @@ struct ChatMediaImageAttachment: View {
                     Color.clear
                 case let .loaded(image):
                     Button {
-                        self.showsFullImage = true
+                        ChatImageViewerController.present(
+                            items: ChatImageViewerItem.viewerItems(
+                                self.gallery,
+                                opening: self.artifactId,
+                                label: self.label),
+                            artifactId: self.artifactId,
+                            thumbnail: image,
+                            load: self.load)
                     } label: {
-                        OpenClawPlatformImageFactory.image(image)
-                            .resizable()
-                            // A known size fills its own box; an unknown one keeps the 3:2 box.
-                            .aspectRatio(contentMode: self.pixelSize == nil ? .fit : .fill)
+                        // The UIKit thumbnail is the zoom transition's source. A known size fills
+                        // its own box; an unknown one keeps the 3:2 box. It takes no touches, so
+                        // the clear overlay gives the button its hit area.
+                        ChatImageViewerThumbnail(
+                            image: image,
+                            artifactId: self.artifactId,
+                            fillsProposal: self.pixelSize != nil)
+                            .allowsHitTesting(false)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .clipped()
+                            .overlay { Color.clear.contentShape(Rectangle()) }
                     }
                     .buttonStyle(.plain)
                     .transition(.opacity)
                     .accessibilityLabel(self.label)
                     .accessibilityHint(String(localized: "Opens image preview"))
-                    .fullScreenCover(isPresented: self.$showsFullImage) {
-                        ChatMediaImagePreview(image: image) { self.showsFullImage = false }
-                    }
                 case .unavailable:
                     VStack(spacing: 6) {
                         Image(systemName: "photo.badge.exclamationmark")
@@ -243,15 +257,9 @@ struct ChatMediaImageAttachment: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(self.label)
                 .accessibilityHint(String(localized: "Opens image preview"))
-                #if os(macOS)
                 .sheet(isPresented: self.$showsFullImage) {
                     ChatMediaImagePreview(image: image) { self.showsFullImage = false }
                 }
-                #else
-                .fullScreenCover(isPresented: self.$showsFullImage) {
-                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
-                }
-                #endif
             case .unavailable:
                 ChatMediaUnavailableRow(
                     systemImage: "photo.badge.exclamationmark",

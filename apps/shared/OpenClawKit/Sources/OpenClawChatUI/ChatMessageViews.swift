@@ -677,9 +677,11 @@ extension ChatMessageBubble {
             }
 
             if !self.visibleInlineAttachments.isEmpty {
+                let imageGallery = ChatImageViewerItem.gallery(in: self.visibleInlineAttachments)
                 ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
                     AttachmentRow(
                         att: self.visibleInlineAttachments[idx],
+                        imageGallery: imageGallery,
                         isUser: self.isUser,
                         textColor: textColor,
                         playbackAllowed: self.mediaPlaybackAllowed)
@@ -853,6 +855,7 @@ private struct AttachmentRow: View {
     @Environment(\.openClawChatGateway) private var gateway
 
     let att: OpenClawChatMessageContent
+    let imageGallery: [ChatImageViewerItem]
     let isUser: Bool
     let textColor: Color
     let playbackAllowed: @MainActor @Sendable () -> Bool
@@ -875,6 +878,7 @@ private struct AttachmentRow: View {
                     width: self.att.width,
                     height: self.att.height,
                     resolverReady: resolverReady,
+                    gallery: self.imageGallery,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
                 // A busy Gateway inspector can omit playback metadata. Let its
