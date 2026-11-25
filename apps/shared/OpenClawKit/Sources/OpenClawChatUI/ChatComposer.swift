@@ -119,6 +119,9 @@ struct OpenClawChatComposer: View {
     /// The draft had the keyboard when the "+" sheet opened; it gets it back once the sheet, or the picker
     /// it opened, closes.
     @State var addSheetReturnsFocus = false
+    /// Text or an attachment tile keeps the composer open when the keyboard goes down; only an empty
+    /// composer closes to one row.
+    @State var hasComposerContent = false
     @Environment(\.openClawChatComposerPanels) var composerPanels
     #else
     @FocusState private var isFocused: Bool
@@ -731,7 +734,15 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var cleanEditor: some View {
         #if os(iOS)
-        self.cleanPhoneEditor(expanded: self.isFocused)
+        self.cleanPhoneEditor(expanded: self.isFocused || self.hasComposerContent)
+            .background {
+                // Read the draft in its own section so typing does not re-evaluate the whole composer.
+                ChatComposerSection {
+                    Color.clear.onChange(
+                        of: self.viewModel.hasDraftToSend || !self.viewModel.preparingAttachments.isEmpty,
+                        initial: true) { self.hasComposerContent = $1 }
+                }
+            }
         #elseif os(macOS)
         if self.isDesktopLayout {
             self.desktopEditor
@@ -1373,7 +1384,7 @@ extension OpenClawChatComposer {
         #if os(macOS)
         self.isDesktopLayout ? CleanChatComposerMetrics.surfaceCornerRadius : 24
         #elseif os(iOS)
-        self.isFocused ? CleanChatComposerMetrics.expandedCornerRadius :
+        self.isFocused || self.hasComposerContent ? CleanChatComposerMetrics.expandedCornerRadius :
             self.cleanControlHeight / 2 + CleanChatComposerMetrics.collapsedControlInset
         #else
         CleanChatComposerMetrics.surfaceCornerRadius
