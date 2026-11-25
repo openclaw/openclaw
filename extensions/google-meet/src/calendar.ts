@@ -123,7 +123,7 @@ function rankCalendarEvent(event: GoogleMeetCalendarEvent, nowMs: number): numbe
     parseDateStringTimestampMs(event.start?.dateTime ?? event.start?.date) ??
     Number.POSITIVE_INFINITY;
   const endMs = parseDateStringTimestampMs(event.end?.dateTime ?? event.end?.date) ?? startMs;
-  if (startMs <= nowMs && endMs >= nowMs) {
+  if (startMs <= nowMs && endMs > nowMs) {
     return 0;
   }
   if (startMs > nowMs) {
