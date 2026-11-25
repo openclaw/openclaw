@@ -45,6 +45,7 @@ export type AgentSchemaInspectionInput = {
 
 export type AgentSchemaInspection = {
   version: number;
+  minReader?: number;
   /** Exact current shape without repair; not an integrity verdict or writable admission. */
   readReady?: true;
   integrityGateOutcome?: "cached" | "healthy";
@@ -121,18 +122,19 @@ export function inspectAgentDatabaseSchema(
 ): AgentSchemaInspection {
   if (!input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness) {
     try {
-      const { userVersion, ...header } = readSqliteSchemaHeader(
+      const { userVersion, agentSchemaMeta, ...header } = readSqliteSchemaHeader(
         database,
-        input.inspectOwnership ? input.supportedVersion : undefined,
+        input.supportedVersion,
       );
       return {
         version: userVersion,
         ...header,
+        ...(input.inspectOwnership ? { agentSchemaMeta } : {}),
         ...(input.inspectEmptyStore
           ? {
               emptyStore:
                 userVersion <= input.supportedVersion &&
-                isEmptyAgentStore(database, input, userVersion, header.agentSchemaMeta),
+                isEmptyAgentStore(database, input, userVersion, agentSchemaMeta),
             }
           : {}),
       };
@@ -145,19 +147,25 @@ export function inspectAgentDatabaseSchema(
   let checkingShape = false;
   let migrationPending = true;
   try {
-    if (version > input.supportedVersion) {
+    const metadata = readExistingAgentSchemaMeta(database);
+    const minReader = metadata?.minReader ?? Math.max(metadata?.schemaVersion ?? 0, version);
+    if (minReader !== version) {
+      inspection.minReader = minReader;
+    }
+    if (minReader > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
-      return { version, ...(writerAppVersion ? { writerAppVersion } : {}) };
+      return { ...inspection, ...(writerAppVersion ? { writerAppVersion } : {}) };
     }
     if (input.inspectOwnership) {
       // Preserve ownership even when shape validation fails: the parent must
       // apply its existing isolation decision before reporting schema defects.
-      inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
+      inspection.agentSchemaMeta = metadata;
     }
     if (input.requireStartupMigrationReadiness) {
       migrationPending =
-        version !== input.supportedVersion ||
-        hasPendingCurrentVersionAgentDatabaseMigration(database);
+        version < input.supportedVersion ||
+        (version === input.supportedVersion &&
+          hasPendingCurrentVersionAgentDatabaseMigration(database));
       if (input.startupIntegrityVerification !== undefined && !migrationPending) {
         inspection.integrityGateOutcome = "cached";
       } else if (input.deferRuntimeIntegrity && !migrationPending) {
@@ -200,7 +208,7 @@ export function inspectAgentDatabaseSchema(
       });
       if (needsIndexRepair) {
         inspection.preparationPending = true;
-      } else if (!migrationPending && version === input.supportedVersion) {
+      } else if (!migrationPending && version >= input.supportedVersion) {
         inspection.readReady = true;
       }
     }

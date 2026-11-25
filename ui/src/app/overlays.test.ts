@@ -171,6 +171,61 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("admits only the exact creator decision projected by the Gateway without broad approval scope", async () => {
+    const request = successfulRequest();
+    const { harness, overlays } = fixture(request, ["operator.sessions.read"], {
+      selfUser: { id: "creator" },
+    });
+    await flushMicrotasks();
+    const bound = { ...approval("participation", 1_000), canDecide: true };
+    harness.emitEvent("exec.approval.requested", bound);
+    harness.emitEvent("exec.approval.requested", {
+      ...approval("unrelated", 2_000),
+      request: { command: "echo unrelated", turnActor: { id: "participant", label: "Pat" } },
+    });
+    expectQueue(overlays, "participation");
+    expect(overlays.snapshot.approvalCanGrant).toBe(false);
+    expect(request.mock.calls.some(([method]) => method.endsWith("approval.list"))).toBe(false);
+    harness.update({ sessionKey: "another-session" });
+    expectQueue(overlays, "participation");
+    await overlays.decideApproval("allow-once", "participation");
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "participation",
+      decision: "allow-once",
+    });
+    expectQueue(overlays);
+    harness.emitEvent("exec.approval.requested", bound);
+    harness.emitEvent("exec.approval.resolved", { id: "participation" });
+    expectQueue(overlays);
+    harness.emitEvent("exec.approval.requested", bound);
+    harness.update({ selfUser: { id: "participant" } });
+    expectQueue(overlays);
+    request.mockClear();
+    await overlays.decideApproval("allow-once", "participation");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses exact eligibility for inline projections without promoting turn attribution", async () => {
+    const request = successfulRequest();
+    const { overlays } = fixture(request, ["operator.sessions.read"]);
+    const projected = {
+      ...approval("inline", 1_000),
+      kind: "exec" as const,
+      request: { command: "pwd", turnActor: { id: "participant", label: "Pat" } },
+    };
+    await overlays.decideApproval("deny", projected.id, projected);
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+    await overlays.decideApproval("deny", projected.id, { ...projected, canDecide: true });
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: projected.id,
+      decision: "deny",
+    });
+    const broad = fixture(request, ["operator.approvals"]);
+    request.mockClear();
+    await broad.overlays.decideApproval("deny", projected.id, { ...projected, canDecide: false });
+    expect(request).not.toHaveBeenCalledWith("exec.approval.resolve", expect.anything());
+  });
+
   it("leaves approval authority and presentation untouched by live tool output", async () => {
     const request = successfulRequest();
     const { harness, overlays } = fixture(request, ["operator.approvals"]);

@@ -3,18 +3,25 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { readSessionMembersInWorker } from "../config/sessions/session-sharing-store.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
+import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
+import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import { assertAgentSchemaVersion } from "./openclaw-agent-db-schema-helpers.js";
+import { assertCurrentAgentSchemaMetadata } from "./openclaw-agent-db-schema-read.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { withoutAgentPostgresMemberAccess } from "./openclaw-agent-member-access-schema.js";
+import {
+  AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL,
+  withoutAgentPostgresMemberAccess,
+} from "./openclaw-agent-member-access-schema.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
 import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
@@ -111,26 +118,27 @@ it("opens a migrated v43 session through the production engine and sharing reade
   });
 });
 
-it("refuses the base build's exact table contract even if the version markers are held back", async () => {
+it("keeps the v43 reader floor when the real v44 member-access migration commits", async () => {
   const base = getOpenClawAgentMigrationSchema(43);
   await fixture("member-downgrade.sqlite", async ({ database, migrate }) => {
-    assertAgentSchemaVersion(database, { agentId: "main", pathname: "fixture", version: 43 }, base);
+    const before = row(database, "SELECT identity_id,added_by,added_at FROM session_members");
     await migrate();
-    expect(() =>
-      assertAgentSchemaVersion(
-        database,
-        { agentId: "main", pathname: "fixture", version: 43 },
-        base,
-      ),
-    ).toThrow(/version 43/);
-    database.exec("PRAGMA user_version=43; UPDATE schema_meta SET schema_version=43");
-    expect(() =>
-      assertAgentSchemaVersion(
-        database,
-        { agentId: "main", pathname: "fixture", version: 43 },
-        base,
-      ),
-    ).toThrow(/session_members/);
+    expectVersion(database, 44);
+    const metadata = readExistingAgentSchemaMeta(database);
+    expect(metadata?.minReader).toBe(43);
+    expect(() => assertCurrentAgentSchemaMetadata(metadata, "main", "fixture", 43)).not.toThrow();
+    expect(collectSqliteSchemaIssues(database, base, AGENT_SCHEMA_COMPATIBILITY)).toEqual([]);
+    expect(row(database, "SELECT identity_id,added_by,added_at FROM session_members")).toEqual(
+      before,
+    );
+    database.exec(
+      "INSERT INTO session_members (session_key,identity_id,added_by,added_at) VALUES ('agent:main:test','old-reader','owner',2)",
+    );
+    expect(
+      row(database, "SELECT access FROM session_members WHERE identity_id='old-reader'"),
+    ).toEqual({
+      access: null,
+    });
   });
 });
 
@@ -150,9 +158,12 @@ it("restores the scoped predecessor backup while preserving unrelated writes", a
 
 it("registers an exact consecutive PostgreSQL migration", () => {
   const step = agentEngineSchema.postgresMigrations?.find((migration) => migration.version === 44);
-  expect(step).toBeDefined();
   expect(withoutAgentPostgresMemberAccess(agentEngineSchema.postgres)).not.toContain(
     '"access" text COLLATE "C",',
+  );
+  expect(step?.minReader).toBe(43);
+  expect(AGENT_MEMBER_ACCESS_POSTGRES_MIGRATION_SQL).toBe(
+    `ALTER TABLE session_members ADD COLUMN access TEXT COLLATE "C" CHECK (access IS NULL OR access IN ('read', 'suggest', 'send'));`,
   );
   expect(step?.sql).toContain("ALTER TABLE session_members ADD COLUMN access");
 });

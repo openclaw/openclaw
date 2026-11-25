@@ -168,6 +168,48 @@ describe("admitted SQLite schema facts", () => {
     expect(observation.queries).toEqual([]);
   });
 
+  it.each(["schema", "version"] as const)(
+    "reuses a newer agent reader floor until its writer changes the %s",
+    (change) => {
+      const version = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
+      const { filename, database: reader } = openFile(
+        `CREATE TABLE schema_meta (
+          meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
+          agent_id TEXT, min_reader INTEGER
+        );
+        INSERT INTO schema_meta VALUES (
+          'primary', 'agent', ${version}, 'main', ${OPENCLAW_AGENT_SCHEMA_VERSION}
+        );
+        PRAGMA user_version = ${version};`,
+      );
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(version);
+      using observation = observeReads();
+      for (let index = 0; index < 10; index += 1) {
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(version);
+      }
+      expect(observation.queries).toEqual([]);
+
+      const writer = openDatabase("", false, filename);
+      const nextVersion = change === "version" ? version + 1 : version;
+      runSqliteImmediateTransactionSync(writer, () => {
+        writer.exec(
+          change === "version"
+            ? `PRAGMA user_version = ${nextVersion}`
+            : "CREATE TABLE newer_agent_data (value TEXT)",
+        );
+        writer
+          .prepare("UPDATE schema_meta SET schema_version = ?, min_reader = ?")
+          .run(nextVersion, nextVersion);
+      });
+      expect(() => assertSupportedAgentSchemaVersion(reader, filename)).toThrow(
+        expect.objectContaining({
+          name: "SqliteSchemaVersionError",
+          message: expect.stringContaining(`Minimum reader schema version is ${nextVersion}`),
+        }),
+      );
+    },
+  );
+
   it("shares physical validation across handles and admits replacement files", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");

@@ -16,8 +16,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { testApi as loggerTest } from "../logging/logger.test-support.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -534,10 +533,12 @@ describe("node host invoke", () => {
   it.runIf(process.platform !== "win32")(
     "reports current allow-always coverage for prepared shell-wrapped system.run commands",
     async () => {
-      const { result } = await invokeCommand("system.run.prepare", {
-        command: ["/bin/sh", "-lc", "/bin/echo ok"],
-        rawCommand: "/bin/echo ok",
-      });
+      const { result } = await withEnvAsync({ BASH_ENV: undefined, ENV: undefined }, () =>
+        invokeCommand("system.run.prepare", {
+          command: ["/bin/sh", "-lc", "/bin/echo ok"],
+          rawCommand: "/bin/echo ok",
+        }),
+      );
       const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
         allowAlwaysCoverage?: {
           complete?: boolean;
@@ -743,7 +744,7 @@ describe("node host invoke", () => {
         command: ["printf", "private-command-argument"],
         env: { PRIVATE_INPUT: "private-environment-value" },
       });
-      await loggerTest.flushFileLogQueueForTests();
+      await flushLogger();
       const diagnostics = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
       expect(diagnostics).toContain("at originalPreparation (synthetic-owner.ts:12:3)");
       expect(diagnostics).not.toContain("private-command-argument");

@@ -148,7 +148,8 @@ export function prepareChatSessionAbort(
   const hasUnauthorizedProtectedOwner =
     hasUnauthorizedProtectedActiveRuns || queuedPlan.hasUnauthorizedProtectedRuns;
   const hasUnauthorizedLifecycleOwner = isLifecycleAbort && hasUnauthorizedProtectedOwner;
-  const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
+  const canRunLifecycleCleanup =
+    !params.requester.participationOnly && !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
   // Keep ordinary chat.abort's admin worker behavior; only the injected broad
   // lifecycle path must preserve hidden or explicitly preserved Gateway runs.
   const canCancelWorkerSession = !isLifecycleAbort || !hasProtectedLifecycleRuns;
@@ -176,12 +177,14 @@ export function prepareChatSessionAbort(
       (input) =>
         input.target?.storeScope === storePath && matchesGateway(input) && includesSource(input),
     ),
-    operations: candidates.operations.filter(
-      (operation) =>
-        getSessionControllerEntryForOperation(operation).target?.storeScope === storePath &&
-        matchesGateway(operation) &&
-        (params.requiredSessionId === undefined || sessionKeys.includes(operation.key)),
-    ),
+    operations: params.requester.participationOnly
+      ? []
+      : candidates.operations.filter(
+          (operation) =>
+            getSessionControllerEntryForOperation(operation).target?.storeScope === storePath &&
+            matchesGateway(operation) &&
+            (params.requiredSessionId === undefined || sessionKeys.includes(operation.key)),
+        ),
     effects: canRunLifecycleCleanup
       ? candidates.effects.filter(
           (effect) =>

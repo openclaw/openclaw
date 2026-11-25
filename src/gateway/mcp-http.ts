@@ -153,7 +153,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     import("./tool-resolution-completion.js"),
   ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
-  const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
   // GET notification streams are intentionally long-lived; shutdown must end
   // them itself before waiting for httpServer.close() to drain active responses.
@@ -187,7 +186,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
       req,
       res,
       ownerToken,
-      nonOwnerToken,
       onSseResponse: trackSseResponse,
     });
     if (!auth) {
@@ -606,7 +604,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
   });
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
-  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
+  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   let cleanupDone = false;

@@ -284,6 +284,31 @@ describe("actor-owned memory storage", () => {
     expect(empty.snapshot(authority)?.entry).toBeUndefined();
   });
 
+  it("keeps a shared current MCP generation until its last memory entry is removed", async () => {
+    const { store, acquire } = await fixture(true);
+    const sibling = storage(await acquire(siblingKey));
+    await create(sibling, { sessionId: "session-1", updatedAt: 2 });
+    const first = await entry(store);
+    const second = await entry(sibling);
+    assert(first && second);
+    const retainedMcpSessionIds = [first.sessionId];
+    const shared = await reclaim(store, {
+      entries: [{ sessionKey, expected: first }],
+      retainedMcpSessionIds,
+    });
+    expect(shared.kind).toBe("committed");
+    if (shared.kind === "committed") {
+      expect(shared.value.retiredMcpSessionIds).toBeUndefined();
+    }
+    await expectCommitted(
+      reclaim(sibling, {
+        entries: [{ sessionKey: siblingKey, expected: second }],
+        retainedMcpSessionIds,
+      }),
+      { retiredMcpSessionIds: [first.sessionId] },
+    );
+  });
+
   it("installs multi-session replacements atomically and authorizes every affected owner", async () => {
     const { actor, store, acquire } = await fixture(true);
     const sibling = await acquire(siblingKey);

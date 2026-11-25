@@ -36,15 +36,21 @@ async function handshake() {
 async function acceptHello(
   { socket, connect }: Awaited<ReturnType<typeof handshake>>,
   auth?: GatewayHelloOk["auth"],
+  features?: GatewayHelloOk["features"],
 ) {
   socket.emitMessage({
     type: "res",
     id: connect.id,
     ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      ...(auth ? { auth } : {}),
+      ...(features ? { features } : {}),
+    },
   });
   await vi.dynamicImportSettled();
-  await vi.advanceTimersByTimeAsync(0);
+  await vi.waitFor(() => expect(socket.sent.join("\n")).toContain('"sessions.messages.subscribe"'));
   const subscription = socket.sent
     .map((value) => JSON.parse(value))
     .find((frame) => frame.method === "sessions.messages.subscribe");
@@ -427,4 +433,34 @@ it("does not admit history after retirement while its runtime is loading", async
     loading.resolve();
     vi.doUnmock("../lib/sessions/session-message-subscriptions.runtime.ts");
   }
+});
+
+it.each([false, true])(
+  "gates identity-only early approval replay on the advertised recipient capability: %s",
+  async (advertised) => {
+    const connection = await handshake();
+    const subscription = await acceptHello(
+      connection,
+      {
+        role: "operator",
+        scopes: ["operator.sessions.read"],
+        profileActivityViewerId: "creator",
+      },
+      { capabilities: advertised ? ["session-approval-recipients-v1"] : [] },
+    );
+    expect(subscription.params.includeApprovals === true).toBe(advertised);
+  },
+);
+
+it("requests approval replay only for an authenticated profile, not a bare principal", async () => {
+  const { canSubscribeSessionApprovals } = await import("../app/session-approval-access.ts");
+  const hello: GatewayHelloOk = {
+    type: "hello-ok",
+    protocol: PROTOCOL_VERSION,
+    auth: { role: "operator", scopes: ["operator.sessions.read"] },
+    features: { capabilities: ["session-approval-recipients-v1"] },
+  };
+  expect(canSubscribeSessionApprovals(hello, undefined, { id: "principal" })).toBe(false);
+  const profile = { id: "creator", identity: { type: "profile" as const, id: "creator" } };
+  expect(canSubscribeSessionApprovals(hello, undefined, profile)).toBe(true);
 });

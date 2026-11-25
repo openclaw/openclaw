@@ -21,7 +21,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
@@ -66,6 +65,7 @@ import {
 } from "./operator-admission.credentials.test-support.js";
 import { runLiveAdmissionCase } from "./operator-admission.live.test-support.js";
 import { AdmissionCase, AdmissionFixture } from "./operator-admission.table.test-support.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
 import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
@@ -556,7 +556,7 @@ export async function runCase(
     if (scenario === "before-start" && ["principal", "channel"].includes(row.credential)) {
       await c.wait(c.finalAdmissionSettled.promise);
       expect(c.preparedHeld).toBe(true);
-      expect(c.finalAdmissionError).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+      expect(c.finalAdmissionError).toBeInstanceOf(OperatorRefusalError);
     }
     if (
       [
@@ -570,6 +570,8 @@ export async function runCase(
         "owner-disabled",
         "plugin-resume-mismatch",
         "plugin-authorize-denied",
+        // A configured owner's queued work re-admits against the current owner list.
+        "owner-revoked-before-start",
       ].includes(scenario)
     ) {
       if (!restartSentinel) {
@@ -584,7 +586,7 @@ export async function runCase(
         assert(c.original?.controllerInput);
         await c.wait(
           c.original.controllerInput.settlement.promise.catch((error: unknown) => {
-            expect(error).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+            expect(error).toBeInstanceOf(OperatorRefusalError);
           }),
         );
         expect(c.original.controllerInput.phase).toBe("consumed");
@@ -637,7 +639,7 @@ export async function runCase(
         }
       }
       await fixture.finishQueuedRun(() => revokeAdmissionSource(fixture, c));
-      if (scenario === "mixed-owner-group" || scenario === "owner-revoked-before-start") {
+      if (scenario === "mixed-owner-group") {
         expect(c.ownerToolChecks).toBeGreaterThan(0);
       }
     }

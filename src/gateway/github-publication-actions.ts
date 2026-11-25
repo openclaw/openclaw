@@ -4,13 +4,9 @@ import type {
   SessionGitHubActionResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
-import {
-  getGatewayToolCallerIdentity,
-  resolveGatewayToolOperatorSelection,
-} from "../agents/tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -23,8 +19,12 @@ import {
 } from "./github-publication-git-transport.js";
 import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
-import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  captureGitHubPublicationActionAuthority,
+  prepareGitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
 import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
 type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
@@ -34,10 +34,10 @@ type Options = Omit<GatewayRequestHandlerOptions, "params"> & {
   >;
 };
 function assertPreservedPublicationFooter(before: string, after: string) {
-  const marker = before.indexOf("\n\n<!-- openclaw-publication:");
-  const credit = before.indexOf("\n\n## Worked on by\n\n");
   // Preserve the whole original suffix; added lookalike blocks cannot replace its identity.
-  const start = marker < 0 ? credit : credit < 0 ? marker : Math.min(marker, credit);
+  const start = before.search(
+    /\n\n(?:Requested by [^\r\n]* via OpenClaw(?:\n|$)|## Worked on by\n\n|<!-- openclaw-publication:)/u,
+  );
   if (start >= 0 && !after.includes(before.slice(start))) {
     throw new Error("Keep the existing PR attribution, publication marker and footer unchanged.");
   }
@@ -47,9 +47,6 @@ function assertPreservedPublicationFooter(before: string, after: string) {
 export async function performSessionGitHubAction(options: Options): Promise<void> {
   const { params, context } = options;
   const caller = getGatewayToolCallerIdentity();
-  const callerOperator = caller
-    ? resolveGatewayToolOperatorSelection().operatorAuthority
-    : undefined;
   if (
     caller &&
     (params.sessionKey !== caller.sessionKey ||
@@ -93,7 +90,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   using resources = new DisposableStack();
   const target = await preparePublishingSession(
     { ...params, agentId: caller?.agentId ?? params.agentId },
-    () => options.sessionMutationAuthorization?.assertCurrent(),
+    () => options.signal?.throwIfAborted(),
     resources,
   );
   const loaded = target.selected.readCurrent();
@@ -106,26 +103,20 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   resources.defer(admitted.release);
-  // The in-process bridge is System-backed; it cannot mint the tool caller's operator authority.
-  const actionScopes = caller
-    ? intersectOperatorScopes(admitted.requester.snapshot.scopes, callerOperator?.scopes ?? [])
-    : admitted.requester.snapshot.scopes;
-  const requiresOperatorWrite =
+  // Rights come from the tool caller's turn grant (or this direct request's admission).
+  if (
     !ownPublicationAction &&
-    !(params.action === "ready" && params.publishingSessionKey === undefined);
+    !(params.action === "ready" && params.publishingSessionKey === undefined) &&
+    !captureGitHubPublicationActionAuthority(admitted.requester).operatorWrite
+  ) {
+    throw new OperatorRefusalError("role-denies", {
+      action: `run the ${params.action} action on this PR`,
+    });
+  }
+  // Stop and session revision fences only; authority was admitted when the turn started.
   const assertRequester = () => {
     target.assertCurrent();
     admitted.requester.assertCurrent();
-    if (
-      requiresOperatorWrite &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: ["operator.write"],
-        allowedScopes: actionScopes,
-      })
-    ) {
-      throw new Error("GitHub pull request actions require full operator write permission.");
-    }
   };
   const explicit = explicitPullRequestUrl
     ? await inspectOwnGitHubPullRequest({

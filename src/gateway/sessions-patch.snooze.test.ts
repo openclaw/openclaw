@@ -22,6 +22,7 @@ const visibility = (entry: Entry) => [
   entry.snoozedAt,
   entry.pinnedAt,
   entry.archivedAt,
+  entry.updatedAt,
 ];
 
 function fixture(entry: Entry = {}, storeKey = key) {
@@ -78,15 +79,18 @@ describe("snooze", () => {
   });
 
   test.each<[Patch, Entry, Entry, number?]>([
-    [{ snoozedUntil: null }, snoozed, { pinnedAt: 10 }, 2],
-    [{ archived: true }, snoozed, { archivedAt: now }],
-    [{ pinned: true }, snoozed, { pinnedAt: 10 }],
+    [{ snoozedUntil: null }, snoozed, { pinnedAt: 10, updatedAt: now }, 2],
+    [{ archived: true }, snoozed, { archivedAt: now, updatedAt: 1 }, 2],
+    [{ archived: false }, { archivedAt: 10 }, { updatedAt: now }],
+    [{ pinned: true }, snoozed, { pinnedAt: 10, updatedAt: 1 }],
+    [{ pinned: true }, {}, { pinnedAt: now, updatedAt: 1 }],
+    [{ pinned: false }, { pinnedAt: 10 }, { updatedAt: 1 }],
     [
       { archived: false, snoozedUntil: wakeAt },
       { archivedAt: 10 },
-      { snoozedUntil: wakeAt, snoozedAt: now },
+      { snoozedUntil: wakeAt, snoozedAt: now, updatedAt: now },
     ],
-    [{ pinned: true, snoozedUntil: wakeAt }, {}, { pinnedAt: now }],
+    [{ pinned: true, snoozedUntil: wakeAt }, {}, { pinnedAt: now, updatedAt: now }],
   ])("applies visibility patch %j consistently", async (patch, entry, expected, repeats = 1) => {
     const value = fixture(entry);
     for (let attempt = 0; attempt < repeats; attempt++) {

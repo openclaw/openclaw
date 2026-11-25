@@ -923,7 +923,7 @@ it.each([
         expect(rejected).toContain(
           scopedOperator
             ? "missing scope: operator.write"
-            : "require full operator write permission",
+            : "Your role on this Gateway does not allow it",
         );
       }
       if (scenario === "role revoked during merge") {

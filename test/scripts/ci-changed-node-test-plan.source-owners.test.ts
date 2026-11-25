@@ -12,10 +12,8 @@ import {
   createSelectedNodeTestShardBundles,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import {
-  isCiProofTestFile,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -203,6 +201,20 @@ describe("CI changed Node test plan", () => {
   it.each([
     ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
     ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+    [
+      "test/fixtures/sqlite/openclaw-agent-schema-v21.sql",
+      "src/state/openclaw-agent-db.storage-migration.test.ts",
+    ],
+    [
+      "test/fixtures/sqlite/openclaw-agent-schema-v26.sql",
+      "src/commands/doctor-historical-imports.process.test.ts",
+    ],
+    ...["src/state/sqlite-copy-swap.test.ts", "test/state-upgrade.e2e.test.ts"].flatMap((reader) =>
+      ["2026.7.1", "2026.9.37"].map((release) => [
+        `test/fixtures/state-corpus-populated/${release}/manifest.json`,
+        reader,
+      ]),
+    ),
   ])("keeps the declared file reader when %s changes", (input, reader) => {
     const cwd = createSourceFixture("changed-declared-input-", {
       [input]: "{}\n",
@@ -861,6 +873,7 @@ describe("CI changed Node test plan", () => {
       [["node-runtime-recovery.mjs"], ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"]],
       [["src/auto-reply/reply/abort.test.ts"], ["test/scripts/tsgo-core-test-shards.test.ts"]],
       [["scripts/lib/ci-proof-test-inventory.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
+      [["scripts/lib/ci-test-tier-policy.mts"], ["test/vitest-pr-exempt-retention.test.ts"]],
       [
         ["src/plugins/plugin-instance.ts"],
         ["test/scripts/eager-import-closure.test.ts", "test/scripts/pr-worktree-provision.test.ts"],

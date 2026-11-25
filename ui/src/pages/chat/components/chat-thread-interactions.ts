@@ -30,11 +30,11 @@ import type { InlineCommandPresentation } from "../chat-inline-command-presentat
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import type { ChatState } from "../chat-state-contract.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -163,6 +163,8 @@ export type ChatThreadProps = Omit<
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
     guardianNotices?: ChatGuardianNotice[];
+    /** Pane scope for transient sharing notices, separate from canonical history. */
+    historyState?: ChatState;
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
@@ -184,7 +186,6 @@ export type ChatThreadProps = Omit<
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
     onStartNewSession?: (runId: string, summary: string) => void;
-    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;

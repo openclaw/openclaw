@@ -8,16 +8,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { hasGatewayAdminScope } from "./operator-scopes.js";
+import { readGatewayRequestAdmission } from "./operator-admission.js";
+import { operatorRefusalText } from "./operator-refusal.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 
-function denied(
-  message = "The session's current tool policy does not allow this operation.",
-): never {
+function denied(message = operatorRefusalText("tool-policy-denies", "run this operation")): never {
   throw new SessionMutationAuthorizationChangedError(
     errorShape(ErrorCodes.FORBIDDEN, message, {
       details: { code: "SESSION_RESOURCE_TOOL_POLICY" },
@@ -104,7 +103,7 @@ export function resolveSessionResourceToolPolicy(params: {
     senderId: caller.SenderId,
     senderName: caller.SenderName,
     senderUsername: caller.SenderUsername,
-    senderIsOwner: hasGatewayAdminScope(params.client),
+    senderIsOwner: readGatewayRequestAdmission(params.client).grant.owner,
     agentAccountId: origin?.accountId,
     groupId: entry.groupId,
     groupChannel: entry.groupChannel,

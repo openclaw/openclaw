@@ -170,6 +170,7 @@ export async function handleChatSendWithStorage(
     ),
     client,
     inputProvenance: systemInputProvenance,
+    grant: admission.operatorAuthority?.grant,
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
     isIncognitoEntry: entry?.incognito === true,

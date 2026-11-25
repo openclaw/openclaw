@@ -199,6 +199,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           cfg: defaults?.config,
           agentId,
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
+          participation: defaults?.participation,
           signal,
         };
         autoReviewer = async (input) => {
@@ -357,6 +358,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
               host,
               workdir: params.workdir,
               defaultCwd: defaults?.cwd,
+              participationRoot: defaults?.participationRoot,
               nodeCwd: defaults?.nodeCwd,
               sandbox,
             });
@@ -454,6 +456,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           security,
           ask,
           bypassHostApprovalFloors: defaults?.bypassHostApprovalFloors,
+          participationDenyMisses: defaults?.participationDenyMisses,
           autoReview,
           autoReviewer,
           signal,

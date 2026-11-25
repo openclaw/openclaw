@@ -1,5 +1,6 @@
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
+import { captureSessionEntryView } from "../../config/sessions/session-entry-view.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
@@ -141,7 +142,26 @@ export async function retainSessionScopedRead(
       sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
     }
     assertCurrent();
-    return { assertCurrent, release, prepared: read };
+    return {
+      assertCurrent,
+      release,
+      prepared: read,
+      isInvitedWorkspaceTarget: (target: {
+        agentId: string;
+        canonicalKey: string;
+        entry?: { sessionId?: string };
+      }) => {
+        assertCurrent();
+        const facts = sharing?.readCurrent(getConfig());
+        return Boolean(
+          profileId &&
+          facts?.membership.has(profileId) &&
+          facts.target?.agentId === target.agentId &&
+          facts.target.canonicalKey === target.canonicalKey &&
+          captureSessionEntryView(facts.target.entry, ["sessionId"]).matches(target.entry),
+        );
+      },
+    };
   } catch (error) {
     release();
     throw error;

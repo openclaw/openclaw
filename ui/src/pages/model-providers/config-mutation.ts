@@ -74,6 +74,16 @@ export function modelDefaultsActions(
       });
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
+    // The picker edits only the primary; a saved fallback chain is kept exactly as written.
+    onSubagentChange: (model: string | null) => {
+      const current = getDefaults().subagentModel;
+      const fallbacks = typeof current === "object" ? current?.fallbacks : undefined;
+      stageDefaults({
+        subagentModel: fallbacks
+          ? { ...(model !== null ? { primary: model } : {}), fallbacks }
+          : model,
+      });
+    },
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
     onThinkingReset: () =>
@@ -229,6 +239,10 @@ export function runModelProviderDefaultsMutation(
               : {}),
             utilityModel: modelSettingPatch(params.utilityModel),
             ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            // Untouched and unset stays out of the patch, so no empty subagents object is written.
+            ...(params.subagentModel !== undefined
+              ? { subagents: { model: modelSettingPatch(params.subagentModel) } }
+              : {}),
             thinkingDefault:
               params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
             fastModeDefault:

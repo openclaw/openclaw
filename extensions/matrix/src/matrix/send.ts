@@ -1,4 +1,4 @@
-import { parseBuffer, type IFileInfo } from "music-metadata";
+import { parseBuffer, TrackType, type IFileInfo, type IFormat } from "music-metadata";
 import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -111,6 +111,23 @@ function resolveAifcIma4DurationSeconds(buffer: Buffer, sampleRate?: number): nu
   // Apple AIFC stores IMA4 packet count in COMM; each packet decodes to 64
   // sample frames. Other encoders can store decoded frames, so verify SSND first.
   return (packetCount * AIFC_IMA4_FRAMES_PER_PACKET) / sampleRate;
+}
+
+function resolveMediaPresentationDuration(format: IFormat): number | undefined {
+  const [track] = format.trackInfo;
+  // A lone MP4 AAC track owns the movie timeline, which includes presentation edits.
+  if (
+    format.trackInfo.length === 1 &&
+    track?.type === TrackType.audio &&
+    track.codecId === "mp4a" &&
+    track.codecName === "MPEG-4/AAC" &&
+    format.containerDuration !== undefined &&
+    Number.isFinite(format.containerDuration) &&
+    format.containerDuration > 0
+  ) {
+    return format.containerDuration;
+  }
+  return format.duration;
 }
 
 function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
@@ -250,7 +267,7 @@ export async function sendMessageMatrix(
               });
               const durationSeconds =
                 resolveAifcIma4DurationSeconds(media.buffer, metadata.format.sampleRate) ??
-                metadata.format.duration;
+                resolveMediaPresentationDuration(metadata.format);
               if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
                 durationMs = Math.max(0, Math.round(durationSeconds * 1000));
               }
