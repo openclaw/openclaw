@@ -217,4 +217,155 @@ describe("gateway compaction hot reload", () => {
       }
     },
   );
+
+  it(
+    "compacts a global session for its explicit agent and persists the summary",
+    { timeout: 90_000 },
+    async () => {
+      const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-global-compaction-",
+      });
+      const summary = "GLOBAL_EXPLICIT_AGENT_COMPACTION_SUMMARY";
+      const providerServer = createTrackedProvider((_raw, response, request) => {
+        if (request.method !== "POST" || request.url !== "/v1/responses") {
+          response.writeHead(404).end();
+          return;
+        }
+        writeOpenAiResponsesText(response, {
+          text: summary,
+          messageId: nextId("provider-message"),
+          responseId: nextId("provider-response"),
+        });
+      });
+
+      let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+      try {
+        const configPath = await createGatewayConfigPath(tempHome);
+        const token = nextId("global-compaction-token");
+        setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+        const baseUrl = await providerServer.listen();
+        const primaryModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-primary");
+        const fallbackModel = buildMockOpenAiResponsesProvider(baseUrl, "gpt-fallback");
+        const availableModels = [primaryModel, fallbackModel];
+        const modelDefaults = { params: { transport: "sse", openaiWsWarmup: false } };
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              workspace: workspaceDir,
+              skipBootstrap: true,
+              model: { primary: primaryModel.modelRef },
+              models: Object.fromEntries(
+                availableModels.map(({ modelRef }) => [modelRef, modelDefaults]),
+              ),
+              compaction: {
+                keepRecentTokens: 1,
+                recentTurnsPreserve: 1,
+                qualityGuard: { enabled: false },
+                memoryFlush: { enabled: false },
+              },
+            },
+            entries: {
+              main: {
+                model: { primary: primaryModel.modelRef, fallbacks: [fallbackModel.modelRef] },
+              },
+              work: { model: { primary: primaryModel.modelRef } },
+            },
+          },
+          session: { scope: "global" },
+          models: {
+            mode: "replace",
+            providers: {
+              [primaryModel.providerId]: {
+                ...primaryModel.config,
+                models: Array.from(availableModels, ({ config }) => ({
+                  ...config.models[0],
+                  input: Array.from(config.models[0].input),
+                })),
+              },
+            },
+          },
+          gateway: { auth: { mode: "token", token } },
+        } satisfies OpenClawConfig;
+        gateway = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token,
+          clientDisplayName: "vitest-global-compaction",
+        });
+        const gatewayClient = gateway.client;
+        const sessionId = nextId("global-compaction-session");
+        const scope = {
+          agentId: "main",
+          sessionId,
+          sessionKey: "global",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        };
+        await upsertSessionEntryCore(scope, {
+          sessionId,
+          updatedAt: Date.now(),
+          compactionCount: 0,
+          modelProvider: primaryModel.providerId,
+          model: primaryModel.modelId,
+        });
+
+        const history = "persisted conversation context ".repeat(24);
+        for (let turn = 0; turn < 6; turn += 1) {
+          const timestamp = Date.now() + turn;
+          await appendTranscriptMessage(scope, {
+            message: { role: "user", content: `Historical request ${turn}: ${history}`, timestamp },
+          });
+          await appendTranscriptMessage(scope, {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: `Historical answer ${turn}: ${history}` }],
+              api: "openai-responses",
+              provider: primaryModel.providerId,
+              model: primaryModel.modelId,
+              usage: {
+                input: 10,
+                output: 10,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 20,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp,
+            },
+          });
+        }
+
+        await expect(gatewayClient.request("sessions.compact", { key: "global" })).rejects.toThrow(
+          /no explicit owner/,
+        );
+        expect(loadSessionEntry(scope)?.compactionCount).toBe(0);
+
+        const res = await gatewayClient.request("sessions.compact", {
+          key: "global",
+          agentId: "main",
+        });
+        expect(res, JSON.stringify(res)).toMatchObject({
+          ok: true,
+          key: "global",
+          compacted: true,
+        });
+        expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
+        expect(loadTranscriptEventsSync(scope)).toContainEqual(
+          expect.objectContaining({
+            type: "compaction",
+            summary: expect.stringContaining(summary),
+          }),
+        );
+      } finally {
+        if (gateway) {
+          await disconnectGatewayClient(gateway.client);
+          await gateway.server.close({ reason: "global session compaction test complete" });
+        }
+        await providerServer.close();
+        await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+        envSnapshot.restore();
+      }
+    },
+  );
 });

@@ -17,6 +17,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { resolveRunModelFallbacksOverride } from "../agent-scope.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -649,4 +650,73 @@ it("keeps required cancellation-settlement floors outside the hook anti-loop bou
       () => scope.drain(),
     );
   }
+});
+
+it("uses the explicitly selected agent's summary fallback for a global session", async () => {
+  const state = await createOpenClawTestState({ prefix: "openclaw-global-summary-fallback-" });
+  onTestFinished(async () => {
+    await closePreparedModelRuntimeSnapshots();
+    await state.cleanup();
+  });
+  const model = (id: string) => ({
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_000,
+    maxTokens: 1024,
+  });
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace: state.workspaceDir,
+        model: { primary: "fixture/model", fallbacks: ["fixture/default-fallback"] },
+        compaction: { timeoutSeconds: 60, keepRecentTokens: 300 },
+      },
+      entries: {
+        main: { model: { primary: "fixture/model", fallbacks: ["fixture/fallback-model"] } },
+        work: { model: { primary: "fixture/model" } },
+      },
+    },
+    session: { scope: "global" },
+    models: {
+      providers: {
+        fixture: {
+          api: "anthropic-messages",
+          apiKey: "synthetic-fixture",
+          baseUrl,
+          models: [model("model"), model("fallback-model"), model("default-fallback")],
+        },
+      },
+    },
+    plugins: { enabled: false, slots: { memory: "none" } },
+  };
+  await state.writeConfig(config);
+  const target = {
+    agentId: "main",
+    sessionId: "global-summary-fallback",
+    sessionKey: "global",
+    storePath: state.path("sessions.sqlite"),
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const fixture = { state, config, target };
+  appendToolTurns(fixture, 0, 8);
+  summaryMode = "refusal-primary";
+
+  expect(() => resolveRunModelFallbacksOverride({ cfg: config, sessionKey: "global" })).toThrow(
+    /no explicit owner/,
+  );
+  const result = await compactSession(fixture, undefined, "manual", true);
+
+  expect(result, JSON.stringify(result)).toMatchObject({
+    ok: true,
+    compacted: true,
+    result: { details: { summaryRoute: "fixture/fallback-model" } },
+  });
+  const models = requestedModels();
+  expect(models.slice(0, 2)).toEqual(["model", "fallback-model"]);
+  expect(models).not.toContain("default-fallback");
+  expect(getCompactions(fixture)[0]?.summary).toContain("Fallback route summary.");
 });
