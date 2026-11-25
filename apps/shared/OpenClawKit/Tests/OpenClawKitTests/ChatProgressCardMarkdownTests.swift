@@ -3,16 +3,6 @@ import Testing
 
 @Suite("ChatProgressCardMarkdown")
 struct ChatProgressCardMarkdownTests {
-    @Test func `a progress tag becomes a bar and leaves the text`() {
-        let parsed = ChatProgressCardMarkdown("""
-        <progress aria-label="PRs reviewed · 12/30" value="12" max="30"></progress>
-
-        **Now:** reading the diff.
-        """)
-        #expect(parsed.bars == [.init(label: "PRs reviewed · 12/30", value: 12, total: 30)])
-        #expect(parsed.text == "**Now:** reading the diff.")
-    }
-
     @Test func `values are kept inside the bar and text without a tag is untouched`() {
         let over = ChatProgressCardMarkdown("<PROGRESS value='9' max='4'>")
         #expect(over.bars == [.init(label: nil, value: 4, total: 4)])
@@ -25,12 +15,12 @@ struct ChatProgressCardMarkdownTests {
     @Test func `multiple bars preserve their labels and remaining Markdown`() {
         let parsed = ChatProgressCardMarkdown("""
         # Review
-        <progress aria-label="First > second" value="1" max="2"></progress>
+        <progress aria-label="First > second · 12/30" value="12" max="30"></progress>
         <progress aria-label='Other' value='2' max='3'></progress>
         **Next:** ship.
         """)
         #expect(parsed.bars == [
-            .init(label: "First > second", value: 1, total: 2),
+            .init(label: "First > second · 12/30", value: 12, total: 30),
             .init(label: "Other", value: 2, total: 3),
         ])
         #expect(parsed.text == "# Review\n\n\n**Next:** ship.")
