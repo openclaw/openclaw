@@ -1208,7 +1208,7 @@ syncBuiltinESMExports();
       status: 0,
       successText: true,
     },
-    ...["internal/tool-schema"].map((missingEntry): NamedTarballCheck => ({
+    ...["internal/tool-schema", "internal/env-api-keys"].map((missingEntry): NamedTarballCheck => ({
       name: `rejects a missing required bundled AI runtime entry (${missingEntry})`,
       files: {
         "dist/index.js": "export {};\n",
@@ -1219,7 +1219,7 @@ syncBuiltinESMExports();
           "export {};\n",
         "node_modules/@openclaw/ai/dist/internal/runtime.mjs": "export {};\n",
         ...Object.fromEntries(
-          ["providers", "internal/tool-schema"]
+          ["providers", "internal/tool-schema", "internal/env-api-keys"]
             .filter((entry) => entry !== missingEntry)
             .map((entry) => [`node_modules/@openclaw/ai/dist/${entry}.mjs`, "export {};\n"]),
         ),

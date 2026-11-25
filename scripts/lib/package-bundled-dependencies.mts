@@ -31,6 +31,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   { subpath: "", whenExported: false },
   { subpath: "providers", whenExported: false },
   { subpath: "transports", whenExported: true },
+  { subpath: "internal/env-api-keys", whenExported: true },
   { subpath: "internal/model-request-body", whenExported: true },
   { subpath: "internal/openai-completions-compat", whenExported: true },
   { subpath: "internal/openai-responses-payload-policy", whenExported: true },
