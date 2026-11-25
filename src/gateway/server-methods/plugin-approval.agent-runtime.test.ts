@@ -150,15 +150,13 @@ describe("plugin approval signed agent runtime", () => {
         const isPending = beginApprovalWait.mock.calls[0]![1];
         expect(isPending()).toBe(true);
         if (outcome === "withdrawal") {
-          const withdrawn = manager.forceDenyDetailed(
+          await manager.forceDenyDetailed(
             record.id,
             "run-aborted",
             { kind: "system", id: null },
             "cancelled",
           );
-          // Cancellation revokes the live predicate before durable settlement yields.
           expect(isPending()).toBe(false);
-          await withdrawn;
         } else {
           const now = vi.spyOn(Date, "now").mockReturnValue(record.expiresAtMs);
           try {
@@ -192,31 +190,8 @@ describe("plugin approval signed agent runtime", () => {
 
       expect(await manager.listPendingRecords()).toHaveLength(0);
       expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
-        message: expect.stringContaining("no longer active"),
+        message: expect.stringContaining("The approval run ended"),
       });
-    });
-  });
-
-  it("cancels a plugin approval when authority closes after the handshake", async (testContext) => {
-    let active = true;
-    const fixture = await approvalFixture(testContext, () => active);
-    const { manager } = fixture;
-    await fixture.run(async () => {
-      const opts = requestOptions({
-        request: { title: "Sensitive action", description: "D", twoPhase: true },
-        identity: {
-          ...identityWithoutExecution(),
-          approvalOwnerPluginId: "codex",
-        },
-        validateAuthority: () => active,
-      });
-      const { pending, id } = await requestApproval(fixture, opts);
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      active = false;
-
-      await expect(manager.awaitDecision(id)).resolves.toBeNull();
-      await pending;
-      expect(await manager.getSnapshot(id)).toMatchObject({ status: "cancelled" });
     });
   });
 

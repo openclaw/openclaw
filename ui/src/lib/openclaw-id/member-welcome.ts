@@ -13,14 +13,14 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { OpenClawIdStatusResult } from "./types.ts";
 
 /** The profile preference that records the member's answer (named themselves or skipped). */
-export const MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY = "ui.openclawId.memberWelcomeAnswered";
+const MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY = "ui.openclawId.memberWelcomeAnswered";
 // This browser's copy of the answer, for a profile whose preferences cannot be read or written.
 // The tunnel origin belongs to one claw, so the account alone scopes it.
 const ANSWERED_KEY_PREFIX = "openclaw.openclawId.memberWelcome.v1:";
 // Set while this browser's last connection was due no welcome, so its composer shows at once.
 const SETTLED_KEY = "openclaw.openclawId.memberWelcome.settled.v1";
 
-export type MemberWelcome = {
+type MemberWelcome = {
   accountId: string;
   email: string | null;
   /** How the member appears until they choose a name. */
@@ -36,7 +36,7 @@ export type MemberWelcomeState =
   | { kind: "due"; client: GatewayBrowserClient; self: AuthenticatedUser; welcome: MemberWelcome };
 
 /** The welcome this connection is due: a member who has not chosen a name. */
-export function memberWelcomeFor(status: OpenClawIdStatusResult): MemberWelcome | null {
+function memberWelcomeFor(status: OpenClawIdStatusResult): MemberWelcome | null {
   const member = status.connection;
   if (member?.kind !== "member") {
     return null;

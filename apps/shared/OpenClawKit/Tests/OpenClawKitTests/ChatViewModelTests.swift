@@ -8816,7 +8816,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.composerPermissionMutationDisabledReason } ==
             "Changing permissions requires operator.write or operator.admin access.")
         #expect(await MainActor.run { vm.composerPermissionDisabledReason(.full) } ==
-            "Full permission requires operator.admin access.")
+            "You don’t have permission to turn on Full access.")
         #expect(await MainActor.run { vm.composerToolOverrideMutationDisabledReason } ==
             "Session tool controls require operator.admin access.")
         #expect(await MainActor.run { vm.composerWebSearchMutationDisabledReason } ==
@@ -15482,8 +15482,9 @@ struct ChatHistoryMutationTests {
         await model.performReset()
         await gate.waitUntilBlocked()
         #expect(model.historyRequiresCanonicalReplacement)
-        await model.handleTransportEvent(.routeChanged)?.value
+        let recovery = model.handleTransportEvent(.routeChanged)
         await gate.release()
+        await recovery?.value
         await model.bootstrapTask?.value
         await model.pendingCacheWriteTask?.value
         #expect(model.messages.isEmpty)

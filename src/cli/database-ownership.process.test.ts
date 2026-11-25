@@ -123,3 +123,34 @@ it.each([false, true])(
     }
   },
 );
+
+it("inspects SQLite during config recovery and refuses unresolved PostgreSQL config", async () => {
+  const { ownership } = await claim();
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH!, "{broken\n");
+
+  const result = await runStateOwnerCli(env, ["database", "ownership", "status", "--json"]);
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual({
+    databasePath: resolveOpenClawStateSqlitePath(env),
+    status: "external",
+    ownership,
+  });
+
+  fs.writeFileSync(
+    env.OPENCLAW_CONFIG_PATH!,
+    JSON.stringify({
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_DSN" },
+        },
+      },
+    }),
+  );
+  const postgres = await runStateOwnerCli(env, ["database", "ownership", "status", "--json"]);
+  expect(postgres.code, postgres.stdout + postgres.stderr).toBe(1);
+  expect(JSON.parse(postgres.stdout)).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("database.postgres.connection") },
+  });
+});

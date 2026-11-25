@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import fs, { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -17,11 +17,11 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { forceFullGc } from "../test-utils/retention.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
   assertStateDatabaseAccessAllowed,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import {
   deferSqlitePostCommitPublication,
@@ -543,6 +543,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
     const databasePath = path.join(root, "admitted.sqlite");
     const requestedPath =
       scenario === "different-path" ? path.join(root, "other.sqlite") : databasePath;
+    using stat = vi.spyOn(fs, "statSync");
     const admission = admissionFixture(() => {
       throw new Error("Format exchange must not request transaction authority");
     });
@@ -596,6 +597,7 @@ it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
         await expect(exchange).resolves.toEqual([0]);
       }
       expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+      expect(stat.mock.calls.filter(([location]) => location === requestedPath)).toEqual([]);
     } finally {
       await worker.terminate();
       await admission.finish();
@@ -848,20 +850,22 @@ it.each(
     );
     expect(events).toEqual([]);
     void settleSqliteWorkerJob(job, undefined, { written: true });
-    expect(getWorkerMessageMetrics()).toContainEqual({
-      kind: "authority",
-      direction: "from_worker",
-      messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
-      payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
-      payloadBytesByRequestClass: {
-        ...before?.payloadBytesByRequestClass,
-        [captured ? "session.actor.completeTurn" : "other"]:
-          (before?.payloadBytesByRequestClass?.[
-            captured ? "session.actor.completeTurn" : "other"
-          ] ?? 0) + payloadBytes,
-      },
-      unmeasuredMessages: before?.unmeasuredMessages ?? 0,
-    });
+    expect(getWorkerMessageMetrics()).toContainEqual(
+      expect.objectContaining({
+        kind: "authority",
+        direction: "from_worker",
+        messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
+        payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+        payloadBytesByRequestClass: {
+          ...before?.payloadBytesByRequestClass,
+          [captured ? "session.actor.completeTurn" : "other"]:
+            (before?.payloadBytesByRequestClass?.[
+              captured ? "session.actor.completeTurn" : "other"
+            ] ?? 0) + payloadBytes,
+        },
+        unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+      }),
+    );
     expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();

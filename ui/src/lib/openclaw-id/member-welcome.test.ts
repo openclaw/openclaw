@@ -2,11 +2,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
-import {
-  landDueMemberOnNewSession,
-  MEMBER_WELCOME_ANSWERED_PREFERENCE_KEY as KEY,
-  memberWelcomeOwner,
-} from "./member-welcome.ts";
+import { landDueMemberOnNewSession, memberWelcomeOwner } from "./member-welcome.ts";
+
+const KEY = "ui.openclawId.memberWelcomeAnswered";
 
 afterEach(() => {
   localStorage.clear();

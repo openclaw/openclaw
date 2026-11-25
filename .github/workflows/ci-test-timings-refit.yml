@@ -63,6 +63,16 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate refit planner admission
+        id: planner_admission
+        if: steps.refit.outputs.changed == 'true'
+        run: |
+          pnpm test \
+            test/scripts/ci-node-test-plan.test.ts \
+            test/scripts/ci-node-test-plan.commands.test.ts \
+            test/scripts/ci-changed-node-test-plan.test.ts \
+            --maxWorkers=1
+
       - name: Upload full timing refit report
         id: report
         if: ${{ !cancelled() && steps.refit.outcome != 'skipped' }}
@@ -74,7 +84,7 @@ jobs:
           retention-days: 30
 
       - name: Update standing refit pull request
-        if: steps.refit.outputs.changed == 'true'
+        if: steps.refit.outputs.changed == 'true' && steps.planner_admission.outcome == 'success'
         uses: ./.github/actions/publish-generated-pr
         with:
           contents-client-id: Iv23liOECG0slfuhz093
@@ -86,24 +96,63 @@ jobs:
           commit-message: "ci: refresh measured test timings"
           pr-title: "ci: refresh measured test timings"
           generated-paths: config/ci-test-timings.json
+          # Admission reads test contents and helper/import inventories as well as planners.
           invalidation-paths: |
+            config/ci-adaptive-markdown.json
             config/ci-test-timings.json
-            scripts/ci-refit-test-timings.mts
-            scripts/ci-run-timings.mjs
-            scripts/lib/arg-utils.runtime.mjs
-            scripts/lib/ci-test-timings-refit.mts
-            scripts/lib/ci-node-test-groups-codec.mts
-            scripts/lib/ci-test-timings-schema.mts
-            scripts/lib/local-check-runtime.mts
-            scripts/lib/vitest-shard-metadata.mts
-            scripts/lib/direct-run.mjs
-            scripts/lib/numeric-options.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/tsx.mjs
+            :(glob)*.mjs
+            :(glob)scripts/**/*.[jt]s
+            :(glob)scripts/**/*.[jt]sx
+            :(glob)scripts/**/*.[cm][jt]s
+            :(glob)scripts/lib/*.json
+            scripts/native-protocol-inputs.json
+            :(glob)test/**/*.[jt]s
+            :(glob)test/**/*.[jt]sx
+            :(glob)test/**/*.[cm][jt]s
+            test/scripts/fixtures/ci-measured-compact-jobs.json
+            :(glob)src/**/*.[jt]s
+            :(glob)src/**/*.[jt]sx
+            :(glob)src/**/*.[cm][jt]s
+            src/agents/blobster-fixtures/garden-keeper.json
+            src/agents/blobster-fixtures/taylor-pinch.json
+            src/infra/database-engine/logbook-port.generated.json
+            src/infra/database-engine/team-reports-port.generated.json
+            src/infra/database-engine/workboard-port.generated.json
+            src/infra/host-env-security-policy.json
+            src/state/postgres-schema.generated/agent-port.json
+            src/state/postgres-schema.generated/manifest.json
+            src/state/postgres-schema.generated/state-port.json
+            :(glob)packages/**/*.[jt]s
+            :(glob)packages/**/*.[jt]sx
+            :(glob)packages/**/*.[cm][jt]s
+            :(glob)packages/*/package.json
+            :(glob)extensions/**/*.[jt]s
+            :(glob)extensions/**/*.[jt]sx
+            :(glob)extensions/**/*.[cm][jt]s
+            :(glob)extensions/*/package.json
+            :(glob)ui/**/*.[jt]s
+            :(glob)ui/**/*.[jt]sx
+            :(glob)ui/**/*.[cm][jt]s
+            :(glob)ui/config/*.json
+            ui/package.json
+            ui/tsconfig.json
+            :(glob)patches/*.patch
+            .npmrc
             package.json
             pnpm-lock.yaml
+            pnpm-workspace.yaml
+            tsconfig.json
+            vitest.config.ts
+            .github/actions/setup-node-env/action.yml
+            :(glob).github/actions/setup-node-env/*.sh
+            :(glob).github/actions/setup-node-env/*.mjs
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml
+            .github/actions/publish-generated-pr/policy.py
+            .github/actions/git-owner/action.yml
+            :(glob).github/actions/git-owner/*.py
+            :(glob).github/actions/git-owner/*.mjs
+            .github/actions/git-owner/test-prerequisites.json
             .github/workflows/ci-test-timings-refit.yml
             .github/workflows/ci.yml
           pr-body: |

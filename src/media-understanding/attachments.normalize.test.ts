@@ -25,16 +25,14 @@ describe("normalizeAttachmentPath", () => {
 describe("normalizeAttachments", () => {
   it("uses staged fact paths at the attachment consumer", () => {
     expect(
-      normalizeAttachments({
-        media: [
-          {
-            path: "/tmp/staged/voice.ogg",
-            url: "/tmp/staged/voice.ogg",
-            contentType: "audio/ogg",
-            workspaceDir: "/tmp/staged",
-          },
-        ],
-      }),
+      normalizeAttachments([
+        {
+          path: "/tmp/staged/voice.ogg",
+          url: "/tmp/staged/voice.ogg",
+          contentType: "audio/ogg",
+          workspaceDir: "/tmp/staged",
+        },
+      ]),
     ).toEqual([
       expect.objectContaining({
         path: "/tmp/staged/voice.ogg",
@@ -50,9 +48,9 @@ describe("normalizeAttachments", () => {
       fact: { fileName: "diagram.svg", contentType: "application/octet-stream" },
     },
   ])("does not select $name for image understanding", ({ fact }) => {
-    const attachments = normalizeAttachments({
-      media: [{ url: "https://cdn.example.test/download/opaque", ...fact }],
-    });
+    const attachments = normalizeAttachments([
+      { url: "https://cdn.example.test/download/opaque", ...fact },
+    ]);
 
     expect(selectAttachments({ capability: "image", attachments }).selected).toEqual([]);
   });

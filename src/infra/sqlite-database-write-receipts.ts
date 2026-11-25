@@ -177,10 +177,21 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     return false;
   }
 
+  let scopeStates: SharedArrayBuffer | undefined;
+  let scopeStateOffset = 0;
+
   function createScopeRevision(): ScopedWriteRevision {
+    if (!scopeStates || scopeStateOffset === scopeStates.byteLength) {
+      // Small chunks reduce worker clone handles while bounding sparse retention.
+      // Never reuse a slot: a retired scope can still have views in another worker.
+      scopeStates = new SharedArrayBuffer(16 * 3 * Int32Array.BYTES_PER_ELEMENT);
+      scopeStateOffset = 0;
+    }
+    const scopeState = new Int32Array(scopeStates, scopeStateOffset, 3);
+    scopeStateOffset += scopeState.byteLength;
     return {
       identity: randomUUID(),
-      state: new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT)),
+      state: scopeState,
     };
   }
 

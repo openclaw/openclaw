@@ -3,7 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -17,9 +17,15 @@ import {
 } from "./before-tool-call-metadata.js";
 import { disposeCodeModeResults } from "./code-mode-results.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
+import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import {
+  getToolSearchCatalogDescriptors,
+  prepareToolSearchCatalogDescriptors,
+  type ToolSearchCatalogDescriptor,
+} from "./tool-search-prepared-catalog.js";
 import {
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
@@ -42,12 +48,6 @@ import type {
 } from "./tool-search-types.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
-// Catalog entry arrays are immutable snapshots. Keying rendered directories by array identity
-// preserves prompt-prefix bytes without retaining retired catalogs.
-export const toolSchemaDirectoryPromptCache = new WeakMap<
-  ToolSearchCatalogEntry[],
-  Map<string, string>
->();
 const catalogMetadata = new WeakMap<
   ToolSearchCatalogSession,
   {
@@ -86,7 +86,7 @@ export function omitDescribedOutputSchema<T extends { outputSchema?: unknown }>(
   return rest;
 }
 
-export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
+export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogDescriptor) {
   const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
     fullInstructions: true,
   });
@@ -98,7 +98,7 @@ export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   };
 }
 
-function instructionsHintForEntry(entry: ToolSearchCatalogEntry): string | undefined {
+function instructionsHintForEntry(entry: ToolSearchCatalogDescriptor): string | undefined {
   const instructions = entry.mcp?.instructions;
   if (!instructions || instructions.length <= MAX_SEARCH_MCP_INSTRUCTIONS_CHARS) {
     return undefined;
@@ -157,17 +157,6 @@ function sameCatalogSchema(source: CatalogSource, a: unknown, b: unknown): boole
     : stableStringify(a) === stableStringify(b);
 }
 
-function rebindCatalogExecutors(
-  existingEntries: ToolSearchCatalogEntry[],
-  currentEntries: readonly ToolSearchCatalogEntry[],
-): ToolSearchCatalogEntry[] {
-  // Keep identical same-run entries; changed executors need a detached descriptor snapshot.
-  // The caller already compared the ordered, unique descriptors position by position.
-  return existingEntries.every((entry, index) => entry.tool === currentEntries[index]!.tool)
-    ? existingEntries
-    : existingEntries.map((entry, index) => ({ ...entry, tool: currentEntries[index]!.tool }));
-}
-
 export function prepareToolSearchCatalogExecutionTool(
   entry: ToolSearchCatalogEntry,
   options: { prepareInput?: boolean; validateInput?: boolean },
@@ -204,8 +193,11 @@ function toCatalogEntry(
   // SAFETY: source classification excludes client callbacks from the native hook wrapper.
   const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
-      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+    source !== "client" && hookContext
+      ? rewrapToolWithBeforeToolCallHook(nativeTool, {
+          ...getBeforeToolCallHookContext(nativeTool),
+          ...hookContext,
+        })
       : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,
@@ -356,8 +348,9 @@ function registerToolSearchCatalog(params: {
     directTools,
     directClientTools,
   );
+  const publication = prepareToolSearchCatalogDescriptors(entries);
   const metadata = existing && catalogMetadata.get(existing);
-  const reboundEntries =
+  const sameRunCatalog =
     params.mode === "reuse" &&
     existing &&
     metadata &&
@@ -366,16 +359,10 @@ function registerToolSearchCatalog(params: {
         toolExecutionAllow !== undefined &&
         metadata.toolExecutionAllow.length === toolExecutionAllow.length &&
         metadata.toolExecutionAllow.every((name, index) => name === toolExecutionAllow[index]))) &&
-    sameCatalogDescriptors(existing.entries, entries)
-      ? rebindCatalogExecutors(existing.entries, entries)
-      : undefined;
-  if (existing && reboundEntries) {
-    const prompts = toolSchemaDirectoryPromptCache.get(existing.entries);
-    if (prompts && reboundEntries !== existing.entries) {
-      // Rebinding swaps executors only; rendered descriptors stay identical.
-      toolSchemaDirectoryPromptCache.set(reboundEntries, prompts);
-    }
-    existing.entries = reboundEntries;
+    (getToolSearchCatalogDescriptors(existing.entries) === publication.prepared ||
+      sameCatalogDescriptors(existing.entries, entries));
+  if (existing && sameRunCatalog) {
+    existing.entries = entries;
     catalogMetadata.set(existing, { toolExecutionAllow, directTools, directClientTools });
     return true;
   }
@@ -399,7 +386,7 @@ function registerToolSearchCatalog(params: {
     disposeCodeModeResults(params.catalogRef);
   }
   delete params.catalogRef.closedTelemetry;
-  return false;
+  return publication.reused;
 }
 
 export function clearToolSearchCatalog(params: { catalogRef?: ToolSearchCatalogRef }): void {
@@ -469,6 +456,13 @@ export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSes
   if (!catalog) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
+  const participationCeiling = ctx.pluginExecutionAuthority?.participationCeiling;
+  if (participationCeiling) {
+    // Catalog refs are run-owned. Narrow exact-id dispatch as well as discovery.
+    catalog.entries = filterParticipationTools(catalog.entries, participationCeiling, (entry) =>
+      getPluginToolMeta(entry.tool),
+    );
+  }
   return catalog;
 }
 
@@ -512,7 +506,7 @@ export function visibleCatalogEntries(
 }
 
 export function compactToolSearchCatalogEntry(
-  entry: ToolSearchCatalogEntry,
+  entry: ToolSearchCatalogDescriptor,
   options: { fullInstructions?: boolean } = {},
 ) {
   const output =
@@ -645,10 +639,15 @@ export function addClientToolsToToolCatalog(params: {
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;
   selection?: ToolSearchSelection;
-}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
+}): {
+  tools: ToolDefinition[];
+  compacted: boolean;
+  catalogToolCount: number;
+  catalogReused: boolean;
+} {
   const catalogRef = params.catalogRef;
   if (!catalogRef?.current) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogReused: false };
   }
   const selected = createToolSearchSelectionMatcher(params.selection);
   const entries: ToolSearchCatalogEntry[] = [];
@@ -666,14 +665,19 @@ export function addClientToolsToToolCatalog(params: {
     !catalogRef.current.entries.some((entry) => entry.source === "client") &&
     !catalogMetadata.get(catalogRef.current)?.directClientTools?.length
   ) {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogReused: false };
   }
-  registerToolSearchCatalog({
+  const catalogReused = registerToolSearchCatalog({
     catalogRef,
     entries,
     mode: "append",
     replaceSource: "client",
     directClientTools: visible,
   });
-  return { tools: visible, compacted: entries.length > 0, catalogToolCount: entries.length };
+  return {
+    tools: visible,
+    compacted: entries.length > 0,
+    catalogToolCount: entries.length,
+    catalogReused,
+  };
 }

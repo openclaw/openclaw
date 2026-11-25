@@ -16,7 +16,6 @@ import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
-  markDiagnosticArgumentChurnObservation,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
@@ -185,7 +184,6 @@ describe("core model owner generations", () => {
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
     markDiagnosticEmbeddedRunStarted({ ...later, owner: laterOwner });
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
-    markDiagnosticArgumentChurnObservation({ ...ref, runId: earlier.runId, active: true });
     for (const callId of ["request-1", "request-2"]) {
       emitCoreModelRequestStartedDiagnosticEvent(
         { ...ref, runId: earlier.runId, callId, provider: "core", model: "request-model" },
@@ -197,7 +195,6 @@ describe("core model owner generations", () => {
 
     expect(getDiagnosticSessionActivitySnapshot(ref, startedAt + 30_000)).toMatchObject({
       activeWorkKind: "model_call",
-      lastProgressReason: "tool_loop:argument_churn",
       lastProgressAgeMs: 30_000,
       repeatedRequestNoProgressAgeMs: 30_000,
     });

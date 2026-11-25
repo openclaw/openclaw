@@ -67,6 +67,8 @@ export class CreationComposer {
     subscribe: (listener) => this.subscribe(listener),
   };
   message = "";
+  /** Who this input is addressed to, known before the agent's roster row exists. */
+  assistantName = "";
   mentions: readonly HumanMention[] = [];
   inputs: CreationComposerInput[] = [];
   error: string | null = null;

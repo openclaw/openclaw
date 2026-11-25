@@ -622,6 +622,13 @@ reviewer-safe prompt through the existing iPhone relay and offers the compact
 allow-once/deny decision subset. Direct Watch Gateway mode does not carry
 approval prompts.
 
+Approval push alerts require current `operator.approvals` and `operator.read`
+access, plus visibility of the request. Devices paired through OpenClaw ID use
+current ID membership and role permissions, even when their linked local profile
+has a broader role. Removing that membership or narrowing its permissions stops
+new approval alerts. Cleanup notifications may still clear an earlier prompt.
+Separately paired local devices retain their local permissions.
+
 Approval state is shared with the Control UI and supported chat surfaces. The
 first committed answer wins. iPhone and Watch fetch the Gateway's saved
 terminal record after another surface resolves the request, after a remote

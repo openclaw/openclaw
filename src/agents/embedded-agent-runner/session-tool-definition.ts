@@ -1,4 +1,6 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
@@ -26,4 +28,17 @@ export function describeSessionToolDefinition(
     publishedToolDefinitions.set(published, definition);
   }
   return definition;
+}
+
+export function sameToolParameters(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = getPublishedRuntimeToolInputSchema(left);
+  const b = getPublishedRuntimeToolInputSchema(right);
+  // Restored transcript pins have no publication fact; derive only their side.
+  return a || b
+    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
+        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
+    : stableStringify(left) === stableStringify(right);
 }

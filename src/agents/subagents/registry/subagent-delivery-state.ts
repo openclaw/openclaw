@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -40,64 +41,48 @@ export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
 export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
   return {
     runId: entry.runId,
-    ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
-    ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
-    ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
-    ...(entry.schedulerSlotId ? { schedulerSlotId: entry.schedulerSlotId } : {}),
-    ...(entry.swarmLaunchReplayKey ? { swarmLaunchReplayKey: entry.swarmLaunchReplayKey } : {}),
+    taskRunId: entry.taskRunId,
+    pauseReason: entry.pauseReason || undefined,
+    swarmRunId: entry.swarmRunId || undefined,
+    schedulerSlotId: entry.schedulerSlotId || undefined,
+    swarmLaunchReplayKey: entry.swarmLaunchReplayKey || undefined,
     childSessionKey: entry.childSessionKey,
-    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
-    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    childAgentId: entry.childAgentId || undefined,
+    controllerSessionKey: entry.controllerSessionKey || undefined,
     requesterSessionKey: entry.requesterSessionKey,
     requesterStorePath: entry.requesterStorePath,
     controllerStorePath: entry.controllerStorePath,
-    ...(entry.collect
-      ? {
-          collect: true,
-          groupId: entry.groupId,
-          swarmRequesterSessionKey: entry.swarmRequesterSessionKey,
-        }
-      : {}),
-    ...(entry.collectorCompletion
-      ? { collectorCompletion: { status: entry.collectorCompletion.status } }
-      : {}),
-    ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
-    ...(entry.model ? { model: entry.model } : {}),
-    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    collect: entry.collect || undefined,
+    groupId: entry.collect ? entry.groupId : undefined,
+    swarmRequesterSessionKey: entry.collect ? entry.swarmRequesterSessionKey : undefined,
+    collectorCompletion: entry.collectorCompletion && { status: entry.collectorCompletion.status },
+    requesterAgentId: entry.requesterAgentId || undefined,
+    model: entry.model || undefined,
+    generation: entry.generation,
     createdAt: entry.createdAt,
     execution: {
       status: entry.execution.status,
-      ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
-      ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
-      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome && { status: entry.execution.outcome.status },
     },
-    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
-    ...(entry.accumulatedRuntimeMs !== undefined
-      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
-      : {}),
-    ...(entry.runTimeoutSeconds !== undefined
-      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
-      : {}),
-    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
-    ...(entry.cleanupCompletedAt !== undefined
-      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
-      : {}),
-    ...(entry.delivery
-      ? {
-          delivery: {
-            status: entry.delivery.status,
-            ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
-            ...(entry.delivery.suspendedAt !== undefined
-              ? { suspendedAt: entry.delivery.suspendedAt }
-              : {}),
-          },
-        }
-      : {}),
+    sessionStartedAt: entry.sessionStartedAt,
+    accumulatedRuntimeMs: entry.accumulatedRuntimeMs,
+    runTimeoutSeconds: entry.runTimeoutSeconds,
+    endedReason: entry.endedReason || undefined,
+    cleanupCompletedAt: entry.cleanupCompletedAt,
+    delivery: entry.delivery && {
+      status: entry.delivery.status,
+      requesterDelivery: entry.delivery.requesterDelivery,
+      disposition: entry.delivery.disposition || undefined,
+      suspendedAt: entry.delivery.suspendedAt,
+    },
   };
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
+  if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
+    // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
     return true;
   }
@@ -123,6 +108,9 @@ export function projectSubagentRunForMaintenance(
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,
+    requesterSettleWake: entry.requesterSettleWake
+      ? { status: entry.requesterSettleWake.status }
+      : undefined,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
     killReconciliation: entry.killReconciliation
@@ -226,19 +214,67 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
   };
 }
 
-export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
-  return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
+export function recordRequesterDelivery(
+  entry: SubagentRunRecord,
+  fact: NonNullable<SubagentCompletionDeliveryState["requesterDelivery"]>,
+): void {
+  const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state !== "consumed") {
+    delivery.requesterDelivery = fact;
+  }
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
+    delivery.disposition = undefined;
+    delivery.lastError = undefined;
+  }
 }
 
-/** A finished requester without its required reply receipt must not execute again implicitly. */
-export function isCompletedRequesterDeliveryBlocked(
-  entry: Pick<SubagentRunRecord, "delivery">,
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+/** A result committed to the requester transcript is delivered, whatever the turn did next. */
+export function resolveRequesterDeliveryOutcome(
+  entries: readonly SubagentRunRecord[],
+  outcome: SubagentAnnounceDeliveryResult,
+): SubagentAnnounceDeliveryResult {
+  return !outcome.delivered && entries.length > 0 && entries.every(hasConsumedRequesterInput)
+    ? { delivered: true, path: "direct" }
+    : outcome;
+}
+
+export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?: string): void {
+  recordRequesterDelivery(entry, {
+    ...entry.delivery?.requesterDelivery,
+    state: "waiting",
+    blockingRunId: blockingRunId ?? entry.delivery?.requesterDelivery?.blockingRunId,
+  });
+}
+
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason" | "requesterSettleWake">,
 ): boolean {
   return (
-    isDeliverySuspended(entry) &&
-    entry.delivery?.suspendedReason === "permanent_failure" &&
-    (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
-      entry.delivery.lastDropReason === "visible_reply_missing")
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    // A yielded requester's batch owns an ended child's delivery; the earlier per-child
+    // attempt may target the aborted turn and must not keep that batch unsettled.
+    entry.requesterSettleWake?.afterRequesterYield === true
+  );
+}
+
+/**
+ * Older builds parked undelivered results as suspended or failed; nothing writes either now.
+ * The sweeper settles each one into requester history once.
+ */
+export function isDeliverySuspended(
+  entry: Pick<SubagentRunRecord, "delivery" | "expectsCompletionMessage">,
+): boolean {
+  return (
+    entry.delivery?.status === "suspended" ||
+    (entry.delivery?.status === "failed" && entry.expectsCompletionMessage !== false)
   );
 }
 
@@ -264,6 +300,9 @@ export const markRequesterSettleWakePending = (
 
 export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state === "waiting") {
+    delivery.requesterDelivery = undefined;
+  }
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;

@@ -1,0 +1,106 @@
+/* Page entries paint around the link and pin. */
+.sidebar-pages__entry {
+  --sidebar-pages-pin-width: 28px;
+
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
+}
+
+.sidebar-pages__entry:has(.nav-item):where(:hover) {
+  background: var(--surface-hover);
+}
+
+.sidebar-pages__entry:has(.nav-item--active) {
+  background: var(--surface-selected);
+}
+
+.sidebar-pages__entry:has(.nav-item--active):hover {
+  background: var(--surface-selected-hover);
+}
+
+/* Page links take the session rows' rhythm: 30px fill, 15px muted icon, 13px
+   title, and the same lead column (the 1px transparent border is part of the inset). */
+.sidebar-pages__entry .nav-item {
+  min-height: var(--sidebar-session-row-floor, 30px);
+  padding-inline-start: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset) - 1px);
+  background: transparent;
+  border-color: transparent;
+}
+
+.sidebar-pages__entry .nav-item__icon {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.sidebar-pages__entry .nav-item__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75px;
+}
+
+.sidebar-pages__entry .nav-item__text {
+  letter-spacing: -0.008em;
+}
+
+.sidebar-pages__entry:hover .nav-item:not(.nav-item--active) {
+  color: var(--text);
+}
+
+.sidebar-pages__entry:hover .nav-item__icon {
+  opacity: 1;
+}
+
+.sidebar-pages__entry > .sidebar-zone-entry {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-pages__pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--sidebar-pages-pin-width, 28px);
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 82%, var(--sidebar-bg, var(--bg)));
+  opacity: 0;
+}
+
+.sidebar-pages__pin svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-pages__entry:hover .sidebar-pages__pin,
+.sidebar-pages__pin:focus-visible,
+.sidebar-pages__pin--pinned {
+  opacity: 1;
+}
+
+.sidebar-pages__pin:hover,
+.sidebar-pages__entry:hover .sidebar-pages__pin--pinned {
+  color: var(--text);
+}
+
+.sidebar-pages__pin--pinned svg {
+  fill: currentColor;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-pages__pin {
+    opacity: 1;
+    height: 38px;
+  }
+}

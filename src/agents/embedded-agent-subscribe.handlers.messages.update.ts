@@ -57,11 +57,11 @@ import {
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
 } from "./embedded-agent-utils.js";
-import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import type { AgentEvent } from "./runtime/index.js";
 
 export function handleMessageUpdate(
   ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
+  evt: Extract<AgentEvent, { type: "message_update" }>,
 ): Promise<void> | undefined {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {

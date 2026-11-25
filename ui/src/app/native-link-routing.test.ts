@@ -255,6 +255,18 @@ it("offers inline, external, and copy actions for an external link", async () =>
   await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(url));
 });
 
+it("opens a new tab for the native command only when the panel can be shown", () => {
+  let available = false;
+  const bridge = installBridge({ canPresentBrowserPanel: () => available });
+  const open = () => window.dispatchEvent(new Event("openclaw:native-new-browser-tab"));
+  open();
+  expect(bridge.browserRequests).toEqual([]);
+  available = true;
+  open();
+  expect(bridge.browserRequests).toEqual([{ open: true, newTab: true }]);
+  expect(bridge.messages).toEqual([]);
+});
+
 it("opens the panel menu action externally during Settings takeover and restores it afterward", async () => {
   let canPresentBrowserPanel = false;
   const bridge = installBridge({ canPresentBrowserPanel: () => canPresentBrowserPanel });

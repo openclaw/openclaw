@@ -10,7 +10,7 @@ import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { formatMissingOperatorReadScopeMessage } from "./permission-error.ts";
 import { listen } from "./reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
-import { requestSessionUsage } from "./sessions/usage.ts";
+import { promptCacheHitRate, requestSessionUsage } from "./sessions/usage.ts";
 
 type SessionContextReportTarget = {
   sessionKey: string;
@@ -27,6 +27,11 @@ export type SessionCostTotal = {
   partial: boolean;
   /** Usage exists but none of it has a price; never present that as $0. */
   unpriced: boolean;
+  /** Share of prompt tokens served from the provider cache; null when no prompt was billed. */
+  cacheHitRate: number | null;
+  /** Lifetime uncached input and output tokens; lower bounds while `partial`. */
+  input: number;
+  output: number;
 };
 type SessionContextReportSnapshot = {
   report: SessionSystemPromptReport | null;
@@ -144,6 +149,10 @@ function createSessionContextReports(gateway: ApplicationGateway) {
                 usd: usage.totalCost,
                 partial: Boolean(response.partial || row?.computing || usage.missingCostEntries),
                 unpriced: usage.totalCost === 0 && usage.missingCostEntries > 0,
+                // Unlike cost, a ratio of incomplete counters is no bound: withhold it.
+                cacheHitRate: response.partial || row?.computing ? null : promptCacheHitRate(usage),
+                input: usage.input,
+                output: usage.output,
               }
             : null,
           loading: false,

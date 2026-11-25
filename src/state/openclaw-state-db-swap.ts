@@ -43,7 +43,7 @@ const STATE_FOLD_IN_STEPS: readonly SqliteFoldInStep[] = [
  * and this build that a name-matched copy cannot express. Found by diffing the
  * released schemas; everything else copies by name.
  */
-export const STATE_SWAP_MAP: SqliteSwapMap = {
+const STATE_SWAP_MAP: SqliteSwapMap = {
   // v36: Claw tables and fields became Templates.
   tables: {
     claw_installs: "template_installs",
@@ -98,7 +98,7 @@ function stampStateSchema(db: DatabaseSync): void {
   writeStateSchemaContentVersion(db);
 }
 
-export function createStateSwapTarget(): SqliteSwapTarget {
+function createStateSwapTarget(): SqliteSwapTarget {
   return {
     label: "state",
     version: OPENCLAW_STATE_SCHEMA_VERSION,

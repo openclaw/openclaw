@@ -16,9 +16,9 @@ import {
   SIDEBAR_SESSION_SORT_OPTIONS,
   SIDEBAR_SESSION_STATUS_OPTIONS,
 } from "./app-sidebar-session-types.ts";
-import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
+  archiveSessionGroupFromMenu,
   createSessionGroup,
   renameSessionGroupFromMenu,
   deleteSessionGroupFromMenu,
@@ -50,6 +50,7 @@ type SidebarSessionGroupMenuAction =
   | "group-defaults"
   | "rename-group"
   | "new-group"
+  | "archive-group"
   | "delete-group";
 
 const EMPTY_GROUPS_OPTIONS = [
@@ -76,6 +77,7 @@ export function renderSidebarSessionGroupMenuForMenus(
     "group-defaults": "sessions.groups.update",
     "rename-group": "sessions.groups.rename",
     "new-group": "sessions.groups.put",
+    "archive-group": "sessions.patchMany",
     "delete-group": "sessions.groups.delete",
   } as const;
   const actionDisabledReasons = createMemo(() =>
@@ -100,12 +102,13 @@ export function renderSidebarSessionGroupMenuForMenus(
     action: SidebarSessionGroupMenuAction,
     label: string,
     icon: JSX.Element,
+    destructive = false,
   ): MenuItem => ({
     id: action,
     label,
     icon,
-    class: `session-menu__item${action === "delete-group" ? " session-menu__item--destructive" : ""}`,
-    variant: action === "delete-group" ? "danger" : undefined,
+    class: `session-menu__item${destructive ? " session-menu__item--destructive" : ""}`,
+    variant: destructive ? "danger" : undefined,
     disabled: !host.connected || Boolean(actionDisabledReasons()[action]),
     attributes: { title: actionDisabledReasons()[action] },
     content: <span class="session-menu__text">{label}</span>,
@@ -125,7 +128,13 @@ export function renderSidebarSessionGroupMenuForMenus(
       id: "separator",
       content: <div class="session-menu__separator" role="separator" />,
     },
-    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />),
+    renderAction(
+      "archive-group",
+      t("sessionsView.archiveGroupMenu"),
+      <Icon name="archive" />,
+      true,
+    ),
+    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />, true),
   ]);
   return (
     <SidebarDropdown
@@ -137,6 +146,7 @@ export function renderSidebarSessionGroupMenuForMenus(
           (value === "group-defaults" ||
             value === "rename-group" ||
             value === "new-group" ||
+            value === "archive-group" ||
             value === "delete-group") &&
           !actionDisabledReasons()[value]
         ) {
@@ -155,6 +165,9 @@ export function renderSidebarSessionGroupMenuForMenus(
               break;
             case "new-group":
               void createSessionGroup(host.sessionOrganizer);
+              break;
+            case "archive-group":
+              void archiveSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
             case "delete-group":
               void deleteSessionGroupFromMenu(host.sessionOrganizer, menu.group);
@@ -481,24 +494,20 @@ export function renderSidebarSessionSortMenuForMenus(
             )}
           </section>
           <footer class="sidebar-session-menu-footer">
-            <button
-              ref={(element) => controls.set("new-collection", element)}
-              type="button"
+            <a
+              ref={(element) => controls.set("all-sessions", element)}
               class="sidebar-session-filter-footer"
-              disabled={!host.connected}
-              onClick={() => {
-                const context = host.sessionDataContext;
-                if (context && host.connected) {
+              href={pathForRoute("sessions", host.basePath)}
+              onClick={(event: MouseEvent) =>
+                handleNavigationClick(event, () => {
                   menus.closePositionedMenu("sessionSort");
-                  void createPersonalSessionGroupActions(context).edit();
-                }
-              }}
+                  host.onNavigate?.("sessions");
+                })
+              }
             >
-              <span aria-hidden="true">
-                <Icon name="plus" />
-              </span>
-              {t("sessionsView.personalGroupNew")}
-            </button>
+              <span aria-hidden="true">{<Icon name="messageCircle" />}</span>
+              {t("chat.sidebar.viewAllSessions")}
+            </a>
             <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"

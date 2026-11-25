@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import fsSync, { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -35,9 +36,14 @@ import {
 import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
+import * as workspaceHashes from "./workspace-hash-memo.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 it.each(["edit", "delete one-child root", "delete two-sided root"])(
@@ -215,16 +221,22 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
   },
 );
 
-async function repairFixture(historicalCache = false) {
+async function repairFixture(
+  historicalPaths: readonly string[] = [],
+  disposablePaths: readonly string[] = [],
+) {
   const root = await fs.realpath(dirs.make("workspace-baseline-repair-"));
   const projection = path.join(root, "projection");
   const canonical = path.join(root, "canonical");
+  const files = ["nested/file.txt", ...historicalPaths];
+  const baselineFile = { type: "file" as const, mode: 0o644, size: 8, sha256: hash("baseline") };
+  const directories = new Set(files.flatMap((file) => [...workspacePathAncestors(file)]));
   for (const directory of [projection, canonical]) {
-    await fs.mkdir(path.join(directory, "nested"), { recursive: true });
-    await fs.writeFile(path.join(directory, "nested/file.txt"), "baseline");
-    if (historicalCache) {
-      await fs.mkdir(path.join(directory, ".openclaw/.pnpm-store"), { recursive: true });
-      await fs.writeFile(path.join(directory, ".openclaw/.pnpm-store/cache"), "baseline");
+    for (const file of new Set([...files, ...disposablePaths])) {
+      await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
+      await fs.writeFile(path.join(directory, file), "baseline");
+    }
+    if (historicalPaths.length) {
       await fs.mkdir(path.join(directory, "node_modules"));
       await fs.writeFile(path.join(directory, "node_modules/installed.js"), "local dependency");
     }
@@ -232,21 +244,8 @@ async function repairFixture(historicalCache = false) {
   await requireGit(canonical, ["init", "--quiet"]);
   await requireGit(canonical, ["add", "nested/file.txt"]);
   const records = createLocalWorkspaceManifestTree([
-    { path: "nested", type: "directory" },
-    { path: "nested/file.txt", type: "file", mode: 0o644, size: 8, sha256: hash("baseline") },
-    ...(historicalCache
-      ? [
-          { path: ".openclaw", type: "directory" as const },
-          { path: ".openclaw/.pnpm-store", type: "directory" as const },
-          {
-            path: ".openclaw/.pnpm-store/cache",
-            type: "file" as const,
-            mode: 0o644,
-            size: 8,
-            sha256: hash("baseline"),
-          },
-        ]
-      : []),
+    ...[...directories].map((entryPath) => ({ path: entryPath, type: "directory" as const })),
+    ...files.map((entryPath) => Object.assign({ path: entryPath }, baselineFile)),
   ]);
   const treeRoot = localWorkspaceDigestBytes(records.get("")!.treeRef);
   const snapshot = {
@@ -269,6 +268,66 @@ async function repairFixture(historicalCache = false) {
   return { projection, canonical, snapshot, treeRoot, records };
 }
 
+it("does not age a racy prehash identity into permission to reuse stale bytes", async () => {
+  const { projection, canonical, snapshot, records } = await repairFixture();
+  const filename = path.join(projection, "nested/file.txt");
+  let now = Date.now();
+  const timestamp = BigInt(now) * 1_000_000n;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const coarse = <T extends object>(stats: T) => {
+    Reflect.set(stats, "ctimeNs", timestamp);
+    Reflect.set(stats, "mtimeNs", timestamp);
+    return stats;
+  };
+  const lstatSync = fsSync.lstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+    const stats = lstatSync(...args);
+    if (args[0] === filename && stats) {
+      coarse(stats);
+    }
+    return stats;
+  });
+  const fstatSync = fsSync.fstatSync.bind(fsSync);
+  vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) => coarse(fstatSync(...args)));
+  syncBuiltinESMExports();
+  const lstat = fs.lstat.bind(fs);
+  vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+    const stats = await lstat(...args);
+    if (args[0] === filename) {
+      coarse(stats);
+    }
+    return stats;
+  });
+  const open = fs.open.bind(fs);
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === filename) {
+      const stat = handle.stat.bind(handle);
+      vi.spyOn(handle, "stat").mockImplementation(async (...options) =>
+        coarse(await stat(...options)),
+      );
+    }
+    return handle;
+  });
+  const rows = [JSON.stringify([...records.values()])];
+  const action = { kind: "scan" as const, target: "canonical" as const, canonicalRoot: canonical };
+  await fs.writeFile(filename, "first!!!");
+  const prepared = await executeLocalWorkspaceManifestRead(
+    { ...snapshot, records: rows },
+    { ...action, prehash: true },
+  );
+  assert(prepared.kind === "scan" && prepared.preparedEntries);
+  await fs.writeFile(filename, "second!!");
+  now += 3_000;
+  const captured = await executeLocalWorkspaceManifestRead(
+    { ...snapshot, records: rows },
+    { ...action, preparedEntries: prepared.preparedEntries },
+  );
+  assert(captured.kind === "scan");
+  expect(captured.currentManifestRaw).toContain(hash("second!!"));
+  expect(captured.currentManifestRaw).not.toContain(hash("first!!!"));
+});
+
 it.each(["probe", "scan"] as const)(
   "avoids redundant path validation for accepted baseline fingerprints (%s)",
   async (kind) => {
@@ -284,6 +343,7 @@ it.each(["probe", "scan"] as const)(
     assert(first.kind === "scan" && first.fingerprints, "Expected a real fingerprint observation");
     const resolved = vi.spyOn(realpathSync, "native");
     const opened = vi.spyOn(fs, "open");
+    const serializedIdentity = vi.spyOn(workspaceHashes, "workspaceStatIdentity");
     const second = await executeLocalWorkspaceManifestRead(
       {
         ...snapshot,
@@ -299,20 +359,29 @@ it.each(["probe", "scan"] as const)(
     const target = path.join(projection, "nested/file.txt");
     expect(resolved.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
     expect(opened.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
+    expect(serializedIdentity).not.toHaveBeenCalled();
   },
 );
 
+const agpPaths = ["intermediates", "outputs/apk", "outputs/bundle"].map((p) => `m/build/${p}/x`);
+const dotnetPaths = ["bin/Debug", "bin/Release", "obj/Debug", "obj/Release"].map((p) => `m/${p}/x`);
+const pnpmPaths = [".openclaw/.pnpm-store/cache"];
 it.each([
-  ["projection", false],
-  ["canonical", false],
-  ["checkpoint", false],
-  ["projection", true],
-  ["checkpoint", true],
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, []] as const),
+  ...["projection", "checkpoint"].map((matching) => [matching, pnpmPaths] as const),
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, agpPaths] as const),
+  ...["projection", "canonical", "checkpoint"].map((matching) => [matching, dotnetPaths] as const),
+  ["projection", dotnetPaths, [...pnpmPaths, ...agpPaths]],
+  ["projection", agpPaths, pnpmPaths],
+  ["projection", pnpmPaths, agpPaths],
+  ["projection", [...pnpmPaths, ...agpPaths]],
 ] as const)(
-  "reconstructs a collected baseline from the verified %s filesystem (historical cache: %s)",
-  async (matching, historicalCache) => {
-    const { projection, canonical, snapshot, treeRoot, records } =
-      await repairFixture(historicalCache);
+  "repairs the verified %s baseline (historical: %s, disposable: %s)",
+  async (matching, historicalPaths, disposablePaths = []) => {
+    const { projection, canonical, snapshot, treeRoot, records } = await repairFixture(
+      historicalPaths,
+      disposablePaths,
+    );
     if (matching === "checkpoint") {
       await fs.writeFile(path.join(canonical, "nested/file.txt"), "pending edit");
       const scan = await executeLocalWorkspaceManifestRead(
@@ -325,7 +394,7 @@ it.each([
       );
       snapshot.row.checkpoint_json = JSON.stringify(scan);
     }
-    if (matching === "canonical") {
+    if (matching === "canonical" && !historicalPaths.length) {
       // A later guest name must not enroll unrelated canonical bytes or spoil
       // an already matching canonical candidate.
       await fs.writeFile(path.join(projection, "unaccepted.txt"), "guest addition");
@@ -337,11 +406,10 @@ it.each([
       kind: "repair",
       canonicalRoot: canonical,
     });
-    expect(result.kind).toBe("replace");
-    if (result.kind !== "replace") {
-      throw new Error("Missing prepared repair");
-    }
-    const mutation = deserialize(inflateRawSync(result.update.mutation)) as LocalWorkspaceMutation;
+    assert(result.kind === "replace", "Missing prepared repair");
+    const mutation = deserialize(
+      zstdDecompressSync(result.update.mutation),
+    ) as LocalWorkspaceMutation;
     expect(mutation).toEqual({
       kind: "update",
       revision: 7,
@@ -371,7 +439,7 @@ it.each([
 it.each(["different", "identical"] as const)(
   "preserves %s later edits when neither filesystem matches the exact missing baseline",
   async (edits) => {
-    const { projection, canonical, snapshot } = await repairFixture(true);
+    const { projection, canonical, snapshot } = await repairFixture(pnpmPaths);
     await fs.writeFile(path.join(projection, "nested/file.txt"), "guest edit");
     const hostEdit = edits === "identical" ? "guest edit" : "host edit";
     await fs.writeFile(path.join(canonical, "nested/file.txt"), hostEdit);

@@ -59,7 +59,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   });
   const resolveWorkspaceBootstrapFiles = () =>
     resolveBootstrapFilesForRun({
-      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
+      bootstrapUserProfileId: attempt.sessionUserProfileId,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
@@ -175,6 +175,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   return {
     ...bootstrapBudget,
     bootstrapMode,
+    bootstrapCompleted: bootstrapRouting.bootstrapCompleted,
     contextFiles,
     bootstrapInjectionStats,
     shouldRecordCompletedBootstrapTurn,

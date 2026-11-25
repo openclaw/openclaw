@@ -96,7 +96,7 @@ describe("secrets store state", () => {
       expect(state.error).toBe(
         complete
           ? "Inventory unavailable"
-          : "Saved 1 of 2 entries. Couldn’t finish the import. Reload the list to check what was saved.\nSecond write refused",
+          : "Confirmed saves before the error: 1 of 2. Couldn’t finish the import. Reload the list to check what was saved.\nSecond write refused",
       );
       expect(state.busy).toBe(false);
       expect(request.mock.calls.filter(([method]) => method === "secrets.store.set")).toHaveLength(
@@ -118,7 +118,7 @@ describe("secrets store state", () => {
       ]),
     ).toBeNull();
     expect(state.error).toBe(
-      "Saved 1 of 2 entries. Couldn’t finish the import. Reload the list to check what was saved.\nStore unavailable",
+      "Confirmed saves before the error: 1 of 2. Couldn’t finish the import. Reload the list to check what was saved.\nStore unavailable",
     );
     expect(state.busy).toBe(false);
   });

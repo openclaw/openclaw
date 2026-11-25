@@ -270,17 +270,17 @@ describe("Git backup command agent selection", () => {
       "unknown",
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      "Error",
     ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s Git create agent", async (_label, agent, message) => {
-    await expect(create({ agents: [agent] })).rejects.toThrow(message);
-
+    ["whitespace-only", "   ", "--agent must not be blank", "ExpectedCliError"],
+  ])("rejects an %s Git create agent", async (_label, agent, message, name) => {
+    await expect(create({ agents: [agent] })).rejects.toMatchObject({ name, message });
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
 
   it("resolves every current agent and its configured root for an all-scope backup", async () => {
-    const mainAgentDir = path.resolve("/tmp/external-main");
-    const opsAgentDir = path.resolve("/tmp/external-ops");
+    const mainAgentDir = path.resolve("external-main");
+    const opsAgentDir = path.resolve("external-ops");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
         entries: {
@@ -311,10 +311,10 @@ describe("Git backup command agent selection", () => {
   });
 
   it("keeps the --all plus explicit-scope conflict ahead of agent validation", async () => {
-    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toThrow(
-      "Use --all by itself, or select --global and --agent scopes explicitly.",
-    );
-
+    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Use --all by itself, or select --global and --agent scopes explicitly.",
+    });
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });

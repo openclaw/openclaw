@@ -467,7 +467,9 @@ describe("config form scalar integrity", () => {
         value: { policy: value },
         onPatch,
       });
-      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+      expect(container.textContent).toContain(
+        "Edit this setting in the Raw tab of Advanced settings.",
+      );
       expect(container.querySelector("input, select, textarea")).toBeNull();
       expect(onPatch).not.toHaveBeenCalled();
     },

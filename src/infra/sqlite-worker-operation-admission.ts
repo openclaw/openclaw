@@ -4,18 +4,17 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
+} from "./path-existence.js";
 import {
   installSqliteDatabaseAdmissions,
   prepareSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmissionAsync,
   retainPreparedSqliteDatabaseAdmissionLocation,
   readSqliteDatabaseAdmissions,
-  retainSqliteDatabaseAdmissionLocation,
 } from "./sqlite-database-admission.js";
 import {
   readSqliteWorkerAdmissionDecision,
@@ -38,7 +37,7 @@ import {
   type RetainedWorkerTransactionAdmission,
   type SqliteWorkerNativeSettlementOwner,
 } from "./sqlite-worker-operation-settlement.js";
-import { recordWorkerMessage } from "./worker-message-metrics.js";
+import { recordWorkerAuthorityMessage } from "./worker-message-metrics.js";
 
 export {
   deferSqliteWorkerCommitReceipt,
@@ -164,6 +163,7 @@ function createOperationAdmission(
   const cleanupFailures: unknown[] = [];
   let closed = false;
   let started = false;
+  let samplePayload: boolean | undefined;
   let observeRequest: ((request: SqliteWorkerAdmissionRequest) => void) | undefined;
   let failure: { error: unknown; source: AdmissionFailureSource } | undefined;
   let databaseAuthority:
@@ -192,12 +192,7 @@ function createOperationAdmission(
     // Reentrant finish releases the owner record, not an already-running callback frame.
     const currentCallbacks = callbacks;
     const metric = isRecord(wire) ? wire : undefined;
-    recordWorkerMessage(
-      metric?.kind === "sqlite-database-admissions" ? "admission" : "authority",
-      "from_worker",
-      typeof metric?.payloadBytes === "number" ? metric.payloadBytes : undefined,
-      admission.requestClass,
-    );
+    samplePayload = recordWorkerAuthorityMessage(metric, admission.requestClass, samplePayload);
     started = true;
     if (metric?.kind === "sqlite-database-admissions") {
       const received = databaseReplies.receive(
@@ -246,25 +241,22 @@ function createOperationAdmission(
             ? expected
             : undefined;
         const upstream = getSqliteDatabaseAdmissionUpstream();
-        const prepared =
-          !message.create &&
-          (!message.location ||
-            retainPreparedSqliteDatabaseAdmissionLocation(
-              message.location,
-              expectedIdentity,
-              observedLocation,
-            ));
-        if (!upstream && prepared) {
-          publishFacts(admissions);
-          return;
-        }
-        if (
-          !upstream &&
-          message.location &&
-          (!message.create || authority || assertRelayCreation)
-        ) {
+        if (!upstream) {
           const location = message.location;
-          const createRequest = message.create;
+          // Without a creation owner, this can observe an existing file but cannot create one.
+          const createRequest = authority || assertRelayCreation ? message.create : undefined;
+          if (
+            !location ||
+            (!createRequest &&
+              retainPreparedSqliteDatabaseAdmissionLocation(
+                location,
+                expectedIdentity,
+                observedLocation,
+              ))
+          ) {
+            publishFacts(admissions);
+            return;
+          }
           const assertCurrent = () => {
             assertWaiting();
             if (closed || callbacks !== currentCallbacks || databaseAuthority !== authority) {
@@ -379,48 +371,21 @@ function createOperationAdmission(
         if (closed) {
           throw new SqliteWorkerError("SQLite worker admission is closed", "closed");
         }
-        if (upstream) {
-          if (upstream.closed) {
-            throw new SqliteWorkerError("SQLite admission upstream is closed", "closed");
-          }
-          // A descendant publication must reach the descriptor owner before its sibling opens.
-          installSqliteDatabaseAdmissions(
-            withSqliteDatabaseAdmissionWait(
-              {
-                deadlineAtMs,
-                assertActive: assertWaiting,
-              },
-              () =>
-                exchangeDatabaseAdmissions(
-                  upstream.port,
-                  admissions,
-                  location,
-                  create ? "admitted" : undefined,
-                  observedLocation,
-                ),
-            ),
-          );
-        } else if (location) {
-          try {
-            assertWaiting();
-            if (create) {
-              prepareSqliteDatabaseAdmission(location, { create: true });
-            }
-            const identity = databaseAuthority?.databaseIdentity;
-            retainSqliteDatabaseAdmissionLocation(
-              location,
-              identity &&
-                (location === identity.databasePath || location === databaseAuthority?.databasePath)
-                ? identity
-                : undefined,
-              observedLocation,
-            );
-          } catch (error) {
-            if (!isRecord(error) || error.code !== "ENOENT") {
-              throw error;
-            }
-          }
+        if (upstream.closed) {
+          throw new SqliteWorkerError("SQLite admission upstream is closed", "closed");
         }
+        // A descendant publication must reach the descriptor owner before its sibling opens.
+        installSqliteDatabaseAdmissions(
+          withSqliteDatabaseAdmissionWait({ deadlineAtMs, assertActive: assertWaiting }, () =>
+            exchangeDatabaseAdmissions(
+              upstream.port,
+              admissions,
+              location,
+              create ? "admitted" : undefined,
+              observedLocation,
+            ),
+          ),
+        );
         publishFacts(admissions);
       } catch (error) {
         failFacts(error, coldOpenPath);

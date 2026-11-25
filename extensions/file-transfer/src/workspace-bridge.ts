@@ -11,6 +11,7 @@ import {
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectStrictBase64 } from "./shared/base64.js";
+import { BOUNDED_DIRECTORY_PAGE_SIZE, BOUNDED_UNARY_FILE_BYTES } from "./shared/bounded-replies.js";
 import { throwFromNodePayload } from "./shared/errors.js";
 import { FILE_FETCH_CHUNK_BYTES } from "./shared/file-fetch-protocol.js";
 import type { FileTransferNodeInvokeCommand } from "./shared/node-invoke-policy-commands.js";
@@ -18,9 +19,24 @@ import { createWorkspaceFile } from "./workspace-file-create.js";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const DIRECTORY_PAGE_SIZE = 4096;
+const WORKSPACE_REQUEST_TIMEOUT_MS = 60_000;
 
 class FileFetchTooLargeError extends Error {
   readonly code = "FILE_TOO_LARGE";
+}
+
+function throwWorkspaceError(
+  command: FileTransferNodeInvokeCommand,
+  payload: Record<string, unknown>,
+): never {
+  if (command === "file.fetch" && payload.code === "FILE_TOO_LARGE") {
+    const message = typeof payload.message === "string" ? payload.message : "file exceeds limit";
+    throw new FileFetchTooLargeError(`file.fetch FILE_TOO_LARGE: ${message}`);
+  }
+  if (payload.code === "NOT_FOUND") {
+    throw Object.assign(new Error(`${command}: path not found`), { code: "ENOENT" });
+  }
+  throwFromNodePayload(command, payload);
 }
 
 function relativeWithin(root: string, target: string, paths = path): string {
@@ -40,6 +56,7 @@ export function createNodeWorkspaceBridge(options: {
   signal: AbortSignal;
   openDuplex?: OpenClawPluginServiceContext["openNodeDuplex"];
   assertCurrent?: () => void;
+  boundedReplies?: boolean;
 }): AgentWorkspaceAccess["bridge"] & Required<Pick<SandboxFsBridge, "createFileExclusive">> {
   const workspaceDir = path.resolve(options.workspaceDir);
   const remoteRoot = path.posix.resolve(options.remoteRoot);
@@ -64,7 +81,7 @@ export function createNodeWorkspaceBridge(options: {
         command,
         params: { followSymlinks: false, ...params },
         signal,
-        timeoutMs: 60_000,
+        timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
       }),
     );
     signal.throwIfAborted();
@@ -74,18 +91,10 @@ export function createNodeWorkspaceBridge(options: {
       throw new Error(`Invalid ${command} response`);
     }
     if (payload.ok !== true) {
-      if (command === "file.fetch" && payload.code === "FILE_TOO_LARGE") {
-        const message =
-          typeof payload.message === "string" ? payload.message : "file exceeds limit";
-        throw new FileFetchTooLargeError(`file.fetch FILE_TOO_LARGE: ${message}`);
+      if (command === "file.stat" && payload.code === "NOT_FOUND") {
+        return null;
       }
-      if (payload.code === "NOT_FOUND") {
-        if (command === "file.stat") {
-          return null;
-        }
-        throw Object.assign(new Error(`${command}: path not found`), { code: "ENOENT" });
-      }
-      throwFromNodePayload(command, payload);
+      throwWorkspaceError(command, payload);
     }
     if (typeof payload.path !== "string" || !path.posix.isAbsolute(payload.path)) {
       throw new Error(`Missing resolved path in ${command} response`);
@@ -108,18 +117,10 @@ export function createNodeWorkspaceBridge(options: {
       followSymlinks: false,
       ...(followParentSymlinks ? { rootPath: remoteRoot, followSymlinks: true } : {}),
     };
-    let payload: Awaited<ReturnType<typeof invoke>>;
-    try {
-      payload = await invoke("file.fetch", fetchParams, params.signal);
-    } catch (error) {
-      // Old nodes retain small-file support even when the caller grants a larger budget.
-      // Only the structured unary size refusal admits a fresh policy-checked binary read.
-      if (
-        !(error instanceof FileFetchTooLargeError) ||
-        maxBytes <= MAX_BYTES ||
-        !options.openDuplex
-      ) {
-        throw error;
+    const readDuplex = async (cause?: FileFetchTooLargeError) => {
+      const openDuplex = options.openDuplex;
+      if (!openDuplex) {
+        throw new Error("Bounded workspace reads require service-owned duplex access");
       }
       const signal = params.signal
         ? AbortSignal.any([options.signal, params.signal])
@@ -129,14 +130,14 @@ export function createNodeWorkspaceBridge(options: {
         options.assertCurrent?.();
       };
       assertCurrent();
-      const channel = await options.openDuplex({
+      const channel = await openDuplex({
         nodeId: options.nodeId,
         command: "file.fetch",
         params: { ...fetchParams, transport: "binary", maxBytes },
         maxMessageBytes: FILE_FETCH_CHUNK_BYTES,
         signal,
         assertCurrent,
-        timeoutMs: 60_000,
+        timeoutMs: WORKSPACE_REQUEST_TIMEOUT_MS,
       });
       void channel.closed.catch(() => {});
       let unsubscribe: (() => void) | undefined;
@@ -153,7 +154,7 @@ export function createNodeWorkspaceBridge(options: {
             message.byteLength > FILE_FETCH_CHUNK_BYTES ||
             message.byteLength > maxBytes - receivedSize
           ) {
-            throw new Error("Invalid or oversized binary file.fetch payload", { cause: error });
+            throw new Error("Invalid or oversized binary file.fetch payload", { cause });
           }
           const chunk = Buffer.from(message);
           receivedSize += chunk.byteLength;
@@ -176,7 +177,7 @@ export function createNodeWorkspaceBridge(options: {
           receipt.sha256 !== hash.digest("hex")
         ) {
           throw new Error("Binary file.fetch receipt does not match the received bytes", {
-            cause: error,
+            cause,
           });
         }
         result = { data: Buffer.concat(chunks, receivedSize), canonicalPath: receipt.path };
@@ -185,12 +186,44 @@ export function createNodeWorkspaceBridge(options: {
         channel.close();
       }
       if (!path.posix.isAbsolute(result.canonicalPath)) {
-        throw new Error("Missing resolved path in file.fetch response", { cause: error });
+        throw new Error("Missing resolved path in file.fetch response", { cause });
       }
       return {
         ...result,
         workspaceRelativePath: relativeWithin(remoteRoot, result.canonicalPath, path.posix),
       };
+    };
+    // Larger caller budgets select the existing service stream up front. This
+    // keeps path approval and the 60-second budget within one invocation.
+    if (options.boundedReplies && maxBytes > BOUNDED_UNARY_FILE_BYTES) {
+      try {
+        return await readDuplex();
+      } catch (error) {
+        options.signal.throwIfAborted();
+        params.signal?.throwIfAborted();
+        options.assertCurrent?.();
+        const details = asOptionalRecord(asOptionalRecord(error)?.details);
+        const refusal = asOptionalRecord(details?.fileTransferError);
+        if (refusal?.ok === false) {
+          throwWorkspaceError("file.fetch", refusal);
+        }
+        throw error;
+      }
+    }
+    let payload: Awaited<ReturnType<typeof invoke>>;
+    try {
+      payload = await invoke("file.fetch", fetchParams, params.signal);
+    } catch (error) {
+      // Old nodes retain small-file support even when the caller grants a larger budget.
+      // Only the structured unary size refusal admits a fresh policy-checked binary read.
+      if (
+        !(error instanceof FileFetchTooLargeError) ||
+        maxBytes <= MAX_BYTES ||
+        !options.openDuplex
+      ) {
+        throw error;
+      }
+      return await readDuplex(error);
     }
     const base64 = typeof payload?.base64 === "string" ? payload.base64 : "";
     const size = inspectStrictBase64(base64);
@@ -313,6 +346,13 @@ export function createNodeWorkspaceBridge(options: {
       return { type: payload.type, size: payload.size, mtimeMs: payload.mtimeMs };
     },
     async readDirectory(params) {
+      const pageSize = options.boundedReplies ? BOUNDED_DIRECTORY_PAGE_SIZE : DIRECTORY_PAGE_SIZE;
+      const signal = options.boundedReplies
+        ? AbortSignal.any([
+            AbortSignal.timeout(WORKSPACE_REQUEST_TIMEOUT_MS),
+            ...(params.signal ? [params.signal] : []),
+          ])
+        : params.signal;
       const entries: Awaited<ReturnType<NonNullable<SandboxFsBridge["readDirectory"]>>> = [];
       let offset = 0;
       while (true) {
@@ -320,16 +360,12 @@ export function createNodeWorkspaceBridge(options: {
           "dir.list",
           {
             path: remotePath(params),
-            maxEntries: DIRECTORY_PAGE_SIZE,
+            maxEntries: pageSize,
             ...(offset > 0 ? { pageToken: String(offset) } : {}),
           },
-          params.signal,
+          signal,
         );
-        if (
-          !payload ||
-          !Array.isArray(payload.entries) ||
-          payload.entries.length > DIRECTORY_PAGE_SIZE
-        ) {
+        if (!payload || !Array.isArray(payload.entries) || payload.entries.length > pageSize) {
           throw new Error("Invalid dir.list response");
         }
         for (const value of payload.entries) {

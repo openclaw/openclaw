@@ -200,6 +200,8 @@ export function shouldConsiderForGatewayStartup(params: {
   manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
+  /** Policy ids of opted-in memory backends that start beside the slot owner. */
+  memoryBackendStartupPolicyIds?: ReadonlySet<string>;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
   return (
@@ -207,7 +209,10 @@ export function shouldConsiderForGatewayStartup(params: {
     params.contextEngineSlotStartupPluginId === params.plugin.pluginId ||
     (params.plugin.startup.memory &&
       (params.startupDreamingPluginIds.has(params.plugin.pluginId) ||
-        params.memorySlotStartupPluginId === params.plugin.pluginId))
+        params.memorySlotStartupPluginId === params.plugin.pluginId ||
+        params.memoryBackendStartupPolicyIds?.has(
+          normalizePluginPolicyId(params.plugin.pluginId),
+        ) === true))
   );
 }
 

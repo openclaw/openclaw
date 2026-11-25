@@ -560,12 +560,15 @@ async function runDoctorHealthFlowWithResult(
       return;
     }
     const pluginWarnings: string[] = [];
+    let pluginLoadFailed = false;
     if (diagnostics.length > 0) {
       const { collectPluginLoadHealthFindings } =
         await import("../commands/doctor-workspace-status.js");
       const findings = collectPluginLoadHealthFindings(diagnostics);
       renderStructuredHealthFindings(ctx, findings);
       pluginWarnings.push(...findings.map((finding) => `${finding.checkId}: ${finding.message}`));
+      // Advisory notices, such as open tool schemas, come from plugins that still loaded.
+      pluginLoadFailed = findings.some((finding) => finding.severity === "error");
     }
     showDoctorHealthSummary(ctx);
     const warnings = normalizeUpdatePostInstallDoctorWarnings([
@@ -597,7 +600,7 @@ async function runDoctorHealthFlowWithResult(
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;
       return;
     }
-    if (pluginWarnings.length > 0) {
+    if (pluginLoadFailed) {
       startup.showDoctorOutro("Doctor finished with plugin load errors.");
       if (options.nonInteractive && !updatePhase.isUpdateDoctorLintPass(process.env)) {
         exitCode = 1;

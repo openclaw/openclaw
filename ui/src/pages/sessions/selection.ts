@@ -24,8 +24,8 @@ export function reconcileSelectedSessions(
   isPending: (row: SessionDeleteRow) => boolean,
 ): Map<string, SessionDeleteRow> {
   const currentRows = new Map(rows.map((row) => [row.key, row]));
-  const selected = new Map(selection);
-  for (const [key, captured] of selected) {
+  let selected = selection;
+  for (const [key, captured] of selection) {
     const current = currentRows.get(key);
     // Pending lifecycle overlays hide rows before the Gateway confirms them.
     // Keep that selection for rollback, but never transfer it to a successor.
@@ -33,10 +33,13 @@ export function reconcileSelectedSessions(
       ? Boolean(captured.sessionId?.trim()) && current.sessionId === captured.sessionId
       : isPending(captured);
     if (!retained) {
+      if (selected === selection) {
+        selected = new Map(selection);
+      }
       selected.delete(key);
     }
   }
-  return selected.size === selection.size ? selection : selected;
+  return selected;
 }
 
 export function updateSelectedSessions(

@@ -41,11 +41,12 @@ it.for(["event", "pump"] as const)(
     const gate = new Int32Array(new SharedArrayBuffer(8));
     const tick = new Int32Array(new SharedArrayBuffer(4));
     const prepare = databaseAdmission.prepareSqliteDatabaseAdmissionAsync;
-    const calls: string[] = [];
+    const calls: boolean[] = [];
+    let pumping = false;
     using preparation = vi.spyOn(databaseAdmission, "prepareSqliteDatabaseAdmissionAsync");
     preparation.mockImplementation((params) => {
       if (params.location === databasePath) {
-        calls.push(new Error().stack ?? "");
+        calls.push(pumping);
       }
       return prepare(params);
     });
@@ -74,12 +75,17 @@ it.for(["event", "pump"] as const)(
             task.read().status === "pending" &&
             performance.now() < deadline
           ) {
-            task.service();
+            pumping = true;
+            try {
+              task.service();
+            } finally {
+              pumping = false;
+            }
             if (calls.length === 0) {
               Atomics.wait(tick, 0, 0, 2);
             }
           }
-          expect(calls.some((stack) => stack.includes("serviceNativeWorkers"))).toBe(true);
+          expect(calls).toContain(true);
         }
         const reply = await withinTest(task.result, signal);
         expect(reply.threadId).toBeGreaterThan(0);

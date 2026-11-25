@@ -106,13 +106,15 @@ extension OnboardingView {
                 {
                     self.selectLocalGateway()
                 }
-                self.connectionChoiceButton(
-                    title: "Sign in with OpenClaw ID",
-                    subtitle: "Use a claw you own, from anywhere. No VPN or token.",
-                    systemImage: "person.crop.circle",
-                    selected: false)
-                {
-                    self.beginOpenClawIDSignIn()
+                if MacOpenClawIDFeature.isEnabled {
+                    self.connectionChoiceButton(
+                        title: "Sign in with OpenClaw ID",
+                        subtitle: "Use a claw you own, from anywhere. No VPN or token.",
+                        systemImage: "person.crop.circle",
+                        selected: false)
+                    {
+                        self.beginOpenClawIDSignIn()
+                    }
                 }
                 self.connectionChoiceButton(
                     title: "On another computer",
@@ -141,21 +143,23 @@ extension OnboardingView {
             Text("How do you reach the computer it runs on?")
                 .foregroundStyle(.secondary)
             self.onboardingCard(spacing: 12, padding: 14) {
-                self.connectionChoiceButton(
-                    title: "Sign in with OpenClaw ID",
-                    subtitle: "Use a claw you own, from anywhere.",
-                    systemImage: "person.crop.circle",
-                    selected: false)
-                {
-                    self.beginOpenClawIDSignIn()
-                }
-                self.connectionChoiceButton(
-                    title: "Use a node invitation",
-                    subtitle: "For a Mac without a person signed in: add it as a node only.",
-                    systemImage: "envelope",
-                    selected: false)
-                {
-                    self.beginNodeInvitation()
+                if MacOpenClawIDFeature.isEnabled {
+                    self.connectionChoiceButton(
+                        title: "Sign in with OpenClaw ID",
+                        subtitle: "Use a claw you own, from anywhere.",
+                        systemImage: "person.crop.circle",
+                        selected: false)
+                    {
+                        self.beginOpenClawIDSignIn()
+                    }
+                    self.connectionChoiceButton(
+                        title: "Use a node invitation",
+                        subtitle: "For a Mac without a person signed in: add it as a node only.",
+                        systemImage: "envelope",
+                        selected: false)
+                    {
+                        self.beginNodeInvitation()
+                    }
                 }
                 self.connectionChoiceButton(
                     title: "Nearby",
@@ -814,6 +818,11 @@ extension OnboardingView {
                         title: "Configure later",
                         subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                         systemImage: "gearshape")
+                } else if self.selectedConnectionMode == .local, !MacOpenClawIDFeature.isEnabled {
+                    self.featureRow(
+                        title: "Running on this Mac",
+                        subtitle: "Private to this computer. It starts automatically.",
+                        systemImage: "checkmark.circle")
                 } else if self.selectedConnectionMode == .local {
                     self.featureRow(
                         title: "Reach it from anywhere",

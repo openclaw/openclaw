@@ -412,6 +412,10 @@ it("keeps core signatures visible when the catalog overflows", () => {
   const render = () => buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []);
   onTestFinished(() => clearToolSearchCatalog(ctx));
   const description = render();
+  expect(description).toContain(
+    "for file changes instead of shell/Python rewriting with nested escaping",
+  );
+  expect(description).toContain('exec({command:["pwd","git diff --check"].join("\\n")})');
   const index = description.slice(description.indexOf("Enabled async tool globals"));
   expect(index).toContain("additional tools omitted");
   expect(index.length).toBeLessThanOrEqual(8_000);
@@ -428,4 +432,13 @@ it("keeps core signatures visible when the catalog overflows", () => {
   expect(lines.some((line) => line.startsWith("- read "))).toBe(true);
   applyCodeModeCatalog({ ...ctx, tools: [...controls, ...targets.toReversed()] });
   expect(render()).toBe(description);
+  applyCodeModeCatalog({
+    ...ctx,
+    tools: [
+      ...controls,
+      ...targets.filter((tool) => !["exec", "edit", "apply_patch"].includes(tool.name)),
+    ],
+  });
+  expect(render()).not.toContain("for file changes instead of shell/Python rewriting");
+  expect(render()).not.toContain("For multiline commands");
 });

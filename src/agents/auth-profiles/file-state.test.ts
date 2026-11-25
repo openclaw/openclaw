@@ -13,7 +13,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
-  captureAuthProfileFileIdentity,
+  captureAuthProfileFileIdentityAsync,
   readAuthProfileDatabaseIdentity,
   readAuthProfileDatabaseIdentityAsync,
   noteAuthProfileFileWrite,
@@ -213,7 +213,7 @@ it("ignores content and sidecar events but observes replacement and nameless inv
   const { databasePath } = fixture({ existing: true });
   const watcher = Object.assign(new EventEmitter(), { close() {} });
   const watch = vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue(watcher);
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   const changed = watch.mock.calls[0]![1];
   const stat = vi.spyOn(fs.promises, "stat");
   syncBuiltinESMExports();
@@ -228,7 +228,7 @@ it("ignores content and sidecar events but observes replacement and nameless inv
   changed("rename", path.basename(databasePath));
   await replaced;
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
-  const replacement = captureAuthProfileFileIdentity(databasePath);
+  const replacement = await captureAuthProfileFileIdentityAsync(databasePath);
   fs.unlinkSync(databasePath);
   const deleted = nextChange(path.dirname(databasePath));
   changed("change");
@@ -241,7 +241,7 @@ it("publishes a first owner write immediately and keeps same-file writes from re
   expect(readAuthProfileDatabaseIdentity(databasePath)?.key).toMatch(/^path:/);
   fs.writeFileSync(databasePath, "created synthetic database");
   noteAuthProfileFileWrite(databasePath);
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
   const changed = nextChange(directory);
   fs.writeFileSync(databasePath, "session-only write in the same file");
@@ -249,7 +249,7 @@ it("publishes a first owner write immediately and keeps same-file writes from re
   expect(() => captured.assertCurrent()).not.toThrow();
 });
 
-it("publishes a first owner write to previously admitted directory aliases", () => {
+it("publishes a first owner write to previously admitted directory aliases", async () => {
   const root = temporary.make("auth-file-alias-write-through-");
   const directory = path.join(root, "owner");
   const alias = path.join(root, "alias");
@@ -267,7 +267,7 @@ it("publishes a first owner write to previously admitted directory aliases", () 
   noteAuthProfileFileWrite(identity.canonicalPath, identity);
   expect(stat).not.toHaveBeenCalled();
   expect(realpath).not.toHaveBeenCalled();
-  const current = captureAuthProfileFileIdentity(aliasPath);
+  const current = await captureAuthProfileFileIdentityAsync(aliasPath);
   expect(current.identity?.key).toMatch(/^file:/);
   expect(current.identity?.canonicalPath).toBe(before?.canonicalPath);
   expect(() => current.assertCurrent()).not.toThrow();
@@ -277,11 +277,11 @@ it("keeps first-write authority when publication overtakes an observed file read
   const { databasePath } = fixture();
   readAuthProfileDatabaseIdentity(databasePath);
   const original = fs.promises.stat;
-  let published: ReturnType<typeof captureAuthProfileFileIdentity> | undefined;
-  vi.spyOn(fs.promises, "stat").mockImplementationOnce((...args) => {
+  let published: Awaited<ReturnType<typeof captureAuthProfileFileIdentityAsync>> | undefined;
+  vi.spyOn(fs.promises, "stat").mockImplementationOnce(async (...args) => {
     fs.writeFileSync(databasePath, "created synthetic database");
     noteAuthProfileFileWrite(databasePath);
-    published = captureAuthProfileFileIdentity(databasePath);
+    published = await captureAuthProfileFileIdentityAsync(databasePath);
     return original(...args);
   });
   syncBuiltinESMExports();
@@ -306,7 +306,7 @@ it("reports first-file creation on explicit refresh without retiring unchanged a
     expect.objectContaining({ identityChanged: false, createdPaths: [databasePath] }),
   );
 
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   expect(captured.identity?.key).toMatch(/^file:/);
   expect(authProfileSourceExists(legacyPath)).toBe(true);
   await Promise.all([refreshAuthProfileFileState(), refreshAuthProfileFileState()]);
@@ -358,7 +358,7 @@ it("joins a fallback observation received while a prior refresh is pending", asy
 it("invalidates admitted auth facts after a separate process replaces their files", async () => {
   const { directory, databasePath } = fixture({ timers: true, existing: true });
   const legacyPath = path.join(directory, "auth-profiles.json");
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   const before = captured.identity;
   expect(authProfileSourceExists(legacyPath)).toBe(false);
   const changed = Promise.withResolvers<void>();
@@ -394,7 +394,7 @@ it("periodically invalidates when directory events are unavailable", async () =>
 
 it("keeps an absent database readable as missing after fallback revalidation", async () => {
   const { directory, databasePath } = fixture({ timers: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   const changed = nextChange(directory);
   await observe(changed);
   expect(readAuthProfileDatabaseIdentity(databasePath)).toEqual(captured.identity);
@@ -403,15 +403,16 @@ it("keeps an absent database readable as missing after fallback revalidation", a
 
 it("retires observations with the database owner", async () => {
   const { databasePath } = fixture({ existing: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   await closeFiles([databasePath]);
   expect(() => captured.assertCurrent()).toThrow("database file identity changed");
-  expect(() => captureAuthProfileFileIdentity(databasePath).assertCurrent()).not.toThrow();
+  const replacement = await captureAuthProfileFileIdentityAsync(databasePath);
+  expect(() => replacement.assertCurrent()).not.toThrow();
 });
 
 it("keeps physical file authority through logical snapshot reset", async () => {
   const { databasePath } = fixture({ existing: true });
-  const captured = captureAuthProfileFileIdentity(databasePath);
+  const captured = await captureAuthProfileFileIdentityAsync(databasePath);
   clearRuntimeAuthProfileStoreSnapshots();
   expect(() => captured.assertCurrent()).not.toThrow();
   await closeOpenClawStateDatabaseAsync();
@@ -424,13 +425,13 @@ it("keeps sibling file authority when another database is replaced or retired", 
   const second = path.join(directory, "second.sqlite");
   fs.writeFileSync(first, "first synthetic database");
   fs.writeFileSync(second, "second synthetic database");
-  const retained = captureAuthProfileFileIdentity(first);
-  const replaced = captureAuthProfileFileIdentity(second);
+  const retained = await captureAuthProfileFileIdentityAsync(first);
+  const replaced = await captureAuthProfileFileIdentityAsync(second);
   replaceFile(second);
   await refreshAuthProfileFileState();
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => replaced.assertCurrent()).toThrow("database file identity changed");
-  const retired = captureAuthProfileFileIdentity(second);
+  const retired = await captureAuthProfileFileIdentityAsync(second);
   await closeFiles([first, second], [first]);
   expect(() => retained.assertCurrent()).not.toThrow();
   expect(() => retired.assertCurrent()).toThrow("database file identity changed");

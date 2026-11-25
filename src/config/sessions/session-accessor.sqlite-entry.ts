@@ -394,7 +394,6 @@ async function patchSqliteSessionEntrySnapshot(
       consumePendingReset: options.consumePendingReset,
       providerReviewMutation: options.providerReviewMutation,
       shouldCommitIf: options.workerGuard?.shouldCommitIf,
-      cliHistory: options.workerGuard?.cliHistory,
       conversation: options.workerGuard?.conversation,
     };
   };
@@ -448,7 +447,6 @@ async function patchSqliteSessionEntrySnapshot(
               consumePendingReset: options.consumePendingReset,
               providerReviewMutation: options.providerReviewMutation,
               shouldCommitIf: options.workerGuard?.shouldCommitIf,
-              cliHistory: options.workerGuard?.cliHistory,
               conversation: options.workerGuard?.conversation,
               ensureIdentitySource,
             },

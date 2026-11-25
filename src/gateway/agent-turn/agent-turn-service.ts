@@ -56,6 +56,7 @@ export function createAgentTurnService(
     privateCompletion,
     replyExpectation,
     settleWakeReplay,
+    subagentCompletions,
     assertAdmissionCurrent,
     assertCancellationCurrent,
     executionSource,
@@ -360,8 +361,9 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             canonicalSessionAgentId: sessionAgentId,
             mainSessionKey,
-            touchInteraction,
           } = preparedSession;
+          const touchInteraction =
+            preparedSession.touchInteraction && !preflight.preserveUserFacingSessionModelState;
           const { entry } = preparedSession;
           cfgForAgent = cfgLocal;
           freshChild = preparedSession.freshChild;
@@ -374,6 +376,7 @@ export function createAgentTurnService(
             principal,
             sessionKey: canonicalSessionKey,
             agentId: sessionAgentId,
+            entry,
           });
           if (sessionAuthorizationError) {
             io.emitAcceptance([false, undefined, sessionAuthorizationError]);
@@ -397,6 +400,7 @@ export function createAgentTurnService(
           ) =>
             buildAgentSessionPatch({
               ...preparedSession,
+              touchInteraction,
               freshEntry,
               initialEntry: entry,
               sessionAgentId,
@@ -583,6 +587,7 @@ export function createAgentTurnService(
           privateCompletion,
           replyExpectation,
           settleWakeReplay,
+          subagentCompletions,
           acquireGatewayWorkAdmission: admissionController.acquire,
           assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
           hasGatewayAdmissionOutcome: admissionController.hasOutcome,

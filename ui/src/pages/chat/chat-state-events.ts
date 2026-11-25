@@ -209,6 +209,16 @@ function handleSessionsChangedEvent(
     visibleSessionMatches(state, event.key, event.agentId ?? undefined),
   );
   const source = asNullableRecord(payload);
+  // Removed members receive the keyless sharing invalidation, not the private session row.
+  // Only a member or viewer can lose access through sharing; owners and admins keep it.
+  const sharingRole = selectedChatSessionRow(state)?.sharingRole;
+  if (
+    source?.reason === "sharing" &&
+    (sharingRole === "member" || sharingRole === "viewer") &&
+    (matchesChat || !source.sessionKey)
+  ) {
+    refreshChatEventHistory(state, presented, true);
+  }
   const resetsSession = source?.reason === "reset" || source?.phase === "reset";
   if (event && (resetsSession || source?.reason === "new")) {
     state.retireSessionCompanion?.(event.key, event.agentId);

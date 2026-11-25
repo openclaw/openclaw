@@ -33,7 +33,7 @@ import {
   recordToolResultPromptProjection,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../../src/agents/embedded-agent-runner/tool-result-projection-key.js";
-import { replayToolResultPromptProjections } from "../../src/agents/embedded-agent-runner/tool-result-projection-replay.js";
+import { projectToolResultMessages } from "../../src/agents/embedded-agent-runner/tool-result-truncation.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json-normalize.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
@@ -210,13 +210,14 @@ function hydrate(session: ReturnType<typeof createSession>) {
   session.messages = convertToLlm(
     values.envelopes === "projected"
       ? normalizeMessagesForLlmBoundary(
-          replayToolResultPromptProjections(
-            bindToolResultPromptProjectionKeys(
+          projectToolResultMessages({
+            messages: bindToolResultPromptProjectionKeys(
               messages,
               createToolResultPromptProjectionState(session.projections),
             ),
-            session.projections,
-          ),
+            // Replay the admitted bytes without advancing the session's pruning state.
+            projectionState: createToolResultPromptProjectionState(session.projections),
+          }).messages,
           { sessionVersion: 4, appendOnlyRuntimeContext: true, includeTimestamp: false },
         )
       : messages,

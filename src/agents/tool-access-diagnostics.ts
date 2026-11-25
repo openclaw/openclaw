@@ -1,7 +1,7 @@
 import type { ToolAccessDiagnostics } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredModelRef } from "./model-selection-shared.js";
 import { listCoreToolSections } from "./tool-catalog.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
@@ -122,13 +122,12 @@ export function resolveConfiguredToolAccess(params: {
     cfg: params.config,
     agentId: params.agentId,
     defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
   });
   const policy = resolveEffectiveToolPolicy({
     config: params.config,
     agentId: params.agentId,
-    modelProvider: model.provider,
-    modelId: model.model,
+    modelProvider: model?.provider,
+    modelId: model?.model,
   });
   const toolNames = params.toolNames ?? ["exec", "process"];
   const diagnostics = createToolAccessDiagnostics({ profiles: policy.profiles, toolNames });

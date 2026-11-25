@@ -195,11 +195,13 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {
@@ -355,8 +357,12 @@ export type CronJobState = Omit<
   runningReceiptId?: string;
   /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
   conditionCheckReceiptId?: string;
-  /** Receipt of the active run while its fired condition waits for a run slot. */
+  /** Receipt of an active run waiting for a slot after a condition or provider check. */
   runSlotWaitReceiptId?: string;
+  /** Resolved provider, valid only with the wait receipt above. */
+  runSlotWaitProvider?: string;
+  /** Receipt that was granted a slot past the fixed floor. */
+  extraRunSlotReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
@@ -513,6 +519,8 @@ type CronJobStateInput = Partial<
     | "runningReceiptId"
     | "conditionCheckReceiptId"
     | "runSlotWaitReceiptId"
+    | "runSlotWaitProvider"
+    | "extraRunSlotReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"

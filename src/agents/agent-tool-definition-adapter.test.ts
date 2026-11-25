@@ -173,7 +173,7 @@ describe("agent tool definition adapter", () => {
     { route: "prepared", owner: "closed" },
     { route: "prepared", owner: "replaced" },
   ] as const)(
-    "checks the retained $route invocation owner before file I/O ($owner)",
+    "finishes the started $route invocation when its owner is $owner",
     async ({ route, owner }, { signal }) => {
       await withTestDir({ prefix: "openclaw-adapter-authority-" }, async (dir) => {
         const runId = `adapter-${route}-${owner}`;
@@ -252,13 +252,8 @@ describe("agent tool definition adapter", () => {
           }
           release.resolve();
           const result = await withinTest(execution, signal);
-          if (owner === "live") {
-            expect(result).toEqual(receipt("written"));
-            expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
-          } else {
-            expectError(result, expect.stringContaining("authority is no longer active"));
-            expect(await fs.readdir(dir)).toEqual([]);
-          }
+          expect(result).toEqual(receipt("written"));
+          expect(await fs.readFile(file, "utf8")).toBe("written by the admitted invocation");
         } finally {
           admission.close();
           replacement?.close();

@@ -8,6 +8,7 @@ import {
 } from "../gateway/worker-environments/workspace-result-inventory.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import { openCommandStdinFile } from "../process/command-stdin-file.js";
 import { runExec } from "../process/exec.js";
 import {
   runWorkspaceCommand,
@@ -40,19 +41,17 @@ export async function initializeNodeWorkerGitWorkspace(params: {
     await git(["config", "--local", "core.longpaths", "true"]);
   }
   if (params.packPath) {
-    const pack = await fsp.open(params.packPath, "r");
-    try {
+    {
+      await using pack = await openCommandStdinFile(params.packPath);
       await runExec("git", [...gitPrefix, "-C", params.workspaceDir, "index-pack", "--stdin"], {
         cwd: params.workspaceDir,
         baseEnv: workspaceCommandEnv(params.manifestHome),
-        stdinFileDescriptor: pack.fd,
+        stdinFile: pack.stdinFile,
         signal: params.signal,
         timeoutMs: TRANSFER_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         logOutput: false,
       });
-    } finally {
-      await pack.close();
     }
     await fsp.rm(params.packPath, { force: true });
   }

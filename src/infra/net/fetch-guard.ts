@@ -108,6 +108,8 @@ export type GuardedFetchOptions = {
 
 export type GuardedFetchResult = {
   response: Response;
+  /** The request's existing caller/deadline signal, active until release. */
+  signal?: AbortSignal;
   finalUrl: string;
   release: () => Promise<void>;
   refreshTimeout?: () => void;
@@ -778,15 +780,14 @@ async function fetchWithSsrFGuardInternal(
         continue;
       }
 
-      // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
-      // TODO: Remove this wrapper once Bun propagates post-header aborts through
-      // installed Undici response and clone body streams.
-      const returnedResponse =
-        process.versions.bun && !(response instanceof Response)
-          ? responseWithAbortSignal(response, init.signal ?? undefined)
-          : response;
       return {
-        response: returnedResponse,
+        // oxlint-disable-next-line no-warning-comments -- removal awaits an upstream Bun runtime fix.
+        // TODO: Remove once Bun propagates post-header aborts through Undici body streams.
+        response:
+          process.versions.bun && !(response instanceof Response)
+            ? responseWithAbortSignal(response, init.signal ?? undefined)
+            : response,
+        signal,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,

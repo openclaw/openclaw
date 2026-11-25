@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,11 +36,10 @@ async function prepareOperation(run: FollowupRun) {
 }
 
 function steeringRequester() {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "steering-requester",
     scopes: ["operator.read", "operator.write"],
     source: {},
-    assertCurrent() {},
   });
 }
 
@@ -243,6 +242,155 @@ it.for([
           ).toBe("requester-d");
           expect(followup).toHaveBeenCalledOnce();
         }
+      } finally {
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+        operation.complete();
+      }
+    });
+  },
+);
+
+it.for([undefined, true])(
+  "retains other Discord requesters without consuming their requests (collaboration=%s)",
+  async (allowCollaborativeSteering, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = "agent:main:discord-request-retention";
+      const original = createQueueTestRun({
+        prompt: "find instrumental music",
+        messageId: "original",
+        originatingChannel: "discord",
+      });
+      Object.assign(original.run, {
+        agentId: "main",
+        sessionKey: key,
+        messageProvider: "discord",
+        chatType: "channel",
+        conversationId: "room",
+        senderId: "alice",
+        config: { messages: { queue: { allowCollaborativeSteering } } },
+      });
+      const { operation, fingerprint } = await prepareOperation(original);
+      const injected: string[] = [];
+      attachSteerBackend(operation, fingerprint, preparedDelivery(injected));
+      const runs = (
+        [
+          ["bob", "second", "what changed in the instructions?"],
+          ["carol", "third", "check the patch"],
+          ["bob", "cancelled", "cancel this queued request"],
+        ] as const
+      ).map(([senderId, messageId, prompt]) => {
+        const run = createQueueTestRun({ prompt, messageId, originatingChannel: "discord" });
+        run.run = { ...original.run, senderId };
+        return run;
+      });
+      const completed = createDeferred();
+      const executed: string[] = [];
+      const followup = async (run: FollowupRun) => {
+        executed.push(run.messageId!);
+        if (executed.length === 2) {
+          completed.resolve();
+        }
+      };
+      const steer = (run: FollowupRun) =>
+        runActiveReplySteer(
+          createSteerParams(key, run, operation, {
+            runFollowup: followup,
+            sessionCtx: {
+              Provider: "discord",
+              OriginatingChannel: "discord",
+              SessionKey: key,
+              ChatId: "room",
+              ChatType: "channel",
+              SenderId: run.run.senderId,
+            },
+          }),
+        );
+      try {
+        for (const run of runs) {
+          await steer(run);
+        }
+        await steer(runs[0]!);
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target, [
+          runs[2]!.controllerInput!,
+        ]);
+        expect(injected).toEqual([]);
+        expect(executed).toEqual([]);
+        expect(operation.result).toBeNull();
+        operation.complete();
+        await withinTest(completed.promise, signal);
+        await Promise.all(runs.map((run) => run.controllerInput!.settlement.promise));
+        expect(executed).toEqual(["second", "third"]);
+      } finally {
+        clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
+        operation.complete();
+      }
+    });
+  },
+);
+
+it.for([
+  { sender: "alice", command: false },
+  { sender: "alice", command: true },
+  { sender: "bob", command: true },
+])(
+  "preserves existing steering rules for sender=$sender explicit=$command",
+  async ({ sender, command }, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = "agent:main:discord-steering-controls";
+      const original = createQueueTestRun({
+        prompt: "find music",
+        messageId: "original",
+        originatingChannel: "discord",
+      });
+      Object.assign(original.run, {
+        agentId: "main",
+        sessionKey: key,
+        messageProvider: "discord",
+        chatType: "channel",
+        conversationId: "room",
+        senderId: "alice",
+        config: { messages: { queue: { allowCollaborativeSteering: true } } },
+      });
+      const { operation, fingerprint } = await prepareOperation(original);
+      const injected: string[] = [];
+      attachSteerBackend(operation, fingerprint, preparedDelivery(injected));
+      const run = createQueueTestRun({
+        prompt: "use instrumental music only",
+        messageId: "correction",
+        originatingChannel: "discord",
+      });
+      run.run = { ...original.run, senderId: sender };
+      const followed = createDeferred();
+      try {
+        await runActiveReplySteer(
+          createSteerParams(key, run, operation, {
+            runFollowup: async () => {
+              followed.resolve();
+            },
+            sessionCtx: {
+              Provider: "discord",
+              OriginatingChannel: "discord",
+              SessionKey: key,
+              ChatId: "room",
+              ChatType: "channel",
+              SenderId: sender,
+              ...(command
+                ? {
+                    CommandSource: "text",
+                    CommandAuthorized: true,
+                    CommandBody: "/steer use instrumental music only",
+                  }
+                : {}),
+            },
+          }),
+        );
+        // Explicit cross-requester steering retains its existing authorization checks.
+        expect(injected).toEqual(sender === "alice" ? [run.prompt] : []);
+        operation.complete();
+        if (sender !== "alice") {
+          await withinTest(followed.promise, signal);
+        }
+        await run.controllerInput?.settlement.promise;
       } finally {
         clearSessionQueues([key], getSessionControllerEntryForOperation(operation).target);
         operation.complete();

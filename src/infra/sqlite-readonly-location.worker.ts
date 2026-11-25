@@ -415,7 +415,8 @@ function runSession(): void {
         if (
           !isRecord(read) ||
           typeof read.expectedIdentity !== "string" ||
-          !read.expectedIdentity.startsWith("file:")
+          !read.expectedIdentity.startsWith("file:") ||
+          (read.expectedBirthtime !== undefined && typeof read.expectedBirthtime !== "string")
         ) {
           throw new Error(
             operation
@@ -423,7 +424,7 @@ function runSession(): void {
               : "Auth profile read requires captured physical ownership",
           );
         }
-        const { expectedIdentity } = read;
+        const { expectedIdentity, expectedBirthtime } = read;
         if (operation) {
           if (typeof read.command !== "string") {
             throw new Error("Invalid SQLite read-only operation encoding");
@@ -440,7 +441,7 @@ function runSession(): void {
           if (!sqliteReadOnlyOperations.has(request)) {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
           const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
@@ -448,13 +449,13 @@ function runSession(): void {
               if (stopping) {
                 throw new Error("SQLite read-only worker is stopping");
               }
-              assertExistingDatabaseIdentity(pathname, expectedIdentity);
+              assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
             },
           });
           if (stopping) {
             return;
           }
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
+          assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
           const handle = transfers.start(
             [{ kind: "result", value: { operation: request.type, value } }].values(),
             { kinds: ["result"] },
@@ -480,6 +481,7 @@ function runSession(): void {
         if (stopping) {
           return;
         }
+        assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
         const rows = readAuthProfileRowsReadOnly(
           pathname,
           openReadOnlyDatabase,
@@ -490,7 +492,7 @@ function runSession(): void {
         if (read.artifactPreserving === true) {
           rows.cacheable = false;
         }
-        assertExistingDatabaseIdentity(pathname, expectedIdentity);
+        assertExistingDatabaseIdentity(pathname, expectedIdentity, expectedBirthtime);
         function* rowFields() {
           for (const batch of jsonFieldBatches(rows)) {
             yield { kind: "fields", value: batch };

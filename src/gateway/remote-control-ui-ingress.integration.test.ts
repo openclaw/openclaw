@@ -4,8 +4,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -16,6 +15,7 @@ import type {
   GatewayControlUiIngressFactoryV2,
   GatewayControlUiIngressV2,
 } from "../plugins/gateway-ingress.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { uploadUserBackground } from "../state/user-background.js";
 import {
@@ -33,12 +33,15 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
+  prepareIngressMember,
+  heldReadBarrier,
+  heldMutationBarrier,
   request,
   expectHello,
   PNG_BYTES,
@@ -66,6 +69,7 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-met
 import { usersHandlers } from "./server-methods/users.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
 import { createGatewayWsTestRequestContext } from "./server/ws-connection.test-helpers.js";
@@ -88,13 +92,6 @@ const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
-
-function heldReadBarrier() {
-  return { entered: createDeferred(), release: createDeferred() };
-}
-function heldMutationBarrier(count: number) {
-  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
-}
 
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
@@ -131,6 +128,7 @@ describe("remote Control UI ingress production composition", () => {
   const lifetime = new AbortController();
   const grantLifetime = new AbortController();
   const clients = new GatewayClientRegistry();
+  const pluginRegistry = createEmptyPluginRegistry();
   let listener: Awaited<
     ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>
   >;
@@ -157,7 +155,7 @@ describe("remote Control UI ingress production composition", () => {
 
   beforeAll(async () => {
     state = await createOpenClawTestState({
-      label: "remote-control-ui-ingress",
+      prefix: "ingress-", // Leave room for the Unix socket beneath nested CI temporary roots.
       layout: "state-only",
     });
     const root = path.dirname(
@@ -276,6 +274,11 @@ describe("remote Control UI ingress production composition", () => {
       getRuntimeConfig: () => config,
       getGatewayRequestContext: () => requestContext as never,
       handleHooksRequest: async () => false,
+      handlePluginRequest: createGatewayPluginRequestHandler({
+        registry: pluginRegistry,
+        log: logger,
+        getGatewayRequestContext: () => gatewayContext,
+      }),
     });
     listener = await reserveTestPortListener({
       offsets: [0],
@@ -646,7 +649,7 @@ describe("remote Control UI ingress production composition", () => {
         ? { ...principalOptions, recoveryId: "issued-transport-grant" }
         : undefined,
     );
-    const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+    const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
     const binding = await factory.bindPrincipal(principalOptions);
     try {
       await binding.request("voicewake.get", {});
@@ -776,19 +779,29 @@ describe("remote Control UI ingress production composition", () => {
     }
   });
 
-  it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
+  defineIdMemberPluginHttpTests(() => ({
+    factory,
+    pluginRegistry,
+    workspaceDir: state.workspaceDir,
+    options: openOptions,
+    foreignSessionKey: OWNER_SESSION_KEY,
+    configureAuth,
+  }));
+
+  it("uses the original ID membership and profile role for app RPC, browser access, and recovery", async () => {
     await configureAuth(TOKEN_AUTH, {
       definitions: {
         ...structuredClone(MEMBER_ROLE_PRESETS),
         viewer: { ...MEMBER_ROLE_PRESETS.viewer, scopes: ["operator.read"] },
       },
     });
-    const claw = await linkedClaw();
-    const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
-    const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
-    const accountId = "ingress-id-member";
+    const { claw, profile, peerKey, accountId, release } = await prepareIngressMember(
+      config,
+      (next) => configure(next, TOKEN_AUTH),
+    );
     try {
       for (const role of ["operator", "viewer"] as const) {
+        await setIngressRole(profile.id, role);
         expect(
           await claw.authority.submit(
             await claw.sign({
@@ -821,7 +834,7 @@ describe("remote Control UI ingress production composition", () => {
             ? { ...options, recoveryId: `original-${role}-app` }
             : undefined,
         );
-        const capture = vi.spyOn(operatorRunAuthority, "captureGatewayOperatorRunAuthority");
+        const capture = vi.spyOn(operatorRunAuthority, "prepareGatewayOperatorRunAuthority");
         const ephemeral = await factory.bindPrincipal(options);
         try {
           await ephemeral.request("users.self", {});
@@ -837,7 +850,7 @@ describe("remote Control UI ingress production composition", () => {
         try {
           const durableCapture = vi.spyOn(
             operatorRunAuthority,
-            "captureGatewayOperatorRunAuthority",
+            "prepareGatewayOperatorRunAuthority",
           );
           let snapshot;
           try {
@@ -858,13 +871,17 @@ describe("remote Control UI ingress production composition", () => {
               context: gatewayContext,
               assertCurrent() {},
             });
-          recovered = await restore();
-          expect(recovered.authority.readCurrentRoleFacts?.()?.policy?.sessions.others).toBe(
-            role === "operator" ? "write" : "view",
-          );
-          expect(recovered.authority.scopes).not.toContain("operator.admin");
+          if (role === "operator") {
+            recovered = await restore();
+            expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
+            expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe("write");
+            expect(recovered.authority.scopes).not.toContain("operator.admin");
+          } else {
+            // A read-only requester's saved source starts no new work.
+            await expect(restore()).rejects.toThrow("I did not run your queued request.");
+          }
           resumable = false;
-          await expect(restore()).rejects.toThrow("original ingress grant");
+          await expect(restore()).rejects.toThrow("The sign-in it was started with");
           resumable = true;
           await expect(binding.request("config.set", { raw: "{}" })).rejects.toThrow(
             "operator.admin",
@@ -904,7 +921,6 @@ describe("remote Control UI ingress production composition", () => {
             ).toMatchObject({ ok: true });
             setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
             await expect(binding.request("voicewake.get", {})).rejects.toThrow();
-            expect(recovered?.authority.assertCurrent).toThrow();
             await expect(restore()).rejects.toThrow();
             await expect(readRemote("/claw/control-ui-config.json", ui)).rejects.toThrow();
           });
@@ -918,6 +934,7 @@ describe("remote Control UI ingress production composition", () => {
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      await release();
     }
   });
 

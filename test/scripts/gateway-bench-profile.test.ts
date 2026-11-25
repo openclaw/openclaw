@@ -367,7 +367,6 @@ it("attributes worker receipts without retaining labels or treating unsized mess
     ReturnType<ReturnType<typeof startGatewayBenchWorkerMessages>> & { sourceHooks: string[] }
   >(`${taskProfilePath}.worker-attribution.json`);
   expect(tasks.sourceHooks).toEqual([
-    "sqlite-worker-operation-admission.ts",
     "worker-cpu.ts",
     "worker-message-metrics.ts",
     "worker-task-pool-core.ts",

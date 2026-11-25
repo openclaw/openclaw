@@ -52,10 +52,7 @@ export async function commitRecoveredVisibleMessages(
       producer: entry.session,
       provenance: entry.transcriptProvenance,
       expectedGeneration: entry.sessionGeneration
-        ? {
-            sessionKey: entry.sessionGeneration.sessionKey,
-            lifecycleRevision: entry.sessionGeneration.lifecycleRevision ?? undefined,
-          }
+        ? { sessionKey: entry.sessionGeneration.sessionKey }
         : undefined,
       payload: { text: prepared.payload.text },
       deliveryId: entry.id,

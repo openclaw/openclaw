@@ -92,16 +92,16 @@ struct OnboardingOpenClawIDContent: View {
             self.heading("Use a node invitation", subtitle: "Ask the owner for a private node invitation.")
             if let unavailableReason { Text(unavailableReason).foregroundStyle(.secondary) }
             Text("""
-            Copy the private invitation, and enter the Discovery origin supplied by the owner. \
-            Neither account sign-in nor a Gateway token is needed.
+            Copy the private invitation. Enter a Discovery origin only if the owner supplied one \
+            separately. Neither account sign-in nor a Gateway token is needed.
             """)
             .foregroundStyle(.secondary)
-            TextField("Discovery origin (https://…)", text: self.$discoveryOrigin)
+            TextField("Discovery origin (optional, https://…)", text: self.$discoveryOrigin)
                 .textFieldStyle(.roundedBorder)
             Button("Paste node invitation") {
                 self.action(.pasteNodeInvitation(discoveryOrigin: self.discoveryOrigin))
             }
-            .buttonStyle(.borderedProminent).disabled(self.discoveryOrigin.isEmpty)
+            .buttonStyle(.borderedProminent)
             Text("""
             The private invitation is read only when you choose Paste. \
             It is not shown here or saved in preferences.

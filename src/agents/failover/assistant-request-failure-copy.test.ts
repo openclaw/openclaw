@@ -255,7 +255,7 @@ describe("renderAssistantRequestFailureCopy", () => {
 
 it("gives compacted-history recovery guidance for structured and terminal item conflicts", () => {
   const expected =
-    "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+    "⚠️ The AI service could not recover saved conversation state (item_conflict). Retry this turn. If it still fails, run /compact or choose another model, and share the Gateway logs with the operator.";
   for (const message of [
     {
       errorCode: "item_conflict",

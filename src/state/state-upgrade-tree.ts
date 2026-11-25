@@ -4,7 +4,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import {
+  isSqlitePathOnBtrfs,
+  setSqliteDirectoryNoCow,
+  prepareSqliteDatabaseDirectory,
+} from "../infra/sqlite-wal-filesystem.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
+import { canReadUpgradeFile, readableCompanionBytes } from "./state-upgrade-readability.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -14,6 +29,7 @@ export type UpgradeOp = {
   kind: "replace" | "add" | "remove";
 };
 
+/** `appVersion` names the generation: the writing build's ID, or its version before build IDs. */
 export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";
@@ -44,10 +60,6 @@ export function fsyncPath(pathname: string, directory = false): void {
   }
 }
 
-export function preservedPath(live: string, appVersion: string): string {
-  return `${live}.pre-${appVersion}`;
-}
-
 export function isSqliteFile(pathname: string): boolean {
   let fd: number | undefined;
   try {
@@ -75,6 +87,7 @@ export function readSqliteRows<T>(db: DatabaseSync, sql: string): T[] {
 export function vacuumSqliteInto(source: string, target: string): void {
   withRecoveredSource(source, (readable) => {
     fs.rmSync(target, { force: true });
+    prepareSqliteDatabaseDirectory(target);
     const db = openNodeSqliteDatabase(readable, { readOnly: true });
     try {
       db.prepare("VACUUM INTO ?").run(target);
@@ -96,11 +109,30 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
     if (!(fs.statSync(journal, { throwIfNoEntry: false })?.size ?? 0)) {
       throw error;
     }
+    const bytes = fs.statSync(pathname).size + fs.statSync(journal).size;
+    checkCopySpace(os.tmpdir(), bytes);
+    const completed = reportCopy(bytes, 2);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-recover-"));
     try {
       const copy = path.join(dir, path.basename(pathname));
-      fs.copyFileSync(pathname, copy);
-      fs.copyFileSync(journal, `${copy}-journal`);
+      prepareSqliteDatabaseDirectory(copy);
+      for (const [source, target] of [
+        [pathname, copy],
+        [journal, `${copy}-journal`],
+      ]) {
+        const input = fs.openSync(source!, "r");
+        try {
+          const output = fs.openSync(target!, "w", 0o600);
+          try {
+            copyFileDescriptorSync(input, output);
+          } finally {
+            fs.closeSync(output);
+          }
+        } finally {
+          fs.closeSync(input);
+        }
+      }
+      completed();
       // The first read on a writable connection rolls the journal back.
       const db = openNodeSqliteDatabase(copy);
       try {
@@ -119,63 +151,268 @@ function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
+/** Paths the frozen launcher can discover when restoring a prior generation. */
+export function isUpgradeRestorePath(stateDir: string, file: string): boolean {
+  const relative = path.relative(stateDir, file);
+  const parts = relative.split(path.sep);
+  return (
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative) &&
+    parts.length <= 5 &&
+    !parts.some(
+      (part, index) =>
+        skipEntry(part) ||
+        (index < parts.length - 1 &&
+          ["git-install", "npm", "node_modules", "tmp", "logs"].includes(part)),
+    )
+  );
+}
+
 /** Changes on any write, replacement or mode change of the file. */
 export function fileStamp(pathname: string): string | undefined {
   const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
-const hasJournalContent = (pathname: string) =>
-  ["-wal", "-journal"].some(
-    (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
-  );
+const LARGE_COPY_BYTES = 256 * 1024 * 1024;
 
-/**
- * Copy the live tree into `shadow` and record each copy's stamp in `baseline`, so the
- * swap moves only what the upgrade wrote. A SQLite file with WAL or journal content
- * gets a consistent read-only copy; every other file a copy-on-write clone where the
- * filesystem supports it.
- */
-export function copyTree(
+function checkCopySpace(volumePath: string, bytes: number): void {
+  const volume = fs.statfsSync(volumePath, { bigint: true });
+  const available = volume.bavail * volume.bsize;
+  // Allow a second copy for migration scratch, and at least 256 MiB for journals.
+  const margin = Math.max(bytes, LARGE_COPY_BYTES);
+  if (available < BigInt(bytes + margin)) {
+    throw Object.assign(
+      new Error(
+        `State upgrade copy needs ${bytes} bytes plus ${margin} bytes margin (${bytes + margin} bytes total); only ${available} bytes available. Free ${BigInt(bytes + margin) - available} bytes on ${volumePath} and start the Gateway again`,
+      ),
+      { code: "ENOSPC" },
+    );
+  }
+}
+
+function reportCopy(
+  bytes: number,
+  files: number,
+  log?: { info: (message: string) => void },
+): () => void {
+  if (bytes < LARGE_COPY_BYTES) {
+    return () => {};
+  }
+  const logger = log ?? createSubsystemLogger("state/upgrade");
+  logger.info(`State upgrade copying ${bytes} bytes in ${files} files.`);
+  const started = performance.now();
+  return () => {
+    const seconds = (performance.now() - started) / 1000;
+    logger.info(
+      `State upgrade copied ${bytes} bytes in ${files} files in ${seconds.toFixed(1)}s (${(bytes / seconds / 1e6).toFixed(1)} MB/s).`,
+    );
+  };
+}
+
+export type UpgradeCopyScope = {
+  directories: Set<string>;
+  retiredBackups: { count: number; bytes: number };
+};
+
+/** Byte copies avoid copy_file_range sharing NOCOW database extents on btrfs. */
+export async function copySqliteFamily(
+  source: string,
+  target: string,
+  log?: { info: (message: string) => void },
+): Promise<void> {
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  if (isSqlitePathOnBtrfs(source)) {
+    // NOCOW is a performance policy; a host without chattr must still upgrade.
+    try {
+      setSqliteDirectoryNoCow(path.dirname(target));
+    } catch (error) {
+      createSubsystemLogger("state/upgrade").warn(
+        `Could not enable NOCOW for ${path.dirname(target)}; copying with filesystem defaults: ${String(error)}`,
+      );
+    }
+  }
+  const files = ["", "-wal", "-journal"].flatMap((suffix) => {
+    const stat = fs.statSync(`${source}${suffix}`, { throwIfNoEntry: false });
+    return stat?.isFile() ? [{ suffix, size: stat.size, mode: stat.mode }] : [];
+  });
+  const completed = log
+    ? reportCopy(
+        files.reduce((sum, file) => sum + file.size, 0),
+        files.length,
+        log,
+      )
+    : undefined;
+  for (const { suffix, mode } of files) {
+    const input = await fs.promises.open(`${source}${suffix}`, "r");
+    try {
+      const output = await fs.promises.open(`${target}${suffix}`, "w", mode & 0o7777);
+      try {
+        await copyFileHandle(input, output);
+      } finally {
+        await output.close();
+      }
+    } finally {
+      await input.close();
+    }
+  }
+  // The caller holds exclusive custody. Recover the copied WAL/journal locally;
+  // VACUUM is reserved for the generic rebuild's independent source snapshot.
+  completed?.();
+  if (files.some(({ suffix, size }) => suffix !== "" && size > 0)) {
+    const db = openNodeSqliteDatabase(target);
+    try {
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
+    } finally {
+      db.close();
+    }
+  }
+}
+
+/** Inventory once, refuse insufficient space, then copy only migration inputs. */
+export async function copyTree(
   live: string,
   shadow: string,
   skip: (absolute: string) => boolean,
   baseline: Map<string, string | undefined>,
-  visited = new Set<string>([fs.realpathSync(live)]),
-): void {
-  fs.mkdirSync(shadow, { recursive: true, mode: 0o700 });
-  for (const entry of fs.readdirSync(live, { withFileTypes: true })) {
-    const source = path.join(live, entry.name);
-    const target = path.join(shadow, entry.name);
-    if (skipEntry(entry.name) || skip(source)) {
-      continue;
-    }
-    // A symlink is copied as what it points to, so nothing written to the private
-    // copy can reach the live file. A dangling link stays a link.
-    const linked = entry.isSymbolicLink() ? fs.statSync(source, { throwIfNoEntry: false }) : null;
-    const real = entry.isDirectory() || linked?.isDirectory() ? fs.realpathSync(source) : null;
-    if (real && linked && source.split(path.sep).includes("node_modules")) {
-      // Package links are code, not state: plugin installs link node_modules/openclaw
-      // to the whole OpenClaw package, so following them would copy that package.
-      fs.symlinkSync(fs.readlinkSync(source), target);
-      baseline.set(target, fileStamp(target));
-    } else if (real) {
-      if (!visited.has(real)) {
-        copyTree(source, target, skip, baseline, new Set([...visited, real]));
+  options: {
+    targets?: readonly { path: string }[];
+    log?: { info: (message: string) => void; warn: (message: string) => void };
+    additionalCopyBytes?: number;
+  } = {},
+): Promise<UpgradeCopyScope> {
+  const requiredPaths = new Set(options.targets?.map((target) => target.path));
+  const scope: UpgradeCopyScope = {
+    directories: new Set(),
+    retiredBackups: { count: 0, bytes: 0 },
+  };
+  const files: Array<{
+    source: string;
+    target: string;
+    mode: number;
+    sqlite: boolean;
+    link?: string;
+  }> = [];
+  const rootStat = fs.statSync(live);
+  const btrfs = isSqlitePathOnBtrfs(live);
+  const mounts = new Set<string>();
+  if (process.platform === "linux") {
+    for (const line of fs.readFileSync("/proc/self/mountinfo", "utf8").split("\n")) {
+      const mount = line.split(" ")[4];
+      if (mount) {
+        mounts.add(decodeMountInfoPath(mount));
       }
-    } else if (entry.isSymbolicLink() && !linked) {
-      fs.symlinkSync(fs.readlinkSync(source), target);
-      baseline.set(target, fileStamp(target));
-    } else if (entry.isFile() || linked?.isFile()) {
-      if (isSqliteFile(source) && hasJournalContent(source)) {
-        vacuumSqliteInto(source, target);
-      } else {
-        fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
-      }
-      fs.chmodSync(target, fs.statSync(source).mode & 0o7777);
-      baseline.set(target, fileStamp(target));
     }
   }
+  let bytes = options.additionalCopyBytes ?? 0;
+  const walk = (directory: string, visited: ReadonlySet<string>, retired = false) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (directory === live || (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM"))) {
+        throw error;
+      }
+      (options.log ?? createSubsystemLogger("state/upgrade")).warn(
+        `Skipping unreadable state upgrade directory ${directory}: ${formatErrorMessage(error)}`,
+      );
+      return;
+    }
+    if (!retired) {
+      scope.directories.add(directory);
+    }
+    for (const entry of entries) {
+      const source = path.join(directory, entry.name);
+      if (skip(source)) {
+        continue;
+      }
+      const stat = fs.statSync(source, { throwIfNoEntry: false });
+      const real = stat ? fs.realpathSync(source) : source;
+      if (skip(real) || (stat && stat.dev !== rootStat.dev) || mounts.has(real)) {
+        continue;
+      }
+      const backup = retired || RETIRED_BACKUP_NAME.test(entry.name);
+      if (stat?.isDirectory()) {
+        // Btrfs subvolume roots have inode 256, including same-device subvolumes.
+        if (visited.has(real) || (btrfs && stat.ino === 256) || GENERATION_NAME.test(entry.name)) {
+          continue;
+        }
+        if (!backup && entry.isSymbolicLink() && source.split(path.sep).includes("node_modules")) {
+          files.push({
+            source,
+            target: path.join(shadow, path.relative(live, source)),
+            mode: stat.mode,
+            sqlite: false,
+            link: fs.readlinkSync(source),
+          });
+        } else {
+          walk(source, new Set([...visited, real]), backup);
+        }
+        continue;
+      }
+      if (backup) {
+        scope.retiredBackups.count++;
+        scope.retiredBackups.bytes += stat?.size ?? 0;
+        continue;
+      }
+      if (skipEntry(entry.name) || (stat && !stat.isFile())) {
+        continue;
+      }
+      const target = path.join(shadow, path.relative(live, source));
+      if (!stat) {
+        if (entry.isSymbolicLink()) {
+          files.push({ source, target, mode: 0, sqlite: false, link: fs.readlinkSync(source) });
+        }
+        continue;
+      }
+      if (!canReadUpgradeFile(source, requiredPaths.has(source), options.log)) {
+        continue;
+      }
+      const sqlite = isSqliteFile(source);
+      const companionBytes = sqlite
+        ? readableCompanionBytes(source, requiredPaths.has(source), options.log)
+        : 0;
+      if (companionBytes === undefined) {
+        continue;
+      }
+      const fileBytes = stat.size + companionBytes;
+      files.push({ source, target, mode: stat.mode, sqlite });
+      // Budget ordinary files too: FICLONE may fall back to a full byte copy.
+      bytes += fileBytes;
+    }
+  };
+  walk(live, new Set([fs.realpathSync(live)]));
+  for (const { path: required } of options.targets ?? []) {
+    if (fs.existsSync(required) && !files.some((file) => file.source === required)) {
+      throw new Error(
+        `State upgrade refused: database ${required} is outside the copy scope. Nothing live was changed. Run openclaw doctor --fix under offline maintenance, then start the Gateway again.`,
+      );
+    }
+  }
+  checkCopySpace(live, bytes);
+  const completed = reportCopy(bytes, files.length, options.log);
+  for (const directory of scope.directories) {
+    fs.mkdirSync(path.join(shadow, path.relative(live, directory)), {
+      recursive: true,
+      mode: 0o700,
+    });
+  }
+  for (const file of files) {
+    if (file.link !== undefined) {
+      fs.symlinkSync(file.link, file.target);
+    } else {
+      if (file.sqlite) {
+        await copySqliteFamily(file.source, file.target);
+      } else {
+        fs.copyFileSync(file.source, file.target, fs.constants.COPYFILE_FICLONE);
+      }
+      fs.chmodSync(file.target, file.mode & 0o7777);
+    }
+    baseline.set(file.target, fileStamp(file.target));
+  }
+  completed();
+  return scope;
 }
 
 function sameContent(a: string, b: string): boolean {
@@ -250,6 +487,7 @@ export function diffTree(
   live: string,
   shadow: string,
   baseline: ReadonlyMap<string, string | undefined>,
+  warn: (message: string) => void = () => {},
 ): UpgradeOp[] {
   const ops: UpgradeOp[] = [];
   // Accepted edge case: a symlinked directory is upgraded only in the private copy;
@@ -269,6 +507,8 @@ export function diffTree(
     }
     if (!fs.existsSync(target) && !isSymlinkAt(target)) {
       ops.push({ kind: "add", live: target, next });
+    } else if (!baseline.has(next)) {
+      warn(`Left uncopied live file unchanged: ${path.relative(live, target)}`);
     } else if (!sameContent(target, next)) {
       ops.push({ kind: "replace", live: target, next });
     }
@@ -370,9 +610,15 @@ export function applyPlan(plan: UpgradePlan): void {
   ];
   for (const op of ordered) {
     directories.add(path.dirname(op.live));
+    if (op.next && isSqliteFile(op.next)) {
+      // Native close retains admission's identity descriptor. Windows cannot
+      // replace either file until the joined swap owner releases that custody.
+      retireSqliteDatabaseAdmissionForPath(op.live);
+      retireSqliteDatabaseAdmissionForPath(op.next);
+    }
     // Shared-memory and seal files are rebuilt on open; they carry no data.
     if (op.kind !== "add" && !/-shm$|\.seal$/u.test(op.live)) {
-      preserve(op.live, preservedPath(op.live, plan.appVersion));
+      preserve(op.live, `${op.live}.pre-${plan.appVersion}`);
     }
     if (op.kind === "remove") {
       fs.rmSync(op.live, { force: true });
@@ -386,43 +632,69 @@ export function applyPlan(plan: UpgradePlan): void {
   }
 }
 
-/**
- * Keep one prior generation. Removes `.pre-*` copies from other versions and the
- * backups the retired in-place migration made. Pinned versions stay.
- */
-export function pruneGenerations(
+/** Keep one prior generation of owned files only. Operator recovery is never pruned. */
+export async function pruneGenerations(
   root: string,
   keepVersion: string,
   pinnedVersions: ReadonlySet<string>,
-  skip: (absolute: string) => boolean,
-): string[] {
+  ownedFiles: ReadonlySet<string>,
+  postgres: {
+    config: OpenClawConfig;
+    activeAnchors: string[];
+    warn: (message: string) => void;
+  },
+): Promise<string[]> {
   const removed: string[] = [];
-  const walk = (directory: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const absolute = path.join(directory, entry.name);
-      if (skip(absolute)) {
+  // No recursive walk: ownership comes from the copy or the durable swap plan.
+  const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
+  const generations: Array<{ absolute: string; retained: boolean }> = [];
+  for (const directory of directories) {
+    for (const name of fs.readdirSync(directory)) {
+      const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
+      if (!match || RETIRED_BACKUP_NAME.test(name)) {
         continue;
       }
-      const generation = /\.pre-(\d[^/]*)$/u.exec(entry.name)?.[1];
-      const retiredBackup = RETIRED_BACKUP_NAME.test(entry.name);
-      if (
-        retiredBackup ||
-        (generation !== undefined && generation !== keepVersion && !pinnedVersions.has(generation))
-      ) {
-        fs.rmSync(absolute, { recursive: true, force: true });
-        removed.push(absolute);
-      } else if (entry.isDirectory()) {
-        walk(absolute);
+      const [, original, generation] = match;
+      const absolute = path.join(directory, name);
+      if (ownedFiles.has(path.join(directory, original!)) && fs.lstatSync(absolute).isFile()) {
+        generations.push({
+          absolute,
+          retained: generation === keepVersion || pinnedVersions.has(generation!),
+        });
       }
     }
-  };
-  walk(root);
+  }
+  const retainedAnchors = [
+    ...postgres.activeAnchors,
+    ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
+  ].filter(isSqliteFile);
+  const protectedNamespaces = new Set(
+    retainedAnchors.flatMap((file) => {
+      const engine = readBackupEngine(file);
+      return engine.engine === "postgres" ? [engine.namespace] : [];
+    }),
+  );
+  for (const { absolute, retained } of generations) {
+    if (retained) {
+      continue;
+    }
+    if (isSqliteFile(absolute)) {
+      const engine = readBackupEngine(absolute);
+      if (engine.engine === "postgres" && !protectedNamespaces.has(engine.namespace)) {
+        try {
+          await retirePostgresUpgrade(absolute, postgres.config, retainedAnchors);
+        } catch (error) {
+          // Keep the anchor with its namespace when ownership or cleanup is uncertain.
+          postgres.warn(
+            `Previous PostgreSQL recovery data was kept because cleanup could not finish: ${formatErrorMessage(error)}. Run openclaw doctor to inspect retained recovery data.`,
+          );
+          continue;
+        }
+      }
+    }
+    fs.rmSync(absolute);
+    removed.push(path.relative(root, absolute));
+  }
   return removed;
 }
 
@@ -509,33 +781,6 @@ export function countSqlitePrefix(db: DatabaseSync, needle: string): number {
     );
   }
   return found;
-}
-
-/** Replace a path prefix in a non-SQLite file or a symlink target. */
-export function rewriteFilePrefix(file: string, from: string, to: string): boolean {
-  const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink()) {
-    const target = fs.readlinkSync(file);
-    if (!target.includes(from)) {
-      return false;
-    }
-    fs.rmSync(file);
-    fs.symlinkSync(target.replaceAll(from, to), file);
-    return true;
-  }
-  const bytes = fs.readFileSync(file);
-  if (!bytes.includes(from)) {
-    return false;
-  }
-  const parts: Buffer[] = [];
-  let start = 0;
-  for (let at = bytes.indexOf(from); at >= 0; at = bytes.indexOf(from, start)) {
-    parts.push(bytes.subarray(start, at), Buffer.from(to));
-    start = at + Buffer.byteLength(from);
-  }
-  parts.push(bytes.subarray(start));
-  fs.writeFileSync(file, Buffer.concat(parts), { mode: stat.mode & 0o7777 });
-  return true;
 }
 
 export function listTreeFiles(root: string): string[] {

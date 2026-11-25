@@ -4,6 +4,7 @@ import { Popover } from "../../components/solid/popover.tsx";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import type { DraftRepositoryRead } from "./draft-repository-state.ts";
@@ -68,6 +69,7 @@ function WorktreeFields(props: {
     clearActiveSuggestion();
     activeSuggestion = rows[nextIndex]!;
     activeSuggestion.setAttribute("aria-selected", "true");
+    activeSuggestion.scrollIntoView({ block: "nearest" });
     baseRef.setAttribute("aria-activedescendant", activeSuggestion.id);
     setSuggestionsOpen(true);
     return true;
@@ -98,17 +100,34 @@ function WorktreeFields(props: {
   };
   const branches = () =>
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
-  const suggestions = createMemo(() => (branches()?.branches ?? []).slice(0, 8));
+  const hasBranches = () => Boolean(branches()?.branches.length);
+  const suggestions = createMemo(() => {
+    const all = branches()?.branches ?? [];
+    const query = props.params.place.baseRef.trim().toLowerCase();
+    // Keep the Gateway's default/current/recent order, with prefix and segment matches first.
+    const leading: typeof all = [];
+    const rest: typeof all = [];
+    for (const branch of all) {
+      const name = branch.name.toLowerCase();
+      if (name.startsWith(query) || name.includes(`/${query}`)) {
+        leading.push(branch);
+      } else if (name.includes(query)) {
+        rest.push(branch);
+      }
+    }
+    return [...leading, ...rest].slice(0, 8);
+  });
+  const suggestionsVisible = () => suggestionsOpen() && suggestions().length > 0;
   const branchName = () => props.params.place.worktreeName.trim();
   const baseRefInput = (
     <input
       id="new-session-worktree-base-ref"
       type="text"
-      role={suggestions().length ? "combobox" : undefined}
+      role={hasBranches() ? "combobox" : undefined}
       aria-label={t("newSession.worktreeBaseRef")}
-      aria-autocomplete={suggestions().length ? "list" : undefined}
-      aria-controls={suggestions().length ? "new-session-worktree-branch-suggestions" : undefined}
-      aria-expanded={suggestions().length ? (suggestionsOpen() ? "true" : "false") : undefined}
+      aria-autocomplete={hasBranches() ? "list" : undefined}
+      aria-controls={hasBranches() ? "new-session-worktree-branch-suggestions" : undefined}
+      aria-expanded={hasBranches() ? (suggestionsVisible() ? "true" : "false") : undefined}
       disabled={props.params.submitting || props.params.pendingPlacement}
       placeholder={
         props.params.place.repository.kind === "checking"
@@ -132,7 +151,7 @@ function WorktreeFields(props: {
     <div class="new-session-page__checkout-fields">
       <div class="new-session-page__menu-field">
         <span>{t("newSession.worktreeBaseRef")}</span>
-        {suggestions().length ? (
+        {hasBranches() ? (
           <div
             class="new-session-page__branch-field"
             onFocusOut={(event) => {
@@ -150,7 +169,7 @@ function WorktreeFields(props: {
               label={t("newSession.worktreeBaseRef")}
               class="new-session-page__branch-popup"
               anchor={baseRef}
-              open={suggestionsOpen()}
+              open={suggestionsVisible()}
               onOpenChange={setSuggestionsOpen}
             >
               <div
@@ -189,7 +208,11 @@ function WorktreeFields(props: {
                           }),
                         ]}
                       >
-                        <span class="session-menu__text">{branch().name}</span>
+                        <HoverMarquee
+                          content={branch().name}
+                          class="session-menu__text"
+                          options={{ host: () => button, delay: 250, speed: 80 }}
+                        />
                       </button>
                     );
                   }}

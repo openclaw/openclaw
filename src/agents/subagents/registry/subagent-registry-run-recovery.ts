@@ -18,6 +18,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { assertRequiredCompletionCustody } from "./subagent-completion-batch-authority.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import {
   clearDeliveryState,
@@ -365,7 +366,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     const refreshCompletionAuthority =
       preserveCompletedRun || replaceParams.refreshCompletionAuthority === true;
     const authority = refreshCompletionAuthority
-      ? await captureOperatorToolGatewayContinuationContext()
+      ? await captureOperatorToolGatewayContinuationContext(undefined, { retainRequester: true })
       : undefined;
     let custodyTransferred = false;
     const runIds = new Set([
@@ -380,6 +381,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     let replacement: { source: SubagentRunRecord; next: SubagentRunRecord } | undefined;
     let publishedNext: SubagentRunRecord | undefined;
     try {
+      if (refreshCompletionAuthority) {
+        assertRequiredCompletionCustody(selected, authority);
+      }
       replacement = await mutateSubagentRuns(
         [...runIds],
         (rows) => {
@@ -567,7 +571,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
-          return { value: { source, next }, postimages };
+          return { value: { source, next }, postimages, removalReason: "superseded" };
         },
         {
           runs: this.options.runs,

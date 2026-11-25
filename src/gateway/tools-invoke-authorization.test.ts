@@ -10,9 +10,13 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -53,7 +57,6 @@ vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: runtime.authorize }));
 // mock-isolation: Keep execution inert while exercising HTTP and WebSocket authorization.
 vi.mock("../agents/openclaw-tools.js", () => ({ createOpenClawToolsAsync: runtime.createTools }));
-vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: runtime.beforeHook,
 }));
@@ -130,7 +133,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
     const cases: Record<string, RoleCase> = {
       "denies out-of-role session creation": {
         sessionKey: "agent:blocked:missing",
-        expectedError: 'cannot create sessions for agent "blocked"',
+        expectedError: 'did not start a session with agent "blocked"',
       },
       "plugin provenance": missingSandbox("agent:main:missing", "plugin_doctor"),
       "main-alias provenance": missingSandbox("main"),
@@ -334,20 +337,27 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "refuses sandbox-required member standalone tools without named roles (stored=%s)",
+  "refuses sandbox-required profile standalone tools without a default role (stored=%s)",
   async (stored) => {
     await withToolsInvokeTestState(
       { label: "member-standalone-sandbox", prepareProfileCatalog: true },
       async () => {
         const profile = ensureProfileForEmail("member-admin-sandbox@example.test");
+        setUserProfileRole(profile.id, "isolated");
         const principal = {
           kind: "member" as const,
           peerKey: "iroh:required-admin",
           accountId: "required-admin",
-          role: "isolated",
+          role: "display-only",
         };
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
         runtime.cfg = {
           gateway: {
+            openclawId: { enabled: true },
             roles: {
               definitions: {
                 isolated: {
@@ -384,6 +394,7 @@ it.each([false, true])(
           expect(runtime.execute).not.toHaveBeenCalled();
         } finally {
           setOpenClawIdTunnelPrincipalLookup(undefined);
+          setOpenClawIdMemberAccountLookup(undefined);
         }
       },
     );

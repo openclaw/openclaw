@@ -1,17 +1,29 @@
+import path from "node:path";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+} from "./workspace-bootstrap-policy.js";
+import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import {
   captureWorkspaceFilesystemEvidence,
   validateWorkspaceFilesystemEvidence,
   type WorkspaceFilesystemEvidence,
 } from "./workspace-state-guard.js";
+import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
   replaceWorkspaceAttestation,
   type WorkspaceAttestation,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
+import { loadWorkspaceTemplate } from "./workspace-template-load.js";
 
 const preparation = resolveGlobalSingleton(
   Symbol.for("openclaw.workspacePreparationQueues"),
@@ -36,6 +48,39 @@ export async function settleWorkspaceBootstrapDeferral(
   options: Parameters<typeof mergeWorkspaceSetupState>[3] = {},
 ): Promise<void> {
   await mergeWorkspaceSetupState(dir, { bootstrapDeferred: false }, undefined, options);
+}
+
+/**
+ * Give a kept agent whose initializer stopped early the ordinary default files.
+ * BOOTSTRAP.md and setup state stay with the initializer, so a later seed still applies.
+ */
+export async function seedDeferredWorkspaceDefaults(
+  dir: string,
+  defaults?: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: readonly OptionalBootstrapFileName[];
+  },
+): Promise<void> {
+  const workspace = resolveUserPath(dir);
+  if (
+    defaults?.skipBootstrap ||
+    !(await readCanonicalWorkspaceStateSnapshot(workspace)).setup.bootstrapDeferred
+  ) {
+    return;
+  }
+  const skipped = new Set<string>(defaults?.skipOptionalBootstrapFiles);
+  await runWorkspacePreparation(workspace, async (filesystem) => {
+    for (const name of [
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+    ].filter((file) => !skipped.has(file))) {
+      await publishBootstrapFile(path.join(workspace, name), () => loadWorkspaceTemplate(name), {
+        filesystem: [filesystem],
+      });
+    }
+  });
 }
 
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */

@@ -63,8 +63,10 @@ it("keeps the source benchmark JSON parseable across all history readers", () =>
       cwd: process.cwd(),
       encoding: "utf8",
       // Exercise diagnostic routing rather than Vitest's default silent console.
-      env: { ...process.env, OPENCLAW_LOG_LEVEL: "info" },
-      timeout: 60_000,
+      env: { ...process.env, OPENCLAW_LOG_LEVEL: "info", TSX_DISABLE_CACHE: "1" },
+      // The three source readers start in separate Node processes, serially.
+      // Under CI contention, the final gateway-tail cold start can push the run past 60s.
+      timeout: 120_000,
     },
   );
 
@@ -82,4 +84,4 @@ it("keeps the source benchmark JSON parseable across all history readers", () =>
       ),
     }),
   );
-}, 65_000);
+}, 125_000);

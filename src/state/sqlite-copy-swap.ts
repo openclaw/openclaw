@@ -54,7 +54,7 @@ export type SetAsideRow = {
   row: Record<string, unknown>;
 };
 
-export type SqliteSwapTableReport = {
+type SqliteSwapTableReport = {
   table: string;
   target: string;
   source: number;
@@ -551,7 +551,7 @@ export const UPGRADE_SET_ASIDE_SCOPE = SET_ASIDE_SCOPE;
  * Build the current schema at `outPath` from a source file that is never written.
  * Data problems never fail the build: rows that do not fit are set aside.
  */
-export function buildSqliteByCopy(
+function buildSqliteByCopy(
   target: SqliteSwapTarget,
   sourcePath: string,
   outPath: string,

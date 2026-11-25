@@ -20,10 +20,6 @@ import {
   readTranscriptToolEvidence,
 } from "./runtime-tool-evidence.js";
 import {
-  runtimeParitySessionKeyDetails,
-  runtimeToolFixtureError,
-} from "./runtime-tool-fixture-session-details.js";
-import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
@@ -461,6 +457,7 @@ function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFix
 export async function runRuntimeToolFixture(
   env: QaSuiteRuntimeEnv,
   config: QaRuntimeToolFixtureConfig,
+  onSessionKeys?: (sessionKeys: readonly [string, string]) => void,
 ) {
   const toolName = normalizeOptionalString(config.toolName) ?? "";
   if (!toolName) {
@@ -497,298 +494,288 @@ export async function runRuntimeToolFixture(
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
   );
   const sessionKeys = [happySessionKey, failureSessionKey] as const;
-  const withSessionDetails = (details: string) =>
-    [details, ...runtimeParitySessionKeyDetails(...sessionKeys)].join("\n");
+  onSessionKeys?.(sessionKeys);
   const skipFixture = (details: string): never => {
-    throw new QaSuiteScenarioSkipError(withSessionDetails(details));
+    throw new QaSuiteScenarioSkipError(details);
   };
-  try {
-    const assertPatchArguments = (
-      args: unknown,
-      operation: "add" | "update",
-      provider: "live" | "mock",
-    ) => {
-      if (
-        toolName === "apply_patch" &&
-        metadata.required &&
-        !matchesRuntimePatchArguments({ args, workspaceDir: env.gateway.workspaceDir, operation })
-      ) {
-        const target =
-          operation === "add"
-            ? RUNTIME_PATCH_HAPPY_FILENAME
-            : `../${RUNTIME_PATCH_DENIED_FILENAME}`;
-        const details =
-          provider === "live"
-            ? `; observed linked arguments: ${describeRuntimePatchArguments(args)}`
-            : "";
+  const assertPatchArguments = (
+    args: unknown,
+    operation: "add" | "update",
+    provider: "live" | "mock",
+  ) => {
+    if (
+      toolName === "apply_patch" &&
+      metadata.required &&
+      !matchesRuntimePatchArguments({ args, workspaceDir: env.gateway.workspaceDir, operation })
+    ) {
+      const target =
+        operation === "add" ? RUNTIME_PATCH_HAPPY_FILENAME : `../${RUNTIME_PATCH_DENIED_FILENAME}`;
+      const details =
+        provider === "live"
+          ? `; observed linked arguments: ${describeRuntimePatchArguments(args)}`
+          : "";
+      throw new Error(
+        `expected linked ${provider} apply_patch to ${operation} ${target}${details}`,
+      );
+    }
+  };
+  const failFixture: (details: string) => never = (details) => {
+    if (isRecord(config.knownHarnessGap)) {
+      skipFixture(formatKnownHarnessGapDetails(toolName, config));
+    }
+    throw new Error(details);
+  };
+  const tools = await readEffectiveTools(env, happySessionKey);
+  if (forcedCodexNativeWorkspace) {
+    const nativeDetails = await runCodexNativeWorkspaceFixture({
+      env,
+      behaviorId: nativeWorkspaceBehaviorId,
+      required: metadata.required,
+      happySessionKey,
+      failureSessionKey,
+      readEvidence: (sessionKey, nativeToolName) =>
+        readLiveToolEvidence({ env, sessionKey, toolName: nativeToolName }),
+      failFixture,
+    });
+    if (nativeDetails) {
+      return nativeDetails;
+    }
+  }
+  // Effective tool discovery may advertise the native name. The forced
+  // runtime and scenario owner, not inventory absence, decide who executes it.
+  const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);
+  const requireCodexNativePatchCoverage =
+    forcedCodexNativeWorkspace && metadata.required && toolName === "apply_patch";
+  const expectedAvailable = asBoolean(config.expectedAvailable) ?? true;
+  if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
+    if (!expectedAvailable) {
+      skipFixture(formatExpectedUnavailableDetails(toolName, tools));
+    }
+    if (isRecord(config.knownBroken)) {
+      skipFixture(formatKnownBrokenDetails(toolName, tools, config));
+    }
+    failFixture(
+      `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
+    );
+  }
+
+  const happyPrompt =
+    normalizeOptionalString(config.happyPrompt) ??
+    `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`;
+  const failurePrompt =
+    normalizeOptionalString(config.failurePrompt) ??
+    `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`;
+  const promptSnippet = normalizeOptionalString(config.promptSnippet) ?? `target=${toolName}`;
+  const failurePromptSnippet =
+    normalizeOptionalString(config.failurePromptSnippet) ?? `failure target=${toolName}`;
+  const happyPathOutputRequired = asBoolean(config.happyPathOutputRequired) ?? true;
+  // Private QA can expose an actual dynamic patch tool. Real Codex instead
+  // mirrors native file changes into linked apply_patch transcript evidence.
+  const requireNativePatchTranscriptEvidence = !env.mock && requireCodexNativePatchCoverage;
+  const requireTranscriptEvidence =
+    metadata.required &&
+    (!env.mock || toolName !== "apply_patch") &&
+    (!dynamicExposureIntentionallyExcluded || requireNativePatchTranscriptEvidence) &&
+    !isRecord(config.knownHarnessGap);
+  const mockBaseUrl = env.mock?.baseUrl;
+  const requestCursorBefore = mockBaseUrl
+    ? readQaMockRequestCursor(await fetchJson(qaMockRequestCursorUrl(mockBaseUrl)))
+    : 0;
+
+  const runHappyPrompt = () =>
+    runAgentPrompt(env, {
+      sessionKey: happySessionKey,
+      message: happyPrompt,
+      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      ...(happyPathOutputRequired && requireTranscriptEvidence
+        ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
+        : {}),
+    });
+  if (toolName !== "apply_patch" || !metadata.required) {
+    await runHappyPrompt();
+  } else {
+    const happyPatchPath = path.join(env.gateway.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME);
+    if ((await readOptionalUtf8(happyPatchPath)) !== undefined) {
+      throw new Error(
+        `apply_patch happy-path target already exists: ${RUNTIME_PATCH_HAPPY_FILENAME}`,
+      );
+    }
+    try {
+      await runHappyPrompt();
+      if ((await readOptionalUtf8(happyPatchPath)) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
+        const diagnostics = await formatRuntimePatchMutationDiagnostics({
+          env,
+          requestCursor: requestCursorBefore,
+        });
         throw new Error(
-          `expected linked ${provider} apply_patch to ${operation} ${target}${details}`,
+          `expected apply_patch to create ${RUNTIME_PATCH_HAPPY_FILENAME} with exact contents; ${diagnostics}`,
         );
       }
-    };
-    const failFixture: (details: string) => never = (details) => {
-      if (isRecord(config.knownHarnessGap)) {
-        skipFixture(formatKnownHarnessGapDetails(toolName, config));
-      }
-      throw new Error(details);
-    };
-    const tools = await readEffectiveTools(env, happySessionKey);
-    if (forcedCodexNativeWorkspace) {
-      const nativeDetails = await runCodexNativeWorkspaceFixture({
-        env,
-        behaviorId: nativeWorkspaceBehaviorId,
-        required: metadata.required,
-        happySessionKey,
-        failureSessionKey,
-        readEvidence: (sessionKey, nativeToolName) =>
-          readLiveToolEvidence({ env, sessionKey, toolName: nativeToolName }),
-        failFixture,
-      });
-      if (nativeDetails) {
-        return withSessionDetails(nativeDetails);
-      }
+    } finally {
+      await fs.rm(happyPatchPath, { force: true });
     }
-    // Effective tool discovery may advertise the native name. The forced
-    // runtime and scenario owner, not inventory absence, decide who executes it.
-    const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);
-    const requireCodexNativePatchCoverage =
-      forcedCodexNativeWorkspace && metadata.required && toolName === "apply_patch";
-    const expectedAvailable = asBoolean(config.expectedAvailable) ?? true;
-    if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
-      if (!expectedAvailable) {
-        skipFixture(formatExpectedUnavailableDetails(toolName, tools));
+  }
+  const runFailurePrompt = () =>
+    runAgentPrompt(env, {
+      sessionKey: failureSessionKey,
+      message: failurePrompt,
+      timeoutMs: liveTurnTimeoutMs(env, 45_000),
+      ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
+    });
+  if (toolName !== "apply_patch") {
+    await runFailurePrompt();
+  } else {
+    const deniedPatchPath = path.resolve(
+      env.gateway.workspaceDir,
+      "..",
+      RUNTIME_PATCH_DENIED_FILENAME,
+    );
+    // Matching outside context makes failure evidence prove containment, not
+    // merely that apply_patch could not find a file or match a hunk.
+    await fs.writeFile(deniedPatchPath, RUNTIME_PATCH_DENIED_CONTENTS, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    try {
+      await runFailurePrompt();
+      const sentinelContents = await fs.readFile(deniedPatchPath, "utf8").catch(() => undefined);
+      if (sentinelContents !== RUNTIME_PATCH_DENIED_CONTENTS) {
+        throw new Error("apply_patch modified or removed the outside-workspace sentinel");
       }
-      if (isRecord(config.knownBroken)) {
-        skipFixture(formatKnownBrokenDetails(toolName, tools, config));
+    } finally {
+      await fs.rm(deniedPatchPath, { force: true });
+    }
+  }
+
+  const requests = env.mock
+    ? readQaRuntimeToolFixtureRequests(
+        await fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
+      )
+    : [];
+  const mockEvidence = env.mock
+    ? ([
+        findToolRequestEvidence({
+          requests,
+          promptSnippet,
+          excludedPromptSnippet: failurePromptSnippet,
+          toolName,
+        }),
+        findToolRequestEvidence({ requests, promptSnippet: failurePromptSnippet, toolName }),
+      ] as const)
+    : undefined;
+  const happyPlannedRequest = mockEvidence?.[0].plannedRequest;
+  const failurePlannedRequest = mockEvidence?.[1].plannedRequest;
+  if (
+    mockEvidence &&
+    isAsyncReportOnlyMockCoverage(metadata) &&
+    happyPlannedRequest &&
+    failurePlannedRequest &&
+    !mockEvidence[0].outputRequest
+  ) {
+    if (!plannedRequestHasPrompt(happyPlannedRequest)) {
+      throw new Error(`expected mock happy-path prompt args for ${toolName}`);
+    }
+    if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
+      throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
+    }
+    if (mockEvidence[1].outputRequest && !mockEvidence[1].failureOutputRequest) {
+      throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+    }
+    skipFixture(
+      formatReportOnlyMockDetails({
+        toolName,
+        happyRequest: happyPlannedRequest,
+        failureRequest: failurePlannedRequest,
+      }),
+    );
+  }
+  const provider = env.mock ? "mock" : "live";
+  const plannedArgsDetails: string[] = [];
+  const discoveryCallIds: [string | undefined, string | undefined] = [undefined, undefined];
+  for (const [phase, sessionKey] of [
+    ["happy", happySessionKey],
+    ["failure", failureSessionKey],
+  ] as const) {
+    const happy = phase === "happy";
+    const index = happy ? 0 : 1;
+    const request =
+      mockEvidence?.[index] ?? (await readLiveToolEvidence({ env, sessionKey, toolName }));
+    if (!request.outputRequest) {
+      if (happy && request.plannedRequest && !happyPathOutputRequired) {
+        skipFixture(
+          `${toolName} ${provider} provider report-only: a planned call without a linked successful result is not product execution evidence`,
+        );
+      }
+      if (env.mock && dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
+        skipFixture(
+          formatCodexNativeWorkspaceDetails({
+            toolName,
+            tools,
+            reason: metadata.reason,
+            happyRequest: happyPlannedRequest,
+            ...(happy ? {} : { failureRequest: failurePlannedRequest }),
+          }),
+        );
       }
       failFixture(
-        `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
+        `expected ${provider} ${phase}-path ${request.plannedRequest ? "tool output" : env.mock ? "request" : "tool call"} for ${toolName}`,
       );
     }
-
-    const happyPrompt =
-      normalizeOptionalString(config.happyPrompt) ??
-      `tool search qa check target=${toolName}. Call exactly that tool once and then summarize.`;
-    const failurePrompt =
-      normalizeOptionalString(config.failurePrompt) ??
-      `tool search qa failure target=${toolName}. Exercise the denied-input path once and then summarize.`;
-    const promptSnippet = normalizeOptionalString(config.promptSnippet) ?? `target=${toolName}`;
-    const failurePromptSnippet =
-      normalizeOptionalString(config.failurePromptSnippet) ?? `failure target=${toolName}`;
-    const happyPathOutputRequired = asBoolean(config.happyPathOutputRequired) ?? true;
-    // Private QA can expose an actual dynamic patch tool. Real Codex instead
-    // mirrors native file changes into linked apply_patch transcript evidence.
-    const requireNativePatchTranscriptEvidence = !env.mock && requireCodexNativePatchCoverage;
-    const requireTranscriptEvidence =
-      metadata.required &&
-      (!env.mock || toolName !== "apply_patch") &&
-      (!dynamicExposureIntentionallyExcluded || requireNativePatchTranscriptEvidence) &&
-      !isRecord(config.knownHarnessGap);
-    const mockBaseUrl = env.mock?.baseUrl;
-    const requestCursorBefore = mockBaseUrl
-      ? readQaMockRequestCursor(await fetchJson(qaMockRequestCursorUrl(mockBaseUrl)))
-      : 0;
-
-    const runHappyPrompt = () =>
-      runAgentPrompt(env, {
-        sessionKey: happySessionKey,
-        message: happyPrompt,
-        timeoutMs: liveTurnTimeoutMs(env, 45_000),
-        ...(happyPathOutputRequired && requireTranscriptEvidence
-          ? { transcriptToolName: toolName, requireSuccessfulTranscriptToolResult: true }
-          : {}),
-      });
-    if (toolName !== "apply_patch" || !metadata.required) {
-      await runHappyPrompt();
-    } else {
-      const happyPatchPath = path.join(env.gateway.workspaceDir, RUNTIME_PATCH_HAPPY_FILENAME);
-      if ((await readOptionalUtf8(happyPatchPath)) !== undefined) {
-        throw new Error(
-          `apply_patch happy-path target already exists: ${RUNTIME_PATCH_HAPPY_FILENAME}`,
-        );
-      }
-      try {
-        await runHappyPrompt();
-        if ((await readOptionalUtf8(happyPatchPath)) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
-          const diagnostics = await formatRuntimePatchMutationDiagnostics({
-            env,
-            requestCursor: requestCursorBefore,
-          });
-          throw new Error(
-            `expected apply_patch to create ${RUNTIME_PATCH_HAPPY_FILENAME} with exact contents; ${diagnostics}`,
-          );
-        }
-      } finally {
-        await fs.rm(happyPatchPath, { force: true });
-      }
+    if (happy && request.outputRequest?.hardFailure) {
+      failFixture(`expected ${provider} happy-path successful tool output for ${toolName}`);
     }
-    const runFailurePrompt = () =>
-      runAgentPrompt(env, {
-        sessionKey: failureSessionKey,
-        message: failurePrompt,
-        timeoutMs: liveTurnTimeoutMs(env, 45_000),
-        ...(requireTranscriptEvidence ? { transcriptToolName: toolName } : {}),
-      });
-    if (toolName !== "apply_patch") {
-      await runFailurePrompt();
-    } else {
-      const deniedPatchPath = path.resolve(
-        env.gateway.workspaceDir,
-        "..",
-        RUNTIME_PATCH_DENIED_FILENAME,
+    if (!happy && !request.failureOutputRequest) {
+      const raw = mockEvidence?.[index]?.outputRequest?.raw;
+      const diagnostics =
+        toolName === "apply_patch" && raw
+          ? `; received ${formatRuntimePatchFailureOutput(raw)}`
+          : "";
+      failFixture(
+        `expected ${provider} failure-path tool failure output for ${toolName}${diagnostics}`,
       );
-      // Matching outside context makes failure evidence prove containment, not
-      // merely that apply_patch could not find a file or match a hunk.
-      await fs.writeFile(deniedPatchPath, RUNTIME_PATCH_DENIED_CONTENTS, {
-        encoding: "utf8",
-        flag: "wx",
-      });
-      try {
-        await runFailurePrompt();
-        const sentinelContents = await fs.readFile(deniedPatchPath, "utf8").catch(() => undefined);
-        if (sentinelContents !== RUNTIME_PATCH_DENIED_CONTENTS) {
-          throw new Error("apply_patch modified or removed the outside-workspace sentinel");
-        }
-      } finally {
-        await fs.rm(deniedPatchPath, { force: true });
-      }
     }
-
-    const requests = env.mock
-      ? readQaRuntimeToolFixtureRequests(
-          await fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
-        )
-      : [];
-    const mockEvidence = env.mock
-      ? ([
-          findToolRequestEvidence({
-            requests,
-            promptSnippet,
-            excludedPromptSnippet: failurePromptSnippet,
-            toolName,
-          }),
-          findToolRequestEvidence({ requests, promptSnippet: failurePromptSnippet, toolName }),
-        ] as const)
-      : undefined;
-    const happyPlannedRequest = mockEvidence?.[0].plannedRequest;
-    const failurePlannedRequest = mockEvidence?.[1].plannedRequest;
+    assertPatchArguments(request.executedRequest?.args, happy ? "add" : "update", provider);
     if (
-      mockEvidence &&
-      isAsyncReportOnlyMockCoverage(metadata) &&
-      happyPlannedRequest &&
-      failurePlannedRequest &&
-      !mockEvidence[0].outputRequest
+      !happy &&
+      toolName === "apply_patch" &&
+      !isWorkspaceBoundaryFailureToolOutput(request.failureOutputRequest?.text)
     ) {
-      if (!plannedRequestHasPrompt(happyPlannedRequest)) {
-        throw new Error(`expected mock happy-path prompt args for ${toolName}`);
-      }
-      if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
-        throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
-      }
-      if (mockEvidence[1].outputRequest && !mockEvidence[1].failureOutputRequest) {
-        throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
-      }
-      skipFixture(
-        formatReportOnlyMockDetails({
-          toolName,
-          happyRequest: happyPlannedRequest,
-          failureRequest: failurePlannedRequest,
-        }),
+      throw new Error(
+        `expected ${provider} apply_patch failure to explicitly reject the workspace boundary`,
       );
     }
-    const provider = env.mock ? "mock" : "live";
-    const plannedArgsDetails: string[] = [];
-    const discoveryCallIds: [string | undefined, string | undefined] = [undefined, undefined];
-    for (const [phase, sessionKey] of [
-      ["happy", happySessionKey],
-      ["failure", failureSessionKey],
-    ] as const) {
-      const happy = phase === "happy";
-      const index = happy ? 0 : 1;
-      const request =
-        mockEvidence?.[index] ?? (await readLiveToolEvidence({ env, sessionKey, toolName }));
-      if (!request.outputRequest) {
-        if (happy && request.plannedRequest && !happyPathOutputRequired) {
-          skipFixture(
-            `${toolName} ${provider} provider report-only: a planned call without a linked successful result is not product execution evidence`,
-          );
-        }
-        if (env.mock && dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
-          skipFixture(
-            formatCodexNativeWorkspaceDetails({
-              toolName,
-              tools,
-              reason: metadata.reason,
-              happyRequest: happyPlannedRequest,
-              ...(happy ? {} : { failureRequest: failurePlannedRequest }),
-            }),
-          );
-        }
-        failFixture(
-          `expected ${provider} ${phase}-path ${request.plannedRequest ? "tool output" : env.mock ? "request" : "tool call"} for ${toolName}`,
-        );
-      }
-      if (happy && request.outputRequest?.hardFailure) {
-        failFixture(`expected ${provider} happy-path successful tool output for ${toolName}`);
-      }
-      if (!happy && !request.failureOutputRequest) {
-        const raw = mockEvidence?.[index]?.outputRequest?.raw;
-        const diagnostics =
-          toolName === "apply_patch" && raw
-            ? `; received ${formatRuntimePatchFailureOutput(raw)}`
-            : "";
-        failFixture(
-          `expected ${provider} failure-path tool failure output for ${toolName}${diagnostics}`,
-        );
-      }
-      assertPatchArguments(request.executedRequest?.args, happy ? "add" : "update", provider);
-      if (
-        !happy &&
-        toolName === "apply_patch" &&
-        !isWorkspaceBoundaryFailureToolOutput(request.failureOutputRequest?.text)
-      ) {
-        throw new Error(
-          `expected ${provider} apply_patch failure to explicitly reject the workspace boundary`,
-        );
-      }
-      discoveryCallIds[index] = request.executedRequest?.id;
-      const plannedArgs = env.mock ? request.executedRequest?.args : request.plannedRequest?.args;
+    discoveryCallIds[index] = request.executedRequest?.id;
+    const plannedArgs = env.mock ? request.executedRequest?.args : request.plannedRequest?.args;
+    plannedArgsDetails.push(
+      `${toolName} ${provider} provider ${phase} planned args (diagnostic only): ${formatPlannedToolArgs(plannedArgs)}`,
+    );
+    if (happy && !happyPathOutputRequired) {
       plannedArgsDetails.push(
-        `${toolName} ${provider} provider ${phase} planned args (diagnostic only): ${formatPlannedToolArgs(plannedArgs)}`,
-      );
-      if (happy && !happyPathOutputRequired) {
-        plannedArgsDetails.push(
-          `${toolName} ${provider} provider happy direct output not required for this async fixture`,
-        );
-      }
-    }
-
-    if (mockEvidence && dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
-      skipFixture(
-        formatCodexNativeWorkspaceDetails({
-          toolName,
-          tools,
-          reason: metadata.reason,
-          happyRequest: mockEvidence[0].executedRequest,
-          failureRequest: mockEvidence[1].executedRequest,
-        }),
+        `${toolName} ${provider} provider happy direct output not required for this async fixture`,
       );
     }
-
-    const discoveryDetails =
-      !env.mock && searchEvidence.needsSearchEvidence(env, metadata.capabilityLayer)
-        ? await searchEvidence.requireRuntimeToolSearchDiscoveryDetails(env, {
-            sessionKeys,
-            callIds: discoveryCallIds,
-            toolName,
-          })
-        : [];
-    return withSessionDetails([...plannedArgsDetails, ...discoveryDetails].join("\n"));
-  } catch (error) {
-    if (error instanceof QaSuiteScenarioSkipError) {
-      throw error;
-    }
-    throw runtimeToolFixtureError(error, ...sessionKeys);
   }
+
+  if (mockEvidence && dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
+    skipFixture(
+      formatCodexNativeWorkspaceDetails({
+        toolName,
+        tools,
+        reason: metadata.reason,
+        happyRequest: mockEvidence[0].executedRequest,
+        failureRequest: mockEvidence[1].executedRequest,
+      }),
+    );
+  }
+
+  const discoveryDetails =
+    !env.mock && searchEvidence.needsSearchEvidence(env, metadata.capabilityLayer)
+      ? await searchEvidence.requireRuntimeToolSearchDiscoveryDetails(env, {
+          sessionKeys,
+          callIds: discoveryCallIds,
+          toolName,
+        })
+      : [];
+  return [...plannedArgsDetails, ...discoveryDetails].join("\n");
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

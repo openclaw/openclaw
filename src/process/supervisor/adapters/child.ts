@@ -210,7 +210,10 @@ export async function createChildAdapter(
   const useDetached = process.platform !== "win32";
 
   const stdio: SpawnStdioEntry[] = [stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
-  using secretDelivery = prepareSecretInputStdio(stdio, params.secretInput);
+  // Readiness delivers the secret after stdin input and Windows Job readiness, both awaited;
+  // construction failures before that release the pipe here.
+  using secretOwner = new DisposableStack();
+  const secretDelivery = secretOwner.use(prepareSecretInputStdio(stdio, params.secretInput));
   if (params.ownedWorker !== undefined) {
     stdio.push("ipc");
   }
@@ -697,6 +700,7 @@ export async function createChildAdapter(
     params.onSpawnCleanup?.(adapter.waitForExtinction?.() ?? cleanup.promise);
   }
   launchGate.resolve();
+  const readyOwner = secretOwner.move();
   const ready = (async () => {
     try {
       if (windowsJob) {
@@ -734,7 +738,7 @@ export async function createChildAdapter(
       }
       throw error;
     }
-  })();
+  })().finally(() => readyOwner.dispose());
   void ready.catch(() => {});
   return { adapter, ready };
 }

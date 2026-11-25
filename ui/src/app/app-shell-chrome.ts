@@ -74,6 +74,7 @@ import {
   handleNavDrawerKeydown,
   setToastInNavDrawer,
   visibleNavDrawerToggle,
+  type NavDrawerCloseOptions,
   type ShellNavigationElements,
   type ShellNavigationSurfaces,
 } from "./navigation-surface.ts";
@@ -100,7 +101,7 @@ export interface ShellChromeHost
   setNativeHistoryState(state: NativeHistoryState): void;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   invalidate(): void;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
 }
 
 export class ShellChromeOwner {
@@ -266,19 +267,22 @@ export class ShellChromeOwner {
       target?.isConnected && target.checkVisibility() ? target : this.host.contentElement,
     );
 
-  readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
+  readonly closeNavDrawer = (options: NavDrawerCloseOptions = {}): void => {
     const host = this.host;
     // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
-    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
-    if (host.navDrawerOpen) {
+    const { navDrawerOpen: drawerWasOpen, navDrawerTrigger: trigger } = host;
+    if (drawerWasOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.reset();
     }
     setToastInNavDrawer(host, false);
-    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (restoreFocus) {
+    if (drawerWasOpen && options.finishMotion) {
+      // A chosen destination takes priority over watching the drawer exit.
+      this.finishNavigationMotion();
+    }
+    if (drawerWasOpen && options.restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };

@@ -298,9 +298,16 @@ const baseConfig: OpenClawConfig = {
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
+  // Happy-path channel tools need configured source adapters, not key-shaped routes.
+  channels: {
+    telegram: { botToken: "synthetic-telegram-token" },
+    discord: { token: "synthetic-discord-token" },
+  },
   tools: {
     // Exclude optional media factories before they inspect ambient provider credentials.
     deny: ["image_generate", "video_generate", "music_generate", "pdf"],
+    // Snapshot the reply/reaction path rather than every configured channel action.
+    message: { actions: { allow: ["react", "send"] } },
     // This happy-path catalog includes search regardless of ambient credentials.
     web: { search: { provider: "duckduckgo" } },
   },

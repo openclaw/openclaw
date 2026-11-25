@@ -1,9 +1,13 @@
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
-import { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import {
+  acquireTranscriptLease,
+  type TranscriptLease,
+} from "../../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 import type { SessionControllerStopCapture } from "../../../sessions/session-controller.stop.js";
 import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
@@ -480,7 +484,7 @@ export async function killAllControlledSubagentRuns(params: {
   if (!params.requestSelection?.sessionGeneration && !params.requestSelection?.prepare) {
     return killSelectedSubagentRuns(selection);
   }
-  let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let generation: TranscriptLease | undefined;
   const assertCurrent = () => {
     params.assertCurrent?.();
     generation?.assertCurrent();
@@ -497,7 +501,7 @@ export async function killAllControlledSubagentRuns(params: {
       }
       const origin = params.requestSelection?.sessionGeneration;
       if (origin) {
-        generation = await prepareSessionGenerationFacts({ ...origin, exactTranscript: true });
+        generation = await acquireTranscriptLease(chatRef(origin), origin);
       }
       prepared = true;
     })());

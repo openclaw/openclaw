@@ -5,6 +5,7 @@ import type {
   AgentsCreateResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../../agents/stream-message-shared.js";
+import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { applyAgentConfig } from "../../commands/agents.config.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
@@ -18,16 +19,20 @@ import { readSessionCreationReceiptInWorker } from "../../config/sessions/sessio
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { buildAgentOnboardingGreeting } from "../../shared/agent-onboarding.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { resolveNavigatorLocale } from "../../shared/control-ui-locale.js";
 import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import { verifySetupInferenceConfig } from "../../system-agent/setup-inference-turn.js";
+import type { TemplateSetupReport } from "../../templates/conversation.js";
 import { TEMPLATE_AGENT_OPENING_MESSAGE } from "../../templates/conversation.js";
+import { buildTemplateDependencyMessage } from "../../templates/setup-prompt.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
@@ -43,6 +48,12 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { createSystemAgentGatewayRuntime } from "./system-agent-execution.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+function creationLocale({ params, client }: GatewayRequestHandlerOptions) {
+  return resolveNavigatorLocale(
+    typeof params.locale === "string" ? params.locale : (client?.connect.locale ?? ""),
+  );
+}
 
 export type PreparedAgentOnboarding = {
   expectedConfigHash: string | null;
@@ -125,7 +136,7 @@ export async function completeAgentOnboarding(
   NonNullable<AgentsCreateResult["onboarding"]> & {
     rollback?: (() => Promise<void>) & {
       assertCurrent?: () => Promise<void>;
-      complete?: () => Promise<void>;
+      complete?: (templateSetup?: SessionEntry["templateSetup"]) => Promise<void>;
       checkpoint?: (
         initialization: NonNullable<SessionEntry["templateInitialization"]>,
       ) => Promise<void>;
@@ -190,7 +201,10 @@ export async function completeAgentOnboarding(
                     content: [
                       {
                         type: "text",
-                        text: buildAgentOnboardingGreeting(cfg.agents?.entries?.[agentId]?.name),
+                        text: buildAgentOnboardingGreeting(
+                          cfg.agents?.entries?.[agentId]?.name,
+                          creationLocale(options),
+                        ),
                       },
                     ],
                     stopReason: "stop",
@@ -260,8 +274,13 @@ export async function completeAgentOnboarding(
                   authority.assertCurrent,
                 );
               },
-              complete: async () => {
-                await finalizeSessionCreateTarget(session, session.entry, authority.assertCurrent);
+              complete: async (templateSetup?: SessionEntry["templateSetup"]) => {
+                await finalizeSessionCreateTarget(
+                  session,
+                  session.entry,
+                  authority.assertCurrent,
+                  templateSetup,
+                );
                 emitSessionsChanged(options.context, { agentId, sessionKey, reason: "created" });
               },
             }
@@ -341,11 +360,27 @@ export async function startAgentOnboardingConversation(
   agentId: string,
   sessionKey: string,
   opening: "new-agent" | "template" = "new-agent",
+  /** Chat-based Template Add only: the caller has built the one setup opening. */
+  templateSetupPrompt?: string,
+  onStarted?: () => void,
+  /** Chat-based Template Add only: the opening turn has sent its first model request. */
+  onModelRequested?: () => void,
 ): Promise<void> {
   const releaseAuthorization = options.sessionMutationAuthorization?.retain?.();
   using _ = { [Symbol.dispose]: () => releaseAuthorization?.() };
   let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
-  const runId = `agents.create:${agentId}:${opening === "template" ? "template-greeting" : "onboarding-question"}`;
+  const setup = opening === "template" && templateSetupPrompt !== undefined;
+  const runId = setup
+    ? `agents.create:${agentId}:template-setup:${randomUUID()}`
+    : `agents.create:${agentId}:${opening === "template" ? "template-greeting" : "onboarding-question"}`;
+  const stopModelRequestWatch = onModelRequested
+    ? onAgentEventForRun(runId, (event) => {
+        if (event.stream === "run_status" && event.data.phase === "starting_model") {
+          stopModelRequestWatch?.();
+          onModelRequested();
+        }
+      })
+    : undefined;
   try {
     await runOutsideAsyncWorkScope(() =>
       handleTrustedInternalChatSend(
@@ -357,8 +392,9 @@ export async function startAgentOnboardingConversation(
             agentId,
             message:
               opening === "template"
-                ? TEMPLATE_AGENT_OPENING_MESSAGE
+                ? (templateSetupPrompt ?? TEMPLATE_AGENT_OPENING_MESSAGE)
                 : [
+                    `Write the question, role names and descriptions in the user’s selected language (${creationLocale(options)}). Use the wording below for meaning, not as text to repeat verbatim. Continue in that language unless the user indicates otherwise.`,
                     "A short introduction has already been saved in this agent’s conversation. Ask the user in plain text: What role would you like me to take on?",
                     "Offer these four single-agent roles: Chief of staff (coordinates work and priorities), Researcher (finds and summarizes evidence), Writer (turns notes and sources into drafts), and Reviewer (checks work against requirements). Invite the user to describe a different role if they prefer. Do not offer a team. Ask only about the role in this opening turn; do not ask for their goal or mention a later follow-up yet. End the message there and wait for their reply.",
                     "After the user replies, ask one open-ended follow-up that invites a little detail about the specific thing they want to achieve. Tailor it to their answer, but do not provide another list or hard-code the follow-up wording. Then continue normally after they answer.",
@@ -369,17 +405,25 @@ export async function startAgentOnboardingConversation(
             suppressCommandInterpretation: true,
             systemInputProvenance: {
               kind: "internal_system",
-              sourceTool: "agents_create_onboarding",
+              sourceTool: setup ? "template_add_setup" : "agents_create_onboarding",
             },
           },
           respond: (...args) => {
-            response ??= args;
+            if (!response) {
+              response = args;
+              // The ordinary source owns its run/queue admission before revealing chat.
+              if (args[0]) {
+                onStarted?.();
+              }
+            }
           },
         },
         undefined,
         {
           transcript: { display: false },
-          toolsAllow: [],
+          // An empty runtime allowlist removes every tool. The setup turn needs the
+          // agent's own tool policy, so that turn passes no runtime allowlist at all.
+          ...(setup ? { templateSetup: true as const } : { toolsAllow: [] }),
           ...(opening === "template" ? { deferWorkspaceBootstrap: true as const } : {}),
         },
       ),
@@ -388,9 +432,20 @@ export async function startAgentOnboardingConversation(
       throw new Error(formatErrorMessage(response[2]));
     }
     if (opening === "template") {
-      // Admission is not model output. The shared installer must not finish
-      // deferrable setup before this ordinary chat owner publishes its greeting.
-      const terminal = await waitForAgentJob({ runId, source: "chat", timeoutMs: 120_000 });
+      // Wait for this source's settled publication, not admission or progress sends.
+      // Setup follows the ordinary runtime deadline plus publication grace.
+      const terminal = await runOutsideAsyncWorkScope(() =>
+        waitForAgentJob({
+          runId,
+          source: "chat",
+          timeoutMs: setup
+            ? resolveAgentTimeoutMs({
+                overrideMs:
+                  resolveAgentTimeoutMs({ cfg: options.context.getRuntimeConfig() }) + 60_000,
+              })
+            : 120_000,
+        }),
+      );
       if (terminal?.status !== "ok" || terminal.terminalReply?.disposition !== "visible") {
         throw new Error(
           `Template opening did not produce a visible greeting: ${terminal?.error ?? terminal?.status ?? "timed out waiting for chat completion"}. The agent and conversation were kept.`,
@@ -404,5 +459,22 @@ export async function startAgentOnboardingConversation(
     options.context.logGateway.warn(
       `could not start onboarding for agent ${agentId}: ${formatErrorMessage(error)}`,
     );
+  } finally {
+    stopModelRequestWatch?.();
   }
+}
+
+/** Install outcomes are delivered as a new hidden turn, after the opening settles. */
+export async function startTemplateDependencyConversation(
+  options: GatewayRequestHandlerOptions,
+  agent: { agentId: string; sessionKey: string },
+  report: TemplateSetupReport,
+): Promise<void> {
+  await startAgentOnboardingConversation(
+    options,
+    agent.agentId,
+    agent.sessionKey,
+    "template",
+    buildTemplateDependencyMessage(report),
+  );
 }

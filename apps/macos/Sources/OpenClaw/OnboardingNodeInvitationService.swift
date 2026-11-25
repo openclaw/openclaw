@@ -87,9 +87,14 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             self.cancel()
             let authority = MacNodeOpenClawIDRouteAuthority()
             self.authority = authority
-            let origin = try OpenClawIDNodeEnrollmentLink.discoveryOrigin(discoveryOrigin)
+            // An entered origin wins over the one the owner's invitation carries.
+            let entered = discoveryOrigin.isEmpty
+                ? nil : try OpenClawIDNodeEnrollmentLink.discoveryOrigin(discoveryOrigin)
             let invitation = try self.readInvitation()
             let link = try OpenClawIDNodeEnrollmentLink(invitation)
+            guard let origin = entered ?? link.discoveryOrigin else {
+                throw OpenClawIDNodeEnrollmentError.discoveryOriginRequired
+            }
             let description = try await self.describeNode()
             try authority.check()
             self.invitation = invitation

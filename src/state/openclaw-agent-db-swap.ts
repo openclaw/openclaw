@@ -43,7 +43,7 @@ export function buildAgentDatabaseByCopy(
   );
 }
 
-export function createAgentSwapTarget(agentId: string): SqliteSwapTarget {
+function createAgentSwapTarget(agentId: string): SqliteSwapTarget {
   return {
     label: `agent:${agentId}`,
     version: OPENCLAW_AGENT_SCHEMA_VERSION,

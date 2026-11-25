@@ -32,6 +32,27 @@ describe("media timeout resolution", () => {
 });
 
 describe("resolveModelEntries", () => {
+  it.each(["audio", "video"] as const)(
+    "pins an explicit %s model, reusing only its exact configured descriptor",
+    (capability) => {
+      const other = { provider: "google", model: "configured", capabilities: [capability] };
+      const exact = { ...other, provider: "openai", model: "whisper-1", baseUrl: "https://a.test" };
+      const pinned = (models: MediaUnderstandingModelConfig[]) =>
+        resolveModelEntries({
+          cfg: { tools: { media: { models } } },
+          capability,
+          providerRegistry,
+          modelOverride: { provider: "openai", model: "whisper-1" },
+        });
+      const requested = [{ entry: { provider: "openai", model: "whisper-1" } }];
+      expect(pinned([])).toEqual(requested);
+      expect(pinned([other])).toEqual(requested);
+      expect(pinned([other, exact])).toEqual([
+        { entry: exact, secretOwnerId: "media-model:shared:1" },
+      ]);
+    },
+  );
+
   it("uses provider capabilities for shared entries without explicit caps", () => {
     const models = [{ provider: "openai", model: "gpt-5.4" }];
     const imageEntries = resolve(models, "image");

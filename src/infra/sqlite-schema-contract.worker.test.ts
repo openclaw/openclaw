@@ -74,6 +74,12 @@ it("uses fingerprints in a cold worker and loads diagnostics only after schema d
     expect(inspect()).resolves.toEqual({ issues, comparisonDdl: 0, diagnosticCatalogReads });
   try {
     await expectInspection(0);
+    database.exec(
+      "ALTER TABLE session_nodes ADD COLUMN compatible_column TEXT DEFAULT NULL CHECK (compatible_column IN ('read', 'send'))",
+    );
+    await expectInspection(1);
+    database.exec("ALTER TABLE session_nodes DROP COLUMN compatible_column");
+    await expectInspection(1);
     database.exec("ALTER TABLE session_nodes ADD COLUMN foreign_column TEXT DEFAULT ''");
     await expectInspection(1, [
       {

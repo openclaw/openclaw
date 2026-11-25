@@ -48,7 +48,7 @@ describe("plugin host hook registry ownership", () => {
             api.session.controls.registerSessionAction({
               id: "describe",
               requiredScopes: [requiredScope],
-              // The roster changes while the action awaits; the live check sees it.
+              // The roster changes while the action awaits; the started action stays admitted.
               handler: async ({ client }) => {
                 const before = client?.isSharedGateway?.();
                 client?.assertCurrent?.();
@@ -120,7 +120,7 @@ describe("plugin host hook registry ownership", () => {
                   sharedBefore: false,
                   sharedAfter: true,
                   allowsMain: true,
-                  callerCurrentAfter: false,
+                  callerCurrentAfter: true,
                 },
               }
             : {

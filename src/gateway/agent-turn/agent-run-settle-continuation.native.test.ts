@@ -18,8 +18,8 @@ import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -65,6 +65,7 @@ function makeTurnParams(
     offloadedRefs: [],
     runId,
     client: null,
+    senderIsOwner: false,
     context: createAgentTurnTestContext(),
     ...overrides,
     request: { message, idempotencyKey: runId, ...overrides.request },
@@ -529,9 +530,13 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
   ]);
 });
 
-it.each(["Original requester", null])(
-  "retains accepted sender presentation after a profile rename (%s)",
-  async (originalName) => {
+it.each([
+  { originalName: "Original requester", restored: false },
+  { originalName: null, restored: false },
+  { originalName: "Original requester", restored: true },
+])(
+  "retains accepted sender presentation (name=$originalName, restored=$restored)",
+  async ({ originalName, restored }) => {
     const sessionKey = "agent:main:private-sender";
     const sessionId = "private-sender-session";
     const runId = "announce:private-sender";
@@ -547,15 +552,22 @@ it.each(["Original requester", null])(
     const rename = (name: string | null) =>
       setCanonicalUserProfileDisplayName(profile.id, name, profileOptions);
     const { profile: original } = await rename(originalName);
-    const clientFor = (displayName: string | null, profileId = profile.id) =>
+    const clientFor = (displayName: string | null, profileId = profile.id, resumed = false) =>
       createSyntheticPluginRuntimeClient({
-        authenticatedUserProfile: {
-          profileId,
-          displayName,
-          avatarRevision: "0",
-          hasAvatar: false,
-          updatedAt: original.updatedAt,
+        agentToolCaller: {
+          agentId: "main",
+          sessionKey,
+          requesterOrigin: { sessionKey, operatorProfileId: profileId },
         },
+        authenticatedUserProfile: resumed
+          ? undefined
+          : {
+              profileId,
+              displayName,
+              avatarRevision: "0",
+              hasAvatar: false,
+              updatedAt: original.updatedAt,
+            },
       });
     const params = makeTurnParams(target, "Retained private result", runId, {
       privateCompletion: true,
@@ -579,7 +591,10 @@ it.each(["Original requester", null])(
         expect(input["__openclaw"]).toHaveProperty("senderName", originalName);
       }
       const { profile: renamed } = await rename("Renamed requester");
-      const retryParams = { ...params, client: clientFor(renamed.displayName) };
+      const retryParams = {
+        ...params,
+        client: clientFor(renamed.displayName, profile.id, restored),
+      };
       expect(recorder.getPendingInputMessage?.()).toEqual(input);
       const retained = await pendingInputs.listSessionPendingInputs(target);
       expect(retained.items).toMatchObject([{ state: "queued", message: input }]);

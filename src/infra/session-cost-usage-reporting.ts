@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -32,6 +32,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { canAccess } from "./path-existence.js";
 import {
   loadCapturedSessionCostSummariesFromCache,
   runUsageReportAfterRefresh,
@@ -68,7 +69,7 @@ async function withSessionUsageDiagnosticSource<
 ): Promise<Result | null> {
   const source = await resolveUsageSessionSource(params);
   const marker = source && parseSqliteSessionFileMarker(source.sessionFile);
-  if (!source || (!marker && !fs.existsSync(source.sessionFile))) {
+  if (!source || (!marker && !(await canAccess(source.sessionFile)))) {
     return null;
   }
   const signal = getAsyncWorkSignal();
@@ -167,7 +168,10 @@ export async function loadSessionCostSummary(params: {
 }
 
 export async function loadSessionUsageTimeSeries(
-  params: SessionUsageDiagnosticParams & { maxPoints?: number },
+  params: SessionUsageDiagnosticParams & {
+    maxPoints?: number;
+    matchesTimestamp?: (ms: number) => boolean;
+  },
 ): Promise<SessionUsageTimeSeries | null> {
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     if (scoped.maxPoints !== undefined && scoped.maxPoints !== null) {
@@ -186,7 +190,11 @@ export async function loadSessionUsageTimeSeries(
     for await (const record of readTranscriptRecords(sessionFile, { countedOnly: true })) {
       const entry = await parseUsageCostTranscriptEntryAsync(record, prepareCost);
       const timestamp = entry?.timestamp?.getTime();
-      if (!entry?.usage || !timestamp) {
+      if (
+        !entry?.usage ||
+        !timestamp ||
+        (scoped.matchesTimestamp && !scoped.matchesTimestamp(timestamp))
+      ) {
         continue;
       }
       points.push({
@@ -555,7 +563,7 @@ export async function resolveUsageSessionSource(input: {
         })
       : undefined);
 
-  if (candidate && fs.existsSync(candidate)) {
+  if (candidate && (await canAccess(candidate))) {
     return { sessionFile: candidate };
   }
   if (!sessionId) {
@@ -567,7 +575,7 @@ export async function resolveUsageSessionSource(input: {
       ? path.dirname(candidate)
       : resolveSessionTranscriptsDirForAgent(params.agentId);
     const baseFileName = `${sessionId}.jsonl`;
-    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true }).filter((entry) => {
+    const entries = (await fs.readdir(sessionsDir, { withFileTypes: true })).filter((entry) => {
       return (
         entry.isFile() &&
         (entry.name === baseFileName ||

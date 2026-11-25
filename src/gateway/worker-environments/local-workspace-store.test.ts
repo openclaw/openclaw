@@ -218,6 +218,48 @@ it("keeps admitted paths and checkpoint documents out of root-publication reques
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
 });
 
+it("bounds reconcile checkpoint requests while preserving the durable recovery document", async () => {
+  const worktreeId = randomUUID();
+  const entries = Array.from({ length: 25000 }, (_, index) => ({
+    path: `file-${index}.txt`,
+    type: "file",
+    mode: 0o644,
+    size: 32,
+    sha256: "b".repeat(64),
+  }));
+  const raw = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: entries.slice(0, 2),
+  });
+  const checkpoint = JSON.stringify({
+    baseManifestRaw: raw,
+    currentManifestRaw: raw,
+    records: [],
+    removed: [],
+    buildCacheInputs: entries.map((entry) => `.artifacts/build-cache-inputs/${entry.path}`),
+  });
+  const bytes: number[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    if (command.type === "localWorkspace.mutate") {
+      bytes.push(serialize(command).byteLength);
+    }
+    return scope.execute(command, options);
+  });
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const created = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+    await store.update(created, {
+      checkpoint_json: checkpoint,
+      pending_target: "canonical",
+    });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const recovered = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(recovered?.checkpoint_json).toBe(checkpoint);
+  expect(bytes).toHaveLength(2);
+  expect(Math.max(...bytes)).toBeLessThan(1024 * 1024);
+});
+
 it("looks up workspace identity without returning pending recovery payloads", async () => {
   const worktreeId = randomUUID();
   const fixture = {
@@ -849,6 +891,7 @@ it("recovers an oversized committed row after reply loss without replaying or tr
   );
   const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
   const journalPack = Buffer.alloc(1024, 7);
+  const publicationPack = new Uint8Array(journalPack);
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -870,12 +913,16 @@ it("recovers an oversized committed row after reply loss without replaying or tr
         journal_pack: journalPack,
         paused_runtimes_json: undefined,
       },
+      undefined,
+      undefined,
+      publicationPack,
     );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
+  expect(publicationPack.byteLength).toBe(0);
   assert(retainedGuard);
   expect(retainedGuard).toThrow();
   const committed = await readLocalWorkspaceProjection(worktreeId, env);

@@ -314,7 +314,6 @@ vi.mock("../../../tts/tts-settings.js", async (importOriginal) => ({
 vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../bootstrap-files.js")>()),
   makeBootstrapWarn: () => () => {},
-  isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
   resolveBootstrapFilesForRun: hoisted.resolveBootstrapFilesForRunMock,
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
   resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
@@ -324,6 +323,7 @@ vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
 vi.mock("../../workspace.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../workspace.js")>()),
   isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+  isWorkspaceSetupCompleted: vi.fn(async () => false),
 }));
 
 // mock-isolation: Observe maintenance admission without running background engine work.
@@ -468,11 +468,6 @@ vi.mock("../../anthropic-vertex-stream.js", () => ({
 
 vi.mock("../../custom-api-registry.js", () => ({
   ensureCustomApiRegistered: () => {},
-}));
-
-// mock-isolation: Workspace attempts do not resolve auth mode from host profiles or environment keys.
-vi.mock("../../model-auth.js", () => ({
-  resolveModelAuthModeAsync: () => undefined,
 }));
 
 vi.mock("../../model-tool-support.js", async (importOriginal) => ({
