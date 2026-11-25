@@ -44,6 +44,16 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 /** Decode historical BLOB values in typed columns before migration readers consume them. */
 export function normalizeSqliteText(db: DatabaseSync): void {
+  const tables = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name IN (SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND strict = 0) ORDER BY rowid",
+    )
+    // SAFETY: the statement fixes the column names and types of each row.
+    .all() as Array<{ name: string }>;
+  // STRICT typed columns cannot contain historical BLOBs. Modern admission stays catalog-only.
+  if (tables.length === 0) {
+    return;
+  }
   // Keys and references must settle together, or retain their original storage classes.
   // SAFETY: PRAGMA foreign_keys returns one row with its integer foreign_keys setting.
   const { foreign_keys: foreignKeys } = db.prepare("PRAGMA foreign_keys").get() as {
@@ -53,12 +63,6 @@ export function normalizeSqliteText(db: DatabaseSync): void {
   try {
     runSqliteImmediateTransactionSync(db, () => {
       const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
-      const tables = db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name IN (SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table') ORDER BY rowid",
-        )
-        // SAFETY: the statement fixes the column names and types of each row.
-        .all() as Array<{ name: string }>;
       for (const { name } of tables) {
         // SAFETY: table_xinfo fixes the names and types of these catalog columns.
         const columns = db.prepare(`PRAGMA table_xinfo(${quote(name)})`).all() as Array<{

@@ -529,9 +529,8 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   if (!options.versionMigrationOnly) {
     revokeSqliteDatabaseAdmissions(db);
   }
-  // Historical value repair belongs to Doctor, not catalog-only version admission.
+  // Historical non-STRICT values need repair before version readers decode metadata.
   if (
-    !options.versionMigrationOnly &&
     getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance &&
     maintenanceLease.agentDatabaseMaintenanceAuthority.getStore()
   ) {

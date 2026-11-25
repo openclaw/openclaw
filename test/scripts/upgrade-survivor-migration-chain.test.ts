@@ -32,6 +32,8 @@ const { getOpenClawAgentMigrationSchema } =
   await import("../../src/state/openclaw-agent-schema-history.js");
 const { seedVersion } = await import("../../src/state/schema-migration.test-support.js");
 const { normalizeSqliteText } = await import("../../src/state/openclaw-state-db-schema-repair.js");
+const { createOpenClawDatabaseMaintenanceScope } =
+  await import("../../src/state/openclaw-state-db-async-lifecycle.js");
 const original = {
   ...integrity,
   ...worker,
@@ -184,11 +186,21 @@ async function migrate(bulk: FixtureStep | undefined, baseline: number, schemaSq
     // Lease admission is outside SQL observation; the real migration retains that lease throughout.
     let observation: SqliteMigrationObservation;
     try {
-      ({ observation } = await withAgentDatabaseMaintenanceLease(options, (maintenance) =>
-        observer.observe(() =>
-          migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
-        ),
-      ));
+      ({ observation } = await withAgentDatabaseMaintenanceLease(options, async (maintenance) => {
+        const scope = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: () => maintenance.assertOwned(),
+        });
+        try {
+          return await scope.run(() =>
+            observer.observe(() =>
+              migrateOpenClawAgentDatabaseForMaintenance({ ...options, pathname }, maintenance),
+            ),
+          );
+        } finally {
+          await scope.close();
+        }
+      }));
     } catch (error) {
       writeMigrationFailure(error, {
         stage: "migration",
@@ -249,6 +261,8 @@ it.each([false, true])(
       CREATE TABLE parent (id TEXT PRIMARY KEY, bytes BLOB);
       INSERT INTO parent VALUES (CAST('retained' AS BLOB), X'00FF');
       INSERT INTO child VALUES (CAST('retained' AS BLOB));
+      CREATE TABLE strict_payload (value ANY) STRICT;
+      INSERT INTO strict_payload VALUES (X'00FF');
     `);
     if (conflict) {
       db.exec("INSERT INTO parent VALUES ('retained', X'01')");
@@ -262,6 +276,9 @@ it.each([false, true])(
     expect(db.prepare("SELECT typeof(parent_id) AS storage FROM child").get()).toEqual({
       storage: conflict ? "blob" : "text",
     });
+    expect(
+      db.prepare("SELECT typeof(value) AS storage, hex(value) AS bytes FROM strict_payload").get(),
+    ).toEqual({ storage: "blob", bytes: "00FF" });
     expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(db.isTransaction).toBe(false);
