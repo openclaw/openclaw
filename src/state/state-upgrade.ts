@@ -440,7 +440,7 @@ function hasRealLegacyWork(
       source !== null &&
       typeof source === "object" &&
       "hasLegacy" in source &&
-      source.hasLegacy === true
+      source.hasLegacy
     ) {
       return true;
     }

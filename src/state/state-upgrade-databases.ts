@@ -1,15 +1,58 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
-import { resolveStateDir } from "../config/paths.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
+import { listLegacyAuthProfileSources } from "../agents/auth-profiles/legacy-source-files.js";
+import { inspectSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  hasPendingSharedAuthCleanup,
+  inspectSharedAuthLegacySourceFile,
+  inspectSharedAuthLegacyRowsReadOnlyAsync,
+} from "../agents/auth-profiles/shared-store-bootstrap.js";
+import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
+import { listUnreferencedJsonlFiles } from "../commands/doctor-session-sqlite-discovery.js";
+import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
+import {
+  resolveConfiguredAgentDatabaseTargets,
+  resolveConfiguredSessionStoreTargets,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { listLegacyPairingStoreFiles } from "../infra/pairing-files.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { detectLegacyApnsRegistrations } from "../infra/state-migrations.apns.js";
+import { detectLegacyAuditLogs } from "../infra/state-migrations.audit-checkpoints.js";
+import { detectLegacyChannelPairingState } from "../infra/state-migrations.channel-pairing.js";
+import { detectLegacyCommitments } from "../infra/state-migrations.commitments.js";
+import { detectLegacyDebugProxyCaptureSidecar } from "../infra/state-migrations.debug-proxy.js";
+import { detectLegacyDeviceAuth } from "../infra/state-migrations.device-auth.js";
+import {
+  detectLegacyDeviceIdentity,
+  hasLegacyDeviceIdentityPath,
+} from "../infra/state-migrations.device-identity-repair.js";
+import { detectLegacyExecApprovals } from "../infra/state-migrations.exec-approvals.js";
+import { resolveLegacyStateMigrationOwner } from "../infra/state-migrations.legacy-owner.js";
+import { inspectLegacyAgentDir } from "../infra/state-migrations.legacy-sessions.js";
+import { detectLegacyManagedOutgoingImages } from "../infra/state-migrations.managed-outgoing-images.js";
+import { detectLegacyMcpOAuthStores } from "../infra/state-migrations.mcp-oauth.js";
+import { detectLegacyMeetingTranscripts } from "../infra/state-migrations.meeting-transcripts-detection.js";
+import { detectLegacyNodeHostConfig } from "../infra/state-migrations.node-host.js";
+import { resolveLegacyProfileMigrationExceptions } from "../infra/state-migrations.profile-scope.js";
+import { detectLegacyRescuePending } from "../infra/state-migrations.rescue-pending.js";
+import { listRetiredDeliveryQueueFiles } from "../infra/state-migrations.retired-delivery-files.js";
+import { listExistingRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
+import { listRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
+import { resolveLegacyConfigHealthPath } from "../infra/state-migrations.runtime-state.js";
+import { resolveSharedAuthMigrationSources } from "../infra/state-migrations.shared-auth-store.js";
+import { detectLegacyTuiLastSessions } from "../infra/state-migrations.tui-last-session.js";
+import { detectLegacyWebPush } from "../infra/state-migrations.web-push.js";
+import { detectLegacyWorkspaceState } from "../infra/state-migrations.workspace-setup.js";
+import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
 import {
   readPluginMetadataStateRowsInDatabase,
   type PluginMetadataStateRow,
@@ -195,6 +238,135 @@ export async function discoverDatabases(
     if (!retainedAgentIds.has(target.agentId)) {
       await add("agent", target.path, target.agentId);
     }
+  }
+  if (!targets.some((target) => target.version === 0)) {
+    return { targets, metadataRows };
+  }
+
+  // Fresh catalogs belong to bootstrap, not schema rollback. Only retained
+  // legacy sources can make an import create them during this upgrade. Use
+  // source owners here: the full detector needs already-migrated agent readers.
+  const doctorSources = { stateDir, env, doctorOnlyStateMigrations: true };
+  let hasLegacySource = await withArtifactPreservingStateReads(
+    async () =>
+      listExistingRetiredStateFiles([
+        resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
+        resolveLegacyConfigHealthPath(stateDir),
+        ...listRetiredRuntimeStateFiles(stateDir, env),
+      ]).length > 0 ||
+      listRetiredDeliveryQueueFiles(stateDir).length > 0 ||
+      (await listLegacyPairingStoreFiles(stateDir)).length > 0 ||
+      detectLegacyDebugProxyCaptureSidecar(stateDir, env).hasLegacy ||
+      detectLegacyTuiLastSessions(doctorSources).hasLegacy ||
+      detectLegacyApnsRegistrations(doctorSources).hasLegacy ||
+      detectLegacyDeviceAuth(doctorSources).hasLegacy ||
+      detectLegacyDeviceIdentity({ stateDir }).sources.some(hasLegacyDeviceIdentityPath) ||
+      detectLegacyExecApprovals(doctorSources).hasLegacy ||
+      detectLegacyMcpOAuthStores(doctorSources).hasLegacy ||
+      detectLegacyManagedOutgoingImages(doctorSources).hasLegacy ||
+      detectLegacyWebPush(doctorSources).hasLegacy ||
+      detectLegacyNodeHostConfig(doctorSources).hasLegacy ||
+      detectLegacyRescuePending(doctorSources).hasLegacy ||
+      detectLegacyAuditLogs(doctorSources).hasLegacy ||
+      (await detectLegacyCommitments(doctorSources)).hasLegacy ||
+      (
+        await detectLegacyMeetingTranscripts({
+          ...doctorSources,
+          artifactPreservingReadOnly: true,
+        })
+      ).hasLegacy ||
+      (await detectLegacyWorkspaceState({ ...doctorSources, cfg: config })).hasLegacy ||
+      detectLegacyChannelPairingState({
+        sourceDir: resolveOAuthDir(createConfigRuntimeEnv(config, env), stateDir),
+        configuredChannelIds: Object.keys(config.channels ?? {}),
+        deferConfiguredAccountDiscovery: true,
+      }).hasLegacy,
+    { agentDatabases: true },
+  );
+
+  if (!hasLegacySource) {
+    const sessionStores = [
+      ...resolveConfiguredSessionStoreTargets(config, env).map((target) => target.storePath),
+      ...(await resolveAgentSessionDirs(stateDir)).map((dir) => path.join(dir, "sessions.json")),
+    ];
+    hasLegacySource = sessionStores.some(
+      (storePath) =>
+        listExistingRetiredStateFiles([storePath]).length > 0 ||
+        listUnreferencedJsonlFiles(storePath, []).length > 0,
+    );
+  }
+  if (!hasLegacySource) {
+    const authSources = resolveSharedAuthMigrationSources(config, env);
+    hasLegacySource =
+      listLegacyAuthProfileSources({ env }).length > 0 ||
+      [
+        ...targets
+          .filter((target) => target.kind === "agent")
+          .map((target) => path.dirname(target.path)),
+        ...authSources.map((source) => path.dirname(source.sourcePath)),
+      ].some((agentDir) => listLegacyAuthProfileSources({ agentDir, env }).length > 0);
+    if (!hasLegacySource) {
+      const ownership = inspectSharedAuthStoreOwnership(env);
+      for (const { sourcePath } of authSources) {
+        if (hasPendingSharedAuthCleanup(env, sourcePath, { artifactPreservingReadOnly: true })) {
+          hasLegacySource = true;
+          break;
+        }
+        if (ownership.location !== "legacy-main") {
+          continue;
+        }
+        const source = inspectSharedAuthLegacySourceFile(sourcePath);
+        if (source.status === "present" && source.size > 0) {
+          const rows = await inspectSharedAuthLegacyRowsReadOnlyAsync(sourcePath, {
+            artifactPreservingReadOnly: isArtifactPreservingStateRead(),
+          });
+          if (rows.store || rows.state) {
+            hasLegacySource = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (!hasLegacySource) {
+    const { migrationTarget } = resolveLegacyStateMigrationOwner({
+      cfg: config,
+      locatorConfig: config,
+      env,
+      homedir: os.homedir,
+    });
+    const { standaloneAgent } = resolveLegacyProfileMigrationExceptions({
+      env,
+      configuredAgentDir: migrationTarget?.dir,
+    });
+    for (const source of new Set([
+      path.join(stateDir, "agent"),
+      ...(standaloneAgent ? [standaloneAgent] : []),
+    ])) {
+      if (
+        migrationTarget &&
+        resolvePathViaExistingAncestorSync(source) ===
+          resolvePathViaExistingAncestorSync(migrationTarget.dir)
+      ) {
+        continue;
+      }
+      const inspection = await withArtifactPreservingStateReads(
+        () => inspectLegacyAgentDir(source),
+        { agentDatabases: true },
+      );
+      if (inspection.status === "failed") {
+        throw new Error(inspection.warning);
+      }
+      if (inspection.status === "payload") {
+        hasLegacySource = true;
+        break;
+      }
+    }
+  }
+  // Source presence deliberately keeps prospective destinations conservative;
+  // exact import destinations remain with the existing Doctor migration owners.
+  if (!hasLegacySource) {
+    return { targets: targets.filter((target) => target.version !== 0), metadataRows };
   }
   return { targets, metadataRows };
 }

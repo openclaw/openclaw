@@ -171,3 +171,138 @@ it("refuses a missing database with unresolved journal data instead of bootstrap
   );
   expect(fs.readFileSync(`${file}-journal`, "utf8")).toBe("retained journal bytes");
 });
+
+it.each(["missing", "zero-byte", "uninitialized"] as const)(
+  "omits %s fresh catalogs from a schema-only upgrade inventory",
+  async (layout) => {
+    const root = dirs.make("state-boundary-fresh-");
+    const shared = path.join(root, "state", "openclaw.sqlite");
+    const agent = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(agent), { recursive: true });
+    {
+      using database = new DatabaseSync(agent);
+      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+    }
+    if (layout !== "missing") {
+      fs.mkdirSync(path.dirname(shared), { recursive: true });
+      if (layout === "zero-byte") {
+        fs.writeFileSync(shared, "");
+      } else {
+        using database = new DatabaseSync(shared);
+        database.exec("CREATE TABLE unrelated (value TEXT)");
+      }
+    }
+    const { targets } = await discoverDatabases(
+      root,
+      { agents: { entries: { main: {}, pending: {} } } },
+      { OPENCLAW_STATE_DIR: root },
+    );
+    expect(targets).toEqual([
+      expect.objectContaining({
+        path: agent,
+        version: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
+      }),
+    ]);
+    expect(
+      fs.existsSync(path.join(root, "agents", "pending", "agent", "openclaw-agent.sqlite")),
+    ).toBe(false);
+  },
+);
+
+it.each([
+  "auth-json",
+  "auth-rows-19",
+  "auth-rows-24",
+  "auth-rows-27",
+  "session-index",
+  "indexless-transcript",
+  "filesystem",
+])("retains prospective fresh catalogs when a %s source exists", async (source) => {
+  const root = dirs.make("state-boundary-legacy-source-");
+  const agentDir = path.join(root, "agents", "main", "agent");
+  const sessionsDir = path.join(root, "agents", "main", "sessions");
+  fs.mkdirSync(agentDir, { recursive: true });
+  if (source.startsWith("auth-rows-")) {
+    using database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    database.exec(`
+      PRAGMA user_version = ${Number(source.slice("auth-rows-".length))};
+      CREATE TABLE auth_profile_store (
+        store_key TEXT PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO auth_profile_store VALUES (
+        'primary',
+        '{"version":1,"profiles":{"synthetic":{"type":"api_key","provider":"openai","key":"synthetic"}}}',
+        1
+      );
+    `);
+  } else if (source === "auth-json") {
+    fs.writeFileSync(path.join(agentDir, "auth-profiles.json"), '{"version":1,"profiles":{}}');
+  } else if (source === "filesystem") {
+    fs.writeFileSync(path.join(root, "node.json"), '{"version":1,"nodeId":"synthetic"}');
+  } else {
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, source === "session-index" ? "sessions.json" : "orphan.jsonl"),
+      source === "session-index" ? "{}" : '{"type":"session","id":"synthetic"}\n',
+    );
+  }
+  const { targets } = await discoverDatabases(
+    root,
+    { agents: { entries: { main: {}, pending: {} } } },
+    { OPENCLAW_STATE_DIR: root },
+  );
+  expect(targets).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "state",
+        path: path.join(root, "state", "openclaw.sqlite"),
+        version: 0,
+      }),
+      expect.objectContaining({
+        kind: "agent",
+        path: path.join(root, "agents", "pending", "agent", "openclaw-agent.sqlite"),
+        version: 0,
+      }),
+    ]),
+  );
+  expect(fs.existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
+});
+
+it.each(["legacy-main", "state-db"])(
+  "uses %s auth ownership rather than agent-file presence for fresh catalogs",
+  async (location) => {
+    const root = dirs.make("state-boundary-auth-owner-");
+    const shared = path.join(root, "state", "openclaw.sqlite");
+    const agent = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(shared), { recursive: true });
+    fs.mkdirSync(path.dirname(agent), { recursive: true });
+    {
+      using database = new DatabaseSync(shared);
+      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      database
+        .prepare("INSERT INTO config_machine_state VALUES ('auth.sharedStore', ?, 1)")
+        .run(JSON.stringify({ location }));
+    }
+    {
+      using database = new DatabaseSync(agent);
+      database.exec(`
+        PRAGMA user_version = 27;
+        CREATE TABLE auth_profile_state (
+          state_key TEXT PRIMARY KEY,
+          state_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO auth_profile_state VALUES ('primary', '{"version":1}', 1);
+      `);
+    }
+    const { targets } = await discoverDatabases(
+      root,
+      { agents: { entries: { main: {}, pending: {} } } },
+      { OPENCLAW_STATE_DIR: root },
+    );
+    expect(targets.some((target) => target.version === 0)).toBe(location === "legacy-main");
+  },
+);

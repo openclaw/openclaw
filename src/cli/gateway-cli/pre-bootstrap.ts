@@ -523,7 +523,7 @@ async function createTrustedGatewayEnvLoader() {
     { isConfigRuntimeEnvVarAllowed },
     { loadGlobalRuntimeDotEnvFiles },
     { normalizeEnv },
-    { normalizeStateDirEnv, resolveStateDir },
+    { normalizeStateDirEnv },
     { resolveConfigDir },
     { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
