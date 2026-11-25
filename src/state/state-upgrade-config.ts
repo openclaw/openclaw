@@ -136,7 +136,7 @@ export function rewriteFilePrefix(file: string, source: string, destination: str
 
 export function stageUpgradeConfigs(
   configInputs: ReadonlyMap<string, string>,
-  configFiles: ReadonlyMap<string, { canonicalPath: string }>,
+  configFiles: ReadonlyMap<string, { raw: string; canonicalPath: string }>,
   ops: UpgradeOp[],
   workDir: string,
   stagedConfigs: Set<string>,
@@ -154,34 +154,26 @@ export function stageUpgradeConfigs(
       ops.splice(index, 1);
     }
   }
+  const restoreRoot = trial && fs.realpathSync(trial.stateDir);
+  // Frozen launchers restore root entries through parent links, not leaf-link targets.
+  const rootEntry =
+    trial &&
+    (fs.lstatSync(trial.configPath, { throwIfNoEntry: false })?.isSymbolicLink()
+      ? trial.configPath
+      : (configFiles.get(trial.configPath)?.canonicalPath ?? trial.configPath));
   for (const [file, target] of configInputs) {
     if (!fs.existsSync(target)) {
       continue;
     }
-    const original = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
-    const destination = configFiles.get(file)?.canonicalPath ?? file;
-    if (original?.equals(fs.readFileSync(target)) || ops.some((op) => op.live === destination)) {
+    const original = configFiles.get(file);
+    const destination = original?.canonicalPath ?? file;
+    if (
+      original?.raw === fs.readFileSync(target, "utf8") ||
+      ops.some((op) => op.live === destination)
+    ) {
       continue;
     }
     ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
-  }
-  if (trial) {
-    const restoreRoot = fs.realpathSync(trial.stateDir);
-    // Frozen launchers also restore the root entry through parent links, but
-    // cannot discover an external leaf-link target from that entry's backup.
-    const rootEntry = fs.lstatSync(trial.configPath, { throwIfNoEntry: false })?.isSymbolicLink()
-      ? trial.configPath
-      : (configFiles.get(trial.configPath)?.canonicalPath ?? trial.configPath);
-    const uncovered = ops.find(
-      (op) =>
-        op.kind !== "add" &&
-        configTargets.has(op.live) &&
-        op.live !== rootEntry &&
-        !isUpgradeRestorePath(restoreRoot, configFiles.get(op.live)?.canonicalPath ?? op.live),
-    );
-    if (uncovered) {
-      return `The release trial cannot restore changed included config ${uncovered.live}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`;
-    }
   }
   const mounts = new Set(
     process.platform === "linux"
@@ -193,13 +185,17 @@ export function stageUpgradeConfigs(
   );
   // A workspace include can be on another filesystem even when the root is not.
   // Stage its planned writes (including Doctor backups) beside their destinations.
-  const configDirectories = new Set(
-    [...configInputs.keys()].flatMap((file) => [
-      path.dirname(file),
-      path.dirname(configFiles.get(file)?.canonicalPath ?? file),
-    ]),
-  );
+  const configDirectories = new Set([...configTargets].map((file) => path.dirname(file)));
   for (const op of ops) {
+    if (
+      restoreRoot &&
+      op.kind !== "add" &&
+      configTargets.has(op.live) &&
+      op.live !== rootEntry &&
+      !isUpgradeRestorePath(restoreRoot, configFiles.get(op.live)?.canonicalPath ?? op.live)
+    ) {
+      return `The release trial cannot restore changed included config ${op.live}. Run openclaw doctor --fix before retrying the update. Nothing live was changed.`;
+    }
     if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
       // A file mount cannot be renamed, even when its contents are writable.
       // Refuse before the database swap plan or recovery images become durable.

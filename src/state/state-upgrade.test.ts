@@ -81,7 +81,9 @@ it("publishes immutable restore intent before the replayable swap plan, and reus
   const statePath = path.join(stateDir, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(statePath));
   const configPath = path.join(stateDir, "openclaw.json");
-  fs.writeFileSync(configPath, "{}");
+  const configTarget = path.join(stateDir, "root.json");
+  fs.writeFileSync(configTarget, "{}");
+  fs.symlinkSync(configTarget, configPath);
   {
     using db = new DatabaseSync(statePath);
     db.exec(OPENCLAW_STATE_SCHEMA_SQL);
@@ -106,11 +108,14 @@ it("publishes immutable restore intent before the replayable swap plan, and reus
   const interrupted = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
     if (path.basename(String(destination)) === "plan.json") {
       expect(fs.existsSync(manifest)).toBe(true);
+      expect(fs.readFileSync(configPath, "utf8")).toBe("{}");
+      expect(fs.readFileSync(`${configTarget}.pre-restore-before-plan`, "utf8")).toBe("{}");
       throw new Error("stopped before swap plan publication");
     }
     return rename(source, destination);
   });
   const runChain = async ({ stateDir: shadow }: { stateDir: string }) => {
+    fs.writeFileSync(path.join(shadow, "openclaw.json"), '{"gateway":{"mode":"local"}}');
     using db = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
     db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
     return { warnings: [] };
@@ -143,6 +148,9 @@ it("publishes immutable restore intent before the replayable swap plan, and reus
     }),
   ).resolves.toMatchObject({ status: "upgraded" });
   expect(fs.statSync(image).ino).toBe(inode);
+  expect(fs.lstatSync(configPath).isSymbolicLink()).toBe(true);
+  expect(fs.readFileSync(configPath, "utf8")).toBe('{"gateway":{"mode":"local"}}');
+  expect(fs.readFileSync(`${configTarget}.pre-restore-before-plan`, "utf8")).toBe("{}");
   using original = new DatabaseSync(image, { readOnly: true });
   expect(original.prepare("PRAGMA user_version").get()?.user_version).toBe(
     OPENCLAW_STATE_SCHEMA_VERSION - 1,

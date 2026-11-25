@@ -3,13 +3,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeGitReleaseLauncher } from "../infra/git-release-launcher.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-schema-versions.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
-import { upgradeStateDirectory } from "../state/state-upgrade.js";
-import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { writeLauncher, TRIAL_BUDGET_MS } from "./launcher.js";
 import type { Trial } from "./store.js";
 
@@ -209,94 +204,19 @@ describe("resident update launcher", () => {
     );
   });
 
-  it.each([false, true])(
-    "publishes linked config in a real trial and restores it on failure (%s)",
-    async (fail) => {
-      const { state, prefix, launcher } = await fixture(`
-      console.log('MIGRATE');
-      process.stdin.once('data', data => {
-        if (JSON.parse(data).fail) process.exit(78);
-        process.send({type:'openclaw.ready',buildId:${JSON.stringify(resolveRuntimeServiceBuildId() ?? "new-build")}});
-      });
-    `);
-      const canonical = path.join(state, "config");
-      const linked = path.join(state, "node_modules", "config");
-      await fs.mkdir(canonical);
-      await fs.mkdir(path.dirname(linked));
-      await fs.symlink(canonical, linked, "junction");
-      const configPath = path.join(state, "openclaw.json");
-      const included = path.join(linked, "agents.json");
-      const original = '{"defaults":{"maxConcurrent":2}}';
-      const migrated = '{"defaults":{"maxConcurrent":3}}';
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "local" }, agents: { $include: included } }),
-      );
-      await fs.writeFile(included, original);
-      const database = path.join(state, "state", "openclaw.sqlite");
-      await fs.mkdir(path.dirname(database));
-      {
-        using db = new DatabaseSync(database);
-        db.exec(OPENCLAW_STATE_SCHEMA_SQL);
-        db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-      }
-      const trial = await pending(prefix);
-      await writeTrial(
-        { ...trial, version: VERSION, buildId: resolveRuntimeServiceBuildId() ?? undefined },
-        prefix,
-      );
-      const run = start(launcher);
-      await output(run.child, "MIGRATE", run.stdout);
-      expect((await readTrial(prefix)).phase).toBe("trial");
-      // The real publication and restore owners run while the fixture child waits.
-      // Only Doctor's migration and the child's readiness/failure are injected.
-      const result = await upgradeStateDirectory({
-        env: { OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: configPath },
-        log: { info() {}, warn() {} },
-        runChain: async (shadow) => {
-          await fs.writeFile(
-            path.join(shadow.stateDir, "node_modules", "config", "agents.json"),
-            migrated,
-          );
-          using db = new DatabaseSync(path.join(shadow.stateDir, "state", "openclaw.sqlite"));
-          db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-          return { warnings: [] };
-        },
-        beforeSwap: async () => {
-          expect(await fs.readFile(included, "utf8")).toBe(original);
-          expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
-        },
-      });
-      expect(result.status).toBe("upgraded");
-      expect(await fs.readFile(included, "utf8")).toBe(migrated);
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(prefix, "releases", "new", ".restore"), "utf8"),
-      );
-      const image = manifest.files.find(
-        (entry: { live: string }) => entry.live === path.join(canonical, "agents.json"),
-      );
-      expect(await fs.readFile(image.preimage, "utf8")).toBe(original);
-      run.child.stdin.write(JSON.stringify({ fail }) + "\n");
-      await output(run.child, fail ? "OLD" : "READY", run.stdout);
-      expect((await readTrial(prefix)).phase).toBe(fail ? "rolled-back" : "committed");
-      expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(
-        path.join(prefix, "releases", fail ? "old" : "new", "openclaw"),
-      );
-      expect(await fs.readFile(included, "utf8")).toBe(fail ? original : migrated);
-      expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
-      using db = new DatabaseSync(database, { readOnly: true });
-      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION - (fail ? 1 : 0),
-      );
-    },
-  );
-
   it("restores preserved state, additions, and orphan companions before restarting the old release", async () => {
     const { state, prefix, launcher } = await fixture(
       "console.error('candidate exploded'); process.exit(1);",
     );
     const database = path.join(state, "state.sqlite");
     const added = path.join(state, "added.sqlite");
+    const included = path.join(state, "config", "agents.json");
+    const linked = path.join(state, "node_modules", "config");
+    await fs.mkdir(path.dirname(included));
+    await fs.mkdir(path.dirname(linked));
+    await fs.symlink(path.dirname(included), linked, "junction");
+    await fs.writeFile(included, '{"defaults":{"maxConcurrent":3}}');
+    await fs.writeFile(included + ".pre-new-build", '{"defaults":{"maxConcurrent":2}}');
     await fs.writeFile(database, "new state");
     await fs.writeFile(database + ".pre-new-build", "old state");
     await fs.writeFile(database + "-wal", "orphan WAL");
@@ -309,6 +229,10 @@ describe("resident update launcher", () => {
     const run = start(launcher);
     await output(run.child, "OLD", run.stdout);
     expect(await fs.readFile(database, "utf8")).toBe("old state");
+    expect(await fs.readFile(path.join(linked, "agents.json"), "utf8")).toBe(
+      '{"defaults":{"maxConcurrent":2}}',
+    );
+    expect((await fs.lstat(linked)).isSymbolicLink()).toBe(true);
     await expect(fs.stat(database + "-wal")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(added)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.realpath(path.join(prefix, "openclaw"))).toBe(
