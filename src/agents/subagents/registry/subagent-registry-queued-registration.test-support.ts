@@ -127,7 +127,6 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
           createPendingLifecycleScheduler({ runs, completeInBackground: vi.fn() }),
         resumeRequesterSettleWake: vi.fn(),
         adoptPausedSubagentRunIntoSuccessor: async () => false,
-        refreshFrozenResultFromSession: async () => {},
         completeSubagentRunWithRecovery: async () => {},
         ...overrides,
       }),

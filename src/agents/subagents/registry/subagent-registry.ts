@@ -147,7 +147,6 @@ const {
   scheduleResume,
   completeCleanupBookkeeping,
   completeSubagentRun,
-  refreshFrozenResultFromSession,
   resumeRequesterSettleWake,
   resumePendingRequesterSettlements,
   settleRequesterTurnAfterSessionSpawns,
@@ -447,7 +446,6 @@ const subagentListener = createSubagentRegistryListener({
       childSessionKey: entry.childSessionKey,
       childAgentId: entry.childAgentId,
     }),
-  refreshFrozenResultFromSession,
   completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
 });
 

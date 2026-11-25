@@ -15,14 +15,17 @@ import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-enviro
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
 import { prepareWorkerTurnTranscriptSource } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
+  emitAgentEvent,
   getAgentEventLifecycleGeneration,
   onAgentEvent,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import {
+  clearAgentRunContext,
   getAgentRunContext,
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
+  registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -107,6 +110,73 @@ function updateRun(
     return { value: undefined, postimages: new Map([[runId, draft]]) };
   });
 }
+
+it("ignores an unregistered emitter instead of rewriting terminal tasks sharing its session", async () => {
+  const childSessionKey = "agent:main:subagent:unregistered-completion";
+  const sessionId = "unregistered-completion-session";
+  const previousRunId = "unregistered-completion-old";
+  const nextRunId = "unregistered-completion-next";
+  const emitter = "unregistered-completion-emitter";
+  await writeSession(childSessionKey, sessionId);
+  await writeSession("agent:main:main", "unregistered-completion-requester");
+  await register(previousRunId, childSessionKey, sessionId, {
+    spawnMode: "session",
+    expectsCompletionMessage: true,
+  });
+  const freeze = (runId: string, answer: string, endedAt: number) =>
+    updateRun(runId, (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        status: "terminal",
+        endedAt,
+        outcome: { status: "ok" },
+      };
+      draft.completion = { required: true, resultText: answer, capturedAt: endedAt };
+      draft.cleanupHandled = true;
+    });
+  await freeze(previousRunId, "The predecessor answer.", 1);
+  expect(
+    await replaceRun(previousRunId, nextRunId, {
+      expected: subagentRuns.get(previousRunId),
+      allowEndedSource: true,
+      preserveCompletedRun: true,
+    }),
+  ).toBe(true);
+  await freeze(nextRunId, "The successor answer.", 2);
+  await fixture.settle();
+  const before = loadSubagentRegistryFromSqlite();
+  const previousCompletion = structuredClone(before.get(previousRunId)?.completion);
+  const nextCompletion = structuredClone(before.get(nextRunId)?.completion);
+  expect(previousCompletion?.resultText).toBe("The predecessor answer.");
+  expect(nextCompletion?.resultText).toBe("The successor answer.");
+  fixture.capture.mockResolvedValue("An unrelated run's answer.");
+  registerAgentRunContext(emitter, {
+    agentId: "main",
+    sessionKey: childSessionKey,
+    sessionId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+  });
+  onTestFinished(() => clearAgentRunContext(emitter));
+  const observed = vi.fn();
+  onTestFinished(
+    onAgentEvent((event) => {
+      if (event.runId === emitter) {
+        observed(event);
+      }
+    }),
+  );
+  emitAgentEvent({
+    runId: emitter,
+    stream: "lifecycle",
+    data: { phase: "end", executionSettled: true, status: "ok", startedAt: 3, endedAt: 4 },
+  });
+  await fixture.settle();
+  expect(observed).toHaveBeenCalledOnce();
+  const after = loadSubagentRegistryFromSqlite();
+  expect(after.get(previousRunId)?.completion).toEqual(previousCompletion);
+  expect(after.get(nextRunId)?.completion).toEqual(nextCompletion);
+  expect(fixture.capture).not.toHaveBeenCalled();
+});
 
 it("does not recreate a source released before replacement admission", async () => {
   await register(
