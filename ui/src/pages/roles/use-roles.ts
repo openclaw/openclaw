@@ -113,7 +113,12 @@ export function useRoles() {
     profiles,
     people,
     peopleLoaded: () => Boolean(directory.read().result),
-    selfProfileId: () => gateway.snapshot?.selfUser?.id ?? null,
+    /** The signed-in person's canonical profile; a session may be bound to a merged alias. */
+    selfProfileId: () => {
+      const id = gateway.snapshot?.selfUser?.id;
+      const row = directory.read().result?.profiles.find((profile) => profile.id === id);
+      return row?.mergedInto ?? id ?? null;
+    },
     clearMessages: () => writer.update({ error: null, notice: null }),
     reload: () => context.runtimeConfig.ensureLoaded(),
     patch(
