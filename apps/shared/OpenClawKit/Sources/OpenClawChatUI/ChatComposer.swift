@@ -113,6 +113,13 @@ struct OpenClawChatComposer: View {
     /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
     @State var isFocused = false
     @State var showsPermissionsSheet = false
+    @State var showsAddSheet = false
+    /// What runs once the "+" sheet is gone: a picker, or the keyboard after a skill went into the draft.
+    @State var addSheetFollowUp: ChatComposerAddFollowUp?
+    /// The draft had the keyboard when the "+" sheet opened; it gets it back once the sheet, or the picker
+    /// it opened, closes.
+    @State var addSheetReturnsFocus = false
+    @Environment(\.openClawChatComposerPanels) var composerPanels
     #else
     @FocusState private var isFocused: Bool
     #endif
@@ -191,6 +198,21 @@ struct OpenClawChatComposer: View {
         #if os(iOS)
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
         .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+        .sheet(isPresented: self.$showsAddSheet, onDismiss: self.addSheetDidDismiss) {
+            ChatComposerAddSheet(
+                viewModel: self.viewModel,
+                isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+                onAttachPhotos: { assets in
+                    guard self.isAttachmentInputEnabled, !assets.isEmpty else { return }
+                    self.viewModel.addRecentPhotos(
+                        assets,
+                        owner: OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel))
+                },
+                onClose: { followUp in
+                    self.addSheetFollowUp = followUp
+                    self.showsAddSheet = false
+                })
+        }
         #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
@@ -440,6 +462,7 @@ struct OpenClawChatComposer: View {
                     self.photoPickerOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsPhotoPicker = isPresented
+                if !isPresented { self.returnFocusAfterAddSheet() }
             })
     }
 
@@ -451,6 +474,7 @@ struct OpenClawChatComposer: View {
                     self.fileImporterOwner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
                 }
                 self.showsFileImporter = isPresented
+                if !isPresented { self.returnFocusAfterAddSheet() }
             })
     }
 
@@ -469,6 +493,7 @@ struct OpenClawChatComposer: View {
                     self.cameraCaptureOwner = nil
                 }
                 #endif
+                if !isPresented { self.returnFocusAfterAddSheet() }
             })
     }
     #endif
@@ -1272,6 +1297,45 @@ extension OpenClawChatComposer {
         guard self.isComposerEnabled else { return }
         self.isFocused = true
     }
+
+    /// The "+" sheet opens with the keyboard down, and over any open panel.
+    func openAddSheet() {
+        self.addSheetReturnsFocus = self.isFocused
+        self.addSheetFollowUp = nil
+        self.composerPanels?.dismiss()
+        // The draft's text view treats a false focus request as no request; end editing instead.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        self.showsAddSheet = true
+    }
+
+    /// Runs once the "+" sheet is gone, however it closed: the picker it asked for opens, or the keyboard comes back.
+    func addSheetDidDismiss() {
+        let followUp = self.addSheetFollowUp
+        self.addSheetFollowUp = nil
+        switch followUp {
+        case .camera:
+            self.cameraPickerPresentation.wrappedValue = true
+        case .photoLibrary:
+            self.photoPickerPresentation.wrappedValue = true
+        case .files:
+            self.fileImporterPresentation.wrappedValue = true
+        case .focusDraft:
+            self.addSheetReturnsFocus = false
+            self.focusDraft()
+        case nil:
+            self.returnFocusAfterAddSheet()
+        }
+    }
+    #endif
+
+    #if !os(macOS)
+    func returnFocusAfterAddSheet() {
+        #if os(iOS)
+        guard self.addSheetReturnsFocus else { return }
+        self.addSheetReturnsFocus = false
+        self.focusDraft()
+        #endif
+    }
     #endif
 
     private var textMinHeight: CGFloat {
@@ -1515,6 +1579,11 @@ extension OpenClawChatComposer {
     #endif
 
     private func dismissAttachmentCapture() {
+        #if os(iOS)
+        self.showsAddSheet = false
+        self.addSheetFollowUp = nil
+        self.addSheetReturnsFocus = false
+        #endif
         self.showsPhotoPicker = false
         self.showsFileImporter = false
         self.showsCameraPicker = false
