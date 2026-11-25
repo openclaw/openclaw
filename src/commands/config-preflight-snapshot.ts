@@ -422,16 +422,6 @@ export async function readAdmittedConfigSnapshot(params: {
                   throwStartupMigrationGuardRejected();
                 }
                 if (read.snapshot.valid) {
-                  // Validate retained credential inputs before recovery or schema maintenance
-                  // can change the shared database. Their existing owner stays read-only here.
-                  await measureDoctorConfigPreflightStep(
-                    "admission.client-credential-sources",
-                    async () => {
-                      const { prepareRequiredLegacyClientCredentials } =
-                        await import("./startup-client-credentials.js");
-                      await prepareRequiredLegacyClientCredentials(env);
-                    },
-                  );
                   recoverOpenClawStateRollbackJournalForStartup({ env: params.env });
                 }
                 return { ...read, ...(recovery ? { recovery } : {}) };

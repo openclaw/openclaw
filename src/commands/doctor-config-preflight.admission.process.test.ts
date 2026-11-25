@@ -373,27 +373,35 @@ it.each<[string, AdmissionCase]>([
           }
         }
       } else if (identityFile && !canonicalIdentity) {
-        // Invalid legacy identity refuses before schema migration or backup publication.
+        // Outside a launcher trial, a later identity refusal retains completed
+        // schema steps. The recovery image preserves every original table row.
         expect(fs.readFileSync(configPath, "utf8")).toBe(configBefore);
         const after = manifest(stateDir);
-        const added = Object.keys(after).filter((file) => !(file in before));
-        if (process.platform !== "win32") {
-          expect(added).toHaveLength(1);
-          const logFile = added[0]!;
-          expect(path.dirname(logFile)).toBe("logs");
-          expect(path.basename(logFile)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/u);
-          expect(fs.readFileSync(path.join(stateDir, logFile), "utf8")).toContain(
-            "gateway requires state migration.",
-          );
-          delete after[logFile];
+        for (const [file, hash] of Object.entries(before)) {
+          if (!file.startsWith(path.join("state", "openclaw.sqlite"))) {
+            expect(after[file], file).toBe(hash);
+          }
         }
-        expect(after).toEqual(before);
-        expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
-        expect(
-          fs
-            .readdirSync(path.dirname(databasePath))
-            .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-")),
-        ).toEqual([]);
+        const backups = fs
+          .readdirSync(path.dirname(databasePath))
+          .filter(
+            (name) =>
+              name.startsWith("openclaw.sqlite.pre-startup-migration-") &&
+              name.endsWith(".bak") &&
+              !name.endsWith(".scoped.bak"),
+          );
+        expect(backups).toHaveLength(1);
+        expect(schemaMetadata(path.join(path.dirname(databasePath), backups[0]!))).toEqual(
+          schemaBefore,
+        );
+        const live = schemaMetadata(databasePath);
+        expect(live.userVersion).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+        expect(live.schemaMeta).toContainEqual(
+          expect.objectContaining({
+            meta_key: "primary",
+            schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          }),
+        );
       } else if (!canonicalIdentity) {
         const after = manifest(stateDir);
         const wal = path.relative(stateDir, `${databasePath}-wal`);

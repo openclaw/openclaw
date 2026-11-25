@@ -715,7 +715,7 @@ describe("runDoctorConfigPreflight", () => {
     });
   });
 
-  it("normalizes historical transcripts at startup and preserves them through later plain Doctor", async () => {
+  it("leaves historical transcript bytes at startup and normalizes them in later plain Doctor", async () => {
     await withUnscopedDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync(
         {
@@ -782,6 +782,14 @@ describe("runDoctorConfigPreflight", () => {
 
             await runStartupConfigPreflight({ gateway: true });
 
+            expect(readEventJson()).toBe(originalJson);
+            // Preserve the same process: readiness must not suppress plain Doctor.
+            await using doctor = await prepareDoctorContext(configPath, {
+              options: { nonInteractive: true },
+            });
+
+            expect(doctor.prompter.shouldRepair).toBe(false);
+
             expect(JSON.parse(String(readEventJson()))).toEqual({
               ...historicalEvent,
               message: {
@@ -791,14 +799,6 @@ describe("runDoctorConfigPreflight", () => {
                 openclawDelivery: { replyToCurrent: true },
               },
             });
-            const normalizedJson = readEventJson();
-            // Plain Doctor must leave the already-normalized event unchanged.
-            await using doctor = await prepareDoctorContext(configPath, {
-              options: { nonInteractive: true },
-            });
-
-            expect(doctor.prompter.shouldRepair).toBe(false);
-            expect(readEventJson()).toBe(normalizedJson);
           } finally {
             await cleanupSessionStateForTest({ stateDir });
           }
