@@ -15,6 +15,7 @@ import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
 } from "../operator-role-policy.js";
+import { resolveOperatorRoleSelfLockout } from "../operator-role-self-lockout.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { respondError } from "./response.js";
 import { recordRoleAssignmentChange } from "./system-changes.js";
@@ -37,7 +38,13 @@ export async function handleUsersSetRole(
       role,
       operatorRoleSubject(target),
     );
-  const assignmentError = roleAssignmentError();
+  const assignmentError =
+    roleAssignmentError() ??
+    resolveOperatorRoleSelfLockout({
+      client: options.client,
+      config: context.getRuntimeConfig(),
+      assignment: { profileId: target?.profileId ?? profileId, role },
+    });
   if (assignmentError) {
     respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
     return;
