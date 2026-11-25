@@ -72,6 +72,7 @@ export type SessionIdentity = {
 export async function selectLiveRestartResumeSessions(
   cfg: OpenClawConfig,
   summary: ReturnType<typeof createRestartResumeSummary>,
+  questionSessions: Array<Partial<SessionIdentity> & { sessionKey: string }> = [],
 ): Promise<Map<string, SessionIdentity>> {
   const sessions = new Map<string, SessionIdentity>();
   const chatRoots = new Set<string>();
@@ -198,7 +199,7 @@ export async function selectLiveRestartResumeSessions(
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
   }
-  inputs.push(...listLiveSubagentSessions(), ...listYieldWaitingSessions());
+  inputs.push(...listLiveSubagentSessions(), ...listYieldWaitingSessions(), ...questionSessions);
   // Register independent owners with their original custody before resolving delegated edges.
   for (const input of inputs.toSorted(
     (a, b) => Number(Boolean(b.directChat)) - Number(Boolean(a.directChat)),

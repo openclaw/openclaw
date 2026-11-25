@@ -1,4 +1,4 @@
-// Tracks transient operator questions and short-lived terminal records in memory.
+// Tracks operator questions and short-lived terminal records in memory; restart markers carry resumable ones.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -14,6 +14,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
@@ -92,6 +93,16 @@ type QuestionEntry = {
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
+  /** Set on ordinary session questions that a graceful restart keeps answerable. */
+  resume?: Omit<ResumableQuestion, "record">;
+};
+
+/** A pending question the session restart marker carries to the next Gateway. */
+export type ResumableQuestion = {
+  record: QuestionRecord;
+  agentId: string;
+  sessionKey: string;
+  operatorSource?: import("./operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -211,6 +222,20 @@ export class QuestionManager {
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
+    // Only ordinary session questions outlive a restart. Secret, form, and host-authorized
+    // questions are never written anywhere, so a restart cannot widen who sees them.
+    if (
+      entry.ordinary &&
+      !params.authorizeClient &&
+      params.sessionKey &&
+      !params.questions.some((question) => question.presentation)
+    ) {
+      const run = params.runId ? getAgentRunContext(params.runId) : undefined;
+      const agentId = run?.agentId ?? params.agentId;
+      if (run?.sessionKey && agentId) {
+        entry.resume = { agentId, sessionKey: run.sessionKey };
+      }
+    }
     this.entries.set(record.id, entry);
     bindMcpFormQuestionRecord(
       record,
@@ -232,6 +257,48 @@ export class QuestionManager {
       }
     }
     return record;
+  }
+
+  /** Pending questions that graceful shutdown records in their session's restart marker. */
+  listResumable(): ResumableQuestion[] {
+    return [...this.entries.values()].flatMap(({ record, resume }) =>
+      record.status === "pending" && resume ? [{ record, ...resume }] : [],
+    );
+  }
+
+  /**
+   * Restores a question from a restart marker. No tool call waits for it any more, so its
+   * answer, skip, or expiry continues the session in a new turn instead.
+   */
+  restore(
+    { record, ...resume }: ResumableQuestion,
+    onResolved: NonNullable<QuestionManagerRequest["onResolved"]>,
+  ): boolean {
+    if (this.closed || this.entries.has(record.id)) {
+      return false;
+    }
+    this.entries.set(record.id, {
+      record,
+      ordinary: true,
+      resume,
+      job: this.scheduler.schedule({
+        id: `${this.scheduleId}:${record.id}`,
+        delayMs: Math.max(0, record.expiresAtMs - this.scheduler.now()),
+        run: () => {
+          this.expire(record.id);
+          return this.drain();
+        },
+      }),
+      waiters: new Set(),
+      onResolved,
+      admissionContinuation: null,
+    });
+    return true;
+  }
+
+  /** The restart marker is already written; the next Gateway accepts the answer instead. */
+  refusesAnswerWhileClosing(id: string): boolean {
+    return this.scheduler.signal.aborted && this.entries.get(id)?.resume !== undefined;
   }
 
   get(id: string): QuestionRecord | null {

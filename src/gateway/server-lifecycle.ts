@@ -544,6 +544,7 @@ export async function prepareGatewayLifecycle(params: {
           await shutdownRuntime.sessionRestartResume.persistRunningSessionsForRestart({
             cfg,
             signal,
+            questions: runtime.resolvePluginGatewayContext()?.questionManager?.listResumable(),
           });
         },
         terminateRunningSubagentsForShutdown: async () => {

@@ -272,7 +272,8 @@ export function handleQuestionPromptEvent(
       invalidateQuestionList(state.client);
     }
     const previous = state.prompts.get(record.id);
-    if (previous && previous.status !== "pending") {
+    // A reconnect can precede restoration; only an authoritative request revives it.
+    if (previous && previous.status !== "pending" && previous.status !== "unavailable") {
       return true;
     }
     storeQuestionRecord(state, record.id, record, previous);

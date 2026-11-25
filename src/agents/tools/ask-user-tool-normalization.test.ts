@@ -1,6 +1,11 @@
 import { Value } from "typebox/value";
 import { expect, it } from "vitest";
-import { AskUserToolSchema, normalizeAskUserParams } from "./ask-user-tool-normalization.js";
+import type { QuestionRecord } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  AskUserToolSchema,
+  normalizeAskUserParams,
+  formatRestartedQuestionResult,
+} from "./ask-user-tool-normalization.js";
 import { createDeploymentQuestion } from "./ask-user-tool.test-support.js";
 
 const question = createDeploymentQuestion("Deployment target");
@@ -114,3 +119,40 @@ it.each([
 ])("does not offer an invalid or ambiguous recovery action: %j", (args) => {
   expect(() => normalizeAskUserParams(args)).toThrow();
 });
+
+it.each([
+  ["expired", undefined, "dependent task remains blocked"],
+  ["cancelled", undefined, "dependent task remains blocked"],
+  ["answered", "Stop this task", "dependent task remains blocked"],
+  ["answered", "Ready to recheck", "Re-observe the original target"],
+] as const)("preserves a restored manual step's %s outcome (%s)", (status, answer, expected) => {
+  const { questions } = normalizeAskUserParams({
+    requiredAction: { reason: "Device approval is pending", instructions: "Approve on the device" },
+  });
+  const record: QuestionRecord = {
+    id: "restored-manual",
+    questions,
+    createdAtMs: 1,
+    expiresAtMs: 2,
+    status,
+    ...(answer ? { answers: { answers: { required_action: [answer] } } } : {}),
+  };
+  expect(formatRestartedQuestionResult(record)).toContain(expected);
+});
+
+it.each([true, false])(
+  "keeps a non-manual question named required_action optional (free text: %s)",
+  (isOther) => {
+    const { questions } = normalizeAskUserParams(withQuestion({ id: "required_action" }));
+    questions[0]!.isOther = isOther;
+    expect(
+      formatRestartedQuestionResult({
+        id: "ordinary",
+        questions,
+        createdAtMs: 1,
+        expiresAtMs: 2,
+        status: "expired",
+      }),
+    ).toContain("proceed with best judgment");
+  },
+);

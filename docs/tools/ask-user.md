@@ -199,7 +199,15 @@ does not pause or extend that attempt's execution budget.
 
 For an ordinary decision question, if it expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
-An aborted agent run cancels its pending Gateway question.
+An aborted agent run cancels its pending Gateway question. A graceful Gateway
+restart keeps an ordinary question pending until its original deadline. Answering it
+after the restart continues the conversation in a new turn that carries the answer; if
+it expires or is skipped instead, the new turn says so. Answers sent while the Gateway
+is shutting down are refused; answer again after it reconnects. Secret, form,
+host-authorized, and child-session questions are not restored. Crash recovery is not
+supported. Clients get `QUESTION_NOT_FOUND` for missing questions, and the Control UI
+shows "Unavailable". An eligible question reappears when the Gateway announces its
+restoration.
 
 In the Control UI, a reply from the main composer can answer one ordinary
 question in the active turn, including an answer outside its options. It appears

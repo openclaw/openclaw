@@ -33,6 +33,8 @@ import {
   withAgentInputRecovery,
 } from "../state/agent-database-preparation-context.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
+import type { ResumableQuestion } from "./question-manager.js";
+import { markerQuestions, questionSessions, restoreMarkerQuestions } from "./question-resume.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -64,6 +66,7 @@ import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorizati
 export async function persistRunningSessionsForRestart(params: {
   cfg: OpenClawConfig;
   signal?: AbortSignal;
+  questions?: ResumableQuestion[];
 }): Promise<void> {
   const summary = createRestartResumeSummary("shutdown");
   const publish = () => summary.publish();
@@ -83,7 +86,11 @@ async function persistRunningSessions(
   const assertCurrent = () => params.signal?.throwIfAborted();
   // Snapshot live owners before ancestry reads; persistence checks custody again before writing.
   assertCurrent();
-  const sessions = await selectLiveRestartResumeSessions(params.cfg, summary);
+  const sessions = await selectLiveRestartResumeSessions(
+    params.cfg,
+    summary,
+    questionSessions(params.questions),
+  );
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -136,7 +143,11 @@ async function persistRunningSessions(
               sessionId: entry.sessionId,
             });
             preserve.push({ session, preserve: queued.preserve });
-            if (!session.needsResume) {
+            const questions = markerQuestions(params.questions, {
+              agentId: session.agentId,
+              sessionKey,
+            });
+            if (!session.needsResume && !questions.length) {
               summary.record(
                 session.agentId,
                 sessionKey,
@@ -150,6 +161,7 @@ async function persistRunningSessions(
                 ...entry,
                 resumeAfterRestart: createRestartResumeMarker({
                   ...(directChat ? { directChat: true } : {}),
+                  ...(questions.length ? { questions } : {}),
                   operatorSource:
                     session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 }),
@@ -486,6 +498,8 @@ async function resumeRestartStore(
           log.warn(
             `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
           );
+        } else if (await restoreMarkerQuestions(context, { agentId, sessionKey }, marker)) {
+          summary.record(agentId, sessionKey, "awaiting-question");
         } else {
           try {
             authority = await prepareSessionSystemTurnAuthority({
@@ -560,6 +574,8 @@ async function resumeRestartStore(
               log,
             });
           }
+        }
+        if (!parked || parked === "resume") {
           await patchSessionEntryCore(
             { ...target, agentId, sessionKey },
             (current) =>

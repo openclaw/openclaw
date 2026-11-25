@@ -614,7 +614,7 @@ describe("refreshPendingQuestions", () => {
     });
   });
 
-  it("terminalizes a missing pending question with an unknown outcome after not-found", async () => {
+  it("recovers a missing pending question when its restored request arrives", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "question.list") {
         return { questions: [] };
@@ -633,6 +633,8 @@ describe("refreshPendingQuestions", () => {
       submitting: false,
       error: null,
     });
+    expect(requestQuestion(state)).toBe(true);
+    expectPrompt(state, { status: "pending" });
   });
 
   it("stops retrying an unmatched resolution after its gateway tombstone ages out", async () => {

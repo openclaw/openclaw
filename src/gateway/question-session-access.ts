@@ -5,6 +5,7 @@ import {
   type QuestionRecord,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { PreparedQuestionCallerRead } from "../agents/harness/host-private-capabilities.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "../config/sessions/session-entry-read-runtime.types.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -32,7 +33,11 @@ import {
 } from "./question-manager.js";
 import type { QuestionSessionAccess } from "./question-session-access.types.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./server-methods/types.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   authorizeOwnSessionMutation,
@@ -93,11 +98,27 @@ export async function withPreparedQuestionSessions<T>(
   consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
   operation: { assertCurrent: () => void },
 ): Promise<T> {
+  return await withPreparedQuestionSessionFacts(
+    options.context,
+    questions,
+    consume,
+    operation,
+    readGatewayRequestMutationAuthority(options).questionCallerRead,
+  );
+}
+
+/** Shared read/publication preparation; a live RPC also retains its caller's read admission. */
+export async function withPreparedQuestionSessionFacts<T>(
+  context: GatewayRequestContext,
+  questions: readonly QuestionTarget[],
+  consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
+  operation: { assertCurrent: () => void },
+  callerRead?: PreparedQuestionCallerRead,
+): Promise<T> {
   const signal = getAsyncWorkSignal();
-  const callerRead = readGatewayRequestMutationAuthority(options).questionCallerRead;
   while (true) {
     operation.assertCurrent();
-    const cfg = options.context.getRuntimeConfig();
+    const cfg = context.getRuntimeConfig();
     const accessRevision = readGatewayAccessRevision();
     let changed = false;
     const groups = new Map<
@@ -177,7 +198,7 @@ export async function withPreparedQuestionSessions<T>(
         if (
           changed ||
           accessRevision !== readGatewayAccessRevision() ||
-          cfg !== options.context.getRuntimeConfig()
+          cfg !== context.getRuntimeConfig()
         ) {
           return { retry: true as const };
         }
@@ -205,7 +226,7 @@ export async function withPreparedQuestionSessions<T>(
               if (
                 !active ||
                 changed ||
-                cfg !== options.context.getRuntimeConfig() ||
+                cfg !== context.getRuntimeConfig() ||
                 accessRevision !== readGatewayAccessRevision()
               ) {
                 throw new Error("Question session preparation is no longer current");
@@ -215,7 +236,7 @@ export async function withPreparedQuestionSessions<T>(
               if (identity) {
                 assertExistingDatabaseIdentity(read.database.path, `file:${identity.identity}`);
               }
-              const currentCfg = options.context.getRuntimeConfig();
+              const currentCfg = context.getRuntimeConfig();
               if (
                 resolveSessionStorePathForScope(
                   { agentId: selection.agentId, sessionKey: selection.sessionKey },

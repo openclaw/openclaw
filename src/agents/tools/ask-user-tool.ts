@@ -22,10 +22,14 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
+import { isAgentRunRestartAbortReason } from "../run-termination.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
+  formatAskUserAnswerLines,
+  formatAskUserNoAnswerNote,
+  formatAskUserRequiredActionOutcome,
   QUESTION_RPC_GRACE_MS,
   REQUIRED_ACTION_READY,
   type NormalizedAskUserParams,
@@ -36,6 +40,7 @@ import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
   readQuestionRejection,
+  waitThroughGatewayRestart,
   wasQuestionReplacedByComposer,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
@@ -354,19 +359,15 @@ function answeredResult(
     const refresh = refreshTools();
     return {
       ...textResult(
-        "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff.\n\n" +
-          JSON.stringify(payload),
+        `${formatAskUserRequiredActionOutcome("ready_to_verify")}\n\n${JSON.stringify(payload)}`,
         payload,
       ),
       ...(refresh ? { terminate: true } : {}),
     };
   }
   const payload = { status: "answered" as const, answers };
-  const lines = questions.map((question) => {
-    const values = answers.answers[question.questionId] ?? [];
-    return `${question.header}: ${values.length > 0 ? values.join(", ") : "(no answer)"}`;
-  });
-  return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload)}`, payload);
+  const lines = formatAskUserAnswerLines(questions, answers);
+  return textResult(`${lines}\n\n${JSON.stringify(payload)}`, payload);
 }
 
 function unresolvedActionResult(
@@ -376,7 +377,7 @@ function unresolvedActionResult(
   const payload = { status: "action_unresolved" as const, reason };
   const note = replacedByComposer
     ? `The required manual step remains incomplete and its dependent actions remain blocked. ${QUESTION_COMPOSER_REPLACEMENT_GUIDANCE}`
-    : `The required manual step was ${reason}. The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.`;
+    : formatAskUserRequiredActionOutcome(reason);
   return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
 }
 
@@ -394,9 +395,7 @@ function noAnswerResult(
   const payload = { status: "no_answer" as const };
   const note = replacedByComposer
     ? QUESTION_COMPOSER_REPLACEMENT_GUIDANCE
-    : status === "cancelled"
-      ? "The question was cancelled; proceed with best judgment."
-      : "No answer arrived; proceed with best judgment.";
+    : formatAskUserNoAnswerNote(status);
   return textResult(`${note}\n\n${JSON.stringify(payload)}`, payload);
 }
 
@@ -544,11 +543,16 @@ export function createAskUserTool(params: {
       );
       using prompt = createQuestionPromptLifetime(signal);
       let registered = false;
-      const cancelPendingQuestion = createGatewayQuestionCanceller({
+      const cancelQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId,
         beforeCancel: prompt.close,
       });
+      // A Gateway restart keeps the question answerable; cancelling it would end it for everyone.
+      const cancelPendingQuestion = (resolvedBy: string) =>
+        isAgentRunRestartAbortReason(signal?.reason)
+          ? Promise.resolve(undefined)
+          : cancelQuestion(resolvedBy);
       const cancelOnAbort = () => {
         prompt.close();
         delivery.release();
@@ -644,11 +648,14 @@ export function createAskUserTool(params: {
           cancelOnAbort();
           signal.throwIfAborted();
         }
-        const answerPromise = gatewayCall(
-          "question.waitAnswer",
-          { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
-          { id: questionId, timeoutMs, includeResolutionId: true },
-          signal ? { signal } : undefined,
+        const answerPromise = waitThroughGatewayRestart(
+          gatewayCall(
+            "question.waitAnswer",
+            { timeoutMs: timeoutMs + QUESTION_RPC_GRACE_MS },
+            { id: questionId, timeoutMs, includeResolutionId: true },
+            signal ? { signal } : undefined,
+          ),
+          signal,
         ).finally(prompt.close) as Promise<QuestionWaitAnswerResult>;
         state.claim.setAnswer(answerPromise);
         delivery.markReady();

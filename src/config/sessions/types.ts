@@ -7,6 +7,7 @@ import type {
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  QuestionRecord,
   SessionEntryArchiveReason,
   SessionRow,
   SessionRunStatus,
@@ -754,6 +755,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     operatorSource?: QueuedOperatorRecoverySource;
     /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
     scope?: string;
+    /** Pending ordinary questions; never secret, form, or host-authorized. */
+    questions?: QuestionRecord[];
   };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only
