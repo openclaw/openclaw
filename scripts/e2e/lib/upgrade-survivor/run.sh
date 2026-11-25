@@ -2013,6 +2013,12 @@ prepare_restart_inference() {
     openclaw_e2e_start_mock_openai 44213 "$ARTIFACT_ROOT/restart-model.log")" || return "$?"
   openclaw_e2e_wait_mock_openai 44213 || return "$?"
   node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai 44213 || return "$?"
+  if [ "$SCENARIO" = "base" ] && [ "$LIVE_ENABLED" = "0" ]; then
+    # The first hop already proved the Anthropic config survives. This OpenAI-only
+    # restart must not send the fake Anthropic credential to its public catalog.
+    openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config set \
+      plugins.entries.anthropic.enabled false --strict-json || return "$?"
+  fi
   restart_inference="mock-openai"
 }
 
