@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenAICompatibleLocalModels } from "./provider-self-hosted-discovery.js";
 
 const listenerMatch = vi.hoisted(() => vi.fn());
-vi.mock("../infra/ports-inspect.js", () => ({ localListenerHasArgument: listenerMatch }));
+vi.mock("../infra/ports-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ports-inspect.js")>()),
+  localListenerHasArgument: listenerMatch,
+}));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
