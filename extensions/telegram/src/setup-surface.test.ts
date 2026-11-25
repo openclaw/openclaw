@@ -74,4 +74,23 @@ describe("Telegram setup", () => {
     expect(resolved).toEqual([{ input: "@user", resolved: false, id: null }]);
     expect(globalFetch).not.toHaveBeenCalled();
   });
+  it("reads a store SecretRef bot token as configured without resolving it", async () => {
+    const botToken = { source: "store", provider: "default", id: "TELEGRAM_BOT_TOKEN" } as const;
+    const cfg = { channels: { telegram: { botToken } } };
+    const prepared = await telegramSetupWizard.prepare?.({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      credentialValues: {},
+      runtime: createRuntimeSpies(),
+      prompter: createTestWizardPrompter(),
+    });
+    expect(prepared?.cfg?.channels?.telegram?.botToken).toEqual(botToken);
+
+    const state = telegramSetupWizard.credentials[0]?.inspect({
+      cfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+    expect(state).toMatchObject({ accountConfigured: true, hasConfiguredValue: true });
+    expect(state?.resolvedValue).toBeUndefined();
+  });
 });

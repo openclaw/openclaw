@@ -7,11 +7,8 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  mergeTelegramAccountConfig,
-  resolveDefaultTelegramAccountId,
-  resolveTelegramAccount,
-} from "./accounts.js";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
 
 const channel = "telegram" as const;
@@ -20,7 +17,7 @@ export function ensureTelegramDefaultGroupMentionGate(
   cfg: OpenClawConfig,
   accountId: string,
 ): OpenClawConfig {
-  const resolved = resolveTelegramAccount({ cfg, accountId });
+  const resolved = inspectTelegramAccount({ cfg, accountId });
   const wildcardGroup = resolved.config.groups?.["*"];
   if (wildcardGroup?.requireMention !== undefined) {
     return cfg;

@@ -11,7 +11,7 @@ import {
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import { listTelegramAccountIds } from "./accounts.js";
 import {
   applyTelegramAllowFrom,
   getTelegramTokenHelpLines,
@@ -63,7 +63,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       keepPrompt: t("wizard.telegram.tokenKeepPrompt"),
       inputPrompt: t("wizard.telegram.tokenInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
-      resolveAccount: ({ cfg, accountId }) => resolveTelegramAccount({ cfg, accountId }),
+      resolveAccount: ({ cfg, accountId }) => inspectTelegramAccount({ cfg, accountId }),
       hasConfiguredValue: (account) =>
         hasConfiguredSecretInput(account.config.botToken) ||
         Boolean(account.config.tokenFile?.trim()),
