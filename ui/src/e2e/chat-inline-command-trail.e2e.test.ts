@@ -593,7 +593,7 @@ suite.define(() => {
         expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
         await stop.waitFor({ state: "detached" });
         expect(await pane.locator(".chat-tool-row--running").count()).toBe(0);
-        await running.getByText("Outcome unknown", { exact: true }).waitFor();
+        await running.getByText("interrupted", { exact: true }).waitFor();
         expect(await running.getByText("Completed", { exact: true }).count()).toBe(0);
         expect(await running.getByText(newestOutput, { exact: true }).count()).toBe(0);
         // A native result owns retained output. This interrupted call has no
