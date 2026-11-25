@@ -311,13 +311,18 @@ describe("secrets CLI", () => {
     async (mode) => {
       const warning =
         'Auth profile "other-account" retains its plaintext credential. Add an explicit auth-profile target to migrate this account.';
+      const applyOnlyWarning = "Additional apply warning.";
       runSecretsApply.mockResolvedValue({
         ...createSecretsApplyResult({ mode: mode === "dry-run" ? "dry-run" : "write" }),
-        warningCount: 1,
-        warnings: [warning],
+        warningCount: 2,
+        warnings: [warning, applyOnlyWarning],
       });
       if (mode === "configure") {
-        runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
+        const configured = createConfigureInteractiveResult();
+        runSecretsConfigureInteractive.mockResolvedValue({
+          ...configured,
+          preflight: { ...configured.preflight, warningCount: 1, warnings: [warning] },
+        });
         await runSecrets(["secrets", "configure", "--apply", "--yes"]);
       } else {
         await withPlanFile(async (planPath) => {
@@ -330,7 +335,10 @@ describe("secrets CLI", () => {
           ]);
         });
       }
-      expect(runtimeLogs).toContain(`- warning: ${warning}`);
+      expect(runtimeLogs.filter((line) => line === `- warning: ${warning}`)).toHaveLength(1);
+      expect(runtimeLogs.filter((line) => line === `- warning: ${applyOnlyWarning}`)).toHaveLength(
+        1,
+      );
     },
   );
 

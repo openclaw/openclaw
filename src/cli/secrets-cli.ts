@@ -296,7 +296,9 @@ export function registerSecretsCli(program: Command): void {
               });
               if (!opts.json) {
                 for (const warning of result.warnings) {
-                  defaultRuntime.log(terminalText`- warning: ${warning}`);
+                  if (!configured.preflight.warnings.includes(warning)) {
+                    defaultRuntime.log(terminalText`- warning: ${warning}`);
+                  }
                 }
                 defaultRuntime.log(
                   result.changed
