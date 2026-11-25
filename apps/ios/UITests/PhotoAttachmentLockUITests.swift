@@ -24,12 +24,10 @@ final class PhotoAttachmentLockUITests: XCTestCase {
         XCTAssertTrue(exists)
         let frame = traced("query composer-options frame") { attachments.frame }
         XCTAssertFalse(frame.isEmpty)
-        // iOS 27 reports this visible SwiftUI Menu as non-hittable. Its center
-        // was verified through independent HID input; assert the resulting menu.
-        traced("tap visible composer-options center") {
+        traced("tap composer add button") {
             attachments.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
-        let library = app.buttons["Photo Library"]
+        let library = app.buttons["chat-composer-add-photo-library"]
         requireVisible(library, named: "Photo Library")
         traced("tap Photo Library") { library.tap() }
 

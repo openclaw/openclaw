@@ -761,50 +761,43 @@ extension OpenClawSnapshotUITests {
         }
         self.chatMessageInput(in: app).tap()
 
+        // The "+" opens a system sheet: photos with the camera first, Photo Library and Files, then skills and
+        // connectors. Permissions stay with the shield.
         attachmentButton.tap()
-        let photoLibrary = app.buttons["Photo Library"]
-        XCTAssertTrue(photoLibrary.waitForExistence(timeout: 3))
-        XCTAssertTrue(photoLibrary.isEnabled)
-        XCTAssertTrue(app.buttons["Camera"].waitForExistence(timeout: 3))
-        let mediaFile = app.buttons["File"]
-        XCTAssertTrue(mediaFile.waitForExistence(timeout: 3))
-        XCTAssertTrue(mediaFile.isEnabled)
-        XCTAssertTrue(app.buttons["Verbosity"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Web Search"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Skills"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Connectors"].waitForExistence(timeout: 3))
+        let addSheet = app.descendants(matching: .any)["chat-composer-add-sheet"]
+        XCTAssertTrue(addSheet.waitForExistence(timeout: 3))
+        for id in ["chat-composer-add-photo-library", "chat-composer-add-files"] {
+            XCTAssertTrue(app.buttons[id].waitForExistence(timeout: 3), id)
+            XCTAssertTrue(app.buttons[id].isEnabled, id)
+        }
+        XCTAssertTrue(app.buttons["chat-composer-add-camera"].exists)
+        XCTAssertTrue(app.buttons["chat-composer-add-skills"].exists)
+        XCTAssertTrue(app.buttons["chat-composer-add-connectors"].exists)
         XCTAssertFalse(app.buttons["Permissions"].exists)
-        XCTAssertEqual(
-            app.buttons.matching(NSPredicate(format: "label == %@", "Model")).count,
-            1)
-        XCTAssertFalse(app.buttons["Thinking"].exists)
-        XCTAssertFalse(app.buttons["Fast"].exists)
-        XCTAssertFalse(self.app?.buttons["Voice Memo"].exists == true)
-        self.attachScreenshot(named: "chat-composer-capabilities")
-        outsideMenu.tap()
+        XCTAssertFalse(app.switches["chat-composer-web-search"].exists, "Web search stays with the shield")
+        self.attachScreenshot(named: "chat-composer-add-sheet")
 
-        attachmentButton.tap()
-        app.buttons["Skills"].tap()
-        XCTAssertTrue(app.buttons["Auto Review"].waitForExistence(timeout: 3))
-        let disabledSkill = app.buttons["Disabled Skill — Disabled in the Gateway configuration."]
-        XCTAssertTrue(disabledSkill.waitForExistence(timeout: 3))
-        XCTAssertFalse(disabledSkill.isEnabled)
+        app.buttons["chat-composer-add-skills"].tap()
+        XCTAssertTrue(app.buttons["chat-composer-skill-autoreview"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["chat-composer-skill-disabled-fixture"].exists, "A skill off on the host isn't offered")
         self.attachScreenshot(named: "chat-composer-skills")
-        outsideMenu.tap()
+        app.buttons["chat-composer-skill-switches"].tap()
+        XCTAssertTrue(app.switches["chat-composer-skill-switch-autoreview"].waitForExistence(timeout: 3))
+        app.buttons["chat-composer-add-close"].firstMatch.tap()
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
 
         attachmentButton.tap()
-        app.buttons["Connectors"].tap()
-        XCTAssertTrue(app.buttons["GitHub"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Linear"].waitForExistence(timeout: 3))
+        app.buttons["chat-composer-add-connectors"].tap()
+        XCTAssertTrue(app.buttons["chat-composer-connector-GitHub"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["chat-composer-connector-Linear"].exists)
         self.attachScreenshot(named: "chat-composer-connectors")
-        app.buttons["GitHub"].tap()
-        XCTAssertTrue(app.buttons["Enabled for this session"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Tool Access"].waitForExistence(timeout: 3))
-        app.buttons["Tool Access"].tap()
-        XCTAssertTrue(app.buttons["Search code"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["Create issue"].waitForExistence(timeout: 3))
-        self.attachScreenshot(named: "chat-composer-tool-access")
-        outsideMenu.tap()
+        app.buttons["chat-composer-connector-GitHub"].tap()
+        XCTAssertTrue(app.switches["chat-composer-connector-switch"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.switches["chat-composer-tool-search_code"].exists)
+        XCTAssertTrue(app.switches["chat-composer-tool-create_issue"].exists)
+        self.attachScreenshot(named: "chat-composer-connector")
+        app.buttons["chat-composer-add-close"].firstMatch.tap()
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
         self.attachScreenshot(named: "chat-composer-compact")
     }
 

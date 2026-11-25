@@ -50,6 +50,31 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
     }
 
+    func testChatComposerAddSheetPutsASkillInFrontOfTheDraft() throws {
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat", initialDestination: "chat", name: "chat-composer-add-skill"))
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the release")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+
+        app.buttons["chat-attachment-picker"].tap()
+        let addSheet = app.descendants(matching: .any)["chat-composer-add-sheet"]
+        XCTAssertTrue(addSheet.waitForExistence(timeout: 3))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "The sheet opens with the keyboard down")
+        app.buttons["chat-composer-add-skills"].tap()
+        let skill = app.buttons["chat-composer-skill-release"]
+        XCTAssertTrue(skill.waitForExistence(timeout: 3))
+        skill.tap()
+
+        XCTAssertTrue(addSheet.waitForNonExistence(timeout: 3))
+        self.waitForValue("/release Check the release", of: input)
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3), "The draft gets the keyboard back")
+        self.attachScreenshot(named: "chat-composer-add-skill-inserted")
+    }
+
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
