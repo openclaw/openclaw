@@ -10,6 +10,7 @@ import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 
 export type TranscriptRow<T = unknown> = {
+  compactActivity?: true;
   estimatedSize?: number;
   retainDom?: boolean;
   /** Prepare Markdown data while idle; visited DOM can still be retained. */

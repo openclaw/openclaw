@@ -142,6 +142,7 @@ it.each(["runtime", "doctor"] as const)(
         scope,
         [
           "operator_approvals",
+          "worker_session_placements",
           "schema_meta",
           "config_machine_state",
           "github_publication_requests",

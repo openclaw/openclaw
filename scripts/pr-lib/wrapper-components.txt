@@ -770,6 +770,7 @@ src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
 src/config/sessions/main-session-key.ts
 src/config/sessions/main-session.ts
+src/config/sessions/session-member-access-facts.ts
 src/config/sessions/session-worker-execution-source.ts
 src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
@@ -2203,6 +2204,7 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-active-event-facts-schema.ts
+src/state/openclaw-agent-member-access-schema.ts
 src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
@@ -2303,6 +2305,7 @@ src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
 src/state/openclaw-state-db-schema-v41-approval-profile.ts
+src/state/openclaw-state-db-schema-v42-worker-loss-recovery.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts

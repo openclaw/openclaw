@@ -10,11 +10,11 @@ import {
   createNodeTestShardBundles,
   resolveUiE2ePrTestSelection,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import {
   isReleaseOnlyRuntimeTestFile,
   listPrExemptRuntimeTestFiles,
-  PR_PROTECTED_RUNTIME_TEST_FILES,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
 import { resolveAffectedTestsFromImportGraph } from "../../scripts/test-projects.test-support.mts";
 import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
 

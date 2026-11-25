@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { resolveGatewayLifecycleContext } from "../cli/daemon-cli/lifecycle-context.js";
+import type * as ConfigIO from "../config/io.js";
 import type * as GatewayLock from "../infra/gateway-lock.js";
 import type { WindowsProcessSnapshotEntry } from "./schtasks-process-snapshot.js";
 import {
@@ -23,14 +25,22 @@ const { native, resetNative } = vi.hoisted(() => {
     ownerTask: "OpenClaw Gateway",
     environment: undefined as Record<string, string> | undefined,
     reads: 0,
+    custodyReleased: false,
     changed: undefined as "present" | "absent" | "unavailable" | undefined,
   });
   const fixture = defaults();
   return { native: fixture, resetNative: () => Object.assign(fixture, defaults()) };
 });
+vi.mock("../config/io.js", async (original) => ({
+  ...(await original<typeof ConfigIO>()),
+  createConfigIO: () => ({ readBestEffortConfig: async () => ({}) }),
+}));
 vi.mock("./schtasks-layout.js", async (original) => ({
   ...(await original<typeof import("./schtasks-layout.js")>()),
   readScheduledTaskCommand: async (_env: unknown, options?: GatewayServiceReadOptions) => {
+    if (native.custodyReleased) {
+      throw new Error("Command inspection reopened retired runtime pin custody.");
+    }
     const first = native.changed && native.reads++ === 0;
     if (first && native.changed === "absent") {
       options?.onCommandInspection?.({ kind: "absent" });
@@ -65,8 +75,11 @@ vi.mock("../infra/windows-port-pids.js", async (original) => ({
 }));
 // mock-isolation: Synthetic task ownership must not read the real Gateway lease database.
 vi.mock("../infra/gateway-owner-lease.js", () => {
-  const readOwner = () =>
-    native.ownerAlive
+  const readOwner = () => {
+    if (native.custodyReleased) {
+      throw new Error("Lease inspection reopened retired shared-state custody.");
+    }
+    return native.ownerAlive
       ? {
           state: "live",
           pid: native.ownerPid,
@@ -74,6 +87,7 @@ vi.mock("../infra/gateway-owner-lease.js", () => {
           supervisor: { kind: "schtasks", name: native.ownerTask },
         }
       : undefined;
+  };
   return { readGatewayOwnerLease: readOwner, readGatewayOwnerLeaseAsync: async () => readOwner() };
 });
 vi.mock("../infra/gateway-lock.js", async (original) => ({
@@ -111,7 +125,7 @@ it.each<[string, Partial<typeof native>]>([
   ["other-task", { ownerTask: "Another Gateway" }],
   ["other-command", {}],
   ["unowned", { ownerAlive: false }],
-])("binds env-only port to exact owner: %s", async (kind, owner) => {
+])("binds env-only process observation to its file owner: %s", async (kind, owner) => {
   environmentPort();
   Object.assign(native, { ownerAlive: true }, owner);
   const actual =
@@ -121,6 +135,7 @@ it.each<[string, Partial<typeof native>]>([
   const argv = kind === "supervised" ? [...actual, supervisorChild(65536)] : actual;
   native.processes = [processEntry(42, argv)];
   const runtime = await readRuntime({});
+  // File PID, port, and captured argv identify a process, not its Scheduler supervisor.
   const matches = kind === "direct" || kind === "supervised" || kind === "other-task";
   expect([runtime.status, runtime.pid]).toEqual(matches ? ["running", 42] : ["unknown", undefined]);
 });
@@ -163,6 +178,21 @@ it.each(["present", "absent", "unavailable"] as const)("pins %s observation", as
   );
   expect([state.running, state.runtime?.status]).toEqual([false, "unknown"]);
 });
+
+it.each(["present", "absent"] as const)(
+  "observes the captured %s lifecycle command after database custody is retired",
+  async (initial) => {
+    native.changed = initial;
+    native.processes = [processEntry(43)];
+    const context = await resolveGatewayLifecycleContext(resolveGatewayService());
+    native.custodyReleased = true;
+    for (let poll = 0; poll < 2; poll += 1) {
+      expect(await context.probeService.readCommand({})).toBe(context.command ?? null);
+      const runtime = await context.probeService.readRuntime({}, { timeoutMs: 5_000 });
+      expect([runtime.status, runtime.pid]).toEqual(["unknown", undefined]);
+    }
+  },
+);
 
 it.each([
   [undefined, "unknown"],

@@ -48,6 +48,9 @@ function freezeFact(fact: SessionMembershipFact): SessionMembershipFact {
   }
   Object.freeze(fact[3]);
   Object.freeze(fact[2]);
+  if (fact[5]) {
+    Object.freeze(fact[5]);
+  }
   return Object.freeze(fact);
 }
 
@@ -239,6 +242,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
         }
         let category = previous[1];
         let memberIds = previous[2];
+        let memberAccess = previous[5];
         let participants = previous[3];
         let sessionId = previous[4];
         if (facts.kind === "entry") {
@@ -246,8 +250,15 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
           sessionId = facts.sessionId;
           if (facts.clearMembers) {
             memberIds = noMembership;
+            memberAccess = undefined;
           }
         } else if (facts.kind === "member") {
+          const levels = { ...memberAccess };
+          delete levels[facts.identityId];
+          if (facts.present && facts.access !== undefined) {
+            levels[facts.identityId] = facts.access;
+          }
+          memberAccess = Object.keys(levels).length ? levels : undefined;
           memberIds = facts.present
             ? [...new Set([...memberIds, facts.identityId])].toSorted(compareSessionKeys)
             : memberIds.filter((identity) => identity !== facts.identityId);
@@ -272,6 +283,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
             memberIds,
             participants,
             sessionId,
+            ...(memberAccess ? ([memberAccess] as const) : ([] as const)),
           ]) || membershipChanged;
       }
       if (membershipChanged) {
@@ -406,6 +418,11 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
     },
     prepare,
     membership,
+    access(this: void, storePath: string, sessionKey: string, identityId: string) {
+      return !disposed
+        ? aliases.get(storePath)?.facts.get(sessionKey)?.[5]?.[identityId]
+        : undefined;
+    },
     ready,
     matchesSession(storePath: string, sessionKey: string, sessionId: string | undefined) {
       return (

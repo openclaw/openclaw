@@ -18,11 +18,8 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
-import {
-  previewRemDreaming,
-  runDreamingSweepPhases,
-  seedHistoricalDailyMemorySignals,
-} from "./dreaming-phases.js";
+import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
+import { runDreamingSweepPhases } from "./dreaming-sweep-phases.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { appendSessionCorpusLines } from "./session-ingestion.js";

@@ -541,7 +541,7 @@ export async function stopStartupEntry(
 export async function terminateInstalledStartupRuntime(
   env: GatewayServiceEnv,
   assertCurrent?: () => void,
-  beforeMutation?: () => Promise<void>,
+  beforeMutation?: () => void | Promise<void>,
 ): Promise<void> {
   if (!(await isStartupEntryInstalled(env))) {
     return;
