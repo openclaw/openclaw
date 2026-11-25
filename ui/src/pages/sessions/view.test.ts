@@ -407,7 +407,9 @@ describe("sessions view", () => {
 
   it("returns two snoozed pins to their saved positions on successive deadlines without new inputs", async () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     vi.setSystemTime(1_000);
     const selector = "tbody .session-data-row .session-key-cell__primary";
     await renderSettled(

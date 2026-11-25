@@ -9,11 +9,11 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 /** Event recipients use their own connection, not the tool that published the edit. */
 export function receivesLegacySessionPins(client: GatewayClient | null | undefined): boolean {
-  return Boolean(
+  return (
     client?.connect.role === "operator" &&
     !client.internal?.operatorRunAuthority &&
     !isSyntheticGatewayConnection(client) &&
-    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS),
+    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS)
   );
 }
 

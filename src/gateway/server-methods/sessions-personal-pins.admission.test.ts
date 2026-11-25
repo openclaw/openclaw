@@ -165,7 +165,7 @@ it.each(["read", "write"] as const)(
       const archive = () => upsertSessionEntryCore(scope(invited), { archivedAt: Date.now() });
       const read = preferences.getCanonicalUserPreferences;
       const write = preferences.setCanonicalUserPreferences;
-      using intercept =
+      using _intercept =
         stage === "read"
           ? vi
               .spyOn(preferences, "getCanonicalUserPreferences")

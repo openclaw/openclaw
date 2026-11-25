@@ -1,12 +1,20 @@
 import { performance } from "node:perf_hooks";
+import {
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import pMap from "p-map";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
-import { personalSessionPinRank } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { recordSessionRowPartitionCache } from "../infra/gateway-work-metrics.js";
+import { getMainThreadTaskName } from "../infra/main-thread-stall.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { SESSIONS_LIST_TRANSCRIPT_LIMIT } from "../shared/session-list-limits.js";
+import {
+  SESSIONS_LIST_OWNER_LIMIT,
+  SESSIONS_LIST_TRANSCRIPT_LIMIT,
+} from "../shared/session-list-limits.js";
 import { resolveAssistantIdentityName } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -14,16 +22,30 @@ import { createVisibleActiveSessionRunProjector } from "./server-methods/session
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
+import {
+  addSessionOwnerFacetIdentity,
+  sortSessionOwnerFacet,
+} from "./session-identity-projection.js";
 import { getSessionListBaseMiss, retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
+  filterSessionEntries,
   projectSessionOwnerRunningCounts,
   type SessionEntrySelection,
   type SessionListFilterParams,
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
-import { selectSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import {
+  createPersonalSessionPinRank,
+  mergeSessionEntryPages,
+  sortAndLimitSessionEntries,
+  type SessionEntryPair,
+} from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
+import {
+  mergeSessionListOwnerCounts,
+  retainCurrentSessionListPartitions,
+} from "./session-list-view-cache.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -43,7 +65,126 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-export { selectSessionEntries } from "./session-list-order.js";
+export function selectSessionEntries(
+  params: SessionListFilterParams & {
+    defaultLimit?: number;
+    invited?: boolean;
+    partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
+    retained?: Map<object, SessionListFilteredEntries>;
+  },
+): SessionEntrySelection {
+  const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
+  const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
+  const ownerLimit =
+    !(params.opts.pinned === true && params.personalPinRank) &&
+    params.ownerFirstActorId &&
+    offset === 0
+      ? Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT)
+      : 0;
+  const pageEnd =
+    limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER);
+  // Person-reference resolution and people truncation require the whole visible roster.
+  // Temporal queries are not retained by the presentation owner.
+  const incremental =
+    params.partitions &&
+    params.retained &&
+    !params.opts.includePeople &&
+    !params.opts.involvingProfileId;
+  const rank =
+    (params.opts.sortBy ?? "updatedAt") === "updatedAt" ? params.personalPinRank : undefined;
+  let filteredResult: SessionListFilteredEntries;
+  if (incremental) {
+    retainCurrentSessionListPartitions(params.retained!, params.partitions!, params.invited);
+    const pages: SessionEntryPair[][] = [];
+    const ownerPages: SessionEntryPair[][] = [];
+    const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
+    const countParts: SessionListFilteredEntries[] | undefined = params.opts
+      .includeOwnerSessionCounts
+      ? []
+      : undefined;
+    let totalCount = 0;
+    let hits = 0;
+    let misses = 0;
+    let activityExpiresAt = Infinity;
+    const archived = params.opts.archived ?? false;
+    for (const partition of params.partitions!) {
+      if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
+        continue;
+      }
+      const revision = (params.invited && partition.invitedRevision) || partition.revision;
+      let part = params.retained!.get(revision);
+      if (!part) {
+        misses++;
+        part = filterSessionEntries({
+          ...params,
+          entries: () => partition.entries.values(),
+        });
+        part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy, rank);
+        part.ownerEntries = sortAndLimitSessionEntries(
+          part.ownerEntries,
+          ownerLimit,
+          params.opts.sortBy,
+          rank,
+        );
+        params.retained!.set(revision, part);
+      } else {
+        hits++;
+      }
+      countParts?.push(part);
+      pages.push(part.entries);
+      ownerPages.push(part.ownerEntries);
+      totalCount += part.totalCount;
+      activityExpiresAt = Math.min(activityExpiresAt, part.activityExpiresAt ?? Infinity);
+      for (const owner of part.ownerFacet) {
+        addSessionOwnerFacetIdentity(owners, owner);
+      }
+    }
+    recordSessionRowPartitionCache(hits, misses, getMainThreadTaskName());
+    filteredResult = {
+      entries: mergeSessionEntryPages(pages, pageEnd, params.opts.sortBy, rank),
+      ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy, rank),
+      totalCount,
+      ownerFacet: sortSessionOwnerFacet(owners),
+      ...(countParts ? mergeSessionListOwnerCounts(countParts) : {}),
+      ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
+    };
+  } else {
+    filteredResult = filterSessionEntries(
+      params,
+      params.entriesSorted ? { offset, limit, ownerLimit } : undefined,
+    );
+  }
+  const { ownerEntries, entries: filtered, ...facets } = filteredResult;
+  const sharedEntries = incremental
+    ? offset === 0
+      ? filtered
+      : filtered.slice(offset)
+    : params.entriesSorted
+      ? filtered
+      : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy, rank).slice(offset);
+  let entries = sharedEntries;
+  let ownerCount = 0;
+  if (ownerLimit > 0) {
+    const owned =
+      params.entriesSorted || incremental
+        ? ownerEntries
+        : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy, rank);
+    ownerCount = owned.length;
+    const ownedKeys = new Set(owned.map(([key]) => key));
+    entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
+  }
+  const nextOffset = offset + sharedEntries.length;
+  const hasMore = nextOffset < facets.totalCount;
+  return {
+    ...facets,
+    entries,
+    ownerCount,
+    limitApplied: limit,
+    offset,
+    nextOffset: hasMore ? nextOffset : null,
+    hasMore,
+  };
+}
 
 function buildSessionsListResult(
   params: Pick<SessionListFilterParams, "cfg" | "opts" | "modelCatalog">,
@@ -323,11 +464,7 @@ export function prepareProjectedSessionList(params: {
       params.personalPins === undefined || (opts.sortBy ?? "updatedAt") !== "updatedAt",
     // Undefined preserves historical ordering; null has neither a shared rank nor a personal fact.
     personalPins: params.personalPins ?? undefined,
-    personalPinRank:
-      params.personalPins === undefined
-        ? undefined
-        : ([key, entry]) =>
-            params.personalPins ? personalSessionPinRank(params.personalPins, key, entry, now) : 0,
+    personalPinRank: createPersonalSessionPinRank(params.personalPins, now),
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
