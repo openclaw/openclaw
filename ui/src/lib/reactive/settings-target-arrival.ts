@@ -21,8 +21,9 @@ export function SettingsTargetArrival(props: {
 }): null {
   onSettled(() => {
     const root = props.host();
+    // The route outlet mounts before Settings content; without it there is nothing to watch.
     if (!root) {
-      return;
+      return () => {};
     }
     const pending = createPendingSettingsTarget(() => root);
     // Rows that depend on Gateway reads render after the route does.
