@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -47,7 +48,7 @@ struct OnboardingPageTests {
     func `unavailable invitation entry preserves an existing browser completion`() {
         let view = OnboardingView(
             state: AppState(preview: true),
-            openClawIDService: UnavailableOnboardingOpenClawIDService())
+            openClawIDService: UnavailableOpenClawIDSetupService())
         view.savedBrowserGatewayName = "Existing browser Gateway"
         #expect(view.beginNodeInvitation() == nil)
         #expect(view.savedBrowserGatewayName == "Existing browser Gateway")
@@ -69,14 +70,14 @@ struct OnboardingPageTests {
 }
 
 @MainActor
-private struct NodeCompletionFixture: OnboardingOpenClawIDService {
+private struct NodeCompletionFixture: OpenClawIDSetupService {
     let unavailableReason: String? = nil
 
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         .nodeConnection(claw: "node-fixture", connected: false)
     }
 
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         .nodeConnection(claw: "node-fixture", connected: true)
     }
 

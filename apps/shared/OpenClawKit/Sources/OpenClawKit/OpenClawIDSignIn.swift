@@ -1,4 +1,3 @@
-import AppKit
 import AuthenticationServices
 import CryptoKit
 import Foundation
@@ -6,32 +5,48 @@ import OpenClawKit
 
 /// Where this build signs in and finds claws. The issuer and client id only authenticate the person
 /// to Discovery; claw access always comes from an owner approval, the recovery kit or an invite.
-struct MacOpenClawIDConfiguration: Equatable {
-    static let callbackScheme = "ai.openclaw.mac"
-    static let redirectURI = "ai.openclaw.mac:/oauth/callback"
-    static let stagingIssuer = "https://openclaw-id-staging.services-91b.workers.dev/api/auth"
-    static let stagingClientID = "DulSrXtaYtPaLEnzEyHGuAHpVNWmaNbf"
-    static let stagingDiscovery = "https://openclaw-discovery-staging.services-91b.workers.dev"
+/// Each app has its own native client and callback scheme.
+public struct OpenClawIDConfiguration: Equatable, Sendable {
+    public static let stagingIssuer = "https://openclaw-id-staging.services-91b.workers.dev/api/auth"
+    public static let stagingDiscovery = "https://openclaw-discovery-staging.services-91b.workers.dev"
 
-    let issuer: URL
-    let clientID: String
-    let discoveryOrigin: URL
+    public let issuer: URL
+    public let clientID: String
+    public let discoveryOrigin: URL
+    /// The app's registered redirect scheme; the redirect is `<scheme>:/oauth/callback`.
+    public let callbackScheme: String
+
+    public var redirectURI: String {
+        "\(self.callbackScheme):/oauth/callback"
+    }
+
+    public init(issuer: URL, clientID: String, discoveryOrigin: URL, callbackScheme: String) {
+        self.issuer = issuer
+        self.clientID = clientID
+        self.discoveryOrigin = discoveryOrigin
+        self.callbackScheme = callbackScheme
+    }
 
     /// Build config (`OpenClawIDIssuer`, `OpenClawIDClientID`, `OpenClawIDDiscoveryURL` in Info.plist)
     /// over the staging defaults. An empty client id means this build has no native sign-in.
-    static func current(info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> Self? {
+    public static func current(
+        stagingClientID: String,
+        callbackScheme: String,
+        info: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> Self?
+    {
         let value = { (key: String, fallback: String) in (info[key] as? String) ?? fallback }
-        let clientID = value("OpenClawIDClientID", Self.stagingClientID).trimmingCharacters(in: .whitespaces)
+        let clientID = value("OpenClawIDClientID", stagingClientID).trimmingCharacters(in: .whitespaces)
         guard !clientID.isEmpty,
               let issuer = URL(string: value("OpenClawIDIssuer", Self.stagingIssuer)), issuer.scheme == "https",
               let discovery = try? OpenClawIDNodeEnrollmentLink.discoveryOrigin(
                   value("OpenClawIDDiscoveryURL", Self.stagingDiscovery))
         else { return nil }
-        return .init(issuer: issuer, clientID: clientID, discoveryOrigin: discovery)
+        return .init(
+            issuer: issuer, clientID: clientID, discoveryOrigin: discovery, callbackScheme: callbackScheme)
     }
 }
 
-enum MacOpenClawIDSignInError: Error, Equatable {
+public enum OpenClawIDSignInError: Error, Equatable, Sendable {
     case cancelled, stateMismatch, issuerMismatch, refused, malformed
 }
 
@@ -39,25 +54,29 @@ enum MacOpenClawIDSignInError: Error, Equatable {
 /// the issuer's authorization endpoint. Returns the ID token, which is only exchanged for a
 /// Discovery account session and never stored.
 @MainActor
-final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private let configuration: MacOpenClawIDConfiguration
+public final class OpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private let configuration: OpenClawIDConfiguration
     private let http: any OpenClawIDNodeEnrollmentHTTP
+    private let anchor: @MainActor () -> ASPresentationAnchor
     private var session: ASWebAuthenticationSession?
 
-    init(
-        configuration: MacOpenClawIDConfiguration,
-        http: any OpenClawIDNodeEnrollmentHTTP = OpenClawIDNodeEnrollmentURLSession())
+    /// `anchor` returns the window the system sign-in sheet attaches to.
+    public init(
+        configuration: OpenClawIDConfiguration,
+        http: any OpenClawIDNodeEnrollmentHTTP = OpenClawIDNodeEnrollmentURLSession(),
+        anchor: @escaping @MainActor () -> ASPresentationAnchor)
     {
         self.configuration = configuration
         self.http = http
+        self.anchor = anchor
     }
 
-    func cancel() {
+    public func cancel() {
         self.session?.cancel()
         self.session = nil
     }
 
-    func signIn(freshLogin: Bool = false) async throws -> String {
+    public func signIn(freshLogin: Bool = false) async throws -> String {
         let metadata = try await self.metadata()
         let verifier = Self.base64URL(Self.random(32))
         let state = Self.base64URL(Self.random(16))
@@ -65,9 +84,11 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         let authorize = try self.authorizationURL(
             endpoint: metadata.authorization, verifier: verifier, state: state, nonce: nonce, freshLogin: freshLogin)
         let callback = try await self.authenticate(authorize)
-        let code = try Self.code(from: callback, state: state, issuer: self.configuration.issuer)
+        let code = try Self.code(
+            from: callback, state: state, issuer: self.configuration.issuer,
+            callbackScheme: self.configuration.callbackScheme)
         let idToken = try await self.exchange(code: code, verifier: verifier, endpoint: metadata.token)
-        guard Self.nonce(of: idToken) == nonce else { throw MacOpenClawIDSignInError.stateMismatch }
+        guard Self.nonce(of: idToken) == nonce else { throw OpenClawIDSignInError.stateMismatch }
         return idToken
     }
 
@@ -80,12 +101,12 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         freshLogin: Bool) throws -> URL
     {
         guard var url = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
-            throw MacOpenClawIDSignInError.malformed
+            throw OpenClawIDSignInError.malformed
         }
         url.queryItems = [
             .init(name: "response_type", value: "code"),
             .init(name: "client_id", value: self.configuration.clientID),
-            .init(name: "redirect_uri", value: MacOpenClawIDConfiguration.redirectURI),
+            .init(name: "redirect_uri", value: self.configuration.redirectURI),
             .init(name: "scope", value: "openid profile email"),
             .init(name: "state", value: state),
             .init(name: "nonce", value: nonce),
@@ -93,21 +114,21 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
             .init(name: "code_challenge_method", value: "S256"),
         ]
         if freshLogin { url.queryItems?.append(.init(name: "prompt", value: "login")) }
-        guard let authorize = url.url else { throw MacOpenClawIDSignInError.malformed }
+        guard let authorize = url.url else { throw OpenClawIDSignInError.malformed }
         return authorize
     }
 
     /// Checks the callback's path, state and (RFC 9207) issuer, and returns the authorization code.
-    static func code(from callback: URL, state: String, issuer: URL) throws -> String {
+    static func code(from callback: URL, state: String, issuer: URL, callbackScheme: String) throws -> String {
         guard let parts = URLComponents(url: callback, resolvingAgainstBaseURL: false),
-              parts.scheme == MacOpenClawIDConfiguration.callbackScheme, parts.path == "/oauth/callback"
-        else { throw MacOpenClawIDSignInError.malformed }
+              parts.scheme == callbackScheme, parts.path == "/oauth/callback"
+        else { throw OpenClawIDSignInError.malformed }
         let pairs = (parts.queryItems ?? []).map { ($0.name, $0.value ?? "") }
         let items = Dictionary(pairs, uniquingKeysWith: { first, _ in first })
-        guard items["state"] == state else { throw MacOpenClawIDSignInError.stateMismatch }
-        if let iss = items["iss"], iss != issuer.absoluteString { throw MacOpenClawIDSignInError.issuerMismatch }
-        if items["error"] != nil { throw MacOpenClawIDSignInError.refused }
-        guard let code = items["code"], !code.isEmpty else { throw MacOpenClawIDSignInError.malformed }
+        guard items["state"] == state else { throw OpenClawIDSignInError.stateMismatch }
+        if let iss = items["iss"], iss != issuer.absoluteString { throw OpenClawIDSignInError.issuerMismatch }
+        if items["error"] != nil { throw OpenClawIDSignInError.refused }
+        guard let code = items["code"], !code.isEmpty else { throw OpenClawIDSignInError.malformed }
         return code
     }
 
@@ -129,39 +150,39 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         }
         let issuer = self.configuration.issuer.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let url = URL(string: issuer + "/.well-known/openid-configuration") else {
-            throw MacOpenClawIDSignInError.malformed
+            throw OpenClawIDSignInError.malformed
         }
         let response = try await self.http.send(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         guard response.status == 200,
               let metadata = try? JSONDecoder().decode(Metadata.self, from: response.body)
-        else { throw MacOpenClawIDSignInError.malformed }
+        else { throw OpenClawIDSignInError.malformed }
         guard metadata.issuer == self.configuration.issuer.absoluteString,
               metadata.authorization_endpoint.scheme == "https", metadata.token_endpoint.scheme == "https",
               metadata.token_endpoint.host == self.configuration.issuer.host
-        else { throw MacOpenClawIDSignInError.issuerMismatch }
+        else { throw OpenClawIDSignInError.issuerMismatch }
         return (metadata.authorization_endpoint, metadata.token_endpoint)
     }
 
     private func authenticate(_ url: URL) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
-                url: url, callbackURLScheme: MacOpenClawIDConfiguration.callbackScheme)
+                url: url, callbackURLScheme: self.configuration.callbackScheme)
             { @Sendable callback, error in
                 // AuthenticationServices calls this on its XPC reply queue, so it must not inherit
                 // this class's main-actor isolation; it only resumes the continuation.
                 if let callback {
                     continuation.resume(returning: callback)
                 } else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
-                    continuation.resume(throwing: MacOpenClawIDSignInError.cancelled)
+                    continuation.resume(throwing: OpenClawIDSignInError.cancelled)
                 } else {
-                    continuation.resume(throwing: MacOpenClawIDSignInError.refused)
+                    continuation.resume(throwing: OpenClawIDSignInError.refused)
                 }
             }
             session.presentationContextProvider = self
             self.session = session
             guard session.start() else {
                 self.session = nil
-                continuation.resume(throwing: MacOpenClawIDSignInError.refused)
+                continuation.resume(throwing: OpenClawIDSignInError.refused)
                 return
             }
         }
@@ -172,7 +193,7 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         form.queryItems = [
             .init(name: "grant_type", value: "authorization_code"),
             .init(name: "code", value: code),
-            .init(name: "redirect_uri", value: MacOpenClawIDConfiguration.redirectURI),
+            .init(name: "redirect_uri", value: self.configuration.redirectURI),
             .init(name: "client_id", value: self.configuration.clientID),
             .init(name: "code_verifier", value: verifier),
         ]
@@ -184,12 +205,12 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         let response = try await self.http.send(request)
         struct Tokens: Decodable { let id_token: String? }
         guard response.status == 200, let token = try? JSONDecoder().decode(Tokens.self, from: response.body).id_token
-        else { throw MacOpenClawIDSignInError.refused }
+        else { throw OpenClawIDSignInError.refused }
         return token
     }
 
-    nonisolated func presentationAnchor(for _: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated { NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor() }
+    public nonisolated func presentationAnchor(for _: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        MainActor.assumeIsolated { self.anchor() }
     }
 
     private static func random(_ count: Int) -> Data {

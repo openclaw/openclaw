@@ -8,7 +8,7 @@ struct OnboardingNodeInvitationServiceTests {
     @Test
     func `production invitation availability follows native packaging`() async {
         let service = OnboardingNodeInvitationService()
-        let model = OnboardingOpenClawIDModel(service: service)
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         #expect((model.unavailableReason == nil) == OpenClawIDNodeNativeEndpoint.isPackaged)
         let start = model.begin(.joinNode)
         #expect((start != nil) == OpenClawIDNodeNativeEndpoint.isPackaged)
@@ -32,7 +32,7 @@ struct OnboardingNodeInvitationServiceTests {
             },
             install: { _ in Issue.record("Unavailable enrollment must not install a node") },
             isConnected: { _ in false })
-        let model = OnboardingOpenClawIDModel(service: service)
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         #expect(model.begin(.joinNode) == nil)
         #expect(model.step == .nodeInvitation)
         #expect(model.perform(.pasteNodeInvitation(discoveryOrigin: "https://discovery.example")) == nil)
@@ -67,7 +67,7 @@ struct OnboardingNodeInvitationServiceTests {
             install: { _ in Issue.record("Reviewing an invitation must not install a node") },
             isConnected: { _ in false })
         let hostname = try OpenClawIDNodeEnrollmentLink(carried).hostname
-        let expected = OnboardingOpenClawIDStep.addMac(claw: hostname, device: "Build node", capabilities: "")
+        let expected = OpenClawIDSetupStep.addDevice(claw: hostname, device: "Build node", capabilities: "")
         #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "")) == expected)
         #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "https://override.example")) == expected)
         await #expect(throws: OpenClawIDNodeEnrollmentError.invalidLink) {
@@ -117,7 +117,7 @@ struct OnboardingNodeInvitationServiceTests {
             now: { fixture.now },
             install: { installed.append($0) },
             isConnected: { _ in connected })
-        let model = OnboardingOpenClawIDModel(service: service)
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         #expect(model.accountUnavailableReason != nil)
         await model.begin(.joinNode)?.value
         #expect(model.step == .nodeInvitation)

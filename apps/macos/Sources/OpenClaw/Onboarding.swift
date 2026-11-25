@@ -681,7 +681,7 @@ struct OnboardingView: View {
     }
 
     @State var showOpenClawID = false
-    @State var openClawID: OnboardingOpenClawIDModel
+    @State var openClawID: OpenClawIDSetupModel
     @State var showBrowserGateway = false
     @State var showConnectionEditor = false
     @State var remoteProbeState: RemoteOnboardingProbeState = .idle
@@ -916,7 +916,7 @@ struct OnboardingView: View {
         initialPage: OnboardingFirstRun.Page = .welcome,
         initialError: String? = nil,
         state: AppState = AppStateStore.shared,
-        openClawIDService: any OnboardingOpenClawIDService = OnboardingOpenClawIDSignInService(),
+        openClawIDService: any OpenClawIDSetupService = OnboardingOpenClawIDSignInService(),
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),
@@ -937,9 +937,10 @@ struct OnboardingView: View {
         self.state = state
         let finishState = OnboardingFinishState()
         _finishState = State(initialValue: finishState)
-        _openClawID = State(initialValue: OnboardingOpenClawIDModel(
+        _openClawID = State(initialValue: OpenClawIDSetupModel(
             service: openClawIDService,
-            onNodeConnected: { finishState.connectionCompletion = .node($0) }))
+            onNodeConnected: { finishState.connectionCompletion = .node($0) },
+            onJoined: { try MacOpenClawIDJoinCompletion.finish(claw: $0) }))
         self.systemAgentDefaults = systemAgentDefaults
         let routeIdentityProvider = aiSetupRouteIdentityProvider ?? {
             OnboardingSystemAgentResumeStore.selectedRouteIdentity(state: state)

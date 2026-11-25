@@ -10,7 +10,7 @@ struct OnboardingOpenClawIDRenderTests {
     func `unpackaged production invitation entry renders unavailable`() throws {
         let output = try OnboardingRenderTests.outputDirectory()
         for dark in [false, true] {
-            let model = OnboardingOpenClawIDModel(service: OnboardingNodeInvitationService())
+            let model = OpenClawIDSetupModel(service: OnboardingNodeInvitationService(), onJoined: { _ in })
             #expect(model.begin(.joinNode) == nil)
             try #require(model.unavailableReason != nil)
             try #require(model.step == .nodeInvitation)
@@ -29,7 +29,7 @@ struct OnboardingOpenClawIDRenderTests {
     func `native ID screens render with explicit fixture data`() async throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let approval = URL(string: "https://fixture.example.test/access")
-        let cases: [(String, OnboardingOpenClawIDStep)] = [
+        let cases: [(String, OpenClawIDSetupStep)] = [
             ("id-node-invitation", .nodeInvitation),
             ("id-node-connecting", .nodeConnection(claw: "studio-fixture", connected: false)),
             ("id-node-connected", .nodeConnection(claw: "studio-fixture", connected: true)),
@@ -42,7 +42,7 @@ struct OnboardingOpenClawIDRenderTests {
             ("id-recovery-kit", .recoveryKit(hostname: "studio-fixture", saved: false)),
             (
                 "id-add-mac",
-                .addMac(
+                .addDevice(
                     claw: "studio-fixture",
                     device: "Example Mac",
                     capabilities: """
@@ -71,7 +71,7 @@ struct OnboardingOpenClawIDRenderTests {
         for (name, step) in cases {
             let dependency = try #require(dependencies[name])
             for dark in [false, true] {
-                let model = OnboardingOpenClawIDModel(service: RenderService(step: step))
+                let model = OpenClawIDSetupModel(service: RenderService(step: step), onJoined: { _ in })
                 await model.begin(.connect)?.value
                 try #require(model.step == step)
                 try OnboardingRenderTests.capture(
@@ -88,15 +88,15 @@ struct OnboardingOpenClawIDRenderTests {
 }
 
 @MainActor
-private struct RenderService: OnboardingOpenClawIDService {
+private struct RenderService: OpenClawIDSetupService {
     let unavailableReason: String? = nil
-    let step: OnboardingOpenClawIDStep
+    let step: OpenClawIDSetupStep
 
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         self.step
     }
 
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         self.step
     }
 

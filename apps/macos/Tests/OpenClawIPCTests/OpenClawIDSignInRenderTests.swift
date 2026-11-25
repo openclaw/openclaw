@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -13,7 +14,7 @@ struct OpenClawIDSignInRenderTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
     func `account switch picker and no claws render`() async throws {
         let output = try OnboardingRenderTests.outputDirectory()
-        let cases: [(String, OnboardingOpenClawIDStep)] = [
+        let cases: [(String, OpenClawIDSetupStep)] = [
             ("switch-picker", .claws(account: "sam@example.test", claws: [
                 .init(id: "studio", name: "studio.example.test", relationship: "Owner", online: true),
                 .init(id: "team", name: "team.example.test", relationship: "Operator", online: true),
@@ -22,7 +23,7 @@ struct OpenClawIDSignInRenderTests {
         ]
         for (name, step) in cases {
             for dark in [false, true] {
-                let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in })
+                let model = OpenClawIDSetupModel(service: RenderService(step: step), onJoined: { _ in })
                 await model.begin(.connect)?.value
                 try #require(model.step == step)
                 // Closing a capture invokes onDisappear, which cancels the model; each appearance needs its own.
@@ -54,7 +55,7 @@ struct OpenClawIDSignInRenderTests {
     func `sign in first sheet steps render`() async throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let claw = "studio-k7x2q.crabd.me"
-        let cases: [(String, OnboardingOpenClawIDStep)] = [
+        let cases: [(String, OpenClawIDSetupStep)] = [
             ("mac-a03-sign-in", .signIn),
             ("mac-a04-signing-in", .signingIn),
             ("mac-a05-claw-picker", .claws(account: "owner@example.test", claws: [
@@ -97,7 +98,7 @@ struct OpenClawIDSignInRenderTests {
         // The recovery-kit entry step is not rendered here: NSSecureTextField layout blocks on the
         // window server lookup this sandbox denies.
         for (name, step) in cases {
-            let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in })
+            let model = OpenClawIDSetupModel(service: RenderService(step: step), onJoined: { _ in })
             await model.begin(.connect)?.value
             try #require(model.step == step)
             try OnboardingRenderTests.capture(
@@ -110,9 +111,9 @@ struct OpenClawIDSignInRenderTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
     func `failed primary migration offers retry`() async throws {
         let output = try OnboardingRenderTests.outputDirectory()
-        let step = OnboardingOpenClawIDStep.ownerConnected(
+        let step = OpenClawIDSetupStep.ownerConnected(
             claw: "studio.example.test", device: "Fixture Mac", approvedWith: "Approved with your recovery kit")
-        let model = OnboardingOpenClawIDModel(service: RenderService(step: step), onJoined: { _ in
+        let model = OpenClawIDSetupModel(service: RenderService(step: step), onJoined: { _ in
             throw PrimaryGatewayControlError.persistenceFailed
         })
         await model.begin(.connect)?.value
@@ -166,15 +167,15 @@ struct OpenClawIDSignInRenderTests {
 }
 
 @MainActor
-private struct RenderService: OnboardingOpenClawIDService {
+private struct RenderService: OpenClawIDSetupService {
     let unavailableReason: String? = nil
-    let step: OnboardingOpenClawIDStep
+    let step: OpenClawIDSetupStep
 
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         self.step
     }
 
-    func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         // The approval wait stays pending until the render cancels it.
         if case .checkApproval = action { try await Task.sleep(for: .seconds(3600)) }
         return self.step

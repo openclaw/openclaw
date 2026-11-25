@@ -1,3 +1,4 @@
+import AuthenticationServices
 import CryptoKit
 import Foundation
 import Testing
@@ -6,17 +7,18 @@ import Testing
 
 @MainActor
 struct OnboardingOpenClawIDSignInTests {
-    private static let configuration = MacOpenClawIDConfiguration(
+    private static let configuration = OpenClawIDConfiguration(
         issuer: URL(string: "https://id.example.test/api/auth")!,
         clientID: "fixture-client",
-        discoveryOrigin: URL(string: "https://discovery.example.test")!)
+        discoveryOrigin: URL(string: "https://discovery.example.test")!,
+        callbackScheme: "ai.openclaw.mac")
 
     @Test func `build config selects the issuer and an empty client id disables sign in`() {
-        let defaults = MacOpenClawIDConfiguration.current(info: [:])
-        #expect(defaults?.issuer.absoluteString == MacOpenClawIDConfiguration.stagingIssuer)
-        #expect(defaults?.clientID == MacOpenClawIDConfiguration.stagingClientID)
-        #expect(MacOpenClawIDConfiguration.current(info: ["OpenClawIDClientID": ""]) == nil)
-        #expect(MacOpenClawIDConfiguration.current(info: ["OpenClawIDIssuer": "http://id.example.test"]) == nil)
+        let defaults = MacOpenClawIDFeature.configuration(info: [:])
+        #expect(defaults?.issuer.absoluteString == OpenClawIDConfiguration.stagingIssuer)
+        #expect(defaults?.clientID == MacOpenClawIDFeature.stagingClientID)
+        #expect(MacOpenClawIDFeature.configuration(info: ["OpenClawIDClientID": ""]) == nil)
+        #expect(MacOpenClawIDFeature.configuration(info: ["OpenClawIDIssuer": "http://id.example.test"]) == nil)
         let service = OnboardingOpenClawIDSignInService(
             configuration: nil, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: Self.environment(http: Discovery()))
@@ -25,28 +27,29 @@ struct OnboardingOpenClawIDSignInTests {
 
     @Test func `callback must carry this attempt's state and issuer`() throws {
         let issuer = Self.configuration.issuer
+        let scheme = Self.configuration.callbackScheme
         let good =
             try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=\(issuer.absoluteString)"))
-        #expect(try MacOpenClawIDSignIn.code(from: good, state: "s1", issuer: issuer) == "abc")
-        #expect(throws: MacOpenClawIDSignInError.stateMismatch) {
-            try MacOpenClawIDSignIn.code(from: good, state: "s2", issuer: issuer)
+        #expect(try OpenClawIDSignIn.code(from: good, state: "s1", issuer: issuer, callbackScheme: scheme) == "abc")
+        #expect(throws: OpenClawIDSignInError.stateMismatch) {
+            try OpenClawIDSignIn.code(from: good, state: "s2", issuer: issuer, callbackScheme: scheme)
         }
         let foreign =
             try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=https://evil.test"))
-        #expect(throws: MacOpenClawIDSignInError.issuerMismatch) {
-            try MacOpenClawIDSignIn.code(from: foreign, state: "s1", issuer: issuer)
+        #expect(throws: OpenClawIDSignInError.issuerMismatch) {
+            try OpenClawIDSignIn.code(from: foreign, state: "s1", issuer: issuer, callbackScheme: scheme)
         }
         let refused = try #require(URL(string: "ai.openclaw.mac:/oauth/callback?error=access_denied&state=s1"))
-        #expect(throws: MacOpenClawIDSignInError.refused) {
-            try MacOpenClawIDSignIn.code(from: refused, state: "s1", issuer: issuer)
+        #expect(throws: OpenClawIDSignInError.refused) {
+            try OpenClawIDSignIn.code(from: refused, state: "s1", issuer: issuer, callbackScheme: scheme)
         }
         let path = try #require(URL(string: "ai.openclaw.mac:/other?code=abc&state=s1"))
-        #expect(throws: MacOpenClawIDSignInError.malformed) {
-            try MacOpenClawIDSignIn.code(from: path, state: "s1", issuer: issuer)
+        #expect(throws: OpenClawIDSignInError.malformed) {
+            try OpenClawIDSignIn.code(from: path, state: "s1", issuer: issuer, callbackScheme: scheme)
         }
-        let claims = MacOpenClawIDSignIn.base64URL(Data(#"{"nonce":"n1"}"#.utf8))
-        #expect(MacOpenClawIDSignIn.nonce(of: "e30.\(claims).sig") == "n1")
-        #expect(MacOpenClawIDSignIn.nonce(of: "not-a-jwt") == nil)
+        let claims = OpenClawIDSignIn.base64URL(Data(#"{"nonce":"n1"}"#.utf8))
+        #expect(OpenClawIDSignIn.nonce(of: "e30.\(claims).sig") == "n1")
+        #expect(OpenClawIDSignIn.nonce(of: "not-a-jwt") == nil)
     }
 
     @Test func `sign in lists claws and routes each relationship`() async throws {
@@ -79,12 +82,12 @@ struct OnboardingOpenClawIDSignInTests {
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await service.perform(.signIn) == .problem(.notInvited(account: "owner@example.test")))
-        environment.signIn = { _ in throw MacOpenClawIDSignInError.cancelled }
+        environment.signIn = { _ in throw OpenClawIDSignInError.cancelled }
         let cancelled = OnboardingOpenClawIDSignInService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
         #expect(try await cancelled.perform(.signIn) == .signIn)
-        environment.signIn = { _ in throw MacOpenClawIDSignInError.stateMismatch }
+        environment.signIn = { _ in throw OpenClawIDSignInError.stateMismatch }
         let failed = OnboardingOpenClawIDSignInService(
             configuration: Self.configuration, databaseURL: Self.database(), nodeInvitations: Self.nodeInvitations(),
             environment: environment)
@@ -92,7 +95,7 @@ struct OnboardingOpenClawIDSignInTests {
     }
 
     @Test func `only a fresh login asks the issuer to ignore its browser session`() throws {
-        let signIn = MacOpenClawIDSignIn(configuration: Self.configuration)
+        let signIn = OpenClawIDSignIn(configuration: Self.configuration) { ASPresentationAnchor() }
         let endpoint = Self.configuration.issuer.appendingPathComponent("oauth2/authorize")
         for fresh in [false, true] {
             let url = try signIn.authorizationURL(
@@ -107,7 +110,7 @@ struct OnboardingOpenClawIDSignInTests {
             #expect(query["state"] == "fixture-state")
             #expect(query["nonce"] == "fixture-nonce")
             #expect(query["code_challenge_method"] == "S256")
-            #expect(query["redirect_uri"] == MacOpenClawIDConfiguration.redirectURI)
+            #expect(query["redirect_uri"] == "ai.openclaw.mac:/oauth/callback")
         }
     }
 
@@ -118,7 +121,7 @@ struct OnboardingOpenClawIDSignInTests {
         var environment = Self.environment(http: http)
         environment.signIn = { fresh in
             attempts.append(fresh)
-            if fresh { throw MacOpenClawIDSignInError.cancelled }
+            if fresh { throw OpenClawIDSignInError.cancelled }
             return "fixture-id-token"
         }
         let service = OnboardingOpenClawIDSignInService(
@@ -126,7 +129,7 @@ struct OnboardingOpenClawIDSignInTests {
             databaseURL: Self.database(),
             nodeInvitations: Self.nodeInvitations(),
             environment: environment)
-        let model = OnboardingOpenClawIDModel(service: service, onJoined: { _ in })
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         await model.begin(.connect)?.value
         await model.perform(.signIn)?.value
         if empty {
@@ -173,7 +176,7 @@ struct OnboardingOpenClawIDSignInTests {
     @Test func `the model waits for approval on its own and finishes the join`() async {
         let service = ApprovalService()
         var joined: [String] = []
-        let model = OnboardingOpenClawIDModel(service: service, onJoined: { joined.append($0) })
+        let model = OpenClawIDSetupModel(service: service, onJoined: { joined.append($0) })
         await model.begin(.connect)?.value
         await model.perform(.approveFromDevice)?.value
         #expect(model.step.isAwaitingApproval)
@@ -192,7 +195,7 @@ struct OnboardingOpenClawIDSignInTests {
     @Test func `switching to the recovery kit cancels the approval wait`() async {
         let service = ApprovalService()
         var joined: [String] = []
-        let model = OnboardingOpenClawIDModel(service: service, onJoined: { joined.append($0) })
+        let model = OpenClawIDSetupModel(service: service, onJoined: { joined.append($0) })
         await model.begin(.connect)?.value
         await model.perform(.approveFromDevice)?.value
         for _ in 0..<50 where !service.waiting {
@@ -211,7 +214,7 @@ struct OnboardingOpenClawIDSignInTests {
     @Test func `failed join completion retries without enrolling again`() async {
         let service = ApprovalService()
         var attempts = 0
-        let model = OnboardingOpenClawIDModel(service: service, onJoined: { _ in
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in
             attempts += 1
             if attempts == 1 { throw PrimaryGatewayControlError.persistenceFailed }
         })
@@ -450,10 +453,10 @@ struct OnboardingOpenClawIDSignInTests {
 
     /// Plays the service side of the approval wait: the code first, then the decision on demand.
     @MainActor
-    private final class ApprovalService: OnboardingOpenClawIDService {
+    private final class ApprovalService: OpenClawIDSetupService {
         let unavailableReason: String? = nil
         var enrollments = 0
-        private var decision: CheckedContinuation<OnboardingOpenClawIDStep, Error>?
+        private var decision: CheckedContinuation<OpenClawIDSetupStep, Error>?
         var waiting: Bool {
             self.decision != nil
         }
@@ -464,11 +467,11 @@ struct OnboardingOpenClawIDSignInTests {
             self.decision = nil
         }
 
-        func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+        func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
             .signIn
         }
 
-        func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+        func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
             switch action {
             case .submitRecoveryKit:
                 self.enrollments += 1

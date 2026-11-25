@@ -1,63 +1,71 @@
 import Foundation
 import Observation
 
-/// Native enrollment owns credentials and approval checks; views receive display data only.
+/// OpenClaw ID setup shared by the Mac and iOS apps. Native enrollment owns credentials and
+/// approval checks; views receive display data only.
 /// Node approval and chat access are separate grants, never one six-digit ceremony.
 @MainActor
-protocol OnboardingOpenClawIDService {
+public protocol OpenClawIDSetupService {
     var unavailableReason: String? { get }
     var accountUnavailableReason: String? { get }
-    func start(_ intent: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep
-    func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep
+    func start(_ intent: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep
+    func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep
     func cancel()
 }
 
-extension OnboardingOpenClawIDService {
-    var accountUnavailableReason: String? {
+extension OpenClawIDSetupService {
+    public var accountUnavailableReason: String? {
         self.unavailableReason
     }
 }
 
-enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
+public enum OpenClawIDSetupIntent { case makeReachable, connect, joinNode }
 
-enum OnboardingOpenClawIDAction {
+public enum OpenClawIDSetupAction {
     case signIn, switchAccount, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval,
          requestChat
     case pasteNodeInvitation(discoveryOrigin: String)
     case approveFromDevice, useRecoveryKit, chooseKitFile, retry, back
     /// Member join: open the invite step, read the copied invite link, send the request, or stop
-    /// waiting and forget this Mac's request keys.
+    /// waiting and forget this device's request keys.
     case joinWithInvite, pasteInvite, requestJoin, cancelJoin
-    /// The person's own comparison of the six digits on this Mac.
+    /// The person's own comparison of the six digits on this device.
     case confirmCode(matches: Bool)
     /// The typed recovery code. It is passed straight to the enrollment and not kept in view state.
     case submitRecoveryKit(String)
 }
 
-struct OnboardingClaw: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let relationship: String
-    let online: Bool
+public struct OpenClawIDSetupClaw: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let relationship: String
+    public let online: Bool
+
+    public init(id: String, name: String, relationship: String, online: Bool) {
+        self.id = id
+        self.name = name
+        self.relationship = relationship
+        self.online = online
+    }
 }
 
-enum OnboardingOpenClawIDStep: Equatable {
+public enum OpenClawIDSetupStep: Equatable, Sendable {
     case signIn
     case nodeInvitation
     case nodeConnection(claw: String, connected: Bool)
-    case claws(account: String, claws: [OnboardingClaw])
+    case claws(account: String, claws: [OpenClawIDSetupClaw])
     // Recovery secrets stay in the service's custody, not in view state or diagnostics.
     case recoveryKit(hostname: String, saved: Bool)
-    case addMac(claw: String, device: String, capabilities: String)
+    case addDevice(claw: String, device: String, capabilities: String)
     case compareCode(claw: String, device: String, code: String, approvalURL: URL?)
     case chatAccess(claw: String, approvalURL: URL?)
     case connected(claw: String)
     case reachable(hostname: String)
     /// The OpenClaw ID sign-in window is open.
     case signingIn
-    /// The owner picks how this Mac becomes their device.
+    /// The owner picks how this device becomes their device.
     case chooseApproval(claw: String, device: String)
-    /// A member adds this Mac to their account from another of their devices.
+    /// A member adds this device to their account from another of their devices.
     case addMemberDevice(claw: String, device: String)
     /// The six digits are shown; the service waits for the approving device on its own, and opens
     /// its handoff only after the person confirmed the match here too. `member`: the approver is
@@ -72,13 +80,13 @@ enum OnboardingOpenClawIDStep: Equatable {
     case memberRequest(claw: String, device: String, account: String)
     /// The request is with the claw; the service waits for an owner's approval on its own.
     case memberPending(claw: String, device: String)
-    /// `role`: the invite's role; nil when another of the member's devices approved this Mac, which
+    /// `role`: the invite's role; nil when another of the member's devices approved this device, which
     /// then has the account's role.
     case memberConnected(claw: String, device: String, role: String?)
-    case problem(OnboardingOpenClawIDProblem)
+    case problem(OpenClawIDSetupProblem)
 }
 
-enum OnboardingOpenClawIDProblem: Equatable {
+public enum OpenClawIDSetupProblem: Equatable, Sendable {
     case clawOffline(claw: String)
     case denied(claw: String)
     case expired(claw: String)
@@ -86,14 +94,14 @@ enum OnboardingOpenClawIDProblem: Equatable {
     case notInvited(account: String)
     /// The copied text is not a working invite link, or Discovery does not know its claw.
     case inviteInvalid
-    /// No owner decided on this Mac's request within the invite's seven days.
+    /// No owner decided on this device's request within the invite's seven days.
     case inviteExpired(claw: String)
     case signInFailed
 }
 
-extension OnboardingOpenClawIDStep {
+extension OpenClawIDSetupStep {
     /// The code is shown and the service is waiting for the owner's decision.
-    var isAwaitingApproval: Bool {
+    public var isAwaitingApproval: Bool {
         switch self {
         case .deviceCompareCode, .memberPending: true
         default: false
@@ -101,7 +109,7 @@ extension OnboardingOpenClawIDStep {
     }
 
     /// The join finished; completing it (primary connection, dashboard) may need a retry.
-    var isJoined: Bool {
+    public var isJoined: Bool {
         switch self {
         case .ownerConnected, .memberConnected: true
         default: false
@@ -109,40 +117,43 @@ extension OnboardingOpenClawIDStep {
     }
 }
 
-struct UnavailableOnboardingOpenClawIDService: OnboardingOpenClawIDService {
-    var unavailableReason: String? {
+public struct UnavailableOpenClawIDSetupService: OpenClawIDSetupService {
+    public init() {}
+
+    public var unavailableReason: String? {
         "Native OpenClaw ID setup is not available in this build. You can continue without it."
     }
 
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    public func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         throw CocoaError(.featureUnsupported)
     }
 
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    public func perform(_: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         throw CocoaError(.featureUnsupported)
     }
 
-    func cancel() {}
+    public func cancel() {}
 }
 
 @MainActor
 @Observable
-final class OnboardingOpenClawIDModel {
-    private(set) var step: OnboardingOpenClawIDStep = .signIn
-    private(set) var busy = false
-    private(set) var error: String?
-    let unavailableReason: String?
-    let accountUnavailableReason: String?
-    @ObservationIgnored private let service: any OnboardingOpenClawIDService
+public final class OpenClawIDSetupModel {
+    public private(set) var step: OpenClawIDSetupStep = .signIn
+    public private(set) var busy = false
+    public private(set) var error: String?
+    public let unavailableReason: String?
+    public let accountUnavailableReason: String?
+    @ObservationIgnored private let service: any OpenClawIDSetupService
     @ObservationIgnored private let onNodeConnected: (String) -> Void
     @ObservationIgnored private let onJoined: (String) throws -> Void
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var wait: Task<Void, Never>?
 
-    init(
-        service: any OnboardingOpenClawIDService,
+    /// `onJoined` makes the claw this app's Gateway; it runs when an owner or member join finishes.
+    public init(
+        service: any OpenClawIDSetupService,
         onNodeConnected: @escaping (String) -> Void = { _ in },
-        onJoined: @escaping (String) throws -> Void = { try MacOpenClawIDJoinCompletion.finish(claw: $0) })
+        onJoined: @escaping (String) throws -> Void)
     {
         self.service = service
         self.onNodeConnected = onNodeConnected
@@ -152,7 +163,7 @@ final class OnboardingOpenClawIDModel {
     }
 
     @discardableResult
-    func begin(_ intent: OnboardingOpenClawIDIntent) -> Task<Void, Never>? {
+    public func begin(_ intent: OpenClawIDSetupIntent) -> Task<Void, Never>? {
         self.cancel()
         self.step = intent == .joinNode ? .nodeInvitation : .signIn
         guard self.unavailableReason == nil else { return nil }
@@ -160,7 +171,7 @@ final class OnboardingOpenClawIDModel {
     }
 
     @discardableResult
-    func perform(_ action: OnboardingOpenClawIDAction) -> Task<Void, Never>? {
+    public func perform(_ action: OpenClawIDSetupAction) -> Task<Void, Never>? {
         guard !self.busy, self.unavailableReason == nil else { return nil }
         self.wait?.cancel()
         self.wait = nil
@@ -174,7 +185,7 @@ final class OnboardingOpenClawIDModel {
         return self.run { try await self.service.perform(action) }
     }
 
-    func cancel() {
+    public func cancel() {
         self.task?.cancel()
         self.task = nil
         self.wait?.cancel()
@@ -185,7 +196,7 @@ final class OnboardingOpenClawIDModel {
         self.step = .signIn
     }
 
-    private func run(_ operation: @escaping @MainActor () async throws -> OnboardingOpenClawIDStep)
+    private func run(_ operation: @escaping @MainActor () async throws -> OpenClawIDSetupStep)
         -> Task<Void, Never>
     {
         self.busy = true
@@ -206,7 +217,7 @@ final class OnboardingOpenClawIDModel {
         return task
     }
 
-    private func show(_ step: OnboardingOpenClawIDStep) throws {
+    private func show(_ step: OpenClawIDSetupStep) throws {
         self.step = step
         switch step {
         case let .nodeConnection(claw, true): self.onNodeConnected(claw)

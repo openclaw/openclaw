@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 struct OnboardingOpenClawIDSignInEnvironment {
     var signIn: (_ freshLogin: Bool) async throws -> String
     var cancelSignIn: () -> Void = {}
-    var discovery: (MacOpenClawIDConfiguration) -> any OpenClawIDNodeEnrollmentHTTP = { _ in
+    var discovery: (OpenClawIDConfiguration) -> any OpenClawIDNodeEnrollmentHTTP = { _ in
         OpenClawIDNodeEnrollmentURLSession()
     }
 
@@ -43,7 +43,7 @@ struct OnboardingOpenClawIDSignInEnvironment {
 /// account by approval from one of their devices; or join a claw as a member with an owner's invite
 /// link. Node invitations are delegated to the headless node path unchanged.
 @MainActor
-final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
+final class OnboardingOpenClawIDSignInService: OpenClawIDSetupService {
     /// Sign-in-first enrollment and node invitations both need the packaged native transport.
     var unavailableReason: String? {
         self.nodeInvitations.unavailableReason
@@ -55,7 +55,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             ? "OpenClaw ID sign-in isn’t set up in this build. You can use a node invitation instead." : nil
     }
 
-    private let configuration: MacOpenClawIDConfiguration?
+    private let configuration: OpenClawIDConfiguration?
     private let environment: OnboardingOpenClawIDSignInEnvironment
     private let nodeInvitations: OnboardingNodeInvitationService
     private let databaseURL: URL
@@ -65,7 +65,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     private var claw: OpenClawIDDiscoveryClaw?
     private var approval: Task<(MacOpenClawIDDevice, OpenClawIDDiscoverySession), Error>?
     /// The current attempt's code and the person's answer (nil until they compare).
-    private var compare: (step: OnboardingOpenClawIDStep, answer: CodeAnswer)?
+    private var compare: (step: OpenClawIDSetupStep, answer: CodeAnswer)?
     /// A pasted invite link, held until the person asks to join or leaves the step.
     private var invite: OpenClawIDInviteLink?
     /// The member request this sheet waits on.
@@ -85,15 +85,15 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     }
 
     convenience init() {
-        let configuration = MacOpenClawIDConfiguration.current()
-        let signIn = configuration.map { MacOpenClawIDSignIn(configuration: $0) }
+        let configuration = MacOpenClawIDFeature.configuration()
+        let signIn = configuration.map { MacOpenClawIDFeature.signIn($0) }
         self.init(
             configuration: configuration,
             databaseURL: MacOpenClawIDDeviceStore.shared.databaseURL,
             nodeInvitations: OnboardingNodeInvitationService(),
             environment: .init(
                 signIn: { freshLogin in
-                    guard let signIn else { throw MacOpenClawIDSignInError.refused }
+                    guard let signIn else { throw OpenClawIDSignInError.refused }
                     return try await signIn.signIn(freshLogin: freshLogin)
                 },
                 cancelSignIn: { signIn?.cancel() },
@@ -109,7 +109,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     }
 
     init(
-        configuration: MacOpenClawIDConfiguration?,
+        configuration: OpenClawIDConfiguration?,
         databaseURL: URL,
         nodeInvitations: OnboardingNodeInvitationService,
         environment: OnboardingOpenClawIDSignInEnvironment)
@@ -120,7 +120,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.environment = environment
     }
 
-    func start(_ intent: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_ intent: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         self.cancel()
         switch intent {
         case .joinNode: return try await self.nodeInvitations.start(.joinNode)
@@ -133,7 +133,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         }
     }
 
-    func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         if let step = try await self.performMemberJoin(action) { return step }
         switch action {
         case .pasteNodeInvitation, .requestNode:
@@ -200,14 +200,14 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.freshLogin = false
     }
 
-    private func discovery(_ configuration: MacOpenClawIDConfiguration) -> OpenClawIDDiscoveryAccount {
+    private func discovery(_ configuration: OpenClawIDConfiguration) -> OpenClawIDDiscoveryAccount {
         .init(origin: configuration.discoveryOrigin, http: self.environment.discovery(configuration))
     }
 
-    private func signIn() async throws -> OnboardingOpenClawIDStep {
+    private func signIn() async throws -> OpenClawIDSetupStep {
         guard let configuration else { throw CocoaError(.featureUnsupported) }
         let idToken: String
-        do { idToken = try await self.environment.signIn(self.freshLogin) } catch MacOpenClawIDSignInError.cancelled {
+        do { idToken = try await self.environment.signIn(self.freshLogin) } catch OpenClawIDSignInError.cancelled {
             return .signIn
         } catch {
             return .problem(.signInFailed)
@@ -221,13 +221,13 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         return try await self.refreshClaws()
     }
 
-    private func refreshClaws() async throws -> OnboardingOpenClawIDStep {
+    private func refreshClaws() async throws -> OpenClawIDSetupStep {
         guard let configuration, let session else { return .signIn }
         self.claws = try await self.discovery(configuration).listClaws(session)
         let account = session.email ?? session.accountID
         guard !self.claws.isEmpty else { return .problem(.notInvited(account: account)) }
         let claws = self.claws.map {
-            OnboardingClaw(
+            OpenClawIDSetupClaw(
                 id: $0.id,
                 name: $0.hostname,
                 relationship: $0.relationship == "owner" ? "Owner" : "Member",
@@ -240,7 +240,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     /// device. A member device has no node.
     private func newDevice(
         _ claw: OpenClawIDDiscoveryClaw,
-        configuration: MacOpenClawIDConfiguration,
+        configuration: OpenClawIDConfiguration,
         approval: MacOpenClawIDDevice.Approval,
         session: OpenClawIDDiscoverySession) async throws -> (MacOpenClawIDDevice, OpenClawIDOwnerDeviceKeys)
     {
@@ -266,7 +266,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
 
     private func client(
         _ device: MacOpenClawIDDevice,
-        configuration: MacOpenClawIDConfiguration) -> OpenClawIDOwnerEnrollmentClient
+        configuration: OpenClawIDConfiguration) -> OpenClawIDOwnerEnrollmentClient
     {
         .init(
             discoveryOrigin: configuration.discoveryOrigin,
@@ -281,7 +281,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         String(self.environment.deviceName().prefix(64))
     }
 
-    private func approveFromDevice() async throws -> OnboardingOpenClawIDStep {
+    private func approveFromDevice() async throws -> OpenClawIDSetupStep {
         guard let configuration, let session, let claw else { throw CocoaError(.featureUnsupported) }
         self.approval?.cancel()
         let member = claw.relationship != "owner"
@@ -317,7 +317,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         do {
             var iterator = codes.stream.makeAsyncIterator()
             guard let code = try await iterator.next() else { throw CancellationError() }
-            let step = OnboardingOpenClawIDStep.deviceCompareCode(
+            let step = OpenClawIDSetupStep.deviceCompareCode(
                 claw: claw.hostname,
                 device: self.environment.deviceName(),
                 code: Self.spaced(code),
@@ -331,7 +331,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         }
     }
 
-    private func confirmCode(_ matches: Bool) throws -> OnboardingOpenClawIDStep {
+    private func confirmCode(_ matches: Bool) throws -> OpenClawIDSetupStep {
         guard let compare, case let .deviceCompareCode(claw, device, code, url, _, member) = compare.step else {
             throw CocoaError(.featureUnsupported)
         }
@@ -341,7 +341,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             claw: claw, device: device, code: code, approvalURL: url, confirmed: matches, member: member)
     }
 
-    private func awaitApproval() async throws -> OnboardingOpenClawIDStep {
+    private func awaitApproval() async throws -> OpenClawIDSetupStep {
         guard let approval, let claw else { throw CocoaError(.featureUnsupported) }
         do {
             let (device, session) = try await approval.value
@@ -356,7 +356,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         }
     }
 
-    private func useRecoveryKit(_ text: String) async throws -> OnboardingOpenClawIDStep {
+    private func useRecoveryKit(_ text: String) async throws -> OpenClawIDSetupStep {
         guard let configuration, let session, let claw else { throw CocoaError(.featureUnsupported) }
         let description = try await self.environment.describeNode()
         let (device, keys) = try await self.newDevice(
@@ -373,7 +373,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     }
 
     private func finish(_ device: MacOpenClawIDDevice, session: OpenClawIDDiscoverySession, approvedWith: String)
-        -> OnboardingOpenClawIDStep
+        -> OpenClawIDSetupStep
     {
         self.environment.install(device, session)
         if device.memberRole != nil {
@@ -382,7 +382,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         return .ownerConnected(claw: device.hostname, device: self.environment.deviceName(), approvedWith: approvedWith)
     }
 
-    private func problem(_ error: Error, claw: OpenClawIDDiscoveryClaw) throws -> OnboardingOpenClawIDStep {
+    private func problem(_ error: Error, claw: OpenClawIDDiscoveryClaw) throws -> OpenClawIDSetupStep {
         switch error as? OpenClawIDOwnerEnrollmentError {
         case .denied, .handoffInvalid: return .problem(.denied(claw: claw.hostname))
         case .kitInvalid, .wrongKit: return .problem(.kitInvalid(claw: claw.hostname))
@@ -395,7 +395,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
 
     /// The member-join actions, and the approval wait and retry while a member request is pending;
     /// nil for every other action.
-    private func performMemberJoin(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep? {
+    private func performMemberJoin(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep? {
         switch action {
         case .joinWithInvite:
             self.approval?.cancel()
@@ -422,13 +422,13 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
 
     /// The saved member request of this account, if any. The wait checks admission before it
     /// treats an old request as expired: an owner may have approved it while this Mac was closed.
-    private func resumeJoin(session: OpenClawIDDiscoverySession) async -> OnboardingOpenClawIDStep? {
+    private func resumeJoin(session: OpenClawIDDiscoverySession) async -> OpenClawIDSetupStep? {
         guard let join = self.environment.store.pendingJoin(), join.accountID == session.accountID else { return nil }
         self.pending = join
         return .memberPending(claw: join.hostname, device: self.environment.deviceName())
     }
 
-    private func pasteInvite() -> OnboardingOpenClawIDStep {
+    private func pasteInvite() -> OpenClawIDSetupStep {
         guard let session, let text = self.environment.readInviteLink(),
               let link = try? OpenClawIDInviteLink(text)
         else { return .problem(.inviteInvalid) }
@@ -437,7 +437,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             claw: link.hostname, device: self.environment.deviceName(), account: session.email ?? session.accountID)
     }
 
-    private func memberClient(_ deviceID: UUID, configuration: MacOpenClawIDConfiguration)
+    private func memberClient(_ deviceID: UUID, configuration: OpenClawIDConfiguration)
         -> OpenClawIDMemberJoinClient
     {
         .init(
@@ -449,7 +449,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     /// Creates this Mac's member keys D and W (no node key) and sends the invite redemption. The
     /// pasted invite stays usable until the request is with the claw or Discovery refused it, so a
     /// failed lookup or refusal can be retried with Ask to join.
-    private func requestJoin() async throws -> OnboardingOpenClawIDStep {
+    private func requestJoin() async throws -> OpenClawIDSetupStep {
         guard let configuration, let session, var link = self.invite else { throw CocoaError(.featureUnsupported) }
         let deviceID = UUID()
         let client = self.memberClient(deviceID, configuration: configuration)
@@ -489,7 +489,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         link: inout OpenClawIDInviteLink,
         keys: (device: OpenClawIDNodeIdentity, peer: OpenClawIDNodeIdentity),
         client: OpenClawIDMemberJoinClient,
-        session: OpenClawIDDiscoverySession) async throws -> OnboardingOpenClawIDStep
+        session: OpenClawIDDiscoverySession) async throws -> OpenClawIDSetupStep
     {
         // Saved before the redemption is sent: a lost answer or a closed window may follow
         // Discovery's acceptance, and only these keys can then be admitted.
@@ -525,7 +525,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     /// Polls until the claw's verified snapshot lists this Mac's W as a member, then installs it
     /// with the invite's role and no node. An ended Discovery session asks for sign-in and keeps
     /// the request.
-    private func awaitMemberApproval() async throws -> OnboardingOpenClawIDStep {
+    private func awaitMemberApproval() async throws -> OpenClawIDSetupStep {
         guard let configuration, let session, let join = self.pending else { throw CocoaError(.featureUnsupported) }
         let client = self.memberClient(join.deviceEnrollmentID, configuration: configuration)
         let peer = try await OpenClawIDNodeIdentity.loadOrCreate(

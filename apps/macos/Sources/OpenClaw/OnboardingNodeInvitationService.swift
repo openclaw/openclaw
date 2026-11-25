@@ -4,7 +4,7 @@ import OpenClawKit
 
 /// Accountless node enrollment. Account/owner signing and operator grants remain separate.
 @MainActor
-final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
+final class OnboardingNodeInvitationService: OpenClawIDSetupService {
     let unavailableReason: String?
     var accountUnavailableReason: String? {
         self.unavailableReason ?? """
@@ -72,7 +72,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
         self.isConnected = isConnected
     }
 
-    func start(_ intent: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_ intent: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         self.cancel()
         switch intent {
         case .joinNode: return .nodeInvitation
@@ -81,7 +81,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
         }
     }
 
-    func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_ action: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         switch action {
         case let .pasteNodeInvitation(discoveryOrigin):
             self.cancel()
@@ -101,7 +101,7 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
             self.origin = origin.absoluteString
             self.hostname = link.hostname
             self.description = description
-            return .addMac(
+            return .addDevice(
                 claw: link.hostname,
                 device: description.displayName,
                 capabilities: description.commands.joined(separator: ", "))

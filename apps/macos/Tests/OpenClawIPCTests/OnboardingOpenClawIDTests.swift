@@ -1,11 +1,12 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 @MainActor
 struct OnboardingOpenClawIDTests {
     @Test func `main build cannot claim an unbacked enrollment succeeded`() {
-        let model = OnboardingOpenClawIDModel(service: UnavailableOnboardingOpenClawIDService())
+        let model = OpenClawIDSetupModel(service: UnavailableOpenClawIDSetupService(), onJoined: { _ in })
         #expect(model.unavailableReason != nil)
         #expect(model.begin(.makeReachable) == nil)
         #expect(model.perform(.confirmRecoveryKit) == nil)
@@ -16,7 +17,7 @@ struct OnboardingOpenClawIDTests {
     @Test func `node approval stays separate from chat and a failed chat step preserves node approval`() async {
         let service = FixtureService()
         service.next = .chatAccess(claw: "fixture-claw", approvalURL: nil)
-        let model = OnboardingOpenClawIDModel(service: service)
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         await model.begin(.connect)?.value
         #expect(model.step == .chatAccess(claw: "fixture-claw", approvalURL: nil))
         service.fail = true
@@ -30,7 +31,7 @@ struct OnboardingOpenClawIDTests {
     @Test func `cancelled enrollment cannot publish late success`() async {
         let service = FixtureService()
         service.suspend = true
-        let model = OnboardingOpenClawIDModel(service: service)
+        let model = OpenClawIDSetupModel(service: service, onJoined: { _ in })
         let task = model.begin(.connect)
         await service.waitUntilStarted()
         model.cancel()
@@ -43,12 +44,12 @@ struct OnboardingOpenClawIDTests {
 }
 
 @MainActor
-private final class FixtureService: OnboardingOpenClawIDService {
+private final class FixtureService: OpenClawIDSetupService {
     let unavailableReason: String? = nil
-    var next: OnboardingOpenClawIDStep = .signIn
+    var next: OpenClawIDSetupStep = .signIn
     var fail = false
     var suspend = false
-    var pending: CheckedContinuation<OnboardingOpenClawIDStep, Never>?
+    var pending: CheckedContinuation<OpenClawIDSetupStep, Never>?
     private var started: CheckedContinuation<Void, Never>?
 
     func waitUntilStarted() async {
@@ -56,7 +57,7 @@ private final class FixtureService: OnboardingOpenClawIDService {
         await withCheckedContinuation { self.started = $0 }
     }
 
-    func start(_: OnboardingOpenClawIDIntent) async throws -> OnboardingOpenClawIDStep {
+    func start(_: OpenClawIDSetupIntent) async throws -> OpenClawIDSetupStep {
         if self.suspend {
             return await withCheckedContinuation {
                 self.pending = $0
@@ -66,7 +67,7 @@ private final class FixtureService: OnboardingOpenClawIDService {
         return self.next
     }
 
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+    func perform(_: OpenClawIDSetupAction) async throws -> OpenClawIDSetupStep {
         if self.fail { throw NSError(domain: "fixture-private-response", code: 1) }
         return self.next
     }

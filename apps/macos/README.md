@@ -142,7 +142,7 @@ Local setup retains the runtime and live inference gates, then offers optional
 OpenClaw ID setup before the final page. **Set up later** starts no Gateway.
 
 Native OpenClaw ID enrollment is not implemented in this build. The production
-`OnboardingOpenClawIDService` reports that limitation; it cannot report a linked
+`OpenClawIDSetupService` reports that limitation; it cannot report a linked
 claw or an approved device. The native views support injected service results
 for design/testing. Recovery-kit saving, account sign-in, and native node/operator
 transports still need their credential-owning implementations. Node approval and

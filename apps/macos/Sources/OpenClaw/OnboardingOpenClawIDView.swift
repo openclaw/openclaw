@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 
 struct OnboardingReachabilityContent: View {
@@ -32,7 +33,7 @@ struct OnboardingReachabilityContent: View {
 }
 
 struct OnboardingOpenClawIDView: View {
-    @Bindable var model: OnboardingOpenClawIDModel
+    @Bindable var model: OpenClawIDSetupModel
     var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
 
@@ -71,9 +72,9 @@ struct OnboardingOpenClawIDView: View {
 
 /// The same presentation is used by native onboarding and credential-free render fixtures.
 struct OnboardingOpenClawIDContent: View {
-    let step: OnboardingOpenClawIDStep
+    let step: OpenClawIDSetupStep
     let unavailableReason: String?
-    let action: (OnboardingOpenClawIDAction) -> Void
+    let action: (OpenClawIDSetupAction) -> Void
     @State private var discoveryOrigin = ""
     @State private var recoveryCode = ""
 
@@ -154,7 +155,7 @@ struct OnboardingOpenClawIDContent: View {
             Button(saved ? "Save again…" : "Save recovery kit…") { self.action(.saveRecoveryKit) }
             Button("I’ve saved it") { self.action(.confirmRecoveryKit) }
                 .buttonStyle(.borderedProminent).disabled(!saved)
-        case let .addMac(claw, device, capabilities):
+        case let .addDevice(claw, device, capabilities):
             self.heading("Add this Mac to \(claw)", subtitle: "Review this Mac’s requested node capabilities.")
             self.row(device, detail: "macOS · this device", icon: "laptopcomputer")
             ScrollView {
@@ -382,7 +383,7 @@ struct OnboardingOpenClawIDContent: View {
     }
 
     @ViewBuilder
-    private func problemContent(_ problem: OnboardingOpenClawIDProblem) -> some View {
+    private func problemContent(_ problem: OpenClawIDSetupProblem) -> some View {
         switch problem {
         case let .clawOffline(claw):
             self.problemHeading(
@@ -467,7 +468,7 @@ struct OnboardingOpenClawIDContent: View {
         _ title: String,
         detail: String,
         icon: String,
-        action: OnboardingOpenClawIDAction) -> some View
+        action: OpenClawIDSetupAction) -> some View
     {
         Button { self.action(action) } label: {
             HStack(alignment: .top, spacing: 12) {

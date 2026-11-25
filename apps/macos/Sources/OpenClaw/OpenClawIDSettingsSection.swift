@@ -76,7 +76,7 @@ final class OpenClawIDSettingsModel {
             return .pendingJoin(claw: join.hostname)
         }
         return Self.unenrolledPresentation(
-            available: MacOpenClawIDConfiguration.current() != nil,
+            available: MacOpenClawIDFeature.configuration() != nil,
             mode: state.connectionMode,
             transport: state.remoteTransport,
             target: state.remoteTarget,
@@ -126,10 +126,10 @@ final class OpenClawIDSettingsModel {
     /// still comes from the claw's snapshot listing this Mac.
     func signInAgain() {
         self.run {
-            guard let configuration = MacOpenClawIDConfiguration.current() else {
+            guard let configuration = MacOpenClawIDFeature.configuration() else {
                 throw OpenClawIDDeviceRouteError.signInRequired
             }
-            let token = try await MacOpenClawIDSignIn(configuration: configuration).signIn()
+            let token = try await MacOpenClawIDFeature.signIn(configuration).signIn()
             let session = try await OpenClawIDDiscoveryAccount(origin: configuration.discoveryOrigin)
                 .createSession(idToken: token)
             self.store.saveSession(session)

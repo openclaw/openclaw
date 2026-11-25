@@ -9,10 +9,11 @@ import Testing
 /// member's devices. Discovery is scripted; no Keychain or app state is touched.
 @MainActor
 struct OnboardingOpenClawIDMemberJoinTests {
-    private static let configuration = MacOpenClawIDConfiguration(
+    private static let configuration = OpenClawIDConfiguration(
         issuer: URL(string: "https://id.example.test/api/auth")!,
         clientID: "fixture-client",
-        discoveryOrigin: URL(string: "https://discovery.example.test")!)
+        discoveryOrigin: URL(string: "https://discovery.example.test")!,
+        callbackScheme: "ai.openclaw.mac")
     private nonisolated static let claw = "team-k7x2q.crabd.me"
     private nonisolated static let clawID = "2123456789abcdef0123456789abcdef"
 
@@ -44,7 +45,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
         #expect(await http.redemptions == 1)
         #expect(effects.saved?.token == "ds_member")
 
-        let model = OnboardingOpenClawIDModel(service: service, onJoined: { effects.joined.append($0) })
+        let model = OpenClawIDSetupModel(service: service, onJoined: { effects.joined.append($0) })
         await model.perform(.retry)?.value
         for _ in 0..<200 where effects.installed.isEmpty {
             try await Task.sleep(for: .milliseconds(5))

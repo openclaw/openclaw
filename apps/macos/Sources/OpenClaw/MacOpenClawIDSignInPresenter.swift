@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawKit
 import SwiftUI
 
 /// The Settings, dashboard recovery and menu entry points share one sign-in sheet.
@@ -12,7 +13,7 @@ final class MacOpenClawIDSignInPresenter: NSObject, NSWindowDelegate {
             AppActivation.shared.makeKeyAndOrderFront(window: window)
             return
         }
-        let model = OnboardingOpenClawIDModel(
+        let model = OpenClawIDSetupModel(
             service: OnboardingOpenClawIDSignInService(),
             onJoined: { [weak self] claw in
                 try MacOpenClawIDJoinCompletion.finish(claw: claw)
