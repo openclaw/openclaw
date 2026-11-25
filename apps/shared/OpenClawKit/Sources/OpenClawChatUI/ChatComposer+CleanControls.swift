@@ -218,7 +218,7 @@ extension OpenClawChatComposer {
 
     private func cleanInlineModelPicker(compact: Bool) -> some View {
         #if os(iOS)
-        // The phone opens the picker card over the chat (ChatModelPickerCard).
+        // The phone presents the picker as a system sheet (ChatModelPickerSheet).
         ChatComposerPanelButton(panel: .model, isFocused: self.isFocused) {
             self.cleanInlineModelLabel(compact: compact)
         }

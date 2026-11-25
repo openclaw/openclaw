@@ -71,7 +71,7 @@ struct ChatEffortBar: View {
                     .disabled(!isEnabled)
                     .accessibilityIdentifier("chat-effort-bar-speed")
                 }
-                .frame(minHeight: ChatModelPickerMetrics.touch)
+                .frame(minHeight: ChatEffortBarMetrics.touch)
             }
         }
         .padding(.horizontal, 16)
@@ -140,7 +140,7 @@ private struct ChatEffortTrack: View {
         }
         .frame(height: self.height)
         // The track draws at 32 pt; the touch target reaches 44.
-        .padding(.vertical, max(0, (ChatModelPickerMetrics.touch - self.height) / 2))
+        .padding(.vertical, max(0, (ChatEffortBarMetrics.touch - self.height) / 2))
         .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0)
             .onChanged { value in
@@ -176,6 +176,7 @@ private struct ChatEffortTrack: View {
 enum ChatEffortBarMetrics {
     static let radius: CGFloat = 26
     static let thumbWidth: CGFloat = 38
+    static let touch: CGFloat = 44
 }
 
 extension OpenClawChatViewModel {
