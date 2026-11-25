@@ -114,6 +114,8 @@
     "HOSTALIASES"
   ],
   "blockedOverrideOnlyKeys": [
+    "OPENCLAW_NODE_WORKER_EXECUTION",
+    "OPENCLAW_WORKER_TOOL_DATA",
     "HOME",
     "GRADLE_USER_HOME",
     "ZDOTDIR",
