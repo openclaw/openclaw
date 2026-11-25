@@ -5,7 +5,7 @@ function activeCall(callUUID: string) {
   return new ActiveFaceTimeCall({
     callUUID,
     phase: "active",
-    owner: { senderId: "owner@example.com", senderIsOwner: true },
+    owner: { senderId: "facetime:owner@example.com" },
   });
 }
 
