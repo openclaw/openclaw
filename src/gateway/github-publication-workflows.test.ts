@@ -248,7 +248,7 @@ it.each([
       expect(result).toMatchObject({
         status: "failed",
         code: "github_rejected",
-        nextAction: expect.stringMatching(/OpenClaw.*not a GitHub token scope/),
+        nextAction: expect.stringMatching(/does not allow it.*not a GitHub token scope/),
       });
       expect(workspace.effects).toEqual([]);
       expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
@@ -286,7 +286,7 @@ it.each(["first", "existing"] as const)(
     expect(await f.publish("source-owned-workflow")).toMatchObject({
       status: "failed",
       code: "github_rejected",
-      nextAction: expect.stringContaining("Publishing GitHub workflow changes"),
+      nextAction: expect.stringContaining("I did not publish these GitHub workflow changes"),
     });
     expect(f.externalWrites).toHaveLength(writesBefore);
   },
@@ -404,7 +404,7 @@ it("rejects target inheritance with multiple best common ancestors", async () =>
   expect(await f.publish("ambiguous")).toMatchObject({
     status: "failed",
     code: "github_rejected",
-    nextAction: expect.stringContaining("Ask a maintainer"),
+    nextAction: expect.stringContaining("Ask a Gateway admin to do it"),
   });
   expect(await workspace.git("rev-parse", "HEAD")).toBe(merged);
   expect(workspace.effects.filter((effect) => effect === "push")).toHaveLength(1);
