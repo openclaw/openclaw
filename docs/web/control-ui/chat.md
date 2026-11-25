@@ -1000,7 +1000,7 @@ a model server that handles one request at a time, it retries once after the tur
 ends. If both model routes fail, the session uses a two-word crustacean-themed name.
 The Gateway logs a warning when chat naming uses this fallback.
 
-Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
+Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers and later Gateway notices stay visible outside collapsed work, including after a reload. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
 While the agent works, its latest tool-activity disclosure shows the current
 operation's purpose instead of operation counts. Within that disclosure, each title

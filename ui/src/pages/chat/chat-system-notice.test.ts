@@ -4,9 +4,17 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { t } from "../../i18n/index.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import {
+  groupsOf,
+  message as fixtureMessage,
+  messagesOf,
+  openAIMessage,
+  toolResult,
+} from "./chat-thread-fixtures.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 import { chatItemStartsDisplayTurn, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { projectSystemNoticeSummary } from "./system-notice-kinds.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
@@ -90,6 +98,35 @@ it.each([undefined, "future-cause", "toString"])(
 );
 
 afterEach(() => resetChatThreadState());
+
+it.each([
+  ["stop", [0, 2, 3], [1]],
+  ["toolUse", [0, 3], [1, 2]],
+] as const)(
+  "keeps only a completed run reply visible before an anonymous channel delivery (%s)",
+  (stopReason, shown, folded) => {
+    const run = { __openclaw: { runId: "completed-run" } };
+    const messages = [
+      fixtureMessage("user", "Inspect the file", 1),
+      toolResult("read-file", "read", "Evidence", 2, run),
+      openAIMessage("File verified", 3, { ...run, stopReason }),
+      fixtureMessage("assistant", "A separate notification was delivered.", 4, {
+        api: "openclaw-transcript",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        openclawDeliveryMirror: { kind: "channel-final" },
+        stopReason: "stop",
+      }),
+    ];
+    const items = collapseCompletedTurnWork(render(messages, []), {
+      sessionKey: "agent:main:dashboard:answers",
+      runWorking: false,
+    });
+    const work = items.flatMap((item) => (item.kind === "work-group" ? item.groups : []));
+    expect(messagesOf(groupsOf(items))).toEqual(shown.map((index) => messages[index]));
+    expect(messagesOf(work)).toEqual(folded.map((index) => messages[index]));
+  },
+);
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([

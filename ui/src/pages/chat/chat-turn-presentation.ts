@@ -15,7 +15,8 @@ import {
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
-  assistantGroupCanOwnActiveRunStatus,
+  assistantGroupCanOwnSettledReply,
+  assistantGroupIsAnonymousChannelDelivery,
   assistantMessageIsInterrupted,
   assistantMessageKind,
   groupEndsRunInFailure,
@@ -171,17 +172,6 @@ function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean):
     );
   }
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
-}
-
-// Unphased providers keep the last-visible-reply policy. Explicit commentary
-// cannot move the completed-work boundary past an already delivered answer.
-function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
-  return (
-    item.kind === "group" &&
-    !item.isStreaming &&
-    assistantGroupCanOwnActiveRunStatus(item) &&
-    assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
-  );
 }
 
 // The saved response, not the current picker or the (possibly OpenAI-compatible) API,
@@ -389,7 +379,10 @@ export function collapseCompletedTurnWork(
       result.push(...turn);
       continue;
     }
-    const terminalReply = turn.findLast(isFinalReplyGroup);
+    const terminalReply = turn.findLast(
+      (item): item is MessageGroup =>
+        item.kind === "group" && assistantGroupCanOwnSettledReply(item),
+    );
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
     if (!terminalReply) {
@@ -468,17 +461,20 @@ export function collapseCompletedTurnWork(
     // input, must not demote an earlier run's reply to work. A run that ended
     // in failure has no reply; the later answer recovers it.
     const earlierRunReplies = new Set<MessageGroup>();
-    if (terminalReply.runId !== undefined) {
-      const answeredRuns = new Set([terminalReply.runId]);
+    const terminalRunId = terminalReply.runId;
+    const anonymousChannelDelivery = assistantGroupIsAnonymousChannelDelivery(terminalReply);
+    if (terminalRunId !== undefined || anonymousChannelDelivery) {
+      const answeredRuns = new Set(terminalRunId === undefined ? [] : [terminalRunId]);
       for (let index = finalReplyIndex - 1; index >= segmentStart; index -= 1) {
         const item = turn[index]!;
         if (item.kind !== "group" || !item.runId || answeredRuns.has(item.runId)) {
           continue;
         }
+        const { runId } = item;
         if (groupEndsRunInFailure(item)) {
-          answeredRuns.add(item.runId);
-        } else if (isFinalReplyGroup(item)) {
-          answeredRuns.add(item.runId);
+          answeredRuns.add(runId);
+        } else if (assistantGroupCanOwnSettledReply(item, anonymousChannelDelivery)) {
+          answeredRuns.add(runId);
           earlierRunReplies.add(item);
         }
       }

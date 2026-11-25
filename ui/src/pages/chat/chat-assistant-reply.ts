@@ -3,6 +3,7 @@ import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
 } from "../../../../src/shared/chat-message-content.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
@@ -142,5 +143,33 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
     !assistantGroupIsIndependentBoundary(group) &&
     !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
     (group.visibleContent === "text" || group.visibleContent === "non-text")
+  );
+}
+
+/** Unphased replies remain eligible unless the caller needs a recorded terminal outcome. */
+export function assistantGroupCanOwnSettledReply(
+  group: MessageGroup,
+  terminalOnly = false,
+): boolean {
+  const { runId } = group;
+  return (
+    !group.isStreaming &&
+    assistantGroupCanOwnActiveRunStatus(group) &&
+    assistantMessageKind(group.messages[0]?.message, group.visibleContent) !== "commentary" &&
+    (!terminalOnly ||
+      (runId !== undefined &&
+        group.messages.some(({ message }) => hasTerminalRunOutcome(message, runId))))
+  );
+}
+
+/** A visible channel delivery without a run cannot answer another run's turn. */
+export function assistantGroupIsAnonymousChannelDelivery(group: MessageGroup): boolean {
+  return (
+    group.runId === undefined &&
+    group.messages.every(
+      ({ message }) =>
+        isOpenClawDeliveryMirrorAssistantMessage(message) &&
+        asRecord(asRecord(message)?.openclawDeliveryMirror)?.kind === "channel-final",
+    )
   );
 }
