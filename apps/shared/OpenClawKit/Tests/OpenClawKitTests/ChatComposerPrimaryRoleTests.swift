@@ -6,6 +6,7 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         draft: Bool = false,
         canSend: Bool = false,
         reply: Bool = false,
+        sentJustNow: Bool = false,
         elsewhere: Bool = false,
         blocking: Bool = false,
         capture: Bool = false,
@@ -14,7 +15,7 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         ChatComposerPrimaryRole.resolve(
             hasDraftToSend: draft,
             canSendDraft: canSend,
-            hasStoppableReply: reply,
+            hasOwnReply: reply || sentJustNow,
             hasReplyRunningElsewhere: elsewhere,
             // A reply this client can stop is always blocking run activity.
             hasBlockingRunActivity: blocking || reply || elsewhere,
@@ -38,14 +39,17 @@ final class ChatComposerPrimaryRoleTests: XCTestCase {
         XCTAssertEqual(self.role(draft: true, canSend: false, reply: true), .stop)
     }
 
-    func testSendInFlightFollowsTheField() {
-        // The draft stays in the field until the local write finishes: Send, disabled (canSend is false).
-        XCTAssertEqual(self.role(draft: true), .send)
-        // Once the field clears the button is what an empty field shows: Talk, or Stop when the run registered.
+    func testSendGoesStraightToStop() {
+        // The tap marks the send: while the draft is still being saved (it cannot be sent again) and
+        // after the field clears, the button is Stop until the reply registers.
+        XCTAssertEqual(self.role(draft: true, sentJustNow: true), .stop)
+        XCTAssertEqual(self.role(sentJustNow: true), .stop)
+        XCTAssertEqual(self.role(sentJustNow: true, talk: false), .stop)
+        XCTAssertEqual(self.role(reply: true, sentJustNow: true), .stop)
+        // A new message typed in that window can be sent, like during a running reply.
+        XCTAssertEqual(self.role(draft: true, canSend: true, sentJustNow: true), .send)
+        // Without the mark (offline queue, local command, timeout) an empty field is Talk again.
         XCTAssertEqual(self.role(), .talk)
-        XCTAssertEqual(self.role(reply: true), .stop)
-        // Between the send and the run registering here, the Gateway already advertises the run.
-        XCTAssertEqual(self.role(elsewhere: true), .stop)
     }
 
     func testReplyThisClientCannotStopShowsStop() {

@@ -5,23 +5,24 @@ enum ChatComposerPrimaryRole: Equatable {
     case send
     case stop
 
-    /// The one place that maps composer state to the primary button. A send in flight is not a
-    /// state of its own: the button shows what fits the field (Send while the draft is still there,
-    /// disabled; Talk or Stop once the field clears) and the message shows that it is sending.
+    /// The one place that maps composer state to the primary button. Sending a message that asks
+    /// for a reply goes straight from Send to Stop; the message itself shows that it is sending.
     static func resolve(
         hasDraftToSend: Bool,
         canSendDraft: Bool,
-        hasStoppableReply: Bool,
+        // A reply this client started: running and stoppable, or sent just now and not yet registered.
+        hasOwnReply: Bool,
         hasReplyRunningElsewhere: Bool,
         hasBlockingRunActivity: Bool,
         isLocalVoiceCaptureActive: Bool,
         hasTalkControl: Bool) -> Self
     {
-        if hasStoppableReply {
+        if hasOwnReply {
             // Decision point (F38, pending Victor): a draft that can be sent now wins over Stop, and
             // Stop returns once the field is empty. The alternative keeps Stop until the reply ends:
             // `return .stop`. A draft that cannot go out during a reply (attachments, a local
             // session command, a transport without an outbox) keeps Stop.
+            // Sent just now: the same rule from the tap on, so Send goes straight to Stop.
             return hasDraftToSend && canSendDraft ? .send : .stop
         }
         if hasTalkControl, OpenClawChatComposer.showsCompactTalkControl(

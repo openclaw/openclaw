@@ -16,7 +16,10 @@ extension OpenClawChatComposer {
                 ink: self.sendButtonForeground,
                 borderOpacity: self.sendButtonBorderOpacity,
                 queueModes: self.inputModel?.sendModeChoices ?? [],
-                action: { self.sendDraftIfEnabled(queueMode: $0) }),
+                action: { mode in
+                    self.markAwaitingReplyIfNeeded()
+                    self.sendDraftIfEnabled(queueMode: mode)
+                }),
             stop: .init(
                 canStop: self.viewModel.pendingRunCount > 0,
                 isAborting: self.viewModel.isAborting,
@@ -28,6 +31,18 @@ extension OpenClawChatComposer {
             sessionKey: self.viewModel.sessionKey,
             controlSize: self.cleanControlHeight,
             visualSize: self.cleanIconControlSize)
+            .onChange(of: self.replyMarkEnded) { _, ended in
+                if ended { self.primaryReplyMark = nil }
+            }
+            .task(id: self.primaryReplyMark) {
+                guard self.primaryReplyMark != nil else { return }
+                do {
+                    try await Task.sleep(for: Self.replyMarkTimeout)
+                } catch {
+                    return
+                }
+                self.primaryReplyMark = nil
+            }
         #else
         if Self.showsCompactTalkControl(
             hasDraftToSend: self.viewModel.hasDraftToSend,
@@ -54,12 +69,33 @@ extension OpenClawChatComposer {
         ChatComposerPrimaryRole.resolve(
             hasDraftToSend: self.viewModel.hasDraftToSend,
             canSendDraft: self.canSendMessage,
-            hasStoppableReply: self.viewModel.pendingRunCount > 0,
+            hasOwnReply: self.viewModel.pendingRunCount > 0 ||
+                (self.primaryReplyMark != nil && !self.replyMarkEnded),
             hasReplyRunningElsewhere: self.viewModel.hasAdvertisedLiveRun ||
                 self.viewModel.hasActiveSessionRunWithoutChatSnapshot,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive,
             hasTalkControl: self.talkControl != nil)
+    }
+
+    /// The reply normally registers within about a second (0.1 s live, up to 1 s through the
+    /// outbox on the test Gateway); the Gateway's run advertisement keeps Stop after that.
+    static let replyMarkTimeout: Duration = .seconds(2)
+
+    /// Marks a send that will ask for a reply, so the button turns into Stop at the tap instead of
+    /// passing through Talk or a second Send while the message is saved and delivered.
+    private func markAwaitingReplyIfNeeded() {
+        guard self.canSendMessage, self.viewModel.healthOK else { return }
+        let command = self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !localSessionCommands.contains(command) else { return }
+        self.primaryReplyMark = UUID()
+    }
+
+    /// Ends the mark: the reply registered (live Stop takes over), the message went to the offline
+    /// queue, or the send gave the draft back.
+    private var replyMarkEnded: Bool {
+        self.viewModel.pendingRunCount > 0 || !self.viewModel.healthOK ||
+            (!self.viewModel.isSubmittingDraft && !self.viewModel.isSending && self.viewModel.hasDraftToSend)
     }
     #endif
 
@@ -111,61 +147,84 @@ struct ChatComposerPrimaryButton: View {
     @State private var isStopArmed = false
 
     var body: some View {
-        Button(action: self.perform) {
-            self.glyph
-                .frame(width: self.visualSize, height: self.visualSize)
-                .background {
-                    Circle().fill(self.fill)
+        self.menuHost
+            .task(id: self.role) {
+                self.isStopArmed = false
+                guard self.role == .stop else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(700))
+                } catch {
+                    return
                 }
-                .overlay {
-                    Circle().strokeBorder(Color.white.opacity(self.borderOpacity), lineWidth: 1)
-                }
-                .opacity(self.role == .stop && (!self.isStopArmed || !self.stop.canStop) ? 0.35 : 1)
-                .frame(width: self.controlSize, height: self.controlSize)
-                .contentShape(Rectangle())
-                .animation(self.reduceMotion ? nil : .snappy(duration: 0.2), value: self.role)
+                self.isStopArmed = true
+            }
+    }
+
+    /// A context menu hosts the button in a UIKit view whose frame trails SwiftUI layout while the
+    /// main thread is busy (a send saving its attachments), so attach it only when it has items.
+    @ViewBuilder
+    private var menuHost: some View {
+        if self.hasMenuItems {
+            self.button.chatActionContextMenu { self.menuItems }
+        } else {
+            self.button
         }
-        .buttonStyle(.plain)
+    }
+
+    private var button: some View {
+        Button(action: self.perform) {
+            // One face per role, stacked: a role change is one opacity cross-fade. Only opacity
+            // animates, so the disc never slides when the card around it changes height.
+            ZStack {
+                self.face(for: .talk)
+                self.face(for: .send)
+                self.face(for: .stop)
+            }
+            .animation(self.faceAnimation) { $0.opacity(self.isInertStop ? 0.35 : 1) }
+            .frame(width: self.controlSize, height: self.controlSize)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ChatComposerPrimaryButtonStyle())
         .disabled(self.isDisabled)
         .accessibilityLabel(self.accessibilityLabel)
         .accessibilityHint(self.accessibilityHint)
         .accessibilityValue(self.role == .talk ? self.talkControl?.accessibilityStatus ?? "" : "")
         .accessibilityIdentifier(self.accessibilityIdentifier)
         .help(self.role == .talk ? self.talkHelpText : "")
-        .chatActionContextMenu {
-            switch self.role {
-            case .send:
-                ForEach(self.send.isEnabled ? self.send.queueModes : [], id: \.self) { mode in
-                    Button {
-                        self.send.action(mode)
-                    } label: {
-                        switch mode {
-                        case .steer:
-                            Label("Steer now", systemImage: "arrow.turn.up.right")
-                                .font(OpenClawChatTypography.body)
-                        case .followup:
-                            Label("Queue next", systemImage: "clock")
-                                .font(OpenClawChatTypography.body)
-                        }
+    }
+
+    private var hasMenuItems: Bool {
+        switch self.role {
+        case .send: self.send.isEnabled && !self.send.queueModes.isEmpty
+        case .talk: self.talkControl?.selectInputDevice != nil
+        case .stop: false
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        switch self.role {
+        case .send:
+            ForEach(self.send.queueModes, id: \.self) { mode in
+                Button {
+                    self.send.action(mode)
+                } label: {
+                    switch mode {
+                    case .steer:
+                        Label("Steer now", systemImage: "arrow.turn.up.right")
+                            .font(OpenClawChatTypography.body)
+                    case .followup:
+                        Label("Queue next", systemImage: "clock")
+                            .font(OpenClawChatTypography.body)
                     }
                 }
-            case .talk:
-                if let talkControl {
-                    ChatTalkInputDeviceMenu(control: talkControl)
-                }
-            case .stop:
-                EmptyView()
             }
-        }
-        .task(id: self.role) {
-            self.isStopArmed = false
-            guard self.role == .stop else { return }
-            do {
-                try await Task.sleep(for: .milliseconds(700))
-            } catch {
-                return
+        case .talk:
+            if let talkControl {
+                ChatTalkInputDeviceMenu(control: talkControl)
             }
-            self.isStopArmed = true
+        case .stop:
+            EmptyView()
         }
     }
 
@@ -180,22 +239,42 @@ struct ChatComposerPrimaryButton: View {
         }
     }
 
+    /// Reduce Motion swaps faces without a cross-fade.
+    private var faceAnimation: Animation? {
+        self.reduceMotion ? nil : .easeInOut(duration: 0.2)
+    }
+
+    private var isInertStop: Bool {
+        self.role == .stop && (!self.isStopArmed || !self.stop.canStop)
+    }
+
+    private func face(for role: ChatComposerPrimaryRole) -> some View {
+        self.glyph(for: role)
+            .frame(width: self.visualSize, height: self.visualSize)
+            .background {
+                Circle().fill(self.fill(for: role))
+            }
+            .overlay {
+                Circle().strokeBorder(Color.white.opacity(self.borderOpacity(for: role)), lineWidth: 1)
+            }
+            .animation(self.faceAnimation) { $0.opacity(self.role == role ? 1 : 0) }
+    }
+
     @ViewBuilder
-    private var glyph: some View {
+    private func glyph(for role: ChatComposerPrimaryRole) -> some View {
         // Only Stop shows progress; a send never turns the button into a spinner.
-        if self.role == .stop, self.stop.isAborting {
-            ProgressView().controlSize(.mini).tint(self.ink)
-        } else if self.role == .talk, let talkControl, talkControl.isEnabled {
+        if role == .stop, self.stop.isAborting {
+            ProgressView().controlSize(.mini).tint(self.ink(for: role))
+        } else if role == .talk, self.role == .talk, let talkControl, talkControl.isEnabled {
             ChatTalkButtonGlyph(control: talkControl)
                 .font(OpenClawChatTypography.composerPrimaryGlyph)
                 .scaleEffect(0.88)
-                .foregroundStyle(self.ink)
+                .foregroundStyle(self.ink(for: role))
         } else {
-            Image(systemName: self.symbolName)
-                .font(self.symbolFont)
-                .scaleEffect(self.role == .talk ? 0.88 : 1)
-                .foregroundStyle(self.ink)
-                .contentTransition(self.reduceMotion ? .identity : .symbolEffect(.replace))
+            Image(systemName: self.symbolName(for: role))
+                .font(self.symbolFont(for: role))
+                .scaleEffect(role == .talk ? 0.88 : 1)
+                .foregroundStyle(self.ink(for: role))
         }
     }
 
@@ -211,32 +290,32 @@ struct ChatComposerPrimaryButton: View {
         }
     }
 
-    private var symbolName: String {
-        switch self.role {
+    private func symbolName(for role: ChatComposerPrimaryRole) -> String {
+        switch role {
         case .talk: "waveform"
         case .send: "arrow.up"
         case .stop: "stop.fill"
         }
     }
 
-    private var symbolFont: Font {
-        switch self.role {
+    private func symbolFont(for role: ChatComposerPrimaryRole) -> Font {
+        switch role {
         case .talk: OpenClawChatTypography.composerPrimaryGlyph
         case .send: .system(size: OpenClawChatTypography.scaled(18), weight: .semibold)
         case .stop: .system(size: OpenClawChatTypography.scaled(17), weight: .semibold)
         }
     }
 
-    private var ink: Color {
-        switch self.role {
+    private func ink(for role: ChatComposerPrimaryRole) -> Color {
+        switch role {
         case .talk: .white
         case .send: self.send.ink
         case .stop: self.stop.ink
         }
     }
 
-    private var fill: AnyShapeStyle {
-        switch self.role {
+    private func fill(for role: ChatComposerPrimaryRole) -> AnyShapeStyle {
+        switch role {
         case .talk:
             guard let talkControl else { return AnyShapeStyle(OpenClawChatTheme.accent) }
             if talkControl.isEnabled {
@@ -250,8 +329,8 @@ struct ChatComposerPrimaryButton: View {
         }
     }
 
-    private var borderOpacity: Double {
-        self.role == .send ? self.send.borderOpacity : 0
+    private func borderOpacity(for role: ChatComposerPrimaryRole) -> Double {
+        role == .send ? self.send.borderOpacity : 0
     }
 
     private var accessibilityLabel: Text {
@@ -294,6 +373,13 @@ struct ChatComposerPrimaryButton: View {
         case .send: "chat-send-message"
         case .stop: "chat-stop-response"
         }
+    }
+}
+
+/// No pressed dimming: the role change is the feedback, and a dim before it reads as a pulse.
+private struct ChatComposerPrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
     }
 }
 #endif

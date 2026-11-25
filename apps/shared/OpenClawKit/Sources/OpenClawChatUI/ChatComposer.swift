@@ -93,6 +93,8 @@ struct OpenClawChatComposer: View {
     @State private var slashPanelHeight: CGFloat = 0
     @State private var slashHighlightIndex = 0
     @State var dictationTask: Task<Void, Never>?
+    /// Set on the tap that sends a message expecting a reply; see `ChatComposerPrimaryButton.swift`.
+    @State var primaryReplyMark: UUID?
     @State private var signInContext: OpenClawChatModelSignInContext?
     @State private var modelSignInRequest: ModelSignInRequest?
     @State private var modelSignInTask: Task<Void, Never>?

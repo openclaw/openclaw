@@ -892,6 +892,18 @@ struct OpenClawChatMicButton: View {
     let onStartDictation: @MainActor () -> Void
 
     var body: some View {
+        self.control
+            // The hit area reaches past the visual slot toward the leading neighbor; the layout keeps the slot.
+                .padding(.leading, -self.hitAreaOverhang)
+    }
+
+    /// A slot narrower than the touch size still gets a full-size target.
+    private var hitAreaOverhang: CGFloat {
+        max(0, self.controlSize - (self.controlWidth ?? self.controlSize))
+    }
+
+    @ViewBuilder
+    private var control: some View {
         if let voiceNoteControl {
             if self.isDictationActionEnabled, let dictationControl {
                 Menu {
@@ -947,6 +959,7 @@ struct OpenClawChatMicButton: View {
             .offset(y: showsStop ? 0 : -1)
             #endif
             .frame(width: self.controlWidth ?? self.controlSize, height: self.controlSize)
+            .frame(width: self.controlSize, height: self.controlSize, alignment: .trailing)
             .contentShape(Rectangle())
     }
 
