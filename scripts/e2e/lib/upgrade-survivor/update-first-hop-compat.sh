@@ -112,27 +112,24 @@ TIMINGS
 
 assert_admission() {
   local output="$ARTIFACT_DIR/$1" owner="$2" warning="${3:-}"
-  node --input-type=module - "$output" "$owner" "$warning" <<'ADMISSION'
-import assert from "node:assert/strict";
-import fs from "node:fs";
-import { assertCompletedUpdate } from "./scripts/lib/update-receipt.mjs";
+  node - "$output" "$owner" "$warning" <<'ADMISSION'
+const assert = require("node:assert/strict"), fs = require("node:fs");
 const [output, owner, warning] = process.argv.slice(2);
 const raw = fs.readFileSync(`${output}.stdout`, "utf8");
 const result = JSON.parse(raw.slice(raw.indexOf("{")));
 const source = JSON.parse(fs.readFileSync(`${output}-source-package.json`, "utf8"));
 assert.equal(source.openclaw?.updateAdmissionProtocol, 1, "Source must support candidate admission");
-const run = assertCompletedUpdate(result) ? result : result.run;
-const admission = run?.admission ?? run?.origin?.admission;
-assert.equal(admission?.owner, owner, "Update receipt did not record the expected admission owner");
-const verdict = run.origin?.candidateAdmission;
+assert.equal(result.status, "ok");
+assert.equal(result.run?.admission?.owner, owner);
+const verdict = result.run.origin?.candidateAdmission;
 if (owner === "candidate") {
-  assert.equal(admission.protocol, 1);
+  assert.equal(result.run.admission.protocol, 1);
   assert.equal(verdict?.protocol, 1);
   assert.equal(verdict.verdict, "admit");
   assert.deepEqual(verdict.reasons, []);
-  assert.equal(admission.candidateVersion, verdict.facts.candidateVersion);
-  assert.deepEqual(admission.checks, verdict.facts.checks);
-  assert(run.steps.some(step => step.step === "candidate-admission"));
+  assert.equal(result.run.admission.candidateVersion, verdict.facts.candidateVersion);
+  assert.deepEqual(result.run.admission.checks, verdict.facts.checks);
+  assert(result.run.steps.some(step => step.step === "candidate-admission"));
   if (warning) {
     assert(verdict.warnings.some(entry => entry.code === warning), `Missing candidate warning ${warning}`);
     assert(verdict.facts.checks.some(check => check.status === "warn"), "Candidate checks omitted warning status");
@@ -140,9 +137,9 @@ if (owner === "candidate") {
 } else {
   assert.equal(verdict, undefined, "Unsupported target must not execute candidate admission");
   assert.equal(warning, "update-admission-unsupported-target");
-  assert.equal(run.steps.filter(step => step.step === `warning:${warning}`).length, 1);
+  assert.equal(result.run.steps.filter(step => step.step === `warning:${warning}`).length, 1);
 }
-fs.writeFileSync(`${output}-admission.json`, `${JSON.stringify({ status: result.status, admission, verdict }, null, 2)}\n`);
+fs.writeFileSync(`${output}-admission.json`, `${JSON.stringify({ status: result.status, admission: result.run.admission, verdict }, null, 2)}\n`);
 ADMISSION
 }
 
