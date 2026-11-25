@@ -259,6 +259,9 @@ export function ToolCardRow(props: ToolCardProps) {
             resolveToolDisplay({ name: card().name, args: card().args, detailMode: "raw" }).detail,
           ));
   };
+  // A blocked image inspection is not grouped, so its own row shows the block.
+  const blockedImage = () =>
+    outcome() === "blocked" && unwrapToolCallForDisplay(card()).name === "view_image";
   const statusKey = () => {
     const state = outcome();
     if (inline() && state === "succeeded") {
@@ -267,8 +270,7 @@ export function ToolCardRow(props: ToolCardProps) {
     if (inline() && state === "running") {
       return view().command ? undefined : "running";
     }
-    // A blocked image inspection is not grouped, so its own row shows the block.
-    if (state === "blocked" && unwrapToolCallForDisplay(card()).name === "view_image") {
+    if (blockedImage()) {
       return "blocked";
     }
     // The open body reports the missing tool result, not the owning run's interruption.
@@ -352,8 +354,12 @@ export function ToolCardRow(props: ToolCardProps) {
       <Show when={statusKey()}>
         {(key) => (
           <span
-            class={inline() ? "chat-command-trail__status" : "chat-activity-group__outcome"}
-            role={inline() ? "status" : undefined}
+            class={
+              inline() || blockedImage()
+                ? "chat-command-trail__status"
+                : "chat-activity-group__outcome"
+            }
+            role={inline() || blockedImage() ? "status" : undefined}
           >
             {t(`chat.toolCards.${key()}`)}
           </span>

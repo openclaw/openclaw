@@ -130,7 +130,7 @@ export function catalogToolOperation(
       (name === "conversations_turn" && (status === "replied" || status === "timeout"))
         ? status
         : "unknown";
-    return t(`chat.toolCards.conversationDelivery.${receipt}`);
+    return { label: t(`chat.toolCards.conversationDelivery.${receipt}`) };
   }
   const labels = Object.hasOwn(catalog, name) ? catalog[name] : undefined;
   if (!labels) {
