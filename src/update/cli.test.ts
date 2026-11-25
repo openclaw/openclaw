@@ -8,6 +8,7 @@ import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -35,7 +36,11 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted((): Pick<UpdateRunRecord, "status" | "phase" | "origin"> => ({
+  status: "skipped",
+  phase: "finished",
+  origin: {},
+}));
 const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
@@ -105,7 +110,6 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
     reason: "already-current",
     steps: [],
     after: {},
-    origin: {},
   }),
 }));
 const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
@@ -151,6 +155,7 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
+  localRun.origin = {};
   maintainRuntimes.mockReset();
   maintainRuntimes.mockResolvedValue([]);
   confirmDowngrade.mockReset();
@@ -420,8 +425,23 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
   install.kind = "package";
   localRun.status = "running";
   localRun.phase = "activating";
+  const releaseAdmission = {
+    owner: "candidate",
+    candidateVersion: "2026.11.6",
+    verdict: "admit",
+    warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+  } satisfies NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]>;
+  localRun.origin.releaseAdmission = releaseAdmission;
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
-    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+    run: {
+      runId: "run-cli",
+      status: "succeeded",
+      phase: "finished",
+      steps: [],
+      after: { version: "2026.11.6" },
+      origin: {},
+    },
   }));
   await runReleaseUpdateCli({
     json: true,
@@ -436,6 +456,13 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
     }),
   ]);
   expect(process.exitCode).toBe(0);
+  expect(json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "succeeded",
+      after: { version: "2026.11.6" },
+      origin: { releaseAdmission },
+    }),
+  );
 });
 
 it.each([
