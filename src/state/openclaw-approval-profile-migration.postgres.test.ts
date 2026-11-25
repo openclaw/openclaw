@@ -52,7 +52,7 @@ describe.skipIf(!connection)("PostgreSQL approval requester profile migration", 
         .prepare("UPDATE operator_approvals SET requested_by_profile_id = ? WHERE approval_id = ?")
         .run("trusted-profile", "original");
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
+      expect(() => fixture.open(source)).toThrow(/minimum reader 41.*supports 40/iu);
       const reopened = fixture.open(stateEngineSchema);
       expect(
         reopened.prepare("SELECT cursor_id, requested_by_profile_id FROM operator_approvals").get(),

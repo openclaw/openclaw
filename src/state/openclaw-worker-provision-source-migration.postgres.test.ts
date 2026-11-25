@@ -83,7 +83,7 @@ describe.skipIf(!connection)("PostgreSQL worker provisioning source migration", 
         upgraded.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),
       ).toEqual(expected);
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
+      expect(() => fixture.open(source)).toThrow(/minimum reader 41.*supports 39/iu);
       const reopened = fixture.open(stateEngineSchema);
       expect(
         reopened.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),
