@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import * as configSchemaAnalysis from "../../components/config-form.analyze.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
@@ -15,6 +16,8 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { pageFixture, queryWithin, runtimeFixture } from "./plugins-page.lifecycle-test-support.ts";
 import {
   clickPluginAction,
+  clickPluginSwitch,
+  findPluginSwitch,
   createClient,
   createDiscoveryDetail,
   createInspectResult,
@@ -67,6 +70,8 @@ it.each(["denied", "cancelled", "aborted"])(
 );
 
 it("accepts a changed schema with the same version while retaining drafts during unrelated revisions", async () => {
+  const analyze = vi.spyOn(configSchemaAnalysis, "analyzeConfigSchema");
+  onTestFinished(() => analyze.mockRestore());
   const schema = (fields: Record<string, JsonSchema>) =>
     objectSchema({
       plugins: objectSchema({
@@ -93,6 +98,8 @@ it("accepts a changed schema with the same version while retaining drafts during
   await harness.runtimeConfig.ensureSchemaLoaded();
   const { page, find } = await harness.mount("/settings/plugins/workboard?view=settings");
   await waitForSolid(() => expect(find('[data-setting="greeting"] input')).not.toBeNull());
+  const initialAnalyses = analyze.mock.calls.length;
+  expect(initialAnalyses).toBeGreaterThan(0);
   const input = find<HTMLInputElement>('[data-setting="greeting"] input')!;
   input.value = "Unfinished greeting";
   input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -100,6 +107,7 @@ it("accepts a changed schema with the same version while retaining drafts during
   await page.updateComplete;
   expect(find('[data-setting="greeting"] input')).toBe(input);
   expect(input.value).toBe("Unfinished greeting");
+  expect(analyze).toHaveBeenCalledTimes(initialAnalyses);
 
   schemaResponse = { schema: replacement, version: "same", uiHints: {} };
   await harness.runtimeConfig.refreshSchema();
@@ -107,6 +115,7 @@ it("accepts a changed schema with the same version while retaining drafts during
     expect(find('[data-setting="greeting"]')?.textContent).toContain("Updated greeting");
     expect(find<HTMLInputElement>('[data-setting="timeout"] input')?.value).toBe("30");
   });
+  expect(analyze.mock.calls.length).toBeGreaterThan(initialAnalyses);
 });
 
 it("retains installed settings and an unfinished input across transport loss, but retires them for a new client", async () => {
@@ -261,12 +270,15 @@ it.each([
 ] as const)(
   "refreshes published inventory after a delayed page read on %s (%s, before adoption=%s)",
   async (path, surface, beforeAdoption) => {
-    const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
+    const browsing = path === "/plugins";
+    const selector = browsing ? ".plugin-catalog-card" : ".plugin-catalog-detail";
     const plugin = createPlugin({ name: "Fresh route plugin", catalogId: "catalog-workboard" });
     const result = { ...createResult(plugin), generation: 1 };
     const preload = deferred<typeof result>();
     let inventoryReads = 0;
-    const detail = createDiscoveryDetail(plugin);
+    const detail = createDiscoveryDetail(
+      browsing ? { ...plugin, installed: false, state: "not-installed" } : plugin,
+    );
     detail.plugin.id = "catalog-workboard";
     detail.plugin.catalog.categories = ["productivity"];
     const harness = pageFixture({
@@ -301,12 +313,20 @@ it.each([
     expect(inventoryReads).toBe(beforeAdoption ? 2 : 1);
     const find = queryWithin(page);
     const connect = vi.spyOn(harness.gateway, "connect");
+    if (browsing) {
+      await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    }
     if (!beforeAdoption) {
       harness.publishGeneration(1);
     }
     await page.updateComplete;
     preload.resolve({ ...createResult(), generation: 0 });
-    await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    if (browsing) {
+      // The catalog still reports an available plugin. The fresh inventory hides it.
+      await waitForSolid(() => expect(find(selector)).toBeNull());
+    } else {
+      await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    }
     expect(inventoryReads).toBe(2);
     expect(connect).not.toHaveBeenCalled();
   },
@@ -351,9 +371,7 @@ it("targets the selected installed route after its inventory refresh fails", asy
       ]),
     );
     expect(page.textContent).toContain("Inventory unavailable");
-    await waitForSolid(() => expect(find('[aria-label="Enable Beta"]')).not.toBeNull());
-    await page.updateComplete;
-    find<HTMLButtonElement>('[aria-label="Enable Beta"]')!.click();
+    await clickPluginSwitch(page, "Beta", false);
     await harness.waitForCall("plugins.setEnabled");
     expect(harness.calls("plugins.setEnabled")).toEqual([
       ["plugins.setEnabled", { pluginId: beta.id, enabled: true }],
@@ -430,7 +448,7 @@ it.each(["settings", "failure"] as const)(
       const action = find("openclaw-plugin-install-action");
       await settlePlugins();
       expect(action?.textContent).toContain("Installing");
-      expect(find('[aria-label="Disable Calendar Plus"]')).toBeNull();
+      expect(findPluginSwitch(page, "Calendar Plus")).toBeUndefined();
       expect(find('[aria-label="Uninstall Calendar Plus"]')).toBeNull();
       if (surface === "failure") {
         install.reject(
@@ -444,7 +462,7 @@ it.each(["settings", "failure"] as const)(
         await waitForSolid(() =>
           expect(page.textContent).toContain("Final installation check failed"),
         );
-        await clickPluginAction(page, "Disable Calendar Plus");
+        await clickPluginSwitch(page, "Calendar Plus", true);
         expect(harness.request).toHaveBeenCalledWith("plugins.setEnabled", {
           pluginId: plugin.id,
           enabled: false,
@@ -453,9 +471,7 @@ it.each(["settings", "failure"] as const)(
         install.resolve({ ok: true, plugin, restartRequired: false });
       }
       await waitForSolid(() =>
-        expect(
-          find(`[aria-label="${surface === "failure" ? "Enable" : "Disable"} Calendar Plus"]`),
-        ).not.toBeNull(),
+        expect(findPluginSwitch(page, "Calendar Plus")?.checked).toBe(surface !== "failure"),
       );
       expect(find("openclaw-plugin-install-action")).toBeNull();
     } finally {

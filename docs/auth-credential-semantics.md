@@ -522,7 +522,7 @@ they do not change message-execution profile rotation or session pins.
 Codex owns its native login. Ordinary status and model reads do not import its
 credentials into OpenClaw profiles. To retain a configured CLI-backed
 `openai:default` profile, explicitly import the current Codex login with
-`openclaw models auth login --provider openai --method device-code`. When that
+`openclaw models auth login --provider openai --method oauth`. When that
 OAuth profile is declared in `auth.profiles`, the source is the current native
 Codex home, and no other managed OpenAI OAuth profile exists, import preserves
 the profile ID and its existing model and session pins. The configured model

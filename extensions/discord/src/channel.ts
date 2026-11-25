@@ -59,7 +59,6 @@ import {
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
 import { prepareDiscordConversationRouteOwnersAsync } from "./conversation-route-owner.js";
-import { normalizeDiscordSnowflake } from "./directory-cache.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -81,7 +80,7 @@ import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.
 import { discordSetupContract } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
-import { parseDiscordTarget } from "./target-parsing.js";
+import { normalizeDiscordSnowflake, parseDiscordTarget } from "./target-parsing.js";
 import { discordConversationBindings } from "./thread-bindings-channel.js";
 
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;

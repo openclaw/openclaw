@@ -1,12 +1,12 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   reconcileCronChannelRequesterAuthority,
   reconcileToolsAllowAuthority,
-  resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
@@ -119,15 +119,13 @@ it("binds a recorded caller origin to executable inputs but not display metadata
     }),
   ).toBe(false);
 });
-it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
+it("uses its owner's tools instead of a stale automatic tool snapshot", () => {
   const job = toolJob(["read"]);
   job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
   job.scheduledToolPolicy = { version: 1, mode: "trusted" };
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toBeUndefined();
+  expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
 
   // Older builds saved this snapshot without `message`; the run gets `*`.
   Object.assign(job.payload, { toolsAllowIsDefault: true });
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
-    policy: { version: 1, mode: "trusted" },
-  });
+  expect(resolveCronRunToolsAllow(job)).toEqual(["*"]);
 });

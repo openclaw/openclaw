@@ -14,7 +14,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -39,7 +39,7 @@ export function recoveryFixture(
 export function pairedOperator(): PairedDevice {
   return {
     deviceId: "recovery-device",
-    publicKey: "fixture-public-key",
+    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     roles: ["operator"],
     approvedScopes: ["operator.admin"],
     tokens: {
@@ -85,6 +85,21 @@ export async function createOperatorRecoveryFixture(params: {
   openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
 }) {
   let config = params.config;
+  const trustedProxyUser =
+    params.trustedProxyUser ??
+    (params.tokenlessDevice && !params.openclawIdPrincipal ? "fixture-proxy-operator" : undefined);
+  if (trustedProxyUser && !config.gateway?.auth) {
+    config = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-fixture-user", allowUsers: [trustedProxyUser] },
+        },
+      },
+    };
+  }
   const context = params.context;
   context.getRuntimeConfig = () => config;
   // Production contexts resolve their owning Gateway; detached work restores against it.
@@ -113,7 +128,7 @@ export async function createOperatorRecoveryFixture(params: {
       params.tokenlessDevice || params.openclawIdPrincipal || params.trustedProxyUser
         ? "trusted-proxy"
         : "token",
-    verifiedIdentity: params.trustedProxyUser,
+    verifiedIdentity: trustedProxyUser,
   });
   if (params.sharedGeneration !== undefined) {
     client.usesSharedGatewayAuth = true;
@@ -132,6 +147,7 @@ export async function createOperatorRecoveryFixture(params: {
       signedAt: 1,
       nonce: "fixture-nonce",
     };
+    client.internal.operatorDeviceScopeCeiling = [...(params.scopes ?? ["operator.admin"])];
     client.internal.operatorDeviceTokenIdentity = params.tokenlessDevice
       ? null
       : expectDefined(
@@ -148,7 +164,7 @@ export async function createOperatorRecoveryFixture(params: {
         );
   }
   const captured = expectDefined(
-    await captureGatewayOperatorRunAuthority({
+    await prepareGatewayOperatorRunAuthority({
       client: expectDefined(captureAgentTurnPrincipal(client), "fresh typed operator principal"),
       context,
       sourceAuthority: params.gatewayAccessGrant
@@ -193,19 +209,19 @@ export async function createOperatorRecoveryFixture(params: {
     entry,
     sourceAuthority,
     snapshot,
+    assertCurrent,
     setConfig: (next: OpenClawConfig) => {
       config = next;
     },
     retire: () => {
       current = false;
     },
-    restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
+    restore: () => restoreGatewayOperatorSource({ snapshot, context, assertCurrent }),
   };
 }
 
-export function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.signal?.aborted).toBe(false);
-  expect(authority.assertCurrent).not.toThrow();
+export function expectCurrent(authority: { signal?: AbortSignal }) {
+  expect(authority.signal?.aborted).not.toBe(true);
 }
 
 export type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
@@ -225,11 +241,6 @@ export function withRecovery(
       profile,
     );
   });
-}
-
-export function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
 }
 
 export async function restoreFixture(fixture: RecoveryFixture) {

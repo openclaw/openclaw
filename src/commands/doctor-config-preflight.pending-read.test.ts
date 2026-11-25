@@ -6,6 +6,7 @@ import * as pendingMigrations from "../infra/deferred-plugin-migrations.js";
 import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import { hasActiveStartupMigrationLeaseForTest } from "../infra/startup-migration-checkpoint.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeAsyncFixture } from "../state/openclaw-state-db-readonly.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -129,7 +130,7 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         ]);
         expect(await fs.readFile(configPath, "utf8")).toBe(raw);
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
-        expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+        expect(hasActiveStartupMigrationLeaseForTest()).toBe(false);
       } finally {
         release.resolve();
         try {

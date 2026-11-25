@@ -1,4 +1,4 @@
-import { dynamic } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -28,11 +28,17 @@ import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
 import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
+import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
-import { resolveToolOperationLabel, resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+import {
+  formatSessionLaunchLimit,
+  resolveToolOperationLabel,
+  resolveToolRowVerb,
+  SESSION_LAUNCH_LIMIT_STYLE,
+} from "./chat-tool-row-presentation.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -73,7 +79,7 @@ function resolveToolRowText(
 
 function ToolRowLink(props: {
   kind: "file" | "subagent";
-  label: string;
+  label: JSX.Element;
   onOpen: () => void;
   openLabel?: string;
 }) {
@@ -179,23 +185,32 @@ function SessionLaunchRowContent(props: {
   subagent: SpawnedSubagent | null;
   onOpen?: () => void;
 }) {
+  const name = () => (
+    <SubagentName
+      name={props.launch.label ?? ""}
+      sessionKey={props.launch.kind === "subagent" ? props.launch.childKey : undefined}
+    />
+  );
   return (
     <>
-      <span class="chat-tool-row__verb">
-        {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
-      </span>
-      <Show when={props.launch.label}>
+      <Show
+        when={formatSessionLaunchLimit(props.launch)}
+        fallback={
+          <span class="chat-tool-row__verb">
+            {t(`chat.toolCards.launch.${props.launch.kind}.${props.launch.phase}`)}
+          </span>
+        }
+      >
+        {(message) => <span style={SESSION_LAUNCH_LIMIT_STYLE}>{message()}</span>}
+      </Show>
+      <Show when={props.launch.label && !props.launch.capacity}>
         <Show
           when={props.onOpen}
-          fallback={
-            <span class="chat-tool-row__title chat-tool-row__subagent-name">
-              {props.launch.label}
-            </span>
-          }
+          fallback={<span class="chat-tool-row__title chat-tool-row__subagent-name">{name()}</span>}
         >
           <ToolRowLink
             kind="subagent"
-            label={props.launch.label!}
+            label={name()}
             openLabel={t(
               props.launch.kind === "chat"
                 ? "chat.toolCards.openChildChat"
@@ -239,6 +254,8 @@ export function ToolCardRow(props: ToolCardProps) {
     (subagent()?.session?.listed && props.options.subagents?.onOpenSubagent) ||
     props.options.subagents?.onOpenSession;
   const canOpenSubagent = () => Boolean(launch()?.childKey && onOpenSubagent());
+  const hasSubagentAvatar = () =>
+    launch()?.kind === "subagent" && Boolean(launch()?.label && launch()?.childKey);
   const handleOpenSubagent = () => {
     const childKey = launch()?.childKey;
     if (childKey) {
@@ -250,21 +267,23 @@ export function ToolCardRow(props: ToolCardProps) {
   const toggle = () => props.options.onToggleExpanded(card().id);
   const rowContent = () => (
     <>
-      <span
-        class="chat-tool-msg-summary__icon"
-        role="img"
-        aria-label={display().name}
-        title={display().name}
-      >
-        <ToolIcon
-          name={
-            readSubagentCancellation(card())
-              ? "bot"
-              : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
-          }
-          tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
-        />
-      </span>
+      <Show when={!hasSubagentAvatar()}>
+        <span
+          class="chat-tool-msg-summary__icon"
+          role="img"
+          aria-label={display().name}
+          title={display().name}
+        >
+          <ToolIcon
+            name={
+              readSubagentCancellation(card())
+                ? "bot"
+                : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+            }
+            tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
+          />
+        </span>
+      </Show>
       <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
           when={launch()}
@@ -295,10 +314,12 @@ export function ToolCardRow(props: ToolCardProps) {
       </span>
       <Show
         when={
-          inline() &&
-          outcome() !== "failed" &&
-          outcome() !== "skipped" &&
-          !(view().command && outcome() === "running")
+          (inline() &&
+            outcome() !== "failed" &&
+            outcome() !== "skipped" &&
+            !(view().command && outcome() === "running")) ||
+          // A blocked image inspection is not grouped, so its own row shows the block.
+          (outcome() === "blocked" && unwrapToolCallForDisplay(card()).name === "view_image")
         }
       >
         <span class="chat-command-trail__status" role="status">
@@ -316,7 +337,7 @@ export function ToolCardRow(props: ToolCardProps) {
       <Show when={props.options.interrupted && outcome() === "unrecorded"}>
         <span class="muted">{t("chat.toolCards.interrupted")}</span>
       </Show>
-      <Show when={!props.options.expanded}>
+      <Show when={!props.options.expanded && !launch()?.capacity}>
         <ToolOutcomeSummary card={card()} />
       </Show>
       <span class="chat-tool-row__chevron" aria-hidden="true">
@@ -358,7 +379,6 @@ export function ToolCardRow(props: ToolCardProps) {
 export function ToolMessageSummary(props: {
   state: GroupedMessagePresentation;
   options: GroupedMessageOptions;
-  imageCount?: number;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
@@ -375,12 +395,11 @@ export function ToolMessageSummary(props: {
       : null;
     if (singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image") {
       const outcome = resolveToolCardOutcome(singleToolCard, props.options.runActive);
-      const count = props.imageCount ?? images.length;
       return {
         singleToolDisplay,
         toolMessageLabel:
-          outcome === "succeeded" && count > 1
-            ? t("chat.toolCards.viewedImages", { count: String(count) })
+          outcome === "succeeded" && images.length > 1
+            ? t("chat.toolCards.viewedImages", { count: String(images.length) })
             : resolveToolOperationLabel(singleToolCard, outcome),
         toolSummaryLabel: undefined,
         toolPreview: "",

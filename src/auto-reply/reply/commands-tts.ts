@@ -292,7 +292,7 @@ async function handleTtsStatusAction(
 }
 
 export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
-  { label: "TTS command", match: parseTtsCommand, silentUnauthorized: true },
+  { label: "TTS command", match: parseTtsCommand },
   async (params, parsed) => {
     const accountId = params.ctx?.AccountId;
     const config = resolveTtsConfig(params.cfg, {

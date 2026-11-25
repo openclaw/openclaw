@@ -19,10 +19,7 @@ function deny(error: ErrorShape): never {
 
 /** Retain the selected facts owner through reads, commit grants, and mirror settlement. */
 export async function withSessionReactionAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "hasCurrentClientAuthority"
-  > & {
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond"> & {
     sessionKey: string;
     agentId?: string;
     write: boolean;
@@ -32,7 +29,7 @@ export async function withSessionReactionAccess(
   const { client, respond } = params;
   try {
     using access = await prepareSessionSharingAccess({ ...params, prepareMembership: true }, () =>
-      deny(errorShape(ErrorCodes.FORBIDDEN, "reaction author or session authority changed")),
+      deny(errorShape(ErrorCodes.FORBIDDEN, "The reaction request ended. Retry the request.")),
     );
     if (!access) {
       return;

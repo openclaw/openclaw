@@ -335,6 +335,7 @@ async function fixture({
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
+    "../../infra/update-run-notice",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
     // Post-update state reads and Doctor facts use their production owners,
@@ -448,6 +449,7 @@ async function fixture({
   values.recordFailedUpdateGatewayState =
     verificationOwner.namespace.recordFailedUpdateGatewayState;
   values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
+  values.releaseLaunchedState = verificationOwner.namespace.releaseLaunchedState;
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();

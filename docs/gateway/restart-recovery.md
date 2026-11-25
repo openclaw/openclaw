@@ -714,7 +714,8 @@ is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
-Children are not adopted or independently resumed at startup.
+Children are not adopted or independently resumed at startup. If a graceful
+restart interrupts a user’s request, the Gateway resumes it automatically.
 
 Collector children retain their captured results. If shutdown recorded a terminal
 child before its collector result finished publishing, startup completes that
@@ -755,6 +756,17 @@ keeps one requester authority, including when a paused child continues in a new
 turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
+
+When the requester's access has ended (its saved grant or access record is gone,
+or its profile was deleted), startup settles that child's delivery once instead of
+retrying it at every restart. The run record keeps
+the result with the delivery marked discarded. The requesting chat, and no other,
+gets one notice: "A background task's result couldn't be delivered because the
+access it ran under has ended." Results whose latest recorded time (result capture,
+end, or delivery attempt; creation time only when nothing later exists) is more
+than 7 days old settle without a notice; the Gateway logs one count per recovery
+pass. Any other failure, including other refusals, an unavailable access policy or
+a busy database, leaves the delivery pending for the next restart.
 
 If shutdown interrupts the requester after a captured child result was committed
 to its transcript, that result is already delivered. The Gateway resumes the

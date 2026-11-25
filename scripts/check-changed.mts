@@ -483,6 +483,36 @@ async function runChangedCheckViaCrabbox(
   };
 }
 
+function createRootTestLintCommands(
+  paths: readonly string[],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+) {
+  let targets = paths.filter(
+    (file) => getChangedPathFacts(file).isRootTestSource && existsSync(file),
+  );
+  if (targets.length > 0) {
+    // --tsconfig affects import resolution, not target selection. Expand the
+    // canonical roots before passing explicit files to native lint.
+    const config = readNativeTypeScriptConfig({
+      cwd: process.cwd(),
+      configFileName: ROOT_TEST_TS_CONFIG,
+    });
+    const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
+    targets = targets.filter((file) => roots.has(path.resolve(file)));
+  }
+  return batchTargetedLintCommand(
+    {
+      name: "lint test root changed files",
+      bin: "node",
+      args: ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...targets],
+      env,
+    },
+    platform,
+    "test root",
+  );
+}
+
 export function createChangedCheckPlan(
   result: ChangedLaneResult,
   options: ChangedCheckPlanOptions = {},
@@ -519,13 +549,30 @@ export function createChangedCheckPlan(
       ));
   // Dedicated CI rows already own their commands; central discovery is discarded.
   if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
+    const lintEnv = createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext);
+    const lintCommands = createCiLintCommands(
+      options.lintSelection,
+      options.lintThreads ?? 1,
+      lintEnv,
+    );
+    // Stripe/group rows leave root discovery to the central row. An otherwise
+    // empty selection can own the explicit root-only fallback.
+    if (lintCommands.length === 0) {
+      lintCommands.push(
+        ...createRootTestLintCommands(
+          options.lintSelection.rootTestFiles ?? [],
+          lintEnv,
+          options.platform ?? process.platform,
+        ).map((command) =>
+          Object.assign({}, command, {
+            args: [...command.args, `--threads=${options.lintThreads ?? 1}`],
+          }),
+        ),
+      );
+    }
     return {
       delegatedTypeGraphs: [],
-      commands: createCiLintCommands(
-        options.lintSelection,
-        options.lintThreads ?? 1,
-        createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext),
-      ),
+      commands: lintCommands,
       summary: result.docsOnly
         ? "docs-only"
         : lanes.releaseMetadata
@@ -580,28 +627,10 @@ export function createChangedCheckPlan(
   const finishPlan = (summary: string) => {
     // Full lint shards exclude test/. Keep changed root sources covered even
     // when another path selects the all-lane early return, without widening lint.
-    let rootTestTargets = (options.lintSelection?.rootTestFiles ?? result.paths).filter(
-      (file) => getChangedPathFacts(file).isRootTestSource && existsSync(file),
-    );
-    if (rootTestTargets.length > 0) {
-      // --tsconfig affects import resolution, not native semantic discovery or
-      // target selection. Expand the canonical roots before passing explicit files.
-      const config = readNativeTypeScriptConfig({
-        cwd: process.cwd(),
-        configFileName: ROOT_TEST_TS_CONFIG,
-      });
-      const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
-      rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
-    }
-    for (const command of batchTargetedLintCommand(
-      {
-        name: "lint test root changed files",
-        bin: "node",
-        args: ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...rootTestTargets],
-        env: baseEnv,
-      },
+    for (const command of createRootTestLintCommands(
+      options.lintSelection?.rootTestFiles ?? result.paths,
+      baseEnv,
       options.platform ?? process.platform,
-      "test root",
     )) {
       addLintCommand(command.name, command.bin, command.args, command.env);
     }
@@ -1436,12 +1465,11 @@ export async function createChangedCiLintPlan(
   const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
-    commands.some(({ args }) =>
-      ["lint", "lint:core", "lint:extensions", "lint:scripts"].includes(args[0] ?? ""),
-    )
+    commands.some(({ args }) => ["lint", "lint:core", "lint:extensions"].includes(args[0] ?? ""))
   ) {
     return null;
   }
+  const fullScripts = commands.some(({ args }) => args[0] === "lint:scripts");
   const { createOxlintShards, selectCoreOxlintStripe, selectExtensionOxlintStripe } =
     await import("./run-oxlint-shards.mts");
   const changedFiles = result.paths.filter((file) => /\.[cm]?[jt]sx?$/u.test(file));
@@ -1462,7 +1490,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
-    fullGroups: [],
+    fullGroups: fullScripts ? ["scripts"] : [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];
@@ -1536,6 +1564,10 @@ export async function createChangedCiLintPlan(
     if (selected.some((shard) => shard.name === "scripts")) {
       central.groups = ["scripts"];
     }
+  }
+  // Full scripts lint already owns these consumers; retain independent core and extension rows.
+  if (fullScripts) {
+    central.groups = central.groups.filter((group) => group !== "scripts");
   }
   central.files = filesFor(central.coreStripes, central.extensionStripes, central.groups);
   // Both workflow outputs and process arguments are bounded. A very broad

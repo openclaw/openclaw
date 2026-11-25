@@ -37,6 +37,7 @@ const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 const rawSqliteAllowPathGroups = {
   "offline canonical port preserves native cell bytes and 64-bit allocation state": [
     "src/infra/database-engine/port.worker.ts",
+    "src/infra/database-engine/port-allocation-fact.ts",
   ],
   "native close conformance on disposable probe databases": [
     "src/infra/bun-sqlite-close-probe.worker.ts",

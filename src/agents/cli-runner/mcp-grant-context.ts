@@ -10,7 +10,6 @@ import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
 import { isToolPolicyMessageProvider } from "../agent-tools.message-provider-policy.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
-  bindActiveCronAuthorityCurrentness,
   bindCronManagementToolConstruction,
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
@@ -18,6 +17,7 @@ import type { DelegationCapability } from "../delegation-capability.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -43,7 +43,6 @@ export function finalizeCliMcpGrant(
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
-  const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
   const withCronManagementToolConstruction = bindCronManagementToolConstruction(context.runId);
   const personalToolParticipants = source.toolAuthorityFingerprint
     ? source.replyOperation?.personalToolParticipants
@@ -56,7 +55,6 @@ export function finalizeCliMcpGrant(
       ...(nativeAuthorityPending ? { nativeCronCreatorToolAllowlist: null } : {}),
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
-    ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     ...(withCronManagementToolConstruction ? { withCronManagementToolConstruction } : {}),
     admittedRunContext: source.admittedRunContext,
     toolPolicyConfig: source.config,
@@ -210,6 +208,9 @@ export function buildCliMcpGrantContext(params: {
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
     sessionId: normalizeOptionalString(params.run.sessionId),
+    ...(isSessionProjectMoveEligible(params.config, params.agentId, params.run.sessionEntry)
+      ? { sessionProjectMoveEligible: true }
+      : {}),
     runId: normalizeOptionalString(params.run.runId),
     workspaceDir: params.run.workspaceDir,
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),

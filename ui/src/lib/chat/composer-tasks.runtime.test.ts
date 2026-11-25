@@ -11,6 +11,7 @@ function setup(value: string) {
       taskPresenters: 1,
       composerComposing: false,
       composerTextarea: textarea,
+      sendDraft: null,
     });
     return {
       tasks,

@@ -7,7 +7,6 @@ import {
   SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
   SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
 } from "../../../packages/gateway-protocol/src/schema/system-event.js";
-import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -16,7 +15,6 @@ import {
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import {
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
@@ -36,7 +34,6 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const mocks = vi.hoisted(() => ({
   captureTarget: vi.fn(),
   enqueueEvent: vi.fn(),
-  readReceipts: vi.fn(),
 }));
 
 // mock-isolation: Control target-capture gates and receipts without admitting real reply work.
@@ -44,15 +41,10 @@ vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.captureTarget,
   enqueueSessionEventForHost: mocks.enqueueEvent,
 }));
-// mock-isolation: Use controlled migration receipts for requester revocation without shared-state reads.
-vi.mock("../../cron/proactive-job-receipt.js", () => ({
-  readDefaultProactiveJobReceiptsAsync: mocks.readReceipts,
-}));
 
 import { systemHandlers } from "./system.js";
 
 const systemEvent = expectDefined(systemHandlers["system-event"], "system-event handler");
-const setHeartbeats = expectDefined(systemHandlers["set-heartbeats"], "set-heartbeats handler");
 let state: OpenClawTestState;
 let mainConfig: OpenClawConfig;
 
@@ -100,9 +92,6 @@ beforeEach(() => {
     cancel: () => false,
     accepted: Promise.resolve({ ok: true }),
     settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
-  });
-  mocks.readReceipts.mockReset().mockResolvedValue({
-    main: { phase: "complete", jobId: "converted", provisionedAtMs: 1 },
   });
 });
 
@@ -356,32 +345,6 @@ describe("system-event routing", () => {
     );
   });
 
-  it("rechecks requester authority after asynchronous target capture", async () => {
-    const entered = createDeferredCore();
-    const capture = createDeferredCore<SessionEventTarget>();
-    mocks.captureTarget.mockImplementationOnce(() => {
-      entered.resolve(undefined);
-      return capture.promise;
-    });
-    let current = true;
-    const sessionKey = "agent:main:main";
-    const instanceId = `revoked-event-${randomUUID()}`;
-    const request = createRequest({ text: "Wake.", sessionKey, wake: true, instanceId });
-    request.options.hasCurrentClientAuthority = () => current;
-    const pending = systemEvent(request.options);
-    const refused = expect(pending).rejects.toThrow("Gateway requester authority changed");
-    await entered.promise;
-    current = false;
-    capture.resolve({ sessionId: "session-main", generation: "captured-generation" });
-    await refused;
-
-    expect(mocks.enqueueEvent).not.toHaveBeenCalled();
-    expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(listSystemPresence().find((entry) => entry.instanceId === instanceId)).toBeUndefined();
-    expect(request.publishPresence).not.toHaveBeenCalled();
-    expect(request.respond).not.toHaveBeenCalled();
-  });
-
   it("passes explicit input activity clearing into system presence", async () => {
     const instanceId = `presence-clear-${randomUUID()}`;
     for (const activity of [
@@ -440,56 +403,4 @@ describe("system-event routing", () => {
     );
     expect(entry.deviceId).toBe(explicitDeviceId ?? ("own" in scenario ? deviceId : undefined));
   });
-});
-
-describe("set-heartbeats compatibility authority", () => {
-  it.each(["discovery", "commit"] as const)(
-    "rejects revocation during automation %s",
-    async (stage) => {
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let current = true;
-      const committed = vi.fn();
-      const job = makeCronJob({ id: "converted" });
-      const list = vi.fn(async () => {
-        if (stage === "discovery") {
-          entered.resolve(undefined);
-          await resume.promise;
-        }
-        return [job];
-      });
-      const update = vi.fn(
-        async (_id: string, _patch: unknown, options?: { commitGuard?: () => void }) => {
-          if (stage === "commit") {
-            entered.resolve(undefined);
-            await resume.promise;
-          }
-          options?.commitGuard?.();
-          committed();
-          return job;
-        },
-      );
-      const request = createRequest({ enabled: false });
-      request.options.hasCurrentClientAuthority = () => current;
-      request.options.context = {
-        ...request.options.context,
-        cron: { list, update },
-      } as unknown as GatewayRequestHandlerOptions["context"];
-      const pending = setHeartbeats(request.options);
-      await entered.promise;
-      current = false;
-      resume.resolve(undefined);
-      await pending;
-
-      expect(committed).not.toHaveBeenCalled();
-      expect(update).toHaveBeenCalledTimes(stage === "commit" ? 1 : 0);
-      expect(request.respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("Gateway requester authority changed"),
-        }),
-      );
-    },
-  );
 });

@@ -46,6 +46,7 @@ import {
   type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
@@ -381,6 +382,7 @@ export function createSqliteSessionActorExecutor(
                       new Set(
                         committed.receipt.postimage.members.map((member) => member.identityId),
                       ),
+                      sessionMemberAccessFacts(committed.receipt.postimage.members),
                     );
                     if (entry && (previousEntry || !metadata?.length)) {
                       // Metadata publication owns initial age facts; later settlement can release claims.
@@ -401,10 +403,7 @@ export function createSqliteSessionActorExecutor(
                     committed.receipt.transcript.authorityReceipts,
                   );
                   try {
-                    observer?.committed(committed);
-                  } finally {
-                    // Record input custody before fallible identity notifications; row facts
-                    // still settle when the receipt observer reports a committed failure.
+                    // Publish committed row facts before observers read the resident list.
                     if (target.database.kind === "file" && metadata?.length) {
                       // Terminal accounting may change the row without appending a transcript event.
                       const databaseIdentity = target.database.physicalIdentity;
@@ -433,6 +432,9 @@ export function createSqliteSessionActorExecutor(
                         publication.settle(undefined, false);
                       }
                     }
+                  } finally {
+                    // Input custody must still be recorded if publication notification fails.
+                    observer?.committed(committed);
                   }
                 } catch (error) {
                   result = preserveFailure(error);

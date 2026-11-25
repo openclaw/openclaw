@@ -38,6 +38,7 @@ export async function waitForChatMediaPlayback(params: {
   source: string;
   authToken?: string | null;
   signal: AbortSignal;
+  onPending?: () => void;
 }): Promise<ChatMediaPlaybackReadiness> {
   const headers = buildChatMediaFetchHeaders(params.authToken);
   headers.set("Accept", "audio/*, video/*");
@@ -86,6 +87,7 @@ export async function waitForChatMediaPlayback(params: {
       if (response.status !== 202) {
         return response.ok ? "ready" : "unavailable";
       }
+      params.onPending?.();
       const retryDelay = CHAT_MEDIA_PLAYBACK_RETRY_DELAYS_MS[attempt];
       if (retryDelay === undefined) {
         return "unavailable";

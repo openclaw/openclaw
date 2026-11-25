@@ -47,6 +47,7 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
     group.timestamp,
     group.isStreaming,
     group.runId,
+    group.compaction,
     ...group.messages.flatMap((source) => [
       source.key,
       source.message,
@@ -129,7 +130,8 @@ export function transcriptContextDependencies(
       props.onStartNewSession,
       props.failedMessageEditSource,
       props.failureActionsRunId,
-      item.modelChange ? props.modelCatalog : undefined,
+      // Model names and the failure heading's provider name come from the catalog.
+      item.modelChange || item.runError?.cause ? props.modelCatalog : undefined,
     ];
   }
   const dependencies: unknown[] = [];

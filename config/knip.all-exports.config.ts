@@ -136,6 +136,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
   // The state-read admission test launches this Worker from computed source and dist paths.
   "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
+  // The state admission tests spawn this peer update-ledger writer by path.
+  "src/infra/database-engine/state-fragments.process.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.
@@ -293,6 +295,8 @@ const config = {
     "src/test-utils/**": ["exports", "nsExports"],
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
+    // Session and cron state type this slot through `import(...)` type queries.
+    "src/cron/service/timer-execution-timeout.ts": ["types"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",

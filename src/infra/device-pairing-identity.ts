@@ -10,6 +10,37 @@ import { mergeDevicePairingRoles, normalizeDevicePairingRole } from "./device-pa
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 export type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
 
+/**
+ * The stored operator grant an OpenClaw ID member device needs so it holds exactly its role's
+ * scopes, or null when it already does or has no approved operator grant on this key. Other
+ * roles' approved scopes are kept.
+ */
+export function resolveMemberOperatorGrantChange(
+  device: PairedDevice | null | undefined,
+  publicKey: string,
+  roleScopes: readonly string[],
+): { approvedScopes: string[]; tokenScopes: string[] } | null {
+  const token = device?.tokens?.operator;
+  if (
+    !device ||
+    device.publicKey !== publicKey ||
+    !token ||
+    !listApprovedPairedDeviceRoles(device).includes("operator")
+  ) {
+    return null;
+  }
+  const tokenScopes = normalizeDeviceAuthScopes(roleScopes);
+  const current = device.approvedScopes ?? device.scopes ?? [];
+  const approvedScopes = normalizeDeviceAuthScopes([
+    ...current.filter((scope) => !scope.startsWith("operator.")),
+    ...tokenScopes,
+  ]);
+  return normalizeDeviceAuthScopes(current).join(",") === approvedScopes.join(",") &&
+    normalizeDeviceAuthScopes(token.scopes).join(",") === tokenScopes.join(",")
+    ? null
+    : { approvedScopes, tokenScopes };
+}
+
 /** Use the same persisted approval ceiling for token verification and retained authority. */
 export function resolveApprovedDeviceScopeBaseline(device: PairedDevice): string[] | null {
   const baseline = device.approvedScopes ?? device.scopes;

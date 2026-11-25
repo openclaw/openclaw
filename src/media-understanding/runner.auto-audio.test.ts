@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
+import {
+  formatDecisionSummary,
+  renderMediaAttachmentDisposition,
+} from "../../packages/media-understanding-common/src/format.js";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { createProviderHttpError } from "../agents/provider-http-errors.js";
@@ -7,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
-import { renderMediaAttachmentDisposition } from "./media-attachment-outcomes.js";
 import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";

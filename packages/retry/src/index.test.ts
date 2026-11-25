@@ -110,15 +110,7 @@ it("owns attempt counting, overrides, rebasing, exhaustion, and cancellation", a
     try {
       await vi.runOnlyPendingTimersAsync();
     } finally {
-      try {
-        await settled;
-      } finally {
-        try {
-          vi.restoreAllMocks();
-        } finally {
-          vi.useRealTimers();
-        }
-      }
+      await settled;
     }
   }
 });
@@ -179,15 +171,7 @@ it.each([50, Number.MAX_SAFE_INTEGER])("completes bounded sleep %s", async (inpu
     try {
       await vi.runOnlyPendingTimersAsync();
     } finally {
-      try {
-        await settled;
-      } finally {
-        try {
-          vi.restoreAllMocks();
-        } finally {
-          vi.useRealTimers();
-        }
-      }
+      await settled;
     }
   }
 });

@@ -144,7 +144,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("No OpenClaw tool list is injected");
-    expect(prompt).not.toContain("exec approval-pending");
+    expect(prompt).not.toContain("Approval-pending:");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", async () => {

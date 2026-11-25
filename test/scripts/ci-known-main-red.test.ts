@@ -456,6 +456,87 @@ describe("main failure attribution", () => {
 
 describe("known hourly main failures", () => {
   it.each([
+    ["complete", "", 1],
+    ["incomplete", "receipt", 0],
+    ["unframed", "unframed", 0],
+    ["unrelated error", "Error: unrelated failure", 0],
+    ["additional failure", "FAIL test/other.test.ts > another failure", 0],
+    ["mismatched counts", "counts", 0],
+    ["setup failure", "failed to spawn", 0],
+  ])("parses separated native errors only with complete evidence: %s", (_name, mutation, count) => {
+    let log = report()
+      .replace(
+        "[shard:gateway] AssertionError:",
+        "[shard:gateway] \n[shard:peer] [test] starting test/vitest/vitest.process.config.ts\n[shard:peer] Test Files 1 passed (1)\n[shard:peer] Tests 1 passed (1)\n[shard:peer] [test] passed 1 Vitest shard\n[shard:gateway] AssertionError:",
+      )
+      .replace('"invocations":1', '"invocations":2');
+    if (mutation === "receipt") {
+      log = log.replace(/^.*\[shard:completion\].*\n/mu, "");
+    } else if (mutation === "unframed") {
+      log = log.replace(/\[shard:[^\]]+\] /gu, "");
+    } else if (mutation === "counts") {
+      log = log.replace("Tests 1 failed", "Tests 2 failed");
+    } else if (mutation) {
+      log = log.replace(
+        "[shard:gateway] Test Files",
+        `[shard:gateway] ${mutation}\n[shard:gateway] Test Files`,
+      );
+    }
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
+    ["complete empty config", "No test files found, exiting with code 0", "", 1],
+    ["missing empty receipt", "", "", 0],
+    ["failed empty config", "No test files found, exiting with code 1", "", 0],
+    [
+      "failure after empty receipt",
+      "No test files found, exiting with code 0",
+      "Error: cleanup failed",
+      0,
+    ],
+    [
+      "test after empty receipt",
+      "No test files found, exiting with code 0",
+      "Tests 1 passed (1)",
+      0,
+    ],
+  ])("accounts for %s without hiding incomplete execution", (_name, receipt, extra, count) => {
+    const empty = [
+      "[test] starting test/vitest/vitest.gateway-server-isolated.config.ts",
+      "RUN v5.0.5 /workspace",
+      receipt,
+      "include:",
+      "exclude: **/node_modules/**",
+      extra,
+    ]
+      .map((line) => `[shard:gateway] ${line}`)
+      .join("\n");
+    const log = report()
+      .replace("[shard:gateway] [test] starting", `${empty}\n[shard:gateway] [test] starting`)
+      .replace("failed 1 Vitest shard in", "failed 2 Vitest shards in");
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it("preserves exact named-error signatures with nested project labels", () => {
+    const message = "GatewayClientRequestTimeoutError: gateway request timeout for config.apply";
+    const log = report()
+      .replace("FAIL   gateway  ", "FAIL   gateway (gateway-server-parallel)  ")
+      .replaceAll("AssertionError: expected true to be false", message);
+    expect(parseNodeFailureReport(log, true)).toEqual([
+      { kind: "vitest", file, test: `${title} :: ${message}` },
+    ]);
+    expect(
+      parseNodeFailureReport(
+        log + "\n[shard:gateway] GatewayClientRequestTimeoutError: cleanup failed",
+        true,
+      ),
+    ).toEqual([]);
+    expect(
+      parseNodeFailureReport(log.replaceAll(message, "UnknownFailure: timeout"), true),
+    ).toEqual([]);
+  });
+  it.each([
     ["complete mixed invocations", "", 2, 1],
     ["failed-only terminal count", "", 1, 0],
     ["missing passing summary", "Tests 2 passed (2)", 2, 0],
@@ -479,6 +560,9 @@ describe("known hourly main failures", () => {
 
   it.each([
     ["[test] inner parallelism 1", 1],
+    ["[test] preparing runtime runtime before Vitest workers", 1],
+    ["[test] preparing private-qa runtime before Vitest workers", 1],
+    ["[test] preparing unknown runtime before Vitest workers", 0],
     ["[test] inner parallelism unknown", 0],
     ["Error: worker failed", 0],
   ])("checks pre-invocation telemetry without hiding errors: %s", (telemetry, count) => {
@@ -487,6 +571,26 @@ describe("known hourly main failures", () => {
       `[shard:gateway] ${telemetry}\n[shard:gateway] begin`,
     );
     expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
+    ["GatewayClientRequestTimeoutError: gateway request timed out", "", 1],
+    [
+      "GatewayClientRequestTimeoutError: gateway request timed out",
+      "GatewayClientRequestTimeoutError: cleanup failed",
+      0,
+    ],
+    ["UnknownFailure: gateway request timed out", "", 0],
+  ])("requires a named error to belong to a test: %s %s", (message, extra, count) => {
+    const log = report().replaceAll("AssertionError: expected true to be false", message);
+    expect(
+      parseNodeFailureReport(extra ? `${log}\n[shard:gateway] ${extra}` : log, true),
+    ).toHaveLength(count);
+  });
+
+  it("accepts the project display label emitted for nested Gateway projects", () => {
+    const log = report().replace("FAIL   gateway  ", "FAIL   gateway (gateway-server-parallel)  ");
+    expect(parseNodeFailureReport(log, true)).toEqual(parseNodeFailureReport(report(), true));
   });
 
   it.each(["", ":42", ":42:3"])(
@@ -709,7 +813,7 @@ describe("loose CI failure discovery", () => {
     const log = [
       `2026-10-12T08:00:00Z [shard:gateway] \u001b[31m FAIL \u001b[0m gateway-server (gateway-server-parallel) ${file} > native session > denies`,
       `2026-10-12T08:00:01Z [shard:other] FAIL ${file} > native session > denies`,
-      `2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
+      `\uFEFF2026-10-12T08:00:02Z [shard:other] FAIL test/second.test.ts > fails too`,
     ].join("\n");
     expect(extractNodeFailedTests(log)).toEqual([
       { file, tests: ["native session > denies"] },

@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
 } from "../agents/run-termination.js";
 import {
@@ -28,6 +29,7 @@ import {
   GatewayOperatorAccessUnavailableError,
 } from "../infra/operator-authority-error.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import type { UserTurnInput } from "./user-turn-input.types.js";
 import {
   readPendingUserTurnTranscriptAdmission,
   readUserTurnRequesterOrigin,
@@ -37,7 +39,6 @@ import {
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
-  type UserTurnInput,
 } from "./user-turn-transcript.js";
 import {
   isUserMessage,
@@ -143,6 +144,29 @@ describe("user turn transcript persistence", () => {
       }
     },
   );
+
+  it.each([
+    { accepted: true, expected: { state: "queued", endCause: undefined } },
+    { accepted: false, expected: { state: "cancelled", endCause: "restart-unrecoverable" } },
+  ])("hands an unconsumed input to restart replay only once accepted=$accepted", async (row) => {
+    const target = makeTarget();
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const recorder = record(userInput("acked input", `restart-${row.accepted}:user`), target);
+    await recorder.stageApproved!({ runId: `restart-${row.accepted}`, assertCurrent: () => {} });
+    const restart = createAgentRunRestartAbortError();
+    await settleUserTurnPendingInput(
+      recorder,
+      AbortSignal.abort(restart),
+      restart,
+      false,
+      "cancelled",
+      row.accepted,
+    );
+    const { items } = await listSessionPendingInputs(target);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ state: row.expected.state });
+    expect(items[0]?.endCause).toBe(row.expected.endCause);
+  });
 
   describe("trusted human transcript ownership", () => {
     it("keeps producer requester custody through staging and live collection", async () => {

@@ -1,10 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  patchSessionEntryCore,
-  resolveSessionTranscriptDatabasePath,
-} from "../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type {
@@ -35,8 +31,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
 import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
@@ -344,10 +340,8 @@ async function prepareCliBlockFallbackWrite(
     sessionTarget: identity,
   });
   if (memory) {
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: memory.path });
     const assertCurrent = () => {
       assertOwnedWrite();
-      cliWriter?.assertCurrent();
       const current = memory.actor.snapshot(memory.authority)?.entry;
       if (
         !current ||
@@ -387,12 +381,10 @@ async function prepareCliBlockFallbackWrite(
       entry: captured,
       matches: (_before, current) => matches(current),
     });
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: source.path });
     return {
       readScope,
       assertCurrent() {
         assertOwnedWrite();
-        cliWriter?.assertCurrent();
         if (!retained.isCurrent()) {
           throw new SessionTranscriptWriterClaimReboundError();
         }
@@ -567,13 +559,7 @@ export async function persistCliRunBlock(
     }
     const target = sessionManager.getSessionTarget();
     const assertOwnedWrite = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    const cliWriter = target
-      ? getCliHistoryWriter({ ...target, storePath: resolveSessionTranscriptDatabasePath(target) })
-      : undefined;
-    const assertCurrent = () => {
-      assertOwnedWrite?.();
-      cliWriter?.assertCurrent();
-    };
+    const assertCurrent = () => assertOwnedWrite?.();
     const append = () =>
       withSessionManagerWrite(sessionManager, async () => {
         assertCurrent();

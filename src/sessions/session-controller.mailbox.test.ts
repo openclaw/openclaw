@@ -5,6 +5,7 @@ import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
 import { reserveSteerCandidate, enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import { admitFollowupRunLifecycle } from "../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { decideTurnGrant } from "../gateway/operator-admission.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -215,9 +216,12 @@ describe("controller mailbox scheduling", () => {
     async (owner) => {
       let failure: Error | undefined;
       const signal = new AbortController().signal;
+      // This source assertion fails without recording operator revocation.
       const authority = {
+        canonicalIdentity: null,
         profileId: "queued-person",
         scopes: ["operator.write"],
+        grant: decideTurnGrant(["operator.write"]),
         signal,
         assertCurrent() {
           if (failure) {

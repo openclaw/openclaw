@@ -86,7 +86,9 @@ environment variable. It redacts the connection from child output.
 Arguments after `--` go to the normal test runner. Start with a file or directory
 to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
-Use `--shard 1/4`, `--shard 2/4`, `--shard 3/4`, or `--shard 4/4` for the CI partitions.
+Use `--shard 1/6` through `--shard 6/6` to reproduce the PostgreSQL 17
+partitions in `ci.yml`. For the separate scheduled qualification workflow, use
+`--shard 1/4` through `--shard 4/4`.
 The shared weighted allocator balances the existing target inventory using committed
 `config/postgres-conformance-timings.json` measurements. Refresh those advisory
 weights from per-file case spans in PostgreSQL conformance job logs when costs change;
@@ -120,17 +122,19 @@ the existing Vitest workers can overlap independent recovery and custody cases.
 They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
 no additional job or service is started.
 
-CI's **PostgreSQL conformance** matrix runs four shards in parallel with a 30-minute
+CI's **PostgreSQL conformance** matrix runs six shards in parallel with a 30-minute
 job budget each. Every shard has a
 fresh PostgreSQL 17 service using the pinned `pgvector/pgvector:pg17` image and
 the `unaccent`, `pg_trgm`, and `vector` extensions. It runs
 on scheduled main CI, manual CI validations, and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
 `src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
-`src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
+`src/infra/sqlite-transaction.ts`, the Gateway lock and PostgreSQL custody code,
+`extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
-omit it. All selected shards are required by `openclaw/ci-gate`.
+omit it. Pull requests also run the PostgreSQL 16 Gateway cron smoke in a
+separate parallel row. All selected rows are required by `openclaw/ci-gate`.
 
 ### Unit / integration (default)
 

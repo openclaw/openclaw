@@ -8,12 +8,10 @@ type ChatSendExternalAdmissionParams = {
   spawnedBy?: string;
   isUncontrolledDashboardChild?: boolean;
   client: GatewayRequestHandlerOptions["client"];
-  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognitoEntry: boolean;
-  isReconnectResume: boolean;
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
 };

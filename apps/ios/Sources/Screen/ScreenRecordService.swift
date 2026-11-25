@@ -2,7 +2,7 @@ import AVFoundation
 import OpenClawKit
 import ReplayKit
 
-final class ScreenRecordService: @unchecked Sendable {
+final class ScreenRecordService: ScreenRecordingServicing, @unchecked Sendable {
     typealias CaptureHandler = @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void
     typealias CaptureCompletion = @Sendable (Error?) -> Void
     typealias StartCaptureAction = @MainActor @Sendable (

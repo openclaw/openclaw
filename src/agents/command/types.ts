@@ -17,10 +17,8 @@ import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  UserTurnInput,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";

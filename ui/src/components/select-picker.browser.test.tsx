@@ -14,7 +14,7 @@ import { SettingsRow } from "./solid/settings-ui.tsx";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
-import "../styles/model-providers.css";
+import "./solid/model-settings-rows.css";
 
 // Geometry assertions measure the settled list, not the Select entry scale.
 document.documentElement.style.setProperty("--select-enter-duration", "0s");
@@ -474,6 +474,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         } else {
           expect(count()).toBe(1000);
         }
+        const [plain, branded] = list.querySelectorAll("[role=option] .picker-select__label");
+        expect(plain!.getBoundingClientRect().left).toBe(branded!.getBoundingClientRect().left);
         const open = menu.getBoundingClientRect().width;
         if (width === 1280) {
           expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);

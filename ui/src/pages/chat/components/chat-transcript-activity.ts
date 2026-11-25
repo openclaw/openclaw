@@ -52,6 +52,9 @@ export function projectTranscriptActivity(
       if (group?.kind !== "group") {
         return undefined;
       }
+      if (group.compaction) {
+        return { key: group.key, running: group.compaction.phase === "active" };
+      }
       const messages = group.messages.filter(
         ({ message }) => transcriptRunId(message) === activityRunId,
       );
@@ -105,7 +108,6 @@ export function createLiveStatusSignature(
   latestAssistantItemKey: string | null,
   continuations: ReadonlyMap<string, readonly StreamGroupPart[]>,
   searchFiltering: boolean,
-  swarmSignature: (key: string) => string | undefined,
 ) {
   return (item: TranscriptDependencyItem): string => {
     if (item.kind === "reading-indicator") {
@@ -125,7 +127,7 @@ export function createLiveStatusSignature(
           part.kind === "stream-run" &&
           part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
       );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}|${swarmSignature(item.key) ?? ""}`;
+      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
     }
     const continuation = continuations.get(item.key);
     // Continuation options already participate in the shared render context.

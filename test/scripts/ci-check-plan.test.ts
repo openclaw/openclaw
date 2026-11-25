@@ -432,8 +432,11 @@ it.each([
           rootTestFiles: [],
         });
       } else {
-        expect(plan.lint_core_matrix.include.map(({ stripe }) => stripe)).toEqual([1, 2]);
-        expect(JSON.parse(plan.central_lint_selection_json).fullGroups).toEqual(["scripts"]);
+        expect(plan.lint_core_matrix.include).toEqual([]);
+        expect(JSON.parse(plan.central_lint_selection_json)).toMatchObject({
+          rootTestFiles: [changedPath],
+          fullGroups: ["scripts"],
+        });
       }
     } else {
       expect(plan.lint_core_matrix.include.map(({ stripe }) => stripe)).toEqual([1, 2]);

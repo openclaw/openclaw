@@ -125,6 +125,7 @@ export function captureGatewayToolResolutionAuthority(
   };
   return {
     assertInvocationCurrent,
+    prepareHostFileMutation: assertRunCurrent?.prepareSessionSourceStorageEffect,
     assertCurrent: () => {
       assertPreparationCurrent?.();
       assertInvocationCurrent();

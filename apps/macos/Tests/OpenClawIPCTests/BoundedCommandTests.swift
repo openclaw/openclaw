@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import Testing
 @testable import OpenClawDiscovery
@@ -38,20 +37,6 @@ struct BoundedCommandTests {
         watchdog.cancel()
 
         #expect(output == nil)
-        #expect(Self.waitUntilGone(pid))
-    }
-
-    /// Reaping is asynchronous, so the process can still be visible for a moment
-    /// after `run` returns.
-    private static func waitUntilGone(_ pid: pid_t) -> Bool {
-        let deadline = Date().addingTimeInterval(5)
-        while Date() < deadline {
-            errno = 0
-            if kill(pid, 0) == -1, errno == ESRCH {
-                return true
-            }
-            usleep(10000)
-        }
-        return false
+        #expect(TestProcessSupport.waitUntilGoneSynchronously(pid))
     }
 }

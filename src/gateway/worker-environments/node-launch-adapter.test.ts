@@ -229,6 +229,33 @@ describe("node worker launch adapter", () => {
     },
   );
 
+  it.each([false, true])(
+    "negotiates Sandbox memory authority without replacing a retained workspace (host support=%s)",
+    async (supported) => {
+      input.descriptor.assignment.toolAuthority.exec = {
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        memoryBoundary: "sandbox",
+      };
+      const expected = structuredClone(input);
+      if (!supported) {
+        delete expected.descriptor.assignment.toolAuthority.exec!.memoryBoundary;
+      }
+      const node = nodeProof();
+      if (supported) {
+        node.workerHost.execMemoryBoundary = true;
+      }
+      invoke.mockImplementation(async (request) => {
+        expect(request.params).toEqual(expected);
+        return wire(receipt(expected, "completed"));
+      });
+      configure({ nodes: async () => [node] });
+      expect(await launch()).toEqual(receipt(expected, "completed"));
+      expect(input.descriptor.assignment.toolAuthority.exec.memoryBoundary).toBe("sandbox");
+    },
+  );
+
   registerNodeLaunchAdapterNativeInferenceSuite();
 
   it.each([

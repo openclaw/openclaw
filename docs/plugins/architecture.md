@@ -308,6 +308,11 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+Bundled public surfaces that would load TypeScript below `node_modules` use the
+matching `dist/extensions/<plugin>/` or `dist-runtime/extensions/<plugin>/`
+JavaScript artifact when available. Resolution follows release symlinks, so Git
+releases built by older updaters do not need a manual relocation to start.
+
 For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
 capture a bundled plugin's own code: its package tree and the build chunks that
 `dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
