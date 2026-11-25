@@ -843,6 +843,18 @@ extension MacNodeModeCoordinatorTests {
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
     }
 
+    @Test func `OpenClaw ID routes omit hosted canvas`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            connectionMode: .remote,
+            supportsHostedCanvas: false)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
+        #expect(commands.allSatisfy { !$0.hasPrefix("canvas.") })
+        #expect(caps.contains(OpenClawCapability.screen.rawValue))
+        #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+    }
+
     @Test func `node permission metadata omits unknown authorization state`() {
         let permissions = MacNodeModeCoordinator.advertisedPermissions([
             .camera: .unknown,

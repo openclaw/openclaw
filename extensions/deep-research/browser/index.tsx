@@ -13,6 +13,7 @@ export default defineControlUiPlugin({
     const dispose = host.ui.registerPanel({
       id: "research",
       label: "Deep research",
+      icon: "textSearch",
       mount: (container, initial) => {
         const key = JSON.stringify([initial.props.agentId, initial.props.sessionKey]);
         const client = createResearchClient(

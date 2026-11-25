@@ -1,5 +1,4 @@
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import { safeRealpathSync } from "@openclaw/fs-safe/path";
@@ -511,6 +510,6 @@ export async function purgeWorktreeCheckout(
   } else if (stat) {
     // Git registration may already be missing. Delete only the host's claimed
     // checkout path; never prune shared metadata or delete a possibly moved branch.
-    await fs.rm(checkout, { recursive: true, force: true });
+    fsSync.rmSync(checkout, { recursive: true, force: true });
   }
 }

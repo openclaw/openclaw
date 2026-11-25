@@ -21,9 +21,10 @@ import {
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
 } from "../providers/anthropic-server-fallback.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
+import { resolveCompactionThreshold } from "../utils/compaction-threshold.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
-  splitSystemPromptCacheBoundary,
+  splitSystemPromptCacheBoundaryForWire,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
@@ -82,7 +83,11 @@ function resolveAnthropicCompactThreshold(
     contextTokens && contextWindow
       ? Math.min(contextTokens, contextWindow)
       : (contextTokens ?? contextWindow ?? 0);
-  return Math.max(ANTHROPIC_COMPACT_THRESHOLD_MIN, Math.floor(effectiveBudget * 0.7));
+  return resolveCompactionThreshold({
+    contextWindowTokens: effectiveBudget,
+    reserveTokensFloor: 0,
+    minimumThresholdTokens: ANTHROPIC_COMPACT_THRESHOLD_MIN,
+  });
 }
 
 /** Resolve the server-compaction gate and effective threshold for an Anthropic route. */
@@ -393,7 +398,7 @@ function normalizeAnthropicSystemBlocks(
     // This transport relocates nothing, so the relocatable marker must not
     // survive into the payload; the cache boundary stays for the breakpoint.
     record.text = stripSystemPromptRelocatableBoundary(blockText);
-    const split = splitSystemPromptCacheBoundary(blockText);
+    const split = splitSystemPromptCacheBoundaryForWire(blockText);
     if (!split) {
       // An already split prompt keeps its shared block for the opening-request checkpoint.
       if (record.cache_control === undefined && !sessionSharedSystemBlocks.has(record)) {
@@ -413,15 +418,15 @@ function normalizeAnthropicSystemBlocks(
       });
     }
     const runtimeFactsStart = splitSystemPromptRelocatableBoundary(split.dynamicSuffix)
-      ? split.dynamicSuffix.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY.trim())
+      ? split.dynamicSuffix.indexOf(SYSTEM_PROMPT_RELOCATABLE_BOUNDARY)
       : -1;
     const sessionShared =
-      runtimeFactsStart > 0 ? split.dynamicSuffix.slice(0, runtimeFactsStart).trimEnd() : "";
+      runtimeFactsStart > 0 ? split.dynamicSuffix.slice(0, runtimeFactsStart) : "";
     const sessionOwned = stripSystemPromptRelocatableBoundary(
-      sessionShared ? split.dynamicSuffix.slice(runtimeFactsStart) : split.dynamicSuffix,
-    ).trimEnd();
+      sessionShared.trim() ? split.dynamicSuffix.slice(runtimeFactsStart) : split.dynamicSuffix,
+    );
     const dynamicSuffix = stripSystemPromptRelocatableBoundary(split.dynamicSuffix);
-    if (sessionShared && sessionOwned) {
+    if (sessionShared.trim() && sessionOwned) {
       const sharedBlock = { ...rest, text: sessionShared };
       sessionSharedSystemBlocks.add(sharedBlock);
       normalizedBlocks.push(sharedBlock, { ...rest, text: sessionOwned });

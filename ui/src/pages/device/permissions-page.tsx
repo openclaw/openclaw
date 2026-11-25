@@ -112,7 +112,15 @@ export function DevicePermissionsPage() {
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
               title={t("configPage.deviceSettings.locationAccess")}
-              description={t("configPage.deviceSettings.locationHint")}
+              description={
+                <>
+                  {t("configPage.deviceSettings.locationHint")}
+                  <Show when={props.snapshot.device.platform === "macos"}>
+                    {" "}
+                    {t("configPage.deviceSettings.locationAlwaysHint")}
+                  </Show>
+                </>
+              }
               stackedOnNarrow
               control={
                 <SettingsSegmented

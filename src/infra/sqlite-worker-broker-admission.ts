@@ -9,8 +9,14 @@ import { getChildLogger } from "../logging/logger.js";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "./path-existence.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
+import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
+import { publishSqliteWalCheckpointObservation } from "./sqlite-wal-checkpoint.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -19,9 +25,10 @@ import type {
   SqliteWorkerOpenCustody,
   StoreClient,
 } from "./sqlite-worker-broker.types.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { SqliteWorkerError, type SqliteWorkerWalCheckpoint } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.js";
 import {
   captureSqliteWorkerStateContext,
   type SqliteWorkerStateContext,
@@ -199,15 +206,25 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
   validateSqliteWorkerModuleUrl(options.moduleUrl);
   const databasePath = path.resolve(options.databasePath);
   const inputHash = createHash("sha256").update(options.input).digest("hex");
-  const identity = await readDatabasePathIdentity(databasePath);
-  options.assertCurrent?.();
-  if (
-    options.expectedIdentity &&
-    (identity.key !== options.expectedIdentity ||
-      (options.expectedBirthtime !== undefined && identity.birthtime !== options.expectedBirthtime))
-  ) {
-    throw new Error("SQLite Worker path no longer matches its borrowed native owner");
+  const identity = await prepareSqliteDatabaseAdmissionAsync({
+    location: databasePath,
+    ...(options.expectedIdentity
+      ? {
+          expectedIdentity: {
+            key: options.expectedIdentity,
+            birthtime: options.expectedBirthtime,
+          },
+        }
+      : {}),
+    assertCurrent: () => {
+      options.signal?.throwIfAborted();
+      options.assertCurrent?.();
+    },
+  });
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
   }
+  options.assertCurrent?.();
   return { databasePath, inputHash, identity, key: identity.key };
 }
 
@@ -405,4 +422,97 @@ export function prepareSqliteWorkerActorContext(
     return delivered;
   }
   return undefined;
+}
+
+/** A matched reply retains original actor custody; a maintenance fact grants no access. */
+export function publishSqliteWorkerWalCheckpoint(
+  job: Pick<Job, "request" | "assertCurrent" | "custody">,
+  actors: ReadonlySet<Pick<Actor, "id" | "identity">>,
+  walCheckpoint: SqliteWorkerWalCheckpoint | undefined,
+): void {
+  if (!walCheckpoint) {
+    return;
+  }
+  const authority = job.request.executionAuthority;
+  for (const actor of actors) {
+    if (actor.id !== job.request.actor) {
+      continue;
+    }
+    if (
+      walCheckpoint.identity.key !== actor.identity.key ||
+      walCheckpoint.identity.birthtime !== actor.identity.birthtime ||
+      walCheckpoint.identity.canonicalPath !== actor.identity.canonicalPath ||
+      (authority &&
+        (walCheckpoint.identity.key !== `file:${authority.physicalIdentity}` ||
+          walCheckpoint.identity.birthtime !== authority.birthtime ||
+          walCheckpoint.incarnation !== authority.incarnation))
+    ) {
+      return;
+    }
+    try {
+      // Ordinary host-admitted commands need not carry the optional fast-grant authority.
+      job.assertCurrent?.();
+      if (readSqliteWorkerRequestCustody(job.custody.descriptor)) {
+        publishSqliteWalCheckpointObservation(
+          walCheckpoint.identity.canonicalPath,
+          walCheckpoint.checkpoint,
+        );
+      }
+    } catch {
+      // A stale maintenance fact cannot affect another native owner's work or result.
+    }
+    return;
+  }
+}
+
+/** The captured opening and companion locators own the exact file-creation allowlist. */
+export function captureSqliteWorkerCreationPaths(source: {
+  opening?: readonly string[];
+  companions?: { primary: string; paths: readonly string[] };
+}) {
+  const select = (resolved: ReadonlyMap<string, string>, location: string) => {
+    const allowed = new Set(source.opening?.map((entry) => resolved.get(entry)));
+    if (source.companions) {
+      const primary = resolved.get(source.companions.primary);
+      for (const companion of source.companions.paths) {
+        const target = resolved.get(companion);
+        if (target !== primary) {
+          allowed.add(target);
+        }
+      }
+    }
+    if (!allowed.has(resolved.get(location))) {
+      throw new SqliteWorkerError(
+        "SQLite creation target differs from its captured database",
+        "closed",
+      );
+    }
+  };
+  const locations = (location: string) =>
+    new Set([
+      ...(source.opening ?? []),
+      ...(source.companions ? [source.companions.primary, ...source.companions.paths] : []),
+      location,
+    ]);
+  return {
+    assertCreate(location: string) {
+      select(
+        new Map(
+          [...locations(location)].map((entry) => [
+            entry,
+            resolveIdentityPathViaExistingAncestorSync(entry),
+          ]),
+        ),
+        location,
+      );
+    },
+    async prepareCreate(location: string) {
+      const resolved = await Promise.all(
+        [...locations(location)].map(
+          async (entry) => [entry, await resolveIdentityPathViaExistingAncestor(entry)] as const,
+        ),
+      );
+      select(new Map(resolved), location);
+    },
+  };
 }

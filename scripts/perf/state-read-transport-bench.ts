@@ -26,6 +26,7 @@ import { resolve } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 import type { captureOpenClawStateReadSource } from "../../src/state/openclaw-state-read-worker.js";
 import type { OpenClawStateReadCommand } from "../../src/state/openclaw-state-read.types.js";
@@ -74,12 +75,52 @@ const liveTopology = freezeTrustedJsonSnapshot(
     requesterSessionKey: `agent:synthetic:cron:00000000-0000-4000-8000-${String(Math.floor(index / 8)).padStart(12, "0")}:run:synthetic`,
   })),
 );
+// Prepared selector payloads are read-only within their producer's operation.
+// Reuse them to isolate transport cost from projection/filesystem preparation.
+const entries = Array.from({ length: 5000 }, (_, index) => ({
+  acp: {
+    keys: [`agent:synthetic:session-${index}`],
+    entry: { sessionId: `session-${index}`, lifecycleRevision: "revision", sessionStartedAt: 1 },
+  },
+  repositoryWorkspace: {
+    agentId: "synthetic",
+    sessionKey: `session-${index}`,
+    workspaceId: `workspace-${index}`,
+  },
+}));
+const preparedEntries = Array.from({ length: 62000 }, (_, index) => ({
+  entry: {
+    path: `src/file-${index}.ts`,
+    type: "file" as const,
+    mode: 0o644,
+    size: 18000,
+    sha256: "a".repeat(64),
+  },
+  identity: `${index}:1`,
+  objectId: "b".repeat(64),
+}));
 function createCommand(): OpenClawStateReadCommand {
   switch (values.command) {
     case "backup":
       return { type: "backup.runs" };
     case "registry":
       return { type: "agentDatabaseRegistry.read" };
+    case "shared-facts":
+      return { type: "sessionRows.sharedFacts", entries };
+    case "workspace":
+      return {
+        type: "localWorkspace.manifest",
+        input: {
+          id: "synthetic",
+          revision: 1,
+          action: {
+            kind: "scan",
+            target: "canonical",
+            canonicalRoot: "/synthetic/workspace",
+            preparedEntries,
+          },
+        },
+      };
     case "descendants": {
       const command = {
         type: "subagents.runs",
@@ -131,7 +172,7 @@ function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
 }
 
-const functionIdentities = await countFunctions(100);
+const functionIdentities = await countFunctions(Math.min(100, iterations));
 await setup(warmup);
 global.gc();
 await nextTurn();
@@ -148,15 +189,21 @@ try {
     });
   }
   const cpuBefore = process.threadCpuUsage();
+  const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const started = performance.now();
   await setup(iterations);
   const elapsedMs = performance.now() - started;
   const cpu = process.threadCpuUsage(cpuBefore);
+  const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const memoryAfter = process.memoryUsage();
   const profile = values.allocations
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
     : undefined;
-  const allocatedBytes = profile ? allocated(profile.head) : undefined;
+  const allocatedBytes = profile
+    ? allocated(profile.head)
+    : typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+      ? allocatedAfter - allocatedBefore
+      : undefined;
   console.log(
     JSON.stringify({
       workload: "state read source capture, transport setup and empty close; no read dispatch",
@@ -175,6 +222,7 @@ try {
       allocationSampling: values.allocations,
       functionIdentities,
       elapsedMs,
+      operationsPerSecond: (iterations * 1000) / elapsedMs,
       mainThreadCpuMs: (cpu.user + cpu.system) / 1000,
       mainThreadCpuUsPerOperation: (cpu.user + cpu.system) / iterations,
       allocatedBytes,

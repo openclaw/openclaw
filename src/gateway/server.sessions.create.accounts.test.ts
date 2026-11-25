@@ -438,7 +438,7 @@ test("sessions.create names an adopted worktree with its committed account befor
         authProfileOverride: selectedAuthProfileId,
         authProfileOverrideSource: "user",
         displayName: "Account Transition",
-        worktree: { branch: "openclaw/account-transition" },
+        worktree: { branch: expect.stringMatching(/^openclaw\/account-transition-[0-9a-f]{6}$/) },
       });
     } finally {
       await removeSessionWorktree(key);

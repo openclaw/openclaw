@@ -1,13 +1,18 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 
-let reportHttpFailure: ((url: string) => void) | undefined;
+// `null` is a refused Gateway reconnect rather than one failed resource.
+let reportHttpFailure: ((url: string | null) => void) | undefined;
 const restoredListeners = createChangeListeners({ snapshot: true });
 
-export function bindBrowserHttpFailures(listener: (url: string) => void): () => void {
+export function bindBrowserHttpFailures(listener: (url: string | null) => void): () => void {
   reportHttpFailure = listener;
   return () => {
     reportHttpFailure = undefined;
   };
+}
+
+export function reportBrowserAccessDenied(): void {
+  reportHttpFailure?.(null);
 }
 
 export function subscribeBrowserAuthRestored(listener: () => void): () => void {

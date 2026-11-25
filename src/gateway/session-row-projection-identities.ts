@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
 import {
   controlUiSessionSlug,
@@ -8,7 +9,12 @@ import { isInternalSessionEffectsKey } from "../config/sessions/internal-session
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
+import {
+  matchesPersistedClientRunId,
+  samePersistedSessionRun,
+} from "../config/sessions/terminal-status.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import {
   first,
   identity,
@@ -18,7 +24,27 @@ import {
   type Query,
   type Row,
 } from "./session-row-projection-record.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
+
+export function firstReferenced(
+  ref: string,
+  rows: ReadonlyMap<string, Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  storePaths: Iterable<string>,
+) {
+  const ids = byKey.get(ref);
+  if (ids?.size === 1) {
+    return rows.get(ids.values().next().value!);
+  }
+  return (
+    ids &&
+    first(
+      [...ids].flatMap((id) => rows.get(id) ?? []),
+      storePaths,
+    )
+  );
+}
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";
@@ -216,16 +242,21 @@ export function indexSessionRow(
     byParent: Map<string, Set<string>>;
   },
   deleting = false,
+  previous?: Row,
 ) {
+  // Replacement keeps the same physical identity; unchanged memberships keep their position.
+  if (previous === row) {
+    return;
+  }
   const { byStore, byAgent, byKey, byParent } = indexes;
   const id = identity(row);
   let singleton: Set<string> | undefined;
-  function updateIndex(map: Map<string, Set<string>>, key: string | undefined) {
+  function updateIndex(map: Map<string, Set<string>>, key: string | undefined, remove = deleting) {
     if (!key) {
       return;
     }
     const values = map.get(key);
-    if (deleting) {
+    if (remove) {
       if (values?.size === 1) {
         if (values.has(id)) {
           map.delete(key);
@@ -244,28 +275,137 @@ export function indexSessionRow(
       values.add(id);
     }
   }
-  updateIndex(byStore, row.storeTarget.storePath);
-  updateIndex(byAgent, row.agentId);
-  updateIndex(byKey, `key:${row.key}`);
-  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`);
-  updateIndex(byKey, logicalSessionRowIdentity(row.agentId, row.key));
-  const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
-  if (uuid) {
-    // Eight characters is the shortest URL id; the resolver filters longer prefixes and ties.
-    updateIndex(byKey, `url-id:${uuid.toLowerCase().replaceAll("-", "").slice(0, 8)}`);
-    const entry = row.storedEntry ?? row.entry;
-    if (entry) {
-      updateIndex(
-        byKey,
-        `url-slug:${controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, entry))}`,
-      );
+  function replaceIndex(map: Map<string, Set<string>>, key: string | undefined, oldKey?: string) {
+    if (previous && key === oldKey) {
+      return;
+    }
+    if (oldKey) {
+      updateIndex(map, oldKey, true);
+    }
+    updateIndex(map, key);
+  }
+  if (!previous) {
+    updateIndex(byStore, row.storeTarget.storePath);
+    updateIndex(byAgent, row.agentId);
+    updateIndex(byKey, `key:${row.key}`);
+    updateIndex(byKey, logicalSessionRowIdentity(row.agentId, row.key));
+    // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
+    if (row.key === "global" || row.key === "unknown") {
+      updateIndex(byKey, physical(row.storeTarget.storePath, row.key));
     }
   }
-  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
-  if (row.key === "global" || row.key === "unknown") {
-    updateIndex(byKey, physical(row.storeTarget.storePath, row.key));
+  replaceIndex(
+    byKey,
+    row.entry && `id:${row.entry.sessionId}`,
+    previous?.entry && `id:${previous.entry.sessionId}`,
+  );
+  const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  if (uuid) {
+    if (!previous) {
+      // Eight characters is the shortest URL id; the resolver filters longer prefixes and ties.
+      updateIndex(byKey, `url-id:${uuid.toLowerCase().replaceAll("-", "").slice(0, 8)}`);
+    }
+    const slug = (candidate: Row | undefined) => {
+      const entry = candidate?.storedEntry ?? candidate?.entry;
+      return (
+        entry &&
+        `url-slug:${controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, entry))}`
+      );
+    };
+    replaceIndex(byKey, slug(row), slug(previous));
+  }
+  for (const parent of previous?.parents ?? []) {
+    if (!row.parents.has(parent)) {
+      updateIndex(byParent, parent, true);
+    }
   }
   for (const parent of row.parents) {
-    updateIndex(byParent, parent);
+    if (!previous?.parents.has(parent)) {
+      updateIndex(byParent, parent);
+    }
+  }
+}
+
+/** A bare run ID can recover only an uncontested single-session startup snapshot. */
+export function createRestoredCompletionIndex(isReady: () => boolean) {
+  type Completion = Pick<NonNullable<Row["storedEntry"]>, "sessionId" | "startedAt" | "endedAt"> & {
+    agentId: string;
+    sessionKey: string;
+    storePath: string;
+    lastRunId: string;
+    sourceKey?: Promise<string | undefined>;
+  };
+  let candidate: Completion | undefined;
+  return {
+    restore(rows: Iterable<Row>) {
+      // Another session's latest row can already have overwritten a reuse of this ID.
+      for (const row of rows) {
+        const entry = row.storedEntry;
+        if (
+          candidate ||
+          !entry?.lastRunId ||
+          entry.status !== "done" ||
+          entry.endedAt === undefined
+        ) {
+          candidate = undefined;
+          break;
+        }
+        candidate = {
+          lastRunId: entry.lastRunId,
+          storePath: row.storeTarget.storePath,
+          sessionKey: row.key,
+          agentId: row.agentId,
+          sessionId: entry.sessionId,
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+        };
+      }
+      return read;
+    },
+    update(before: Row["storedEntry"], after?: Row["storedEntry"]) {
+      if (candidate && !samePersistedSessionRun(before, after)) {
+        candidate = undefined;
+      }
+    },
+  };
+  function read(runId: string) {
+    const completion = candidate;
+    if (!completion || !matchesPersistedClientRunId(completion.lastRunId, runId) || !isReady()) {
+      return undefined;
+    }
+    completion.sourceKey ??= readUserKey(completion).catch(() => {
+      completion.sourceKey = undefined;
+      return undefined;
+    });
+    const inputKey = buildRunUserTurnIdempotencyKey(runId);
+    return completion.sourceKey.then((source) =>
+      isReady() && candidate === completion && source === inputKey ? completion : undefined,
+    );
+  }
+  async function readUserKey(completion: Completion) {
+    const page = await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
+      offset: 0,
+      maxMessages: 64,
+      maxBytes: 256 * 1024,
+      readOnly: true,
+    });
+    if (page.newestContiguousEventCount !== page.totalMessages) {
+      return undefined;
+    }
+    // Only the initiating user input identifies the exact wire ID of a normalized row.
+    let inputKey: string | undefined;
+    for (const { event } of page.events) {
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      if (
+        message?.role === "user" &&
+        asOptionalRecord(message["__openclaw"])?.steerTargetRunId == null
+      ) {
+        if (inputKey !== undefined || typeof message.idempotencyKey !== "string") {
+          return undefined;
+        }
+        inputKey = message.idempotencyKey;
+      }
+    }
+    return inputKey;
   }
 }

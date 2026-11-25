@@ -17,6 +17,7 @@ import type {
   SecretInputMode,
 } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 export type ProviderAuthProfile = {
   profileId: string;
@@ -111,6 +112,19 @@ export type ProviderAuthContext = {
   allowSecretRefPrompt?: boolean;
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  /**
+   * Paired nodes, present only when sign-in runs inside the Gateway (absent in offline CLI login).
+   * Invocations go through Gateway `node.invoke` policy with the sign-in caller's authority.
+   */
+  nodes?: {
+    list: PluginRuntime["nodes"]["list"];
+    invoke: (
+      params: Omit<
+        Parameters<PluginRuntime["nodes"]["invoke"]>[0],
+        "scopes" | "sessionKey" | "assertCurrent"
+      >,
+    ) => Promise<unknown>;
+  };
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
     authorize?: (params: {
@@ -189,6 +203,13 @@ export type ProviderAuthMethod = {
   wizard?: ProviderPluginWizardSetup;
   /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
   matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
+  /** Match a shared-store reconnect; defaults to matchesPersonalAccount when absent. */
+  matchesSharedAccount?: ProviderAuthMethod["matchesPersonalAccount"];
+  /** Whether shared login may replace an occupied generated profile ID when no reconnect matched. */
+  canReplaceGeneratedProfile?: (
     credential: AuthProfileCredential,
     existing: AuthProfileCredential,
   ) => boolean;

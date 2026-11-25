@@ -140,7 +140,7 @@ it("uses theme artwork as fallback, respects personal artwork, and follows theme
   await settle(fixture, "blob:/__openclaw__/theme-art/ship?v=2");
 
   vi.mocked(resolveAvatarImageUrl).mockReturnValue("blob:personal-avatar");
-  fixture.theme.settings.tabIcon = "agent:circle";
+  fixture.theme.settings.tabIcon = "agent";
   await settle(fixture, "blob:personal-avatar", "circle");
   fixture.selection.state.selectedId = "other";
   await settle(fixture, "blob:/__openclaw__/theme-art/ship?v=2");

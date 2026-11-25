@@ -18,14 +18,13 @@ import { assertExecutionPolicy } from "../cron/service/jobs-validation.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { decodeDoctorHeartbeatJobRows, type DoctorCronJob } from "./doctor-heartbeat-jobs.js";
@@ -240,6 +239,7 @@ export async function ensureHeartbeatMonitorJobs(
   legacyFileAgentIds: readonly string[] = [],
 ): Promise<Map<string, CronJob>> {
   validateLegacyHeartbeatConfig(cfg);
+  await prepareProviderModelPolicySurfaces();
   const inspected = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
     ({ db }) => {
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);

@@ -26,7 +26,7 @@ import type { StoredBinding } from "./agentsapi-binding-record.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { createAgentsApiHarness } from "./agentsapi-harness.js";
-import { createHostedSession } from "./agentsapi.test-support.js";
+import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
 
 export function registerHarness(
   env: NodeJS.ProcessEnv,
@@ -198,4 +198,30 @@ export async function prepareHistoryHandoff(params: Awaited<ReturnType<typeof cr
     },
   ]);
   return recorder;
+}
+
+export function createCompletedSessionFactory(): typeof import("./agentsapi-session.js").createAgentsApiSession {
+  let nextTurn = 0;
+  return (options) => {
+    const turn = createTurn({
+      id: `turn-${options.sessionId}-${++nextTurn}`,
+      session_id: options.sessionId,
+    });
+    return {
+      isAvailable: () => false,
+      isSettled: () => true,
+      wasSubmitted: () => true,
+      queueMessage: async () => {},
+      readUsageTurns: async () => [],
+      run: async (prompt, persistInput, onSubmitted) => {
+        await persistInput();
+        await options.client.message(options.sessionId, prompt, options.signal);
+        onSubmitted();
+        options.onSettled?.();
+        return { turn, cancelled: false, terminatedByTool: false };
+      },
+      close: async () => {},
+      reconcileAfterClose: async () => turn,
+    };
+  };
 }

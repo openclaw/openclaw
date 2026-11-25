@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { BroadcastChannel } from "node:worker_threads";
-import { isAbortError } from "../../infra/abort-signal.js";
+import { isAbortError, waitForAbortSignal } from "../../infra/abort-signal.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
@@ -21,9 +22,11 @@ import type {
   CronSchedulerResult,
 } from "../store/scheduler-actor.types.js";
 import { locked } from "./locked.js";
+import { watchCronProviderPushback } from "./provider-backoff.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
 import {
   adoptCronRunRequests,
+  drainCronRunQueue,
   getCronRunQueueRequests,
   launchCronRunQueueResult,
 } from "./run-queue.js";
@@ -34,6 +37,7 @@ import { emit, type CronServiceState } from "./state.js";
 import { noteLoadedCronStoreCommit, runPostPersistCronNotifications } from "./store.js";
 
 type ActorConnection = {
+  assertCurrent: () => void;
   lease?: OpenClawStateWorkerLease;
   borrowedLease?: OpenClawStateWorkerLease;
   acquireLease: () => OpenClawStateWorkerLease;
@@ -44,9 +48,11 @@ type ActorConnection = {
   releaseRefresh: () => void;
   pending: Promise<void>;
   refreshAfter?: Promise<unknown>;
+  nativeLost?: boolean;
 };
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
+const recoveries = new WeakSet<CronServiceState>();
 
 function executeScheduler(
   state: CronServiceState,
@@ -121,6 +127,7 @@ async function publish(
 export async function startCronScheduler(
   state: CronServiceState,
   skipJobIds: ReadonlySet<string>,
+  waitForStartupRuns = true,
 ): Promise<void> {
   if (connections.has(state)) {
     return;
@@ -131,12 +138,22 @@ export async function startCronScheduler(
   const channel = new BroadcastChannel(channelName);
   channel.unref();
   const context = captureOpenClawStateWorkerContext();
-  const acquireLease = () =>
-    createOpenClawStateWorkerLease(context, async (scope) => {
-      await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
-    });
-  const lease = state.deps.cronEnabled ? acquireLease() : undefined;
+  const acquireLease = (onNativeLost?: () => void) =>
+    createOpenClawStateWorkerLease(
+      context,
+      async (scope) => {
+        await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
+      },
+      onNativeLost,
+    );
+  const lease = state.deps.cronEnabled
+    ? acquireLease(() => {
+        connection.nativeLost = true;
+        refreshCronScheduler(state);
+      })
+    : undefined;
   const connection: ActorConnection = {
+    assertCurrent: () => context.admission.assertCurrent(),
     lease,
     acquireLease,
     channel,
@@ -147,8 +164,10 @@ export async function startCronScheduler(
     pending: Promise.resolve(),
   };
   connections.set(state, connection);
-  connection.releaseRefresh = registerCronSchedulerRefresh(state, () =>
-    refreshCronScheduler(state),
+  connection.releaseRefresh = registerCronSchedulerRefresh(
+    state,
+    () => refreshCronScheduler(state),
+    () => drainCronRunQueue(state),
   );
   connection.unregister = registerOpenClawStateDatabaseAsyncResource({
     async close(identity) {
@@ -171,7 +190,8 @@ export async function startCronScheduler(
       state.deps.log.warn({ err: String(error) }, "cron: scheduling delayed; worker will retry");
     });
   });
-  connection.unsubscribe = sessionChanges.subscribe((change) => {
+  const stopPushbackWatch = watchCronProviderPushback();
+  const stopConfigWatch = sessionChanges.subscribe((change) => {
     if (
       !("all" in change) ||
       typeof change.scope !== "string" ||
@@ -181,6 +201,10 @@ export async function startCronScheduler(
     }
     refreshCronScheduler(state);
   });
+  connection.unsubscribe = () => {
+    stopConfigWatch();
+    stopPushbackWatch();
+  };
   let started = false;
   try {
     await lease?.ready;
@@ -211,6 +235,11 @@ export async function startCronScheduler(
     state.schedulerStarted = true;
     const publishedRevision = await publish(state, result, observedRevision);
     await locked(state, () => launchCronRunQueueResult(state, result, context, publishedRevision));
+    // The run queue owns accepted execution and shutdown settlement. Recovery must
+    // release its busy owner so another native loss can reconnect while jobs run.
+    if (!waitForStartupRuns) {
+      return;
+    }
     // Readiness observers keep queued custody without holding Gateway initialization.
     const preparingReceiptIds = new Set(
       result.preparing.map(({ runReceipt }) => runReceipt.receiptId),
@@ -220,7 +249,7 @@ export async function startCronScheduler(
         .filter((request) => !preparingReceiptIds.has(request.runReceipt.receiptId))
         .map((request) => request.completion),
     );
-    const failed = completed.find((completion) => completion.status === "rejected");
+    const failed = completed.find((outcome) => outcome.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
     }
@@ -230,6 +259,70 @@ export async function startCronScheduler(
     }
     throw error;
   }
+}
+
+function recoverCronScheduler(state: CronServiceState): void {
+  if (recoveries.has(state) || state.schedulingPaused) {
+    return;
+  }
+  recoveries.add(state);
+  const generation = state.lifecycleGeneration;
+  const recovery = runInDetachedAsyncContext(async () => {
+    // Other borrowers keep a dead store published until they settle, so a
+    // replacement can lose its worker at once; retry until a live store answers.
+    for (let retryMs = 250; ; retryMs = Math.min(retryMs * 2, 30_000)) {
+      const lost = connections.get(state);
+      const current = () =>
+        lost?.nativeLost === true &&
+        connections.get(state) === lost &&
+        !state.stopped &&
+        !state.schedulingPaused &&
+        !state.schedulerScope.signal.aborted &&
+        state.lifecycleGeneration === generation;
+      if (!lost || !current()) {
+        return;
+      }
+      const run = async () => {
+        await state.op;
+        if (!current()) {
+          return;
+        }
+        // Keep the retired slot while paused; resume can request the same recovery.
+        // Join native settlement and host publication before registering another actor.
+        await closeConnection(state, lost, true, true);
+        if (!current()) {
+          return;
+        }
+        lost.assertCurrent();
+        connections.delete(state);
+        try {
+          await startCronScheduler(state, new Set(), false);
+        } catch (error) {
+          // Failed startup removed its own connection; keep the lost slot for the next attempt.
+          if (!connections.has(state)) {
+            connections.set(state, lost);
+          }
+          state.deps.log.warn({ err: String(error) }, "cron: worker recovery failed");
+          return;
+        }
+        state.deps.log.info({}, "cron: scheduler reconnected after native worker loss");
+      };
+      await (state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run());
+      if (current()) {
+        await waitForAbortSignal(
+          state.schedulerScope.signal,
+          delay(retryMs, undefined, { ref: false }),
+        );
+      }
+    }
+  })
+    .catch((error: unknown) => {
+      state.deps.log.warn({ err: String(error) }, "cron: worker recovery failed");
+    })
+    .finally(() => {
+      recoveries.delete(state);
+    });
+  state.schedulerDrain = Promise.all([state.schedulerDrain, recovery]).then(() => undefined);
 }
 
 /** The worker decides which slots are due; the host only launches committed requests. */
@@ -305,6 +398,10 @@ export function refreshCronScheduler(state: CronServiceState): void {
   if (!connection || state.stopped) {
     return;
   }
+  if (connection.nativeLost) {
+    recoverCronScheduler(state);
+    return;
+  }
   const operation = state.op;
   if (connection.refreshAfter === operation) {
     return;
@@ -353,8 +450,11 @@ async function closeConnection(
   state: CronServiceState,
   connection: ActorConnection,
   retired: boolean,
+  preserveConnection = false,
 ) {
-  connections.delete(state);
+  if (!preserveConnection && connections.get(state) === connection) {
+    connections.delete(state);
+  }
   connection.unsubscribe();
   connection.channel.close();
   connection.releaseRefresh();

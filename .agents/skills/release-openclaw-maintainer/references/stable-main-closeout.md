@@ -9,16 +9,25 @@ publishing stable also advanced `main`.
 
 Closeout requires the original successful stable/full FRV with soak and blocking
 performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
-decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+decisions. Closeout reuses the successful publisher's waiver verdict for that
+manifest; it does not re-evaluate the grants under later tooling. An original
+published receipt-recovery aggregate is also eligible: closeout
+authenticates it through the shared release evidence owner, including the original
+qualification receipts, successful recovery seal, and current operator authority.
+The recovery run/attempt and published manifest remain unchanged; a matching
+display name alone never qualifies recovery. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
 skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
-new evidence. Invalid or mismatched assets remain blocking.
+new evidence. Invalid or mismatched required assets remain blocking. ClawHub
+publication and verification are independent: do not wait for them to open or
+complete the main closeout or retrospective PR. Record pending or failed
+ClawHub work and its owner/run/attempt as a separate follow-up.
 
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
    with branch `release/<version>-main-closeout` and exact title
    `chore(release): close out <version> on main`. `<version>` is the published
    stable `YYYY.M.PATCH` (or `YYYY.M.PATCH-N` correction), without the `v` prefix.
-   Audit `release/YYYY.M.PATCH` against it and
+   [Audit `release/YYYY.M.PATCH` against it](#audit-without-per-commit-fetches) and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Normally set `main` to the shipped stable version, not a speculative next
@@ -125,10 +134,19 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
-9. Finish with the [release retrospective](retrospective.md): once publication,
+9. Finish with the [release retrospective](retrospective.md): once core publication,
    platform assets, and this closeout are terminal, write the report and open
-   its `openclaw/maintainers` PR with the shared issue-ledger update. The stable
+   its `openclaw/tideclaw` PR with the shared issue-ledger update. The stable
    release is not done until that PR is open and its ledger check passes.
+
+## Audit without per-commit fetches
+
+Pin main and release SHAs, then explicitly fetch missing audit blobs in batches of
+at most 1,024 through the existing source-acquisition owner
+([RRI691](https://github.com/openclaw/tideclaw/blob/main/release/retrospectives/2026.11.1.md#L875-L882)).
+Semantically compare release changes—including intermediate changes and merge
+resolutions—against pinned main with `git --no-lazy-fetch`; report missing content
+as an incomplete audit.
 
 ## Recover a failed publication parent
 

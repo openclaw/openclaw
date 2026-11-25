@@ -1,0 +1,27 @@
+[
+  {
+    "name": "short",
+    "clawHost": "a-00000.crabd.xyz",
+    "sandboxLabel": "sbx--s3g6aqm6xxhx3mj7nv5nlqzztmwidgr3"
+  },
+  {
+    "name": "63-byte-claw-label",
+    "clawHost": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-00000.crabd.xyz",
+    "sandboxLabel": "sbx--vtyogyk6ybrcj2u3c224brzt7bjw4k35"
+  },
+  {
+    "name": "fsn1",
+    "clawHost": "fsn1-r7pd5.crabd.xyz",
+    "sandboxLabel": "sbx--kjlhrap3fkjertegyqztbvxi5klcdimj"
+  },
+  {
+    "name": "mixed-case",
+    "clawHost": "FSN1-R7PD5.CRABD.XYZ",
+    "sandboxLabel": "sbx--kjlhrap3fkjertegyqztbvxi5klcdimj"
+  },
+  {
+    "name": "test-host-with-port",
+    "clawHost": "claw.localhost:47140",
+    "sandboxLabel": "sbx--fzgfpq6okhzyz4mxy2q3ynxpedctdgwf"
+  }
+]

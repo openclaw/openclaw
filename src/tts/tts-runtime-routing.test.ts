@@ -87,16 +87,16 @@ describe("TTS runtime native voice-note routing", () => {
 
   afterEach(resetTtsRuntime);
 
-  it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
-    const hint = buildTtsSystemPromptHint(createTtsConfig("openclaw-speech-core-tts-hint-test"));
-
-    expect(hint).toContain("Voice (TTS) is enabled.");
-    expect(hint).toContain(
+  it("offers [[tts]] directive guidance only when model overrides are enabled", () => {
+    const hint = (enabled: boolean) =>
+      buildTtsSystemPromptHint(
+        createTtsConfig("tts-hint", { auto: "inbound", modelOverrides: { enabled } }),
+      )!.split("\n");
+    expect(hint(true).filter((l) => l.includes("[[tts:"))).toEqual([
       "If workspace context (especially MEMORY.md) tells you not to use [[tts:...]] or to use a local/non-tagged voice workflow, follow that workspace instruction instead.",
-    );
-    expect(hint).toContain(
       "Use [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
-    );
+    ]);
+    expect(hint(false)).toEqual(hint(true).filter((l) => !l.includes("[[tts:")));
   });
 
   it("prepares deep-merged surface config and directive inputs", async () => {

@@ -1,3 +1,0 @@
-# Native ResizeObserver retained-row regression and eager layout-shift source identity.
-# Exact 158-line net regression-test growth; no credit for inherited baseline debt.
-158

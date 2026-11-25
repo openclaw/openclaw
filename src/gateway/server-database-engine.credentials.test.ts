@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   sanitizeEnvVars,
   sanitizeExplicitSandboxEnvVars,
@@ -19,6 +19,8 @@ const config = (key: string) => ({
     postgres: { connection: { source: "env" as const, provider: "default", id: key } },
   },
 });
+
+beforeEach(resetDatabaseEngineSelectionForTest);
 
 afterEach(async () => {
   await closePostgresPool();

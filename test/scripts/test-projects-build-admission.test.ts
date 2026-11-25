@@ -1178,6 +1178,15 @@ describe("cache lease completion", () => {
           configs.map((config) => runPlan(config)),
         );
       }
+      const workerCompiler = createControlledWorkerCompiler(
+        tempDirs.make("scheduler-worker-"),
+        process.env,
+      );
+      commands.prepare.mockImplementation((command) =>
+        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+          : Promise.resolve(0),
+      );
       const selections: unknown[] = [];
       await assertSchedulerDrain({
         args: focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
@@ -1242,30 +1251,30 @@ describe("test-projects build admission", () => {
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
-  it.each(["test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts"])(
-    "prepares cold UI before admitting the real Doctor fixture %s",
-    async (target) => {
-      const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-      const ui = createPreparationGate<number>(commands.prepare);
-      commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
-      const entry = start([target]);
-      try {
-        await Promise.race([runtime.started, entry]);
-        expect(commands.uiAssets).not.toHaveBeenCalled();
-        expect(commands.reader).not.toHaveBeenCalled();
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        await Promise.race([ui.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepare.mock.lastCall?.[0].args).toEqual(uiBuildArgs);
-      } finally {
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        ui.resolve(0);
-        await entry;
-      }
-      await expectPassed();
-      expect(commands.reader).toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
+    "test/doctor-guest-session-upgrade.e2e.test.ts",
+  ])("prepares cold UI before admitting the real Doctor fixture %s", async (target) => {
+    const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+    const ui = createPreparationGate<number>(commands.prepare);
+    commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+    const entry = start([target]);
+    try {
+      await Promise.race([runtime.started, entry]);
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      expect(commands.reader).not.toHaveBeenCalled();
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await Promise.race([ui.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.lastCall?.[0].args).toEqual(uiBuildArgs);
+    } finally {
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      ui.resolve(0);
+      await entry;
+    }
+    await expectPassed();
+    expect(commands.reader).toHaveBeenCalled();
+  });
 
   it.each(["ready", "missing", "failed", "skip"])(
     "handles prebuilt Doctor UI with no runtime build-info: %s",
@@ -1408,6 +1417,7 @@ describe("test-projects build admission", () => {
     build: boolean;
   }>([
     { args: [avatarTarget], build: true },
+    { args: ["ui/src/e2e/home-readonly.real-gateway.e2e.test.ts"], build: true },
     { args: [uiConfig], include: [avatarTarget], build: true },
     {
       args: [uiConfig],
@@ -1440,6 +1450,12 @@ describe("test-projects build admission", () => {
     await start(args);
     await expectPassed();
     expect(commands.prepare).toHaveBeenCalledTimes(build ? 1 : 0);
+    if (build) {
+      expect(commands.prepare.mock.lastCall?.[0]).toMatchObject({
+        args: currentRuntimeArgs,
+        env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
+      });
+    }
     expect(commands.uiAssets).toHaveBeenCalledTimes(build ? 1 : 0);
     expect(
       commands.prepare.mock.calls.some(([command]) => command.args[0] === "scripts/ui.js"),
@@ -1460,7 +1476,7 @@ describe("test-projects build admission", () => {
     async (target, build, include) => {
       const args = [target];
       const workerCompiler =
-        args[0] === infraConfig
+        args[0] === infraConfig || (args[0] === toolingConfig && include === undefined)
           ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
           : undefined;
       if (workerCompiler) {

@@ -143,7 +143,9 @@ describe("bundled plugin metadata", () => {
       ...EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_EXTRAS,
     ].toSorted((left, right) => left.localeCompare(right));
 
-    expect(expectedPluginIds).not.toContain("slack-huddles");
+    for (const id of ["google-meet", "teams-meetings", "zoom-meetings", "slack-huddles"]) {
+      expect(expectedPluginIds).not.toContain(id);
+    }
     expect(
       resolveGatewayStartupPluginPlanFromRegistry({
         config: {},

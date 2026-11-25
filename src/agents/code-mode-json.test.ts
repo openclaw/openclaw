@@ -97,10 +97,7 @@ describe("Code Mode JSON normalization", () => {
       // Descending and ascending probes cover reuse of measured prefix intervals.
       for (const limit of [maxBytes, 0, 1, maxBytes - 1, 128, 4_096, 512]) {
         const measured = project(limit, "budget");
-        const json = serializeToolSearchControlResult(
-          { ...metadata, ...project(limit).channels },
-          true,
-        );
+        const json = serializeToolSearchControlResult({ ...metadata, ...project(limit).channels });
         expect(measured, `repeat=${repeat}, limit=${limit}`).toEqual({
           chars: estimateToolResultTextChars(json),
           contextChars: estimateToolResultTextChars(json, { minimumRawWeight: 2 }),

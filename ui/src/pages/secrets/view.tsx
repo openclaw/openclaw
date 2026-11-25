@@ -154,13 +154,15 @@ function SecretsTable(props: SecretsStoreViewProps) {
         <Show
           when={props.read().length > 0}
           fallback={
-            <SettingsEmpty
-              message={
-                <>
-                  {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
-                </>
-              }
-            />
+            <Show when={props.state.store.loaded}>
+              <SettingsEmpty
+                message={
+                  <>
+                    {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
+                  </>
+                }
+              />
+            </Show>
           }
         >
           <div class="secrets-store__list" role="list">

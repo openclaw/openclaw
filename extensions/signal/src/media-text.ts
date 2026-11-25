@@ -1,8 +1,27 @@
 import {
+  formatInboundMediaUnavailableText,
   formatMediaPlaceholderText,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+
+export function formatSignalUnavailableMediaText(params: {
+  body: string;
+  viewOnce: boolean;
+  unavailableAttachmentCount: number;
+}): string {
+  const { body, viewOnce, unavailableAttachmentCount: count } = params;
+  if (!viewOnce && count === 0) {
+    return body;
+  }
+  const attachmentLabel = count === 1 ? "attachment" : "attachments";
+  return formatInboundMediaUnavailableText({
+    body,
+    notice: viewOnce
+      ? "[signal view-once media not shown]"
+      : `[signal ${count > 1 ? `${count} ` : ""}${attachmentLabel} unavailable]`,
+  });
+}
 
 /** Keeps Signal's established multi-attachment text while sharing single-item rendering. */
 export function formatSignalMediaText(media: readonly MediaPlaceholderTextFact[]): string {

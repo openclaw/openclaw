@@ -18,6 +18,7 @@ import type {
   SessionAgentPurgeResult,
   SessionAgentPurgeSelection,
 } from "./session-agent-purge.types.js";
+import { deleteAgentToolUsageInDatabase } from "./tool-usage.kernel.js";
 
 function isDeletedAgentEntry(input: SessionAgentPurgeSelection, sessionKey: string): boolean {
   return (
@@ -84,5 +85,8 @@ export function commitSessionAgentPurgeInDatabase(
     new Set(plannedSessionKeys),
   );
   deletePlannedLifecycleArtifactEntries(database, input.entryRemovals);
+  if (database.agentId === input.agentId) {
+    deleteAgentToolUsageInDatabase(database.db);
+  }
   return { archivedTranscripts, maintenancePlans: [applyMaintenance(database)] };
 }

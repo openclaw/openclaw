@@ -337,7 +337,7 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it.each(["operator-unset", "cli-error", "published-error"] as const)(
-    "returns %s to one unarmed repair turn",
+    "returns a model-generated %s to one unarmed repair turn",
     async (failure) => {
       useTempStateDir();
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
@@ -346,6 +346,26 @@ describe("SystemAgentChatEngine operations", () => {
           approvalArmed: params.approvalArmed,
           proposalRef: params.session.proposalRef,
         });
+        if (runAgentTurn.mock.calls.length === 1) {
+          if (unset) {
+            const proposal = await tool.execute("initial-proposal", {
+              action: "config_unset",
+              path: "agents.defaults.fastModeDefault",
+            });
+            return { text: expectDefined(extractToolResultText(proposal), "proposal text") };
+          }
+          return {
+            text: "Applying the approved change.",
+            directive: {
+              kind: "approved-operation",
+              operation: {
+                kind: "config-set",
+                path: "gateway.port",
+                value: published ? "18789" : "banana",
+              },
+            },
+          };
+        }
         const result = await tool.execute("repair-proposal", {
           action: "config_set",
           path: "gateway.port",
@@ -366,9 +386,6 @@ describe("SystemAgentChatEngine operations", () => {
         : new Error(
             unset ? "fixture schema error" : "gateway.port: Expected number, received string",
           );
-      const command = unset
-        ? "config unset agents.defaults.fastModeDefault"
-        : `config set gateway.port ${published ? "18789" : "banana"}`;
       if (failure === "cli-error") {
         mockApprovedOperation(async (_operation, runtime) => {
           runtime.error(error.message);
@@ -396,9 +413,8 @@ describe("SystemAgentChatEngine operations", () => {
         operatorApprovalOnly: unset,
         yes: failure === "cli-error" || published,
       });
-      let reply;
+      let reply = await engine.handle("Apply this configuration change.");
       if (unset) {
-        await engine.handle(command);
         reply = expectDefined(
           await engine.resolveOperatorApproval(
             "allow-once",
@@ -407,8 +423,6 @@ describe("SystemAgentChatEngine operations", () => {
           "operator reply",
         );
         expect(operationMocks.runConfigUnset).toHaveBeenCalledOnce();
-      } else {
-        reply = await engine.handle(command);
       }
       expect(reply.text).toContain("The config write failed");
       expect(reply.text).toContain(error.message);
@@ -428,10 +442,10 @@ describe("SystemAgentChatEngine operations", () => {
         path: "gateway.port",
         value: "18789",
       });
-      expect(runAgentTurn).toHaveBeenCalledOnce();
-      expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain(error.message);
-      expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
-      expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
+      expect(runAgentTurn).toHaveBeenCalledTimes(2);
+      expect(runAgentTurn.mock.calls[1]?.[0]?.input).toContain(error.message);
+      expect(runAgentTurn.mock.calls[1]?.[0]?.approvalArmed).toBe(false);
+      expect(runAgentTurn.mock.calls[1]?.[0]?.input).toContain("[config-verify]");
     },
   );
 
@@ -468,14 +482,16 @@ describe("SystemAgentChatEngine operations", () => {
       if (failure === "invalid") {
         expect(reply.text).toContain("failed validation");
         expect(reply.text).toContain("gateway.port: Expected number, received string");
-        expect(reply.text).toContain("could not propose a repair");
+        expect(reply.text).toContain("submit a new exact config command");
       } else {
         expect(reply.text).toContain("post-write verification is unavailable");
         expect(reply.text).toContain(
           failure === "missing" ? "openclaw.json was not found" : "openclaw.json could not be read",
         );
       }
-      expect(reply.text).toContain("openclaw doctor --fix");
+      if (failure !== "invalid") {
+        expect(reply.text).toContain("openclaw doctor --fix");
+      }
     },
   );
 });

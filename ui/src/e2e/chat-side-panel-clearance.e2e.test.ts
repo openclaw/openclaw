@@ -334,14 +334,17 @@ suite.define(() => {
         const expandedCenter = await rowCenter();
         expect(expandedCenter).toBeGreaterThan(24);
 
-        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
         await polledAttribute(shell, "class").toContain("shell--nav-collapsed");
         await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
         const controls = page.locator(".sidebar-rail [data-navigation-view]");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),
         );
-        expect(controlBoxes).toHaveLength(3);
+        expect(controlBoxes).toHaveLength(2);
         const tabsBox = (await tabs.boundingBox())!;
         for (const box of controlBoxes) {
           expect(box.width).toBeGreaterThan(0);
@@ -385,7 +388,10 @@ suite.define(() => {
             deviceLess ? "rtl" : "ltr",
           );
           if (navCollapsed) {
-            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+            await page
+              .locator("openclaw-app-sidebar")
+              .getByRole("button", { name: "Collapse sidebar", exact: true })
+              .click();
             await polledAttribute(page.locator(".shell"), "class").toContain(
               "shell--nav-collapsed",
             );

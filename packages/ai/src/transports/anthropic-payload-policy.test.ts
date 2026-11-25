@@ -41,7 +41,7 @@ it("normalizes each live system revision and cache policy once without sharing e
             ? [{ type: "text", text: `${prefix}\nDynamic` }]
             : [
                 { type: "text", text: prefix, cache_control },
-                { type: "text", text: "Dynamic" },
+                { type: "text", text: "\nDynamic" },
               ];
         const { params } = await buildAnthropicRequest(
           anthropicModel,
@@ -127,7 +127,7 @@ it("triggers inside a configured input cap", () => {
       {},
       "test-api-key",
     ),
-  ).toEqual({ enabled: true, threshold: 140_000 });
+  ).toEqual({ enabled: true, threshold: 170_000 });
 });
 it("requires resolved authentication before disabling client pruning", () => {
   expect(isAnthropicServerToolClearingEnabled(model, "  ")).toBe(false);

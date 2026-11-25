@@ -177,6 +177,10 @@ suite.define(() => {
                 );
               expect(landed.length).toBeGreaterThan(0);
               expect(
+                landed.every((row) => Math.abs(row.height - row.size) <= 0.5),
+                JSON.stringify(result),
+              ).toBe(true);
+              expect(
                 landed.every((row) => Math.abs(row.y - landed.at(-1)!.y) <= 1),
                 JSON.stringify(result),
               ).toBe(true);
@@ -237,7 +241,7 @@ suite.define(() => {
       await expect.poll(() => followUp.count()).toBe(1);
       await page.locator(".agent-chat__composer-combobox textarea").focus();
       await page.keyboard.press("ControlOrMeta+f");
-      const search = page.getByRole("textbox", { name: "Search messages", exact: true });
+      const search = page.getByRole("textbox", { name: "Search loaded messages", exact: true });
       await search.fill("Verification 24");
       await expect.poll(() => followUp.count()).toBe(0);
       expect(await body.textContent()).toBe(liveText);

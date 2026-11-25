@@ -222,6 +222,8 @@ file replacement or observed truncation starts a fresh stream. Slow output pipes
 pause reading instead of accumulating the rest of the log in memory.
 SIGINT or SIGTERM stops either tail source, settles any active history read,
 and exits with status 130 or 143 without printing later records.
+When the output pipe closes (for example `| head -n 1`), tail stops the same
+way and exits with status 0.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |

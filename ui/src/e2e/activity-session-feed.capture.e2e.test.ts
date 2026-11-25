@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -22,6 +25,88 @@ const identity = { type: "profile" as const, id: "profile-alice" };
 const alice = { id: identity.id, identity, label: "Alice Chen" };
 
 suite.define(() => {
+  it("scrolls the session feed from both page margins without moving the desktop filters", () =>
+    suite.withPage(
+      { locale: "en-US", colorScheme: "light", viewport: { height: 900, width: 1600 } },
+      async ({ page }) => {
+        const now = Date.now();
+        const sessions = Array.from({ length: 40 }, (_, index) => ({
+          key: `agent:main:activity-scroll-${index}`,
+          kind: "direct",
+          label: `Review session ${String(index + 1).padStart(2, "0")}`,
+          updatedAt: now - index * 60_000,
+          createdActor: { type: "human" as const, ...alice },
+          activitySummary: {
+            state: "current",
+            text: "Reviewed the proposed changes and recorded the remaining follow-up work.",
+            updatedAt: now,
+          },
+        }));
+        await installMockGateway(page, {
+          sessionKey: "agent:main:activity-scroll-0",
+          methodResponses: { "sessions.list": chatSessionListResponse(sessions) },
+        });
+        await page.goto(`${suite.server.baseUrl}activity`);
+        await expectCount(page.locator("[data-activity-session]")).toBe(sessions.length);
+        const firstRow = page.locator("[data-activity-session]").first();
+        const toolbar = page.locator(".activity-feed__toolbar");
+        const main = page.locator("main.content");
+
+        for (const width of [1600, 820, 390]) {
+          await page.setViewportSize({ width, height: 900 });
+          await firstRow.hover();
+          const bounds = await main.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            return {
+              left: rect.left + Number.parseFloat(getComputedStyle(element).borderLeftWidth),
+              right: rect.right,
+            };
+          });
+          const toolbarTop = (await toolbar.boundingBox())!.y;
+          for (const [side, x] of [
+            ["left", bounds.left + 8],
+            ["right", bounds.right - 8],
+            ["center", (bounds.left + bounds.right) / 2],
+          ] as const) {
+            const rowTop = (await firstRow.boundingBox())!.y;
+            await page.mouse.move(x, 650);
+            await page.mouse.wheel(0, 300);
+            try {
+              await expect
+                .poll(async () => (await firstRow.boundingBox())!.y)
+                .toBeLessThan(rowTop - 100);
+            } finally {
+              if (
+                process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" &&
+                width === 1600 &&
+                side === "left"
+              ) {
+                const frame = await takeControlUiScreenshotFrame(page, main, [toolbar], {
+                  animations: "disabled",
+                });
+                await writeFile(
+                  path.join(suite.artifactDir, "activity-margin-scroll.png"),
+                  frame.png,
+                );
+              }
+            }
+            if (width > 768) {
+              expect((await toolbar.boundingBox())!.y).toBe(toolbarTop);
+            }
+            await page.mouse.wheel(0, -300);
+            await expect
+              .poll(async () => (await firstRow.boundingBox())!.y, {
+                message: `Return to the starting row position at ${width}px from the ${side}`,
+              })
+              .toBe(rowTop);
+          }
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+          ).toBe(true);
+        }
+      },
+    ));
+
   it("keeps activity filters, attribution and inspector links usable in desktop and mobile layouts", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
@@ -206,84 +291,7 @@ suite.define(() => {
       },
     ));
 
-  it("folds Live activity controls into the filter popover and actions menu on phones", () =>
-    suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
-      async ({ page }) => {
-        const key = "agent:main:release";
-        const session = {
-          key,
-          kind: "direct",
-          label: "release",
-          displayName: "release",
-          updatedAt: Date.now(),
-          hasActiveRun: true,
-          activeRunIds: ["live-run"],
-          status: "running",
-        };
-        const gateway = await installMockGateway(page, {
-          sessionKey: key,
-          methodResponses: { "sessions.list": chatSessionListResponse([session]) },
-        });
-        await page.goto(`${suite.server.baseUrl}activity?view=live`);
-        await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
-        const activity = page.locator("openclaw-activity-page");
-        await activity.locator(".activity-current-work__row").waitFor();
-        for (const [id, isError] of [
-          ["call-one", false],
-          ["call-two", true],
-        ] as const) {
-          await gateway.emitGatewayEvent("session.tool", {
-            stream: "tool",
-            runId: "live-run",
-            sessionKey: key,
-            data: { toolCallId: id, name: "read", phase: "result", isError, result: { text: id } },
-          });
-        }
-        const entries = activity.locator(".activity-entry");
-        await expectCount(entries).toBe(2);
-
-        const trigger = activity.locator("#activity-live-filter-trigger");
-        const statuses = activity.locator('.activity-status-filter input[type="checkbox"]');
-
-        await trigger.click();
-        const panel = activity.locator(".activity-live-filter-popover:popover-open");
-        await expectCount(panel.locator('.activity-status-filter input[type="checkbox"]')).toBe(3);
-        await expectCount(panel.locator(".activity-live-autofollow").getByRole("switch")).toBe(1);
-        await statuses.nth(1).click();
-        await expectCount(entries).toBe(1);
-        await expect
-          .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
-          .toBe(true);
-        await statuses.nth(1).click();
-        await expectCount(entries).toBe(2);
-        await expect
-          .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
-          .toBe(false);
-        await page.keyboard.press("Escape");
-
-        const actions = page.locator(".topnav-shell__page-actions .activity-live-actions__trigger");
-        await actions.click();
-        await page.getByRole("menuitem", { name: "Expand all" }).click();
-        await expect
-          .poll(() =>
-            entries.evaluateAll((rows) => rows.every((row) => (row as HTMLDetailsElement).open)),
-          )
-          .toBe(true);
-        await actions.click();
-        await page.getByRole("menuitem", { name: "Collapse all" }).click();
-        await expect
-          .poll(() =>
-            entries.evaluateAll((rows) => rows.some((row) => (row as HTMLDetailsElement).open)),
-          )
-          .toBe(false);
-        await actions.click();
-        await page.getByRole("menuitem", { name: "Clear" }).click();
-        await expectCount(entries).toBe(0);
-      },
-    ));
-
-  it("keeps unnamed people private when filtering their phone activity", () =>
+  it("aligns phone activity and its people filter without exposing unnamed identities", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -356,6 +364,19 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}activity`);
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activity = page.locator("openclaw-activity-page");
+        await activity.locator(".activity-feed__sessions").waitFor();
+        const pageEdge = (await activity.locator(".page-subtitle").boundingBox())!.x;
+        for (const selector of [".activity-feed__search", ".activity-feed__sessions"]) {
+          expect((await activity.locator(selector).first().boundingBox())!.x).toBe(pageEdge);
+        }
+        const tabLabelEdge = await activity
+          .getByRole("tab", { name: "Sessions" })
+          .evaluate((tab) => {
+            const label = document.createRange();
+            label.selectNodeContents(tab);
+            return label.getBoundingClientRect().left;
+          });
+        expect(Math.abs(tabLabelEdge - pageEdge)).toBeLessThanOrEqual(1);
         const rowLink = (name: string) =>
           activity.locator(`[data-activity-session="agent:main:${name}"]`);
         const meta = (name: string) => rowLink(name).locator(".activity-feed__session-meta");
@@ -372,6 +393,10 @@ suite.define(() => {
 
         // Selecting the full identity keeps its unnamed heading private.
         await activity.locator(".activity-feed__people-trigger").click();
+        const labelEdges = await activity
+          .locator(".activity-feed__people-name")
+          .evaluateAll((labels) => labels.map((label) => label.getBoundingClientRect().left));
+        expect(new Set(labelEdges).size).toBe(1);
         await page.locator(`[data-activity-unresolved] [data-activity-person="${rawId}"]`).click();
         await expectText(activity.locator(`[data-activity-identity="${rawId}"] h2`)).toBe("Person");
       },

@@ -6,16 +6,13 @@ import {
   type ParsedRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import { comparePackageUpdateVersions } from "../infra/package-update-utils.js";
-import {
-  validateOpenClawPackageInstallCompatibility,
-  type PluginInstallRuntime,
-} from "./install-shared.js";
+import type { PluginInstallRuntime } from "./install-shared.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type PluginInstallFailureResult,
   type PluginInstallLogger,
 } from "./install-types.js";
-import type { OpenClawPackageManifest } from "./manifest.js";
+import { validateOpenClawPackageInstallCompatibility } from "./package-compat.js";
 
 export function isNpmPackageNotFoundMessage(error: string): boolean {
   const normalized = error.trim();
@@ -136,9 +133,9 @@ export function validateNpmResolutionCompatibility(params: {
   resolution: NpmSpecResolution;
 }): PluginInstallFailureResult | null {
   return validateOpenClawPackageInstallCompatibility({
-    runtime: params.runtime,
+    currentHostVersion: params.runtime.resolveCompatibilityHostVersion(),
     pluginId: params.expectedPluginId ?? params.resolution.name ?? params.parsedSpec.name,
-    packageMetadata: params.resolution.packageOpenClaw as OpenClawPackageManifest | undefined,
+    packageMetadata: params.resolution.packageOpenClaw,
   });
 }
 

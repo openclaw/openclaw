@@ -129,3 +129,20 @@ Do not introduce provider or platform special cases in core to make this work.
 Core owns Talk session semantics. Provider plugins own vendor session setup.
 Voice-call and Google Meet own telephony/meeting adapters. Browser and native
 apps own device capture/playback UX.
+
+## Await session-policy preparation
+
+Official realtime integrations should await
+`assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync` before fast-context
+lookup and again before returning its result. It uses the same target and
+requester model-lock policy as the synchronous helper, with worker-backed reads.
+Keep the call's live cancellation and ownership checks after each await.
+
+`controlRealtimeVoiceAgentRun` accepts `getToolAuthorityOverlayAsync` for
+worker-backed caller-policy reads. The controller prepares it again for each
+steering admission; do not capture one overlay for the lifetime of a call. Supply
+`assertCurrent` to recheck the speaker and call lifetime synchronously at the
+control effect, including cancellation. A prepared overlay is not live authority.
+The existing synchronous lock helper, `getToolAuthorityOverlay` callback, and
+dependency adapters retain their contracts. Failed asynchronous reads never fall
+back to synchronous storage.

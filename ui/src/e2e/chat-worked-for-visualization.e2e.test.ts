@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle, chatMessage } from "./chat-flow.test-support.ts";
+import { waitForChatScrollIdle, chatMessage, openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -38,12 +38,193 @@ async function captureProof(page: import("playwright").Page, name: string) {
 
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
+  it.each(["saved", "live"] as const)(
+    "folds image inspections into command activity and keeps delivered media visible (%s)",
+    async (source) => {
+      await suite.withPage(
+        { viewport: { width: 1200, height: 900 }, colorScheme: "light" },
+        async ({ page }) => {
+          const sessionKey = "agent:main:dashboard:tool-media-work";
+          const imageUrl = await page.evaluate(() => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 640;
+            canvas.height = 120;
+            const context = canvas.getContext("2d")!;
+            context.fillStyle = "#153343";
+            context.fillRect(0, 0, 640, 120);
+            context.fillStyle = "#9de2dd";
+            context.font = "24px sans-serif";
+            context.fillText("Verified preview · synthetic fixture", 30, 70);
+            return canvas.toDataURL("image/png");
+          });
+          const image = {
+            type: "image",
+            url: imageUrl,
+            mimeType: "image/png",
+            width: 640,
+            height: 120,
+          };
+          const inspect = (id: string) => [
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              stopReason: "toolUse",
+              content: [
+                { type: "toolCall", id, name: "view_image", arguments: { path: id + ".png" } },
+              ],
+            },
+            {
+              role: "toolResult",
+              toolCallId: id,
+              toolName: "view_image",
+              isError: false,
+              content: [{ type: "text", text: "Inspected screenshot" }, image],
+            },
+          ];
+          const runCommand = (id: string, command: string) => [
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id, name: "exec", arguments: { command } }],
+            },
+            {
+              role: "toolResult",
+              toolCallId: id,
+              toolName: "exec",
+              isError: false,
+              details: { exitCode: 0 },
+              content: [{ type: "text", text: "Command completed." }],
+            },
+          ];
+          const messages = [
+            { role: "user", content: "Check the preview and show the final image." },
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              phase: "commentary",
+              content: "I will inspect both screenshots.",
+            },
+            ...runCommand("lint", "pnpm lint"),
+            ...inspect("before"),
+            ...runCommand("build", "pnpm ui:build"),
+            ...inspect("after"),
+            ...runCommand("check", "pnpm tsgo:ui"),
+            {
+              role: "assistant",
+              provider: "openclaw",
+              model: "gateway-publication",
+              stopReason: "stop",
+              content: "Published the preview update.",
+            },
+            {
+              role: "assistant",
+              ...openAiAuthor,
+              phase: "final_answer",
+              stopReason: "stop",
+              content: [{ type: "text", text: "The preview is ready." }, image],
+            },
+          ].map((message, index) =>
+            Object.assign(message, {
+              timestamp: 1_000 + index * 1_000,
+              __openclaw: { id: "media-work-" + index, seq: index + 1, runId: "media-work-run" },
+            }),
+          );
+          const runId = "media-work-run";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            historyMessages: source === "live" ? messages.slice(0, -1) : messages,
+            ...(source === "live"
+              ? {
+                  inFlightRun: { runId, startedAt: 1_000, text: "" },
+                  sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+                }
+              : {}),
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const inspectedImages = page.getByRole("button", { name: "Viewed image", exact: true });
+          if (source === "live") {
+            await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+            await page.getByText("Published the preview update.", { exact: true }).waitFor();
+            expect(await page.locator(".chat-work-group").count()).toBe(0);
+            const finalMessage = messages.at(-1)!;
+            await gateway.setHistoryMessages(messages);
+            await gateway.emitGatewayEvent("session.message", {
+              sessionKey,
+              runId,
+              message: finalMessage,
+              messageId: finalMessage["__openclaw"].id,
+              messageSeq: finalMessage["__openclaw"].seq,
+              hasActiveRun: true,
+              activeRunIds: [runId],
+            });
+            await gateway.emitGatewayEvent("chat", {
+              sessionKey,
+              runId,
+              seq: 1,
+              state: "final",
+              message: finalMessage,
+            });
+            await gateway.emitGatewayEvent("sessions.changed", {
+              sessionKey,
+              reason: "lifecycle",
+              session: {
+                key: sessionKey,
+                hasActiveRun: false,
+                activeRunIds: [],
+                lastRunId: runId,
+                status: "done",
+              },
+            });
+          }
+          // The saved case reloads the persisted fixture; the live case checks the
+          // event-to-history handoff without replacing the page or its transcript.
+          for (const reloaded of source === "saved" ? [false, true] : [false]) {
+            if (reloaded) {
+              await page.reload();
+            }
+            const answer = page
+              .locator(".chat-bubble")
+              .getByText("The preview is ready.", { exact: true });
+            await answer.waitFor();
+            const work = page.locator(".chat-work-group > .chat-activity-group__summary");
+            await work.waitFor();
+            await waitForChatScrollIdle(page);
+            expect(await work.count()).toBe(1);
+            expect(await work.getAttribute("aria-expanded")).toBe("false");
+            expect(await inspectedImages.count()).toBe(0);
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
+            await work.click();
+            await waitForChatScrollIdle(page);
+            expect(await work.getAttribute("aria-expanded")).toBe("true");
+            await page.getByText("Published the preview update.", { exact: true }).waitFor();
+            if (!reloaded) {
+              await captureProof(page, `tool-media-activity-${source}`);
+            }
+            expect(await inspectedImages.count()).toBe(0);
+            const commands = page.getByRole("button", { name: "Ran commands", exact: true });
+            await commands.click();
+            await inspectedImages.nth(1).waitFor();
+            expect(await inspectedImages.count()).toBe(2);
+            await inspectedImages.nth(1).click();
+            await page.locator(".chat-activity-group__body img.chat-message-image").waitFor();
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(2);
+            expect(await answer.isVisible()).toBe(true);
+            await commands.click();
+            await work.click();
+            await waitForChatScrollIdle(page);
+            expect(await page.locator(".chat-thread img.chat-message-image").count()).toBe(1);
+          }
+        },
+      );
+    },
+  );
   it.each([
     { scenario: "widget first", browserFirst: false, framed: false },
     { scenario: "browser first", browserFirst: true, framed: false },
     { scenario: "widget first in a run frame", browserFirst: false, framed: true },
   ])(
-    "keeps widgets and browser previews in execution order ($scenario)",
+    "keeps delivered widgets visible without automatic browser previews ($scenario)",
     async ({ browserFirst, framed }) => {
       await suite.withPage(
         { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 2, colorScheme: "dark" },
@@ -79,6 +260,7 @@ suite.define(() => {
             return [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
                 timestamp,
               },
@@ -115,6 +297,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: `[embed ref="${viewId}" title="Release confidence" height="1000" /]`,
               timestamp: browserFirst ? 4_000 : 3_000,
             },
@@ -145,6 +328,7 @@ suite.define(() => {
             ),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: "The widget and release reference are ready.",
               timestamp: 6_000,
             },
@@ -179,19 +363,9 @@ suite.define(() => {
           const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
           const browser = page.locator("openclaw-browser-tab-card");
           await widget.waitFor();
-          await browser.waitFor();
           await waitForChatScrollIdle(page);
           expect(await widget.count()).toBe(1);
-          expect(await browser.count()).toBe(1);
-          expect(
-            await page
-              .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
-              .evaluateAll((elements) =>
-                elements.map((element) =>
-                  element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
-                ),
-              ),
-          ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
+          expect(await browser.count()).toBe(0);
           const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
           expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
           for (const expanded of [true, false]) {
@@ -199,7 +373,7 @@ suite.define(() => {
             await waitForChatScrollIdle(page);
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
             expect(await widget.count()).toBe(1);
-            expect(await browser.count()).toBe(1);
+            expect(await browser.count()).toBe(0);
             const overlaps = await page
               .locator(".chat-virtual-row:not([data-prepared-row])")
               .evaluateAll((elements) => {
@@ -272,6 +446,7 @@ suite.define(() => {
           { role: "user", content: "Check it.", timestamp: 1_000 },
           {
             role: "assistant",
+            ...openAiAuthor,
             content: [
               { type: "text", text: "Here is the visualization." },
               {
@@ -305,7 +480,7 @@ suite.define(() => {
             content: "ok",
             timestamp: 3_000,
           },
-          chatMessage("assistant", "Done.", { timestamp: 4_000 }),
+          chatMessage("assistant", "Done.", { ...openAiAuthor, timestamp: 4_000 }),
         ],
       });
 

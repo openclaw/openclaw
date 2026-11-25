@@ -11,6 +11,7 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/cron.js";
 import { CronStreamApprovalEndedSchema } from "../../cron/stream-approval-outcome.js";
 import { defineToolOutputSchema } from "../schema/tool-output-schema.js";
+import { CronCreationSlotsSchema } from "./cron-tool-schema.js";
 
 function closedObject<T extends TProperties>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
@@ -26,6 +27,7 @@ const CompactCronJobSchema = closedObject({
   id: job.id,
   name: job.name,
   agentId: job.agentId,
+  cyberAccessProgram: job.cyberAccessProgram,
   // Protocol-v4 compact replies from older Gateways omit the update timestamp.
   updatedAtMs: Type.Optional(job.updatedAtMs),
   declarationKey: job.declarationKey,
@@ -44,6 +46,7 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("event"),
   ]),
   streamExecutionHost: job.streamExecutionHost,
+  reauthorizationRequired: job.reauthorizationRequired,
   schedule: Type.Optional(
     Type.Union(
       job.schedule.anyOf.filter((schema) =>
@@ -107,6 +110,7 @@ const CronStatusOutputSchema = closedObject({
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),
   jobs: Type.Optional(Type.Integer({ minimum: 0 })),
+  reauthorizationRequired: Type.Optional(Type.Integer({ minimum: 0 })),
   nextWakeAtMs: Type.Optional(nullableNumber),
 });
 
@@ -174,11 +178,28 @@ const streamExecutionApproval = Type.Optional(
   ),
 );
 
+const automationCreation = Type.Optional(
+  Type.Union([
+    closedObject({
+      type: Type.Literal("automation_creation_result"),
+      planId: Type.String(),
+      slotId: Type.String(),
+      status: Type.Literal("created"),
+      jobId: Type.String(),
+    }),
+    closedObject({
+      type: Type.Literal("automation_creation_result"),
+      planId: Type.String(),
+      slotId: Type.String(),
+      status: Type.Literal("failed"),
+    }),
+  ]),
+);
 const CronAddToolOutputSchema = Type.Union([
   ...CronAddResultSchema.anyOf.map((schema) =>
-    Type.Object({ ...schema.properties, streamExecutionApproval }, { additionalProperties: false }),
+    closedObject({ ...schema.properties, streamExecutionApproval, automationCreation }),
   ),
-  CronStreamApprovalEndedSchema,
+  closedObject({ ...CronStreamApprovalEndedSchema.properties, automationCreation }),
 ]);
 const CronUpdateToolOutputSchema = Type.Union([
   Type.Object(
@@ -195,6 +216,11 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     status: CronStatusOutputSchema,
     list: CronListOutputSchema,
     get: CronJobSchema,
+    plan: closedObject({
+      type: Type.Literal("automation_creation_plan"),
+      planId: Type.String(),
+      slots: CronCreationSlotsSchema,
+    }),
     // Add can return a direct job or the declarative convergence envelope.
     add: CronAddToolOutputSchema,
     update: CronUpdateToolOutputSchema,

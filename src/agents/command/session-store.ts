@@ -15,7 +15,9 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { readVisibleSessionActivityAt } from "../../gateway/session-row-transcript-backfill.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -42,11 +44,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   compactionAccounting?: Extract<CompactionAccountingFact, { kind: "durable" }>;
   touchInteraction?: boolean;
   /**
-   * When false, skip the lastActivityAt bump so internal-event runs
-   * do not re-flag sessions unread; cron and user-facing runs count as activity.
-   */
-  touchActivity?: boolean;
-  /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for turn-local fallback and
@@ -69,7 +66,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
-  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -105,12 +101,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (updatesContext && expectedSession.sessionId !== sessionId) {
     return;
   }
+  const visibleActivityAt = preserveUserFacingRunState
+    ? undefined
+    : await readVisibleSessionActivityAt({
+        agentId: params.agentId,
+        storePath,
+        sessionKey,
+        sessionId,
+        sessionEntry: entry,
+      });
+  const touchActivity = (visibleActivityAt ?? 0) > (entry.lastActivityAt ?? 0);
   const next: SessionEntry = {
     ...entry,
     updatedAt: now,
     sessionStartedAt: entry.sessionStartedAt ?? now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
-    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
+    lastActivityAt: touchActivity ? visibleActivityAt : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -142,12 +148,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const hasUsage = hasNonzeroUsage(usage);
   if (!preserveUserFacingRunState) {
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateAggregateUsageCost({
+      await estimateAggregateUsageCostAsync({
         usage,
-        provider: providerUsed,
-        model: modelUsed,
-        config: cfg,
-        agentDir: params.agentDir,
+        prepareCost: () =>
+          resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+            agentDir: params.agentDir,
+          }),
       }),
     );
     Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));

@@ -84,7 +84,7 @@ writer is best-effort, not a lossless compliance archive.
 }
 ```
 
-- Default log file: `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`. When `/tmp/openclaw` is unsafe or unavailable (and always on Windows), OpenClaw uses a directory under the OS temp dir instead: `openclaw-<uid>` where a numeric user id is available, and plain `openclaw` where it is not, which includes Windows. Dated log files are pruned after 24 hours.
+- Default log file: `<stateDir>/logs/openclaw-YYYY-MM-DD.log`; named profiles use their own state directory and `openclaw-<profile>-YYYY-MM-DD.log`. When `logs/` is unsafe or unavailable (and always on Windows), OpenClaw uses `tmp/openclaw-<uid>` under the same state directory, or `tmp/openclaw` without a numeric user ID. Dated log files are pruned after 24 hours. See [log locations](/logging#where-logs-live).
 - Set `logging.file` for a stable path.
 - `consoleLevel` bumps to `debug` when `--verbose`.
 - `consoleStyle`: `"pretty"` or `"json"`. The earlier `"compact"` value is retired; [`openclaw doctor --fix`](/cli/doctor) maps it to `"pretty"`.

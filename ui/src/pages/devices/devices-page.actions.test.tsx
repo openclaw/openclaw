@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { openDeviceDisclosures } from "../../test-helpers/devices-view.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   gatewaySnapshot,
@@ -49,6 +50,7 @@ async function startSave(container: ParentNode) {
       "enabled save",
     ),
   );
+  openDeviceDisclosures(container);
   save.click();
   await waitForSolid(() => {
     expect(save.textContent).toContain(t("common.saving"));

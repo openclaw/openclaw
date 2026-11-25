@@ -32,6 +32,7 @@ import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import type { CronJobCreate } from "../types.js";
 import {
   createAuthorityCronService,
   prepareAuthorityConfig,
@@ -72,6 +73,8 @@ beforeEach(() => {
 it.each([
   "own",
   "foreign",
+  "foreign-same-owner",
+  "foreign-unbound",
   "operator",
   "archived",
   "managed",
@@ -87,7 +90,9 @@ it.each([
   const isolatedChild = scenario.startsWith("isolated-child");
   const foreignWorkspace = tempDirs.make("cron-foreign-workspace-");
   const foreignKey = "agent:main:dashboard:another-person";
-  const targetKey = scenario === "foreign" || scenario === "operator" ? foreignKey : SESSION;
+  const foreign = scenario === "foreign" || scenario === "foreign-same-owner";
+  const targetKey =
+    foreign || scenario === "foreign-unbound" || scenario === "operator" ? foreignKey : SESSION;
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "read", "write"], fs: { workspaceOnly: true } },
   });
@@ -143,8 +148,11 @@ it.each([
       ...creatorEntry,
       sessionId: "foreign-conversation",
       lifecycleRevision: "foreign",
-      spawnedCwd: foreignWorkspace,
-      createdActor: { type: "human", source: "profile", id: "another-person" },
+      spawnedCwd: scenario === "foreign-unbound" ? undefined : foreignWorkspace,
+      createdActor:
+        scenario === "foreign-same-owner"
+          ? CREATOR
+          : { type: "human", source: "profile", id: "another-person" },
       worktree: undefined,
     },
   );
@@ -152,11 +160,12 @@ it.each([
   const definition = {
     name: `Workspace authority ${scenario}`,
     enabled: false,
+    wakeMode: "now",
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: isolatedChild ? "isolated" : `session:${targetKey}`,
     payload: { kind: "agentTurn", message: "Read sentinel.txt", toolsAllow: ["read"] },
     delivery: { mode: "none" },
-  };
+  } satisfies CronJobCreate;
   if (scenario === "operator") {
     const respond = vi.fn();
     const add = expectDefined(cronHandlers["cron.add"], "cron.add");
@@ -183,7 +192,43 @@ it.each([
         await expect(
           tools.invoke("read", { path: path.join(foreignWorkspace, "sentinel.txt") }),
         ).rejects.toThrow(/outside|sandbox root|escapes/i);
-        await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: definition });
+        if (foreign) {
+          await expect(
+            tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: definition }),
+          ).rejects.toThrow(/Create the automation from the target conversation/);
+          expect(await fixture.read()).toHaveLength(0);
+          // Persist an old definition through the scheduler owner to preserve the runtime backstop proof.
+          const legacy = await fixture.context.cron.add({
+            ...definition,
+            owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
+          });
+          for (const patch of [
+            { enabled: true },
+            { sessionTarget: `session:${targetKey}` },
+            { payload: { kind: "agentTurn", message: "Changed instructions" } },
+          ]) {
+            await expect(
+              tools.invoke(AUTOMATIONS_TOOL_NAME, {
+                action: "update",
+                jobId: legacy.id,
+                job: patch,
+              }),
+            ).rejects.toThrow(/Create the automation from the target conversation/);
+          }
+          // Recovery controls must remain usable for invalid legacy jobs.
+          await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "update",
+            jobId: legacy.id,
+            job: { enabled: false },
+          });
+          await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "update",
+            jobId: legacy.id,
+            job: { name: "Paused legacy job" },
+          });
+        } else {
+          await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "add", job: definition });
+        }
       } finally {
         clearGatewayContextResolver(admitted);
       }
@@ -256,7 +301,7 @@ it.each([
       expect(result?.lastError).toMatch(/it was archived/);
       expect(execution.getJob(job.id)?.enabled).toBe(false);
     } else if (
-      scenario === "foreign" ||
+      foreign ||
       scenario === "managed-foreign-owner" ||
       scenario === "managed-manual-owner" ||
       scenario === "managed-escape"
@@ -264,7 +309,7 @@ it.each([
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(result?.lastRunStatus).toBe("error");
       expect(result?.lastError).toMatch(
-        scenario === "foreign"
+        foreign
           ? /only use its owning conversation’s workspace/
           : scenario === "managed-escape"
             ? /workspace does not match its managed worktree/

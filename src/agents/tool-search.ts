@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
@@ -6,22 +7,23 @@ import {
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { bindGatewayToolPolicyControl, copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
+import type { ToolResultBudget } from "./tool-result-limits.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION,
+  TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
+  omitDescribedOutputSchema,
   resolveCatalog,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
-import {
-  applyToolSchemaDirectoryCatalog,
-  buildMcpToolSearchDirectory,
-} from "./tool-search-directory.js";
+import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
   MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
@@ -57,6 +59,7 @@ export {
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
+  buildRunGrantedToolDirectory,
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
@@ -165,6 +168,7 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
 function formatToolSearchBatchResponse(
   results: ToolSearchBatchGroup[],
   networkContent: boolean,
+  budget?: ToolResultBudget,
 ): AgentToolResult<{
   results: ToolSearchBatchGroup[];
   truncated?: true;
@@ -183,8 +187,8 @@ function formatToolSearchBatchResponse(
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   let payload = render();
-  let { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
-  while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  let rendered = renderToolSearchControlText(JSON.stringify(payload), networkContent, { budget });
+  while (rendered.truncated || rendered.text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -208,9 +212,9 @@ function formatToolSearchBatchResponse(
     removable.truncated = true;
     truncated = true;
     payload = render();
-    ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
+    rendered = renderToolSearchControlText(JSON.stringify(payload), networkContent, { budget });
   }
-  const result = textResult(text, payload);
+  const result = textResult(rendered.text, payload);
   return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
 
@@ -232,37 +236,24 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
-  const result = applyToolCatalogCompaction({
+  // The MCP directory goes in the system prompt's deferred-tool section, so a server
+  // that connects later changes an appended prompt update, never this definition.
+  return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
     selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
     isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
   });
-  const catalog = result.catalogRegistered ? params.catalogRef?.current : undefined;
-  const directory = catalog ? buildMcpToolSearchDirectory(catalog) : "";
-  if (!directory) {
-    return result;
-  }
-  // The directory follows the registered catalog snapshot; an unchanged MCP
-  // inventory keeps identical description bytes across turns.
-  return {
-    ...result,
-    tools: result.tools.map((tool) =>
-      tool.name === TOOL_SEARCH_RAW_TOOL_NAME
-        ? copyAgentToolMetadata(tool, {
-            ...tool,
-            description: `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`,
-          })
-        : tool,
-    ),
-  };
 }
 
 export { applyToolSchemaDirectoryCatalog };
 
 const describeParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
+  [TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION]: Type.Optional(
+    Type.Boolean({ description: TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION_DESCRIPTION }),
+  ),
 });
 const callParameters = Type.Object({
   id: Type.String({ description: "Tool search result id or tool name." }),
@@ -340,7 +331,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
               parentToolCallId: toolCallId,
             }),
             runtime,
-            { parentToolCallId: toolCallId },
+            { parentToolCallId: toolCallId, allowPartial: true },
           );
         }
         const results = await Promise.all(
@@ -352,22 +343,32 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             }),
           })),
         );
-        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
+        return formatToolSearchBatchResponse(
+          results,
+          runtime.hasNetworkContent(toolCallId),
+          runtime.resultBudget,
+        );
       },
     },
     {
       name: TOOL_DESCRIBE_RAW_TOOL_NAME,
       label: "Tool Describe",
       description:
-        "Load the full schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
+        "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
       prepareArguments: prepareToolSearchDispatcherArguments,
-      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
-        formatToolSearchControlResult(
-          await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
-          runtime,
-          { parentToolCallId: toolCallId },
-        ),
+      execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
+        const described = await runtime.describe(readToolSearchId(args), {
+          parentToolCallId: toolCallId,
+        });
+        const includeOutputSchema =
+          isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
+        return formatToolSearchControlResult(described, runtime, {
+          parentToolCallId: toolCallId,
+          modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
+          allowPartial: true,
+        });
+      },
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
@@ -406,12 +407,10 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           }
           // Invocation results need identity, not another copy of the discovery metadata.
           // Keep the full target result in details; forward its already-projected images as content.
-          // Compact: indenting would escape and re-indent target text the model already reads,
-          // spending the shared output cap on whitespace.
           const controlResult = formatToolSearchControlResult(
             { tool: { id, name, source }, result: modelResult },
             runtime,
-            { parentToolCallId: toolCallId, images, compact: true },
+            { parentToolCallId: toolCallId, images },
           );
           const failureKind = resolveToolResultFailureKind(callResult.result);
           // Keep the model-visible `{ tool, result }` envelope stable while the

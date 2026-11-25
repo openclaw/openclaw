@@ -24,63 +24,6 @@ const privateText = "Synthetic private draft for retention measurement.";
 
 export const specialDialogScenes: Scene[] = [
   {
-    ...chat,
-    id: "dialog-onboarding-memory-import",
-    label: "Onboarding memory offer (synthetic once-per-tab guard reset)",
-    scenario: {
-      featureMethods: [...baseScenario.featureMethods!, "migrations.memory.plan"],
-      methodResponses: {
-        "migrations.memory.plan": {
-          agentId: "main",
-          workspace: "/synthetic/workspace",
-          providers: [
-            {
-              providerId: "codex",
-              label: "Codex",
-              planFingerprint: "a".repeat(64),
-              found: true,
-              source: "/synthetic/codex",
-              target: "/synthetic/workspace",
-              summary: {
-                total: 1,
-                planned: 1,
-                migrated: 0,
-                skipped: 0,
-                conflicts: 0,
-                errors: 0,
-                sensitive: 0,
-              },
-              items: [
-                {
-                  id: "memory:codex:MEMORY.md",
-                  status: "planned",
-                  source: "/synthetic/codex/MEMORY.md",
-                },
-              ],
-            },
-          ],
-        },
-      },
-    },
-    prepare: async (page) => {
-      // The offer intentionally appears once per tab. Rearm only its named
-      // synthetic storage trigger, then enter through the ordinary route.
-      await page.evaluate(() => {
-        sessionStorage.removeItem("openclaw.onboarding.memory-import");
-        window.openclawControlUi!.navigate("new-session", {
-          pathname: "/new",
-          search: "?onboarding=1",
-          hash: "",
-        });
-      });
-      const dialog = page.locator(".onboarding-memory-import-dialog");
-      await dialog.waitFor();
-      await dialog.getByText("Codex", { exact: true }).waitFor();
-      await dialog.locator('[data-test-id="onboarding-memory-import-skip"]').click();
-      await dialog.waitFor({ state: "detached" });
-    },
-  },
-  {
     route: "skills",
     path: "/skills?clawhub=%40fixture%2Fguide",
     ready: "openclaw-skills-page",

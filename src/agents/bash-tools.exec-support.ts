@@ -1,7 +1,11 @@
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
+import {
+  type ExecDroppedOutputFacts,
+  type ExecProcessOutcome,
+  renderExecDroppedOutputNote,
+  renderExecOutputText,
+} from "./bash-tools.exec-output.js";
 import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -22,11 +26,12 @@ export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
-  aggregateOutputDropped?: boolean;
+  session?: ExecDroppedOutputFacts & { readonly aggregated?: string };
 }): AgentToolResult<ExecToolDetails> {
   const warning = params.warningText?.trim();
   const warningText = warning ? `${params.warningText}\n\n` : "";
-  const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
+  const retentionCapNote = params.session ? renderExecDroppedOutputNote(params.session) : "";
+  const file = params.session?.outputFile;
   const outcome = params.outcome;
   const details: ExecToolDetails = {
     status: outcome.status,
@@ -35,11 +40,19 @@ export function buildExecForegroundResult(params: {
     ...(outcome.status === "failed" ? { failureKind: outcome.failureKind } : {}),
     exitReason: outcome.exitReason,
     durationMs: outcome.durationMs,
-    aggregated: outcome.aggregated,
+    aggregated:
+      outcome.status === "completed" && outcome.exitCode === 0
+        ? (params.session?.aggregated ?? outcome.aggregated)
+        : outcome.aggregated,
     ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,
     ...(warning ? { warningText: warning } : {}),
+    // Record-time truncation keeps this path visible when it cuts the result; a file cut at
+    // its limit stays marked partial through history elision.
+    ...(file
+      ? { fullOutputPath: file.path, ...(file.limitReached ? { spillTruncated: true } : {}) }
+      : {}),
   };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =

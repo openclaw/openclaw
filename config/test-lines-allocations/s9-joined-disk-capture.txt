@@ -1,3 +1,0 @@
-# Native Git/HTTP capture of unchanged initialization files after disk binding.
-# Retains explicit snapshot aliases, implicit-read/fork refusal and unchanged SQLite ownership.
-62

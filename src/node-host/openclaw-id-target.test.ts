@@ -43,3 +43,35 @@ test.each([
 ])("rejects non-origin Discovery routing %s", (url) => {
   expect(() => normalize(url)).toThrow("Discovery origin");
 });
+
+test("saved freshness keeps the K_gw its snapshot order belongs to", () => {
+  const marker = { seq: 3, issued_at: 1, binding_seq: 1, k_gw: world.gateway.pub };
+  const saved = normalizeGatewayConfig({
+    kind: "openclaw-id",
+    openclawId: { ...target, freshness: { claw_id: target.pin.claw_id, snapshot: marker } },
+  })?.openclawId;
+  expect(saved?.freshness?.snapshot).toEqual(marker);
+  expect(() =>
+    normalizeGatewayConfig({
+      kind: "openclaw-id",
+      openclawId: {
+        ...target,
+        freshness: { claw_id: target.pin.claw_id, snapshot: { ...marker, k_gw: "nope" as never } },
+      },
+    }),
+  ).toThrow("freshness");
+});
+
+test("a saved high-water above the pinned binding is capped on load (J5)", () => {
+  const saved = normalizeGatewayConfig({
+    kind: "openclaw-id",
+    openclawId: {
+      ...target,
+      freshness: {
+        claw_id: target.pin.claw_id,
+        snapshot: { seq: 3, issued_at: 1, binding_seq: 50 },
+      },
+    },
+  })?.openclawId;
+  expect(saved?.freshness?.snapshot?.binding_seq).toBe(1);
+});

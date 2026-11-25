@@ -66,6 +66,17 @@ type MemoryCandidateRequest = {
   limit?: number;
   activeProjectKeys?: readonly string[];
 };
+/** A new memory entry; the provider decides where and how it is kept. */
+export type MemoryStoreRequest = {
+  text: string;
+  title?: string;
+  tags?: readonly string[];
+  /** Why the host or owner is writing: an agent tool call, a pre-compaction flush, or capture. */
+  origin?: "tool" | "flush" | "capture";
+};
+export type MemoryStoreResult =
+  | { status: "stored"; reference: MemoryReference }
+  | { status: "rejected"; reason: string };
 export type MemoryProviderCapabilities = {
   /** Corpora search can cover. Non-empty. */
   sources: readonly ("memory" | "sessions")[];
@@ -75,6 +86,8 @@ export type MemoryProviderCapabilities = {
   candidates: readonly ("trigger" | "project")[];
   /** search honours `activeProjectKeys` as a filter. */
   projectFilter: boolean;
+  /** `store()` accepts new entries. Absent or false means the provider is read-only. */
+  store?: boolean;
 };
 
 /** A caller-bound lease. close releases this lease, not another caller's cached manager. */
@@ -89,5 +102,7 @@ export type MemoryProviderHandle = {
   health(): Promise<MemoryHealth>;
   candidates?(request: MemoryCandidateRequest): Promise<MemorySearchPage>;
   refresh?(): Promise<void>;
+  /** Persist a new entry. Present exactly when `capabilities.store` is true. */
+  store?(request: MemoryStoreRequest): Promise<MemoryStoreResult>;
   close(): Promise<void>;
 };

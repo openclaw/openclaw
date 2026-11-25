@@ -7,6 +7,10 @@ import {
   isWebchatClient,
 } from "../../utils/message-channel.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../auth-policy.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { resolveProfileActivityViewerId } from "../session-profile-activity-policy.js";
@@ -72,9 +76,13 @@ export function disconnectDisallowedGatewayPolicyClients(
     let currentRole: ReturnType<typeof resolveOperatorRolePolicyForProfile> = undefined;
     if (client.connect?.role === "operator") {
       try {
-        currentRole = resolveOperatorRolePolicyForProfile(
-          client.authenticatedUserProfile?.profileId,
-          cfg,
+        const principal = client.internal?.openclawIdPrincipal;
+        if (principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+          throw new Error("OpenClaw ID owner connection changed. Reconnect and try again.");
+        }
+        // A linked owner device keeps the owner's grants under its person's profile.
+        currentRole = openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
           currentRole !== undefined &&

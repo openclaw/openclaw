@@ -12,9 +12,12 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
+import { Icon } from "./icon.tsx";
 import type { MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";
+import "../../styles/chat/split-view.css";
+import "../../styles/select-picker.css";
 import "../../../public/themes/absolutely.css";
 import "../../../public/themes/phosphor.css";
 
@@ -80,13 +83,54 @@ function positionTrigger(style: Partial<CSSStyleDeclaration>) {
 }
 
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
-  const box = expectWithinViewport(menu);
+  // The menu's scrollport clips rows: a menu inside the viewport can still cut one off.
+  const top = expectWithinViewport(menu).top + menu.clientTop;
   const itemBox = element.getBoundingClientRect();
-  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
-  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+  expect(itemBox.top, element.textContent ?? "").toBeGreaterThanOrEqual(top);
+  expect(itemBox.bottom, element.textContent ?? "").toBeLessThanOrEqual(top + menu.clientHeight);
 }
 
 describe("native overlay presentation", () => {
+  it("centers the sharing permission caret before and after opening", async () => {
+    mountMenu({
+      panelClass: "chat-pane__sharing-menu--desktop",
+      items: [
+        {
+          id: "access",
+          label: "Can send",
+          trigger: (
+            <>
+              <span>Can send</span>
+              <span class="picker-select__chevron">
+                <Icon name="chevronDown" />
+              </span>
+            </>
+          ),
+          class: "chat-pane__sharing-permission",
+          children: [{ id: "read", label: "Can read" }],
+        },
+      ],
+    });
+    await openMenu();
+    const button = trigger("people-access");
+    for (const expanded of [false, true]) {
+      if (expanded) {
+        await openMenu("people-access");
+      }
+      document.getAnimations().forEach((animation) => animation.finish());
+      const box = button.getBoundingClientRect();
+      const icon = button.querySelector(".picker-select__chevron > svg")!;
+      expect(
+        button.querySelector<HTMLElement>(".oc-menu-item__submenu-icon")!.checkVisibility(),
+      ).toBe(false);
+      const glyph = icon.getBoundingClientRect();
+      expect(glyph.y + glyph.height / 2).toBeCloseTo(box.y + box.height / 2, 1);
+      expect(getComputedStyle(icon).marginInlineEnd).toBe("0px");
+      expect(glyph.width).toBe(
+        Number.parseFloat(getComputedStyle(root).getPropertyValue("--chrome-icon-size")),
+      );
+    }
+  });
   it("inherits palettes, focus, and menu states across stock, imported, and custom themes", async () => {
     mountMenu({
       items: [
@@ -219,6 +263,71 @@ describe("native overlay presentation", () => {
       expectItemVisible(last, child);
     },
   );
+
+  it.each(["bottom-end", "top-start"] as const)(
+    "keeps %s when it fits, flips before clipping, and scrolls when neither side fits",
+    async (placement) => {
+      await page.viewport(800, 600);
+      mountMenu({ placement, items: entries("Action", 24) });
+      surface().style.setProperty("--oc-overlay-max-height", "126px");
+      positionTrigger({ left: "350px", top: "280px" });
+      await openMenu();
+      const preferred = expectWithinViewport(surface());
+      const anchor = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(preferred.top).toBeGreaterThanOrEqual(anchor.bottom);
+      } else {
+        expect(preferred.bottom).toBeLessThanOrEqual(anchor.top);
+      }
+      await userEvent.keyboard("{Escape}");
+      positionTrigger({ top: placement === "bottom-end" ? "550px" : "20px" });
+      await openMenu();
+      const flipped = expectWithinViewport(surface());
+      expect(flipped.height).toBe(preferred.height);
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      const edge = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(flipped.bottom).toBeLessThanOrEqual(edge.top);
+      } else {
+        expect(flipped.top).toBeGreaterThanOrEqual(edge.bottom);
+      }
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      expectItemVisible(item("Action 24"), surface());
+
+      await userEvent.keyboard("{Escape}");
+      surface().style.removeProperty("--oc-overlay-max-height");
+      await page.viewport(390, 200);
+      positionTrigger({ left: "150px", top: "80px" });
+      await openMenu();
+      expectWithinViewport(surface());
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      await userEvent.keyboard("{End}");
+      expectItemVisible(item("Action 24"), surface());
+      await userEvent.keyboard("{Home}");
+      expectItemVisible(item("Action 1"), surface());
+    },
+  );
+
+  it("flips a short row menu at the window edge with every action whole", async () => {
+    await page.viewport(800, 600);
+    mountMenu({
+      placement: "bottom-end",
+      items: [
+        { id: "edit", label: "Edit" },
+        { id: "delete", label: "Delete", variant: "danger" },
+      ],
+    });
+    // Like the last Secrets row: less room below the trigger than the menu needs.
+    positionTrigger({ right: "16px", bottom: "40px" });
+    await openMenu();
+    const rows = [...surface().querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => expectItemVisible(row, surface()));
+    expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      trigger().getBoundingClientRect().top,
+    );
+  });
 
   it("uses high-contrast borders and focus in forced colors", async () => {
     await emulateOverlayMedia({ forcedColors: "active" });

@@ -5,7 +5,6 @@ import {
   parseDiscordModalCustomId,
 } from "../component-custom-id.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
-import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -36,20 +35,6 @@ function mapOptionLabels(
   }
   const map = new Map(options.map((option) => [option.value, option.label]));
   return values.map((value) => map.get(value) ?? value);
-}
-
-export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
-  const raw = readParsedId(data, "cid");
-  const componentId =
-    typeof raw === "string"
-      ? decodeCustomIdComponent(raw)
-      : typeof raw === "number"
-        ? String(raw)
-        : null;
-  if (!componentId) {
-    return null;
-  }
-  return { componentId };
 }
 
 export function parseDiscordComponentData(

@@ -1,6 +1,7 @@
 import { expect, it, type Mock } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runCapability } from "./capability-cli.test-harness.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 export async function interruptCapability(
   run: (waitForAbort: (signal?: AbortSignal) => Promise<never>) => Promise<void>,
@@ -69,11 +70,13 @@ export function registerEmbeddingCapabilityCliTests({
   );
 
   it("rejects conflicting provider and model prefixes before creating a provider", async () => {
-    await expect(
-      create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json"),
-    ).rejects.toThrow("exit 1");
+    const run = create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json");
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow(
+      'Embedding --provider "deepinfra" must match the provider "Qwen" in --model.',
+    );
     expect(providerCall()).toBeUndefined();
-    expectError('Embedding --provider "deepinfra" must match the provider "Qwen" in --model.');
+    expect(jsonOutput()).toBeUndefined();
   });
 
   it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {
