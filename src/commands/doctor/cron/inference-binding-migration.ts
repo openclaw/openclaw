@@ -500,7 +500,10 @@ export async function maybeRepairCronInferenceBindings(params: {
       changes,
     );
     return {
-      changes: [...descriptions, `Saved pre-repair cron backup: ${result.backupPath}`],
+      changes: [
+        ...descriptions,
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
+      ],
       warnings: [...warnings, ...(result.warnings ?? [])],
     };
   } catch (error) {

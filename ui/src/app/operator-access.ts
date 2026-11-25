@@ -1,6 +1,10 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { canCallGatewayMethod, canPresentGatewayMethod } from "../lib/gateway-methods.ts";
+import {
+  canCallGatewayMethod,
+  canPresentGatewayMethod,
+  isGatewayMethodAdvertised,
+} from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 type OperatorAuth = {
@@ -113,4 +117,32 @@ export function canReactToSession(
   return visibility === "shared"
     ? cap !== "view" && cap !== "suggest"
     : visibility === "suggest" && cap !== "view";
+}
+
+/** Recipient-local invitation evidence; creator/admin controls remain unchanged. */
+export function invitedSessionAccess(
+  session: Pick<GatewaySessionRow, "sharingRole" | "invitedAccess"> | undefined,
+) {
+  return session?.sharingRole === "member" || session?.sharingRole === "viewer"
+    ? session.invitedAccess
+    : undefined;
+}
+
+export function canSuggestInSession(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
+  session: Pick<GatewaySessionRow, "sharingRole" | "visibility" | "invitedAccess"> | undefined,
+  options: { multiIdentity: boolean; archived: boolean },
+) {
+  const invitation = invitedSessionAccess(session);
+  return (
+    !options.archived &&
+    (invitation !== undefined
+      ? invitation === "suggest"
+      : options.multiIdentity &&
+        hasOperatorWriteAccess(snapshot.hello?.auth ?? null) &&
+        session?.visibility === "suggest" &&
+        session.sharingRole === "viewer") &&
+    isGatewayMethodAdvertised(snapshot, "session.suggestions.add") === true &&
+    isGatewayMethodAdvertised(snapshot, "session.suggestions.list") === true
+  );
 }

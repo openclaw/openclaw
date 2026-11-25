@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { CyberAccessProgram, GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -163,7 +163,10 @@ it("keeps an all-cold catalog disabled with provider setup", async () => {
     "Sign-in needed",
   );
   find("model-setup", "true")!.click();
-  expect(navigate).toHaveBeenCalledWith("model-setup");
+  expect(context.settingsAgentSelection.state.selectedId).toBe("main");
+  expect(navigate).toHaveBeenCalledWith("model-providers", {
+    search: "?provider=openai&connect=1",
+  });
 });
 
 it("does not restore a stale preference when picker-open recovery succeeds", async () => {
@@ -729,7 +732,13 @@ describe("runtime choices", () => {
 });
 
 it("preserves an explicit Access choice across model and catalog changes", async () => {
-  const { context, control, changed, request } = setup([luna, sol]);
+  const availableAccessPrograms: ModelCatalogEntry["availableAccessPrograms"] = {
+    cyber: ["standard", "daybreak_blue", "daybreak_red"],
+  };
+  const { context, control, changed, request } = setup([
+    { ...luna, availableAccessPrograms },
+    { ...sol, availableAccessPrograms },
+  ]);
   const preference = { cyberAccessProgram: "daybreak_blue" as const };
   control.load(context, "main", true, { preference });
   await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
@@ -788,6 +797,30 @@ const daybreakCyber: ModelCatalogEntry = {
   availableAccessPrograms: { cyber: ["daybreak_red"] },
   cyberAccessProgramDefault: "standard",
 };
+
+it.each([
+  { programs: { cyber: ["standard"] }, expected: undefined },
+  { programs: undefined, expected: "daybreak_blue" },
+] satisfies {
+  programs: ModelCatalogEntry["availableAccessPrograms"];
+  expected: CyberAccessProgram | undefined;
+}[])("submits a saved draft choice with advertised programs $programs", async (scenario) => {
+  const model: ModelCatalogEntry = {
+    ...sol,
+    availableAccessPrograms: scenario.programs,
+    cyberAccessProgramDefault: "standard",
+  };
+  const { context, control } = setup([daybreakMainline, model]);
+  const agent = { id: "main", model: { primary: `openai/${model.id}` } };
+  control.load(context, "main", true, {
+    agent,
+    preference: { cyberAccessProgram: "daybreak_blue" },
+  });
+  await control.metadataRead;
+  expect(control.accessProgramForSubmission()).toBe(scenario.expected);
+  control.selectModel(`openai/${daybreakMainline.id}`);
+  expect(control.draftSelection("main")?.cyberAccessProgram).toBe(scenario.expected);
+});
 
 it("saves one model selection with mandatory Daybreak, then follows the new model back", async () => {
   const { context, control, changed } = setup([daybreakMainline, daybreakCyber]);

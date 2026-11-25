@@ -115,7 +115,7 @@
           "type": "string"
         },
         "effectId": {
-          "description": "sendWithEffect id/name.",
+          "description": "Numeric Telegram message effect id; private chats only.",
           "type": "string"
         },
         "emoji": {
@@ -138,9 +138,6 @@
         },
         "gatewayUrl": {
           "type": "string"
-        },
-        "gifPlayback": {
-          "type": "boolean"
         },
         "groupId": {
           "type": "string"
@@ -573,12 +570,6 @@
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
-          "type": "string"
-        },
-        "targetAuthor": {
-          "type": "string"
-        },
-        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {

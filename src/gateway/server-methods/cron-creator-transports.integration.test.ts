@@ -44,6 +44,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
+import { decideTurnGrant } from "../operator-admission.js";
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
@@ -431,11 +432,11 @@ it.each([
             runId,
             resolvedSessionKey: SESSION,
             client,
+            grant: decideTurnGrant(client.connect.scopes ?? []),
             inputProvenance: { kind: "internal_system", sourceTool: "template_add_setup" },
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
             isIncognitoEntry: false,
-            isReconnectResume: false,
             isSystemGenerated: true,
             turnKind: "main",
           })
@@ -444,10 +445,10 @@ it.each([
               runId,
               resolvedSessionKey: SESSION,
               client,
+              grant: decideTurnGrant(client.connect.scopes ?? []),
               hasExplicitOrigin: false,
               hasRestoredCronContinuation: false,
               isIncognito: false,
-              isReconnectResume: false,
               isSystemGenerated: false,
               turnKind: "main",
               isDirectExternalUser: true,
@@ -603,10 +604,10 @@ it.each(["admin", "caller", "non-admin"] as const)(
       runId,
       resolvedSessionKey: SESSION,
       client,
+      grant: decideTurnGrant(client.connect.scopes ?? []),
       hasExplicitOrigin: false,
       hasRestoredCronContinuation: false,
       isIncognito: false,
-      isReconnectResume: false,
       isSystemGenerated: false,
       turnKind: "main",
       isDirectExternalUser: true,

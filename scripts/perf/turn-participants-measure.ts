@@ -26,10 +26,12 @@ const { createReplyTurnParticipants } =
   await import("../../src/sessions/session-controller.tool-authority.js");
 const { createAdmittedRunOperatorAuthority } =
   await import("../../src/agents/admitted-run-context.js");
+const { decideTurnGrant } = await import("../../src/gateway/operator-admission.js");
 const authority = createAdmittedRunOperatorAuthority({
   canonicalIdentity: null,
   profileId: "synthetic-profile",
   scopes: ["operator.admin"],
+  grant: decideTurnGrant(["operator.admin"]),
 });
 const fixture = {
   operatorAuthority: authority,

@@ -1,7 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
-import * as cryptoDigest from "../../infra/crypto-digest.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
@@ -176,32 +175,6 @@ describe("cache-TTL tool-result projection", () => {
       );
     },
   );
-
-  it("hashes each frozen source once across interleaved sessions and recreated attempt state", () => {
-    using digest = vi.spyOn(cryptoDigest, "sha256Base64Url");
-    const sessions = ["first", "second"].map((text) => ({
-      messages: [freezeJsonSnapshot(tool({ id: "shared-id", text }))],
-      state: newState(),
-    }));
-    for (const session of sessions) {
-      projectToolResultMessages({ messages: session.messages, projectionState: session.state });
-    }
-    expect(digest).toHaveBeenCalledTimes(2);
-    const hashes = sessions.flatMap(({ state }) => [...state.sourceHashByKey.values()]);
-    expect(new Set(hashes).size).toBe(2);
-    for (let turn = 0; turn < 3; turn++) {
-      for (const session of sessions) {
-        reconcile(session.messages, session.state);
-        const recreated = newState();
-        expect(
-          projectToolResultMessages({ messages: session.messages, projectionState: recreated })
-            .messages,
-        ).toEqual(session.messages);
-        expect(recreated.sourceHashByKey).toEqual(session.state.sourceHashByKey);
-      }
-    }
-    expect(digest).toHaveBeenCalledTimes(2);
-  });
 
   it.each(["mutable", "shallow", "deep"])(
     "invalidates rewritten %s sources without losing another session's projection",

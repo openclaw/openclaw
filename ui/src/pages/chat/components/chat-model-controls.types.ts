@@ -51,6 +51,8 @@ export type ChatModelControlsProps = {
   sending: boolean;
   sessionKey: string;
   selectedSession: SessionsListResult["sessions"][number] | undefined;
+  /** The active connection supplied this session row, not an offline snapshot. */
+  sessionRowCurrent?: boolean;
   selectedAgentRuntime?: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;
@@ -59,7 +61,7 @@ export type ChatModelControlsProps = {
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
   onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
-  onModelSetup?: () => void;
+  onModelSetup?: (provider?: string) => void;
   onProviderSettings?: (provider: string) => void;
   onModelPickerOpen?: () => unknown;
   onModelPickerOpenChange?: (open: boolean) => void;

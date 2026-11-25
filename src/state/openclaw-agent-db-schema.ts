@@ -108,6 +108,10 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import { AGENT_INDEX_RETIREMENT_SQL } from "./openclaw-agent-index-retirement-migration.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  migrateAgentMemberAccessInTransaction,
+} from "./openclaw-agent-member-access-schema.js";
 import { AGENT_MEMORY_REVISION_SQL } from "./openclaw-agent-memory-revision-migration.js";
 import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
@@ -199,7 +203,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     integrityCheck,
   );
   const startedAt = performance.now();
-  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
+  if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     const boundedIndexes =
       runtimeAdmission && !verification && !reuseAdmission && integrityCheck !== "full"
         ? admitAgentDatabaseRuntimeStructure(database, pathname, agentId, diagnostics)
@@ -294,6 +298,11 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion > targetVersion) {
+        if (targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+          // A compatible newer writer owns its version and floor; runtime open must not rewrite either.
+          assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
+          return;
+        }
         throw new Error(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
@@ -399,6 +408,9 @@ function ensureAgentSchema(
         }
         if (crossesVersion(AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION)) {
           migrateAgentPendingInputEndingsInTransaction(db);
+        }
+        if (crossesVersion(AGENT_MEMBER_ACCESS_SCHEMA_VERSION)) {
+          migrateAgentMemberAccessInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own
         // only their declared tables; additive index repair stays at admission.
@@ -722,7 +734,13 @@ export function* ensureOpenClawAgentDatabaseSchemaSteps(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const admittedDb = admitOpenClawAgentDatabaseSchema(db, { agentId, path: pathname });
   if (databaseOptions.register === true) {
-    registerOpenClawAgentDatabase({ agentId, path: pathname, env: options.env, admittedDb });
+    registerOpenClawAgentDatabase({
+      agentId,
+      path: pathname,
+      env: options.env,
+      admittedDb,
+      schemaVersion: readSqliteUserVersion(db),
+    });
   }
 }
 

@@ -69,7 +69,7 @@ it("retains a saved unavailable model without offering it for another default se
     blocked.push(...picker.querySelectorAll(optionSelector("blocked")));
     ready.push(...picker.querySelectorAll(optionSelector("ready")));
   }
-  expect(blocked).toHaveLength(3);
+  expect(blocked).toHaveLength(4);
   expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
   expect(ready.every((option) => option.getAttribute("aria-disabled") === "false")).toBe(true);
   const utility = trigger(container, "utility");
@@ -85,6 +85,32 @@ it("retains a saved unavailable model without offering it for another default se
   expect(row.querySelector(optionSelector("blocked"))).toBeNull();
   await choosePickerValue(picker, "fixture/last");
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
+});
+
+it("shows a saved subagent model unfolded and clears it back to not set", async () => {
+  const onSubagentChange = vi.fn();
+  const container = mount(
+    props({
+      configuredModels: [
+        { provider: "fixture", id: "ready", name: "Ready", available: true },
+        { provider: "fixture", id: "last", name: "Last", available: true },
+      ],
+      defaultModels: {
+        primary: "fixture/ready",
+        fallbacks: [],
+        utilityModel: null,
+        subagentModel: "fixture/last",
+      },
+      onSubagentChange,
+    }),
+  );
+  await updatePickers(container);
+  const picker = trigger(container, "subagent");
+  expect(picker.textContent).toContain("Last");
+  await choosePickerValue(picker, "fixture/ready");
+  expect(onSubagentChange).toHaveBeenLastCalledWith("fixture/ready");
+  await choosePickerValue(picker, "__openclaw_inherit_subagent__");
+  expect(onSubagentChange).toHaveBeenLastCalledWith(null);
 });
 
 it("chooses a harness for the primary or fallback without offering the primary again", async () => {

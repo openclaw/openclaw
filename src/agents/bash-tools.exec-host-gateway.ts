@@ -65,6 +65,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  createGatewayExecDenial,
   buildGatewayExecAllowlistDeniedMessage,
   publishGatewayGuardianReview,
   buildGatewayExecApprovalDeniedToolResult,
@@ -112,14 +113,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const deny = (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
-    deniedResult: buildGatewayExecApprovalDeniedToolResult({
-      approvalId,
-      deniedReason,
-      command: params.command,
-      cwd: params.workdir,
-    }),
-  });
+  const deny = createGatewayExecDenial(params);
   const { approvals, hostSecurity, hostAsk, askFallback } = await resolveExecHostApprovalContext({
     agentId: params.agentId,
     security: params.security,
@@ -170,6 +164,9 @@ export async function processGatewayAllowlist(
     hostSecurity === "allowlist" &&
     (!analysisOk || !allowlistSatisfied) &&
     !durableApprovalSatisfied;
+  if (params.participationDenyMisses && hasAllowlistMiss) {
+    return deny("participant-allowlist-miss");
+  }
   function emitApprovalEvent(event: {
     action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
     outcome: "success" | "denied" | "error";

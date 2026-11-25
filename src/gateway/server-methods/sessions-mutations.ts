@@ -145,6 +145,7 @@ function createSessionPatchHandler(
         context,
         signal,
         diagnostics,
+        participationOnly: sessionMutationAuthorization?.participationCeiling !== undefined,
         operatorAuthority: preparingOperator,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,

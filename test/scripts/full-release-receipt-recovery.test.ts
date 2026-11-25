@@ -29,6 +29,7 @@ import {
   revalidateCandidateArtifactAuthority,
 } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import {
   consumptionOptions,
   recoveryConsumptionFixture,
@@ -73,6 +74,56 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
+  it.each([
+    { mode: "Gateway default", expected: "false", actual: "false" },
+    { mode: "Gateway default", expected: "false", actual: "true" },
+    { mode: "legacy explicit", expected: "true", actual: "true" },
+    { mode: "legacy explicit", expected: "true", actual: "false" },
+  ] as const)(
+    "checks a Normal CI receipt with include_android=$actual against the frozen $mode",
+    async ({ mode, expected, actual }) => {
+      const test = recoveryConsumptionFixture(
+        candidatePublicationFixture({
+          releaseProfile: "extended-stable",
+          candidateVersion: "2026.8.34",
+          targetContextRef: "extended-stable/2026.8.33",
+          qualificationSha: "b".repeat(40),
+        }),
+        { normalCiReceiptAndroid: actual },
+      );
+      if (mode === "legacy explicit") {
+        const source = test.client.getWorkflowSource;
+        vi.spyOn(test.client, "getWorkflowSource").mockImplementation((sha, path) => {
+          const workflow = source(sha, path);
+          if (
+            sha !== test.direct.q ||
+            (path && path !== ".github/workflows/full-release-validation.yml")
+          ) {
+            return workflow;
+          }
+          return workflow.replace(
+            'args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f dispatch_id="$dispatch_id")',
+            [
+              "include_android=true",
+              'if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi',
+              'args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")',
+            ].join("\n              "),
+          );
+        });
+      }
+      expect(
+        expectDefined(test.recovery.children.normalCi, "normal CI selection").inputs.release_scope,
+      ).toBe("full");
+      const operation = verifyOriginalReceiptQualification(test.recovery, { client: test.client });
+      if (actual !== expected) {
+        await expect(operation).rejects.toThrow(
+          "Full release child evidence selection identity or dispatch inputs changed",
+        );
+      } else {
+        await expect(operation).resolves.toBeDefined();
+      }
+    },
+  );
   it("recovers raw failed child receipts using the original admitted Q grant", async () => {
     const test = recoveryConsumptionFixture(true, { waivedFailure: true });
     const original = await verifyOriginalReceiptQualification(test.recovery, {
@@ -89,6 +140,58 @@ describe("receipt-backed aggregate recovery", () => {
     await expect(
       verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
     ).rejects.toThrow("Full release child evidence workload does not pass recovery release policy");
+  });
+
+  it("recovers a successful child missing an admitted job only with the original Q grant", async () => {
+    const test = recoveryConsumptionFixture(true, { omittedPluginJob: true });
+    const verified = await verifyOriginalReceiptQualification(test.recovery, {
+      client: test.client,
+    });
+    expect(
+      verified.children.find(({ role }) => role === "pluginPrereleaseCandidate"),
+    ).toMatchObject({
+      conclusion: "success",
+      waivers: [{ jobName: "plugin-prerelease-suite" }],
+    });
+    const source = test.client.getWorkflowSource;
+    vi.spyOn(test.client, "getWorkflowSource").mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+        : source(sha, path),
+    );
+    await expect(
+      verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
+    ).rejects.toThrow("workload does not pass recovery release policy");
+  });
+
+  it("requires no child receipt when its admitted parent is waived", async () => {
+    const f = recoveryConsumptionFixture(true);
+    const children = { ...f.recovery.children };
+    Reflect.deleteProperty(children, "normalCi");
+    const request = { ...f.recovery, children };
+    const source = f.client.getWorkflowSource;
+    const grant = {
+      targetVersion: f.direct.admission.receipt.baselinePolicy.candidateVersion,
+      targetSha: f.direct.c,
+      childRole: "normalCi",
+      reason: "Synthetic parent waiver",
+    };
+    const reuse = vi.spyOn(f.client, "validateChildReuse");
+    const verified = verifyOriginalReceiptQualification;
+    await expect(verified(request, { client: f.client })).rejects.toThrow(
+      "exactly the admitted child roles",
+    );
+    vi.spyOn(f.client, "getWorkflowSource").mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [grant] })
+        : source(sha, path),
+    );
+    const result = await verified(request, { client: f.client });
+    expect(result.children.find(({ role }) => role === "normalCi")).toMatchObject({
+      conclusion: "not-collected",
+      waivers: [grant],
+    });
+    expect(reuse.mock.calls.map(([, input]) => input.role)).not.toContain("normalCi");
   });
 
   it("rechecks a separately admitted ledger against the original failed receipts at publication", async () => {
@@ -358,7 +461,7 @@ describe("receipt-backed aggregate recovery", () => {
       },
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
-    expect(new Set(calls).size).toBe(10);
+    expect(new Set(calls).size).toBe(11);
     const normalCi = recovery.children.normalCi;
     if (!normalCi) {
       throw new Error("fixture is missing the normal CI child");

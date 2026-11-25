@@ -155,6 +155,8 @@ type SubagentKillIntent = {
 };
 
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
+  /** This execution cannot deliver a continuation without its original live source custody. */
+  requiresCompletionAuthority?: true;
   /** Host-captured SDK spawn provenance; absence never establishes plugin ownership. */
   nativePluginOwner?: {
     version: 1;

@@ -10,24 +10,26 @@ export function resolveDaybreakAccessProgram(
       ? selectedDaybreak
       : programs?.find((value) => value !== "standard");
   const locked = program !== undefined && programs?.includes("standard") === false;
-  const on = locked || selectedDaybreak !== undefined;
+  const visible = program !== undefined;
+  const on = visible && (locked || selectedDaybreak !== undefined);
   const remap = on && program !== selected ? program : undefined;
   return {
     program,
     locked,
     on,
     checked: on && remap === undefined,
-    visible: on || program !== undefined,
+    visible,
     remap,
   };
 }
 
-/** A model switch keeps Daybreak on: store the destination's program unless it is already stored. */
+/** Keep Daybreak on across supported models and clear it when the destination has none. */
 export function resolveDaybreakModelSwitch(
-  programs: readonly CyberAccessProgram[],
+  programs: readonly CyberAccessProgram[] | undefined,
   current: CyberAccessProgram | undefined,
   stored: CyberAccessProgram | undefined,
 ) {
   const { on, program } = resolveDaybreakAccessProgram(programs, current);
-  return on && program !== stored ? program : undefined;
+  const next = on ? program : stored === "standard" ? stored : undefined;
+  return next === stored ? undefined : (next ?? null);
 }

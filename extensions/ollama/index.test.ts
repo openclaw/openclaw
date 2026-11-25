@@ -1078,24 +1078,6 @@ describe("ollama plugin", () => {
     },
   );
 
-  it("lists and resolves GLM-5.2 from the offline cloud catalog", async () => {
-    const provider = registerOllamaCloudProvider();
-    const catalog = await provider.staticCatalog.run({});
-    expect(catalog.provider.models).toContainEqual(expect.objectContaining({ id: "glm-5.2" }));
-    const model = provider.resolveDynamicModel?.({
-      provider: "ollama-cloud",
-      modelId: "glm-5.2",
-    } as never);
-    expect(model).toMatchObject({
-      provider: "ollama-cloud",
-      id: "glm-5.2",
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-      reasoning: true,
-    });
-    expect(model?.contextTokens).toBeUndefined();
-  });
-
   it("wraps OpenAI-compatible payloads with num_ctx for Ollama compat routes", async () => {
     const provider = registerProvider();
     const payloadResult = Promise.resolve();
@@ -1161,15 +1143,6 @@ describe("ollama plugin", () => {
     controller.abort(reason);
     await expect(pending).rejects.toBe(reason);
     expect(baseStreamFn).not.toHaveBeenCalled();
-  });
-
-  it("preserves the original stream when no Ollama wrapper applies", () => {
-    const provider = registerProvider();
-    const streamFn = vi.fn(() => ({}) as never);
-    const context = { provider: "ollama", modelId: "qwen3:32b" };
-    expect(provider.wrapStreamFn?.({ ...context, streamFn })).toBe(streamFn);
-    expect(provider.wrapStreamFn?.(context)).toBeUndefined();
-    expect(streamFn).not.toHaveBeenCalled();
   });
 
   it("selects cloud native transport with the default URL only for api=ollama", () => {

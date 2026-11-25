@@ -279,6 +279,7 @@ describe("ModelSetupPage catalog icons", () => {
     });
     authButton(page, "provider-auth")?.click();
     await vi.waitFor(() => expect(releaseProgress).toBeTypeOf("function"));
+    await waitForText(page, "Downloading");
 
     const competingMutation = runtimeConfig.runExternalMutation(async () => {
       order.push("competing-mutation");

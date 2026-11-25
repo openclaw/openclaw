@@ -830,6 +830,17 @@ suite.define(() => {
     const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
     await outcomeHeading.waitFor();
     await expectFocused(outcomeHeading);
+    const promptLeft = await document
+      .locator(".chat-question-summary__prompt")
+      .evaluate((prompt) => {
+        const range = prompt.ownerDocument.createRange();
+        range.selectNodeContents(prompt);
+        return range.getBoundingClientRect().left;
+      });
+    const labelLeft = await document
+      .locator(".chat-question-summary__line strong")
+      .evaluate((label) => label.getBoundingClientRect().left);
+    expect(Math.abs(promptLeft - labelLeft)).toBeLessThan(1);
     expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");

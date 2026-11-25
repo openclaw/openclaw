@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
-import { createCodeModeTools } from "./code-mode.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   createToolSearchCatalogRef,
-  TOOL_SEARCH_RAW_TOOL_NAME,
   createToolSearchTools,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
@@ -373,28 +371,6 @@ describe("applyAgentToolSurfaceCatalog", () => {
     expect(config.tools).toBeUndefined();
   });
 
-  it("uses the code-mode catalog when code-mode controls are enabled", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: true, toolSearch: { enabled: true, mode: "directory" } },
-    };
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-    const catalogRef = createToolSearchCatalogRef();
-    const result = applyAgentToolSurfaceCatalog({
-      tools: [
-        ...createCodeModeTools({ config, catalogRef, executeTool }),
-        createStubTool("hidden_target"),
-      ],
-      config,
-      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
-      codeModeControlsEnabled: plan.codeModeControlsEnabled,
-      toolSearchConfig: plan.toolSearchConfig,
-      catalogRef,
-    });
-
-    expect(result.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(result.catalogToolCount).toBe(1);
-  });
-
   it("uses the schema-directory catalog in directory mode", () => {
     const config: OpenClawConfig = {
       tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
@@ -413,23 +389,5 @@ describe("applyAgentToolSurfaceCatalog", () => {
       "uncataloged_without_directory_controls",
     ]);
     expect(result.compacted).toBe(false);
-  });
-
-  it("uses the tool-search catalog outside directory mode", () => {
-    const config: OpenClawConfig = {
-      tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" } },
-    };
-    const plan = resolveAgentToolSurfacePlan({ ...basePlanParams, config });
-    const result = applyAgentToolSurfaceCatalog({
-      tools: [createStubTool(TOOL_SEARCH_RAW_TOOL_NAME), createStubTool("hidden_target")],
-      config,
-      toolSearchRuntimeConfig: plan.toolSearchRuntimeConfig,
-      codeModeControlsEnabled: plan.codeModeControlsEnabled,
-      toolSearchConfig: plan.toolSearchConfig,
-      catalogRef: createToolSearchCatalogRef(),
-    });
-
-    expect(result.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_RAW_TOOL_NAME]);
-    expect(result.catalogToolCount).toBe(1);
   });
 });
