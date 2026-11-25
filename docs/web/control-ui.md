@@ -112,6 +112,8 @@ Agent questions appear above the message box. You can keep writing or queue a
 follow-up while the question is expanded; sending a chat message does not answer
 the question. Use its choices and **Submit**, or **Skip**, to resolve it.
 
+<a id="edit-a-failed-message" />
+
 ## Rewind and fork
 
 To edit a failed message, hover over your original message and choose **Rewind**,
