@@ -68,7 +68,7 @@ struct OpenClawIDStepContent: View {
         case .signIn:
             OnboardingHeroHeader(
                 title: "OpenClaw",
-                subtitle: "Sign in to reach your claws from anywhere. No VPN, no setup code.")
+                subtitle: "Sign in to connect to your Claw.")
                 .padding(.top, 18)
             OnboardingIntroPanel {
                 VStack(alignment: .leading, spacing: 14) {

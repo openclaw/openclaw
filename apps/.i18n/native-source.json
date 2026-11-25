@@ -4211,7 +4211,7 @@
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.aee591f659ff3bd4","source":"One account for all your claws"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.b8fd3263920a001e","source":"OpenClaw"},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.dbdf3a3a438a002a","source":"OpenClaw ID didn’t confirm your account. Try again."},
-    {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.79ae01a47c88d832","source":"Sign in to reach your claws from anywhere. No VPN, no setup code."},
+    {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.a7f9461c5b543e50","source":"Sign in to connect to your Claw."},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.8241ab36d3d9b4a5","source":"Signed in as \\(account)."},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.a2e6608e26250acf","source":"The computer running \\(claw) isn’t reachable. Make sure it’s on and connected."},
     {"path":"apps/ios/Sources/OpenClawID/OpenClawIDOnboardingView.swift","kind":"ui-named-argument","surface":"apple","id":"native.apple.ecd61110619682d2","source":"The request to add this device to \\(claw) was declined. Nothing was added."},
