@@ -174,7 +174,9 @@ struct OpenClawIDStepContent: View {
                 self.link("Use your recovery kit instead", action: .useRecoveryKit)
             }
         case let .recoveryKitEntry(claw):
-            self.heading("Use your recovery kit", subtitle: "Enter the recovery code from the kit you saved for \(claw).")
+            self.heading(
+                "Use your recovery kit",
+                subtitle: "Enter the recovery code from the kit you saved for \(claw).")
             SecureField(text: self.$recoveryCode) {
                 Text("Recovery code").font(OpenClawType.body)
             }
@@ -207,7 +209,9 @@ struct OpenClawIDStepContent: View {
             self.heading("You’re all set", subtitle: "\(device) is your device on \(claw).", mood: .celebrating)
             self.row("Full access", detail: "Chat, dashboard and settings. \(approvedWith).", icon: "checkmark.seal")
         case .inviteEntry:
-            self.heading("Join with an invite", subtitle: "Copy the invite link the owner sent you, then paste it here.")
+            self.heading(
+                "Join with an invite",
+                subtitle: "Copy the invite link the owner sent you, then paste it here.")
             self.primary("Paste invite link", action: .pasteInvite)
             Text("The link is read only when you tap Paste. It isn’t shown here or saved.")
                 .font(OpenClawType.footnote)
@@ -223,7 +227,10 @@ struct OpenClawIDStepContent: View {
             self.primary("Ask to join", action: .requestJoin)
             self.link("Back", action: .back)
         case let .memberPending(claw, device):
-            self.heading("Waiting for approval", subtitle: "An owner of \(claw) needs to approve \(device).", mood: .thinking)
+            self.heading(
+                "Waiting for approval",
+                subtitle: "An owner of \(claw) needs to approve \(device).",
+                mood: .thinking)
             self.row(
                 "You can close the app",
                 detail: "Let the owner know you asked to join. Open OpenClaw again to finish joining.",
