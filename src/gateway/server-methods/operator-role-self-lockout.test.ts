@@ -85,7 +85,20 @@ it("refuses a default role that would demote the administrator setting it", asyn
       });
       expect(mocks.commit).not.toHaveBeenCalled();
 
-      await setCanonicalUserProfileRole(self.id, "admin");
+      // The Roles page's order: assign administrators while no default exists, then set it.
+      const assigned = vi.fn();
+      await expectDefined(
+        usersHandlers["users.setRole"],
+        "users.setRole handler",
+      )({
+        req: { type: "req", id: "1", method: "users.setRole" },
+        params: { profileId: self.id, role: "admin" },
+        client,
+        isWebchatConnect: () => false,
+        respond: assigned,
+        context: createContext([], () => ({ gateway: { roles } })),
+      });
+      expect(assigned.mock.calls[0]?.[0]).toBe(true);
       const respond = await patchDefaultRole(client);
       expect(mocks.commit).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);

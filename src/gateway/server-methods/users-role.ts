@@ -33,11 +33,7 @@ export async function handleUsersSetRole(
   const assertCurrent = await prepareUserProfileAdministration(options);
   const target = await prepareUserProfileRoleAuthority(profileId);
   const roleAssignmentError = () =>
-    resolveUserRoleAssignmentError(
-      () => context.getRuntimeConfig(),
-      role,
-      operatorRoleSubject(target),
-    );
+    resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
   const assignmentError =
     roleAssignmentError() ??
     resolveOperatorRoleSelfLockout({

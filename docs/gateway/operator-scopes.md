@@ -354,8 +354,8 @@ the catalog governs only current OpenClaw ID members through their canonical lin
 profile, including that same person's ordinary trusted-proxy, HTTP, channel, and
 background access. A stored identity link alone is not membership. Other people keep
 the same authentication, scopes, attribution, and session access as a Gateway without
-`roles`; named `users.setRole` assignments for them require a default, while clearing
-an assignment remains allowed.
+`roles`. `users.setRole` can still save a named assignment for them; it takes effect
+only once a default turns enforcement on, which lets administrators be chosen first.
 An enforced person with no resolvable role, or a role that grants no scopes, cannot
 connect. An otherwise permitted connection with an empty device or header scope
 ceiling may still connect for health and scope-upgrade recovery. The Control UI
