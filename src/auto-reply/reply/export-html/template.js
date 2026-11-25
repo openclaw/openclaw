@@ -1451,7 +1451,7 @@
   }
 
   function renderMarkdownLink(token) {
-    const text = this.parser.parseInline(token.tokens);
+    const text = token.autolink ? escapeHtml(token.text) : this.parser.parseInline(token.tokens);
     const href = typeof token?.href === "string" ? token.href.trim() : "";
     if (!isSafeMarkdownLinkHref(href)) {
       return text;

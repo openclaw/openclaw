@@ -39,6 +39,17 @@ it("renders named references in conversation text and preserves their spelling i
   }
 });
 
+it("keeps typed autolink labels literal and renders explicit link labels as Markdown", async () => {
+  const url = "https://example.test/&copy;";
+  const { document } = await render([{ role: "user", content: `<${url}> [*&copy;*](${url})` }]);
+
+  const links = document.querySelectorAll("#messages .user-message .markdown-content a");
+  expect(Array.from(links, (link) => [link.textContent, link.getAttribute("href")])).toEqual([
+    [url, url],
+    ["©", url],
+  ]);
+});
+
 it.each([
   ["bash", "", false],
   ["bash", "", true],
