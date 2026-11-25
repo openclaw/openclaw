@@ -1,0 +1,423 @@
+import Foundation
+import OpenClawProtocol
+
+/// A direct child of the chat (a subagent), as the activity row and its sheet show it.
+struct ChatActivityChild: Equatable, Identifiable {
+    enum State: Equatable {
+        case working
+        case queued
+        case done
+        case failed
+        case stopped
+        case timedOut
+    }
+
+    let key: String
+    let name: String
+    let state: State
+    let startedAt: Double?
+    let endedAt: Double?
+    let runtimeMs: Double?
+    let order: Int
+
+    var id: String {
+        self.key
+    }
+
+    var isWorking: Bool {
+        self.state == .working
+    }
+
+    /// Mirrors src/shared/session-run-state.ts, as `ChatSubagentWait` does: a terminal status wins over stale liveness.
+    static func state(of row: OpenClawChatSessionEntry) -> State {
+        switch row.status {
+        case "running":
+            return .working
+        case "queued":
+            return row.hasActiveRun == true ? .working : .queued
+        case "failed", "error":
+            return .failed
+        case "killed", "aborted", "stopped", "cancelled":
+            return .stopped
+        case "timeout", "timed_out":
+            return .timedOut
+        case .some:
+            return .done
+        case nil:
+            if row.hasActiveRun == true { return .working }
+            return row.subagentRunState == "active" ? .queued : .done
+        }
+    }
+
+    /// The chat's direct children in launch order (createdAt, then startedAt, then key), as the web's roster.
+    static func children(of parent: OpenClawChatSessionEntry?, in sessions: [OpenClawChatSessionEntry]) -> [Self] {
+        guard let parent else { return [] }
+        return self.roster(sessions.filter { row in
+            guard row.key != parent.key else { return false }
+            if let owner = row.parentSessionKey ?? row.spawnedBy { return owner == parent.key }
+            return parent.childSessions?.contains(row.key) == true
+        })
+    }
+
+    /// Rows already known to be the chat's children (a `spawnedBy` page), in launch order. A swarm's members
+    /// stay out: the swarm progress view above the composer already shows them.
+    static func roster(_ rows: [OpenClawChatSessionEntry]) -> [Self] {
+        rows.filter { $0.archived != true && $0.swarmGroupId == nil }.sorted { left, right in
+            let l = (left.createdAt ?? left.startedAt ?? .greatestFiniteMagnitude, left.startedAt ?? 0, left.key)
+            let r = (right.createdAt ?? right.startedAt ?? .greatestFiniteMagnitude, right.startedAt ?? 0, right.key)
+            return l < r
+        }.enumerated().map { index, row in
+            Self(
+                key: row.key,
+                name: ChatSessionSidebarModel.displayName(for: row),
+                state: self.state(of: row),
+                startedAt: row.startedAt,
+                endedAt: row.endedAt,
+                runtimeMs: row.runtimeMs,
+                order: index)
+        }
+    }
+}
+
+/// The plan the progress card holds, read the same way by the pill and its sheet.
+struct ChatActivityPlan {
+    let steps: [ProgressCardStep]
+    let note: String?
+    let runActive: Bool
+    let sessionStatus: String?
+    let refreshPending: Bool
+
+    var completed: Int {
+        self.steps.count(where: { $0.status == .completed })
+    }
+
+    var isComplete: Bool {
+        !self.steps.isEmpty && self.completed == self.steps.count
+    }
+
+    /// The step in front of the person: the first in progress, else the first pending, else the last completed
+    /// (ui/src/components/session-progress-card.ts).
+    var currentIndex: Int? {
+        self.steps.firstIndex { $0.status == .inProgress }
+            ?? self.steps.firstIndex { $0.status == .pending }
+            ?? (self.steps.isEmpty ? nil : self.steps.count - 1)
+    }
+
+    enum Outcome: Equatable {
+        case updating
+        case running
+        case complete
+        case timedOut
+        case failed
+        case stopped
+        case waiting
+    }
+
+    var outcome: Outcome {
+        if self.refreshPending { return .updating }
+        if self.runActive { return .running }
+        if self.isComplete { return .complete }
+        switch self.sessionStatus {
+        case "timeout", "timed_out": return .timedOut
+        case "failed", "error": return .failed
+        case "killed", "aborted", "stopped", "cancelled": return .stopped
+        default: return .waiting
+        }
+    }
+}
+
+/// One pill above the composer. The row and its tests read only this.
+struct ChatActivityPill: Equatable, Identifiable {
+    enum Kind: Hashable {
+        case subagents
+        case goal
+        case progress
+        case pullRequest(String)
+    }
+
+    /// Neutral ink everywhere; color only marks a problem that needs the person.
+    enum Tone: Equatable {
+        case neutral
+        case muted
+        case attention
+        case problem
+    }
+
+    struct Badge: Equatable {
+        enum Mark: Equatable {
+            case symbol(String)
+            case spinner
+        }
+
+        let mark: Mark
+        let tone: Tone
+        let label: String
+    }
+
+    let kind: Kind
+    /// SF Symbol for the pill's leading mark; the subagents pill draws the working claw instead.
+    let symbol: String?
+    let label: String
+    let count: String?
+    let badge: Badge?
+    let labelTone: Tone
+    let accessibilityLabel: String
+
+    var id: Kind {
+        self.kind
+    }
+}
+
+struct ChatActivityInput {
+    var approvalPending = false
+    var children: [ChatActivityChild] = []
+    var goal: OpenClawChatSessionGoal?
+    var plan: ChatActivityPlan?
+    var pullRequests: OpenClawSessionPullRequestSnapshot?
+}
+
+enum ChatActivityRules {
+    /// Which pills show and in what order: subagents, Goal, task progress, then one per PR
+    /// (ui/src/pages/chat/components/chat-activity-pills.tsx). While an approval waits, only the Goal stays.
+    static func pills(_ input: ChatActivityInput) -> [ChatActivityPill] {
+        var pills: [ChatActivityPill] = []
+        let working = input.children.filter(\.isWorking)
+        if !input.approvalPending, !working.isEmpty {
+            pills.append(self.subagents(count: working.count))
+        }
+        if let goal = input.goal, goal.isPresentable {
+            pills.append(self.goal(goal))
+        }
+        if !input.approvalPending, let plan = input.plan {
+            pills.append(self.progress(plan))
+        }
+        if !input.approvalPending, let snapshot = input.pullRequests {
+            pills += self.ordered(snapshot.pullRequests).map { self.pullRequest($0, status: snapshot.status) }
+        }
+        return pills
+    }
+
+    static func subagents(count: Int) -> ChatActivityPill {
+        let label = String(format: String(localized: "%lld working"), count)
+        return ChatActivityPill(
+            kind: .subagents,
+            symbol: nil,
+            label: label,
+            count: nil,
+            badge: nil,
+            labelTone: .neutral,
+            accessibilityLabel: count == 1
+                ? String(localized: "1 subagent working")
+                : String(format: String(localized: "%lld subagents working"), count))
+    }
+
+    static func goalLabel(_ status: OpenClawChatSessionGoal.Status?) -> String {
+        // "Pursuing goal" needs a receipt that ties the Goal to the run in progress; the phone has none yet,
+        // and an active Goal alone is not proof that work is happening.
+        switch status {
+        case .active, nil: String(localized: "Goal active")
+        case .paused: String(localized: "Goal paused")
+        case .complete: String(localized: "Goal achieved")
+        case .blocked: String(localized: "Goal blocked")
+        case .usageLimited: String(localized: "Goal usage limit")
+        case .budgetLimited: String(localized: "Goal budget reached")
+        }
+    }
+
+    static func goal(_ goal: OpenClawChatSessionGoal) -> ChatActivityPill {
+        let label = self.goalLabel(goal.status)
+        let symbol = switch goal.status {
+        case .paused: "pause"
+        case .complete: "checkmark"
+        case .blocked, .usageLimited, .budgetLimited: "exclamationmark.triangle"
+        case .active, nil: "scope"
+        }
+        let needsAttention = [.blocked, .usageLimited, .budgetLimited].contains(goal.status)
+        return ChatActivityPill(
+            kind: .goal,
+            symbol: symbol,
+            label: label,
+            count: nil,
+            badge: nil,
+            labelTone: needsAttention ? .attention : goal.status == .paused ? .muted : .neutral,
+            accessibilityLabel: String(format: String(localized: "%@: %@"), label, goal.objective ?? ""))
+    }
+
+    static func progress(_ plan: ChatActivityPlan) -> ChatActivityPill {
+        let title = String(localized: "Task progress")
+        let badge: ChatActivityPill.Badge? = switch plan.outcome {
+        case .updating:
+            .init(mark: .spinner, tone: .neutral, label: String(localized: "Updating saved progress"))
+        case .running:
+            .init(mark: .spinner, tone: .neutral, label: String(localized: "Running"))
+        case .complete:
+            .init(mark: .symbol("checkmark"), tone: .neutral, label: String(localized: "Completed"))
+        case .timedOut:
+            .init(
+                mark: .symbol("exclamationmark.triangle.fill"),
+                tone: .attention,
+                label: String(localized: "Reply timed out; plan saved"))
+        case .failed:
+            .init(
+                mark: .symbol("xmark"),
+                tone: .problem,
+                label: String(localized: "Reply failed; plan saved"))
+        case .stopped:
+            .init(mark: .symbol("stop.fill"), tone: .problem, label: String(localized: "Reply stopped; plan saved"))
+        case .waiting:
+            .init(mark: .symbol("clock"), tone: .muted, label: String(localized: "Pending"))
+        }
+        guard let index = plan.currentIndex else {
+            // A note without steps names the feature, never a cut-off sentence of the note.
+            let quiet = plan.outcome == .waiting || plan.outcome == .complete
+            return ChatActivityPill(
+                kind: .progress,
+                symbol: "checklist",
+                label: title,
+                count: nil,
+                badge: quiet ? nil : badge,
+                labelTone: .neutral,
+                accessibilityLabel: quiet || badge == nil
+                    ? title : String(format: String(localized: "%@, %@"), title, badge?.label ?? ""))
+        }
+        let step = plan.steps[index].step
+        let completed = plan.completed
+        let total = plan.steps.count
+        return ChatActivityPill(
+            kind: .progress,
+            symbol: "checklist",
+            label: step,
+            count: "\(completed)/\(total)",
+            badge: badge,
+            labelTone: .neutral,
+            accessibilityLabel: String(
+                format: String(localized: "Task progress, %@, %lld of %lld completed, %@"),
+                step,
+                completed,
+                total,
+                badge?.label ?? ""))
+    }
+
+    /// Open, then draft, merged and closed, keeping the Gateway's order within a state
+    /// (ui/src/lib/session-pull-request-presentation.ts).
+    static func ordered(
+        _ pullRequests: [OpenClawSessionPullRequestSnapshot.PullRequest])
+        -> [OpenClawSessionPullRequestSnapshot.PullRequest]
+    {
+        let rank = ["open": 0, "draft": 1, "merged": 2, "closed": 3]
+        return pullRequests.enumerated().sorted {
+            let l = rank[$0.element.state] ?? 4
+            let r = rank[$1.element.state] ?? 4
+            return l == r ? $0.offset < $1.offset : l < r
+        }.map(\.element)
+    }
+
+    static func pullRequestID(_ pr: OpenClawSessionPullRequestSnapshot.PullRequest) -> String {
+        "\(pr.owner)/\(pr.repo)#\(pr.number)"
+    }
+
+    static func pullRequestStateLabel(_ state: String) -> String {
+        switch state {
+        case "open": String(localized: "Open")
+        case "draft": String(localized: "Draft")
+        case "merged": String(localized: "Merged")
+        case "closed": String(localized: "Closed")
+        default: state.capitalized
+        }
+    }
+
+    static func pullRequestSymbol(_ state: String) -> String {
+        switch state {
+        case "draft": "circle.dashed"
+        case "merged": "arrow.triangle.merge"
+        case "closed": "xmark.circle"
+        default: "arrow.triangle.pull"
+        }
+    }
+
+    static func checksLabel(_ checks: OpenClawSessionPullRequestSnapshot.Checks) -> String {
+        switch checks.state {
+        case "passing": String(localized: "Checks passed")
+        case "failing": String(localized: "Checks failed")
+        default: String(localized: "Checks running")
+        }
+    }
+
+    static func pullRequest(
+        _ pr: OpenClawSessionPullRequestSnapshot.PullRequest,
+        status: String) -> ChatActivityPill
+    {
+        // Checks describe an open PR's head, and only when the last read reached GitHub.
+        let checks = ["open", "draft"].contains(pr.state) && status == "ready" ? pr.checks : nil
+        let badge: ChatActivityPill.Badge? = if status != "ready" {
+            .init(
+                mark: .symbol("exclamationmark.triangle.fill"),
+                tone: .attention,
+                label: String(localized: "Couldn’t update; showing the last details"))
+        } else if let checks {
+            switch checks.state {
+            case "passing":
+                .init(mark: .symbol("checkmark"), tone: .neutral, label: self.checksLabel(checks))
+            case "failing":
+                .init(mark: .symbol("xmark"), tone: .problem, label: self.checksLabel(checks))
+            default:
+                .init(mark: .spinner, tone: .neutral, label: self.checksLabel(checks))
+            }
+        } else {
+            nil
+        }
+        let number = "#\(pr.number)"
+        let state = self.pullRequestStateLabel(pr.state)
+        let spoken = [
+            String(format: String(localized: "Pull request %@ in %@"), number, "\(pr.owner)/\(pr.repo)"),
+            pr.title,
+            state,
+            badge?.label,
+        ].compactMap(\.self).joined(separator: ", ")
+        return ChatActivityPill(
+            kind: .pullRequest(self.pullRequestID(pr)),
+            symbol: self.pullRequestSymbol(pr.state),
+            label: number,
+            count: nil,
+            badge: badge,
+            labelTone: pr.state == "draft" || pr.state == "closed" ? .muted : .neutral,
+            accessibilityLabel: spoken)
+    }
+}
+
+enum ChatActivityFormat {
+    /// The web Goal card's clock (src/shared/session-goal-display.ts formatGoalElapsed).
+    static func duration(ms: Double) -> String {
+        let seconds = max(0, Int(ms / 1000))
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 24 { return minutes % 60 == 0 ? "\(hours)h" : "\(hours)h \(minutes % 60)m" }
+        let days = hours / 24
+        let period = days >= 7 ? "\(days / 7)wk \(days % 7)d" : "\(days)d"
+        return "\(period) \(hours % 24)h \(minutes % 60)m"
+    }
+
+    /// The web's token count: 950, 1.2k, 184k, 1.5m (formatGoalTokenCount).
+    static func tokens(_ value: Double) -> String {
+        guard value.isFinite, value > 0 else { return "0" }
+        func trimmed(_ number: Double) -> String {
+            number == number.rounded() ? String(Int(number)) : String(number)
+        }
+        if value < 1000 { return String(Int(value.rounded())) }
+        if value < 1_000_000 {
+            let rounded = value >= 10000 ? (value / 1000).rounded() : (value / 100).rounded() / 10
+            return rounded >= 1000 ? "1m" : "\(trimmed(rounded))k"
+        }
+        let rounded = value >= 10_000_000 ? (value / 1_000_000).rounded() : (value / 100_000).rounded() / 10
+        return "\(trimmed(rounded))m"
+    }
+
+    /// "184k/500k" against a budget, "184k used" without one, nothing before any use (formatGoalUsage).
+    static func goalUsage(_ goal: OpenClawChatSessionGoal) -> String? {
+        let used = goal.tokensUsed ?? 0
+        if let budget = goal.tokenBudget, budget.isFinite { return "\(self.tokens(used))/\(self.tokens(budget))" }
+        return used > 0 ? String(format: String(localized: "%@ used"), self.tokens(used)) : nil
+    }
+}
