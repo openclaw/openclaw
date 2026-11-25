@@ -227,6 +227,14 @@ export function resolveCodexUsageLimitResetAtMs(
     : undefined;
 }
 
+/** Codex's typed reason for a reached limit, preferring a specific one over the generic type. */
+export function readCodexRateLimitReachedType(value: JsonValue | undefined): string | undefined {
+  const types = collectCodexRateLimitSnapshots(value).flatMap((snapshot) =>
+    snapshot.rateLimitReachedType ? [snapshot.rateLimitReachedType] : [],
+  );
+  return types.find((type) => type !== "rate_limit_reached") ?? types[0];
+}
+
 export function summarizeCodexAccountUsage(
   value: JsonValue | undefined,
   nowMs = Date.now(),
