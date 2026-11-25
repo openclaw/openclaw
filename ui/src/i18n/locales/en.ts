@@ -1943,8 +1943,6 @@ const startupEnglish = {
     },
     workRun: {
       workedFor: "Worked for {duration}",
-      workedAndCompacted: "Worked, compacted context",
-      workedForAndCompacted: "Worked for {duration}, compacted context",
       worked: "Worked",
     },
     sessionDiff: {

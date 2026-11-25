@@ -20,9 +20,17 @@ const session = {
 const sessionUrl = () => controlUiSessionUrl(suite.server.baseUrl, sessionKey);
 
 suite.define(() => {
-  it.each([false, true])(
-    "retains distinct compactions after reload (OpenAI rollup: %s)",
-    (openAI) =>
+  it.each([
+    {
+      openAI: false,
+      timed: false,
+      label: "Read and changed files, ran commands, compacted context",
+    },
+    { openAI: true, timed: false, label: "Worked" },
+    { openAI: true, timed: true, label: "Worked for 13s" },
+  ])(
+    "keeps distinct, ordered compactions under $label before and after reload",
+    ({ openAI, timed, label }) =>
       suite.withPage({ viewport, colorScheme: "light" }, async ({ page }) => {
         const now = Date.now();
         const runId = "verification-run";
@@ -61,7 +69,13 @@ suite.define(() => {
         messages.forEach((message, index) =>
           Object.assign(message, {
             timestamp: now - 10000 + index * 1000,
-            __openclaw: { ...message["__openclaw"], id: String(index), seq: index + 1, runId },
+            __openclaw: {
+              ...message["__openclaw"],
+              id: String(index),
+              seq: index + 1,
+              runId,
+              ...(timed && index === messages.length - 1 ? { recordTimestampMs: now + 3000 } : {}),
+            },
           }),
         );
         await installMockGateway(page, {
@@ -72,22 +86,31 @@ suite.define(() => {
         await page.goto(sessionUrl());
         const thread = page.locator(".chat-thread");
         const reply = thread.getByText(final, { exact: true });
-        const summary = thread
-          .locator(".chat-activity-group__summary[aria-expanded=false]")
-          .filter({
-            hasText: openAI
-              ? "Worked, compacted context"
-              : "Read and changed files, ran commands, compacted context",
-          });
+        const summary = thread.locator(
+          openAI ? ".chat-work-group > button" : ".chat-activity-group__summary",
+        );
+        const summaryLabel = summary.locator(".chat-activity-group__label");
         const rows = thread.locator(".chat-compaction-activity");
         const expand = async () => {
           await reply.waitFor();
-          await summary.click();
+          await summary.waitFor();
+          expect(await summary.getAttribute("aria-expanded")).toBe("false");
+          expect(await rows.count()).toBe(0);
+          const collapsedLabel = await summaryLabel.textContent();
+          await summary.press("Enter");
           await rows.first().waitFor();
-          const keys = await rows.evaluateAll((list) =>
-            list.map((row) => row.getAttribute("data-chat-row-key")),
+          const activity = await rows.evaluateAll((list) =>
+            list.map((row) => ({
+              key: row.getAttribute("data-chat-row-key"),
+              timestamp: Number(row.getAttribute("data-ts")),
+            })),
           );
+          const keys = activity.map(({ key }) => key);
           expect([keys.length, new Set(keys).size]).toEqual([2, 2]);
+          expect(activity.map(({ timestamp }) => timestamp)).toEqual([now - 5000, now - 4000]);
+          expect(await rows.getByText("Compacted context", { exact: true }).count()).toBe(2);
+          expect(await summary.getAttribute("aria-expanded")).toBe("true");
+          expect([collapsedLabel, await summaryLabel.textContent()]).toEqual([label, label]);
           return keys;
         };
         const keys = await expand();
