@@ -29,7 +29,33 @@ export async function requestLogsTail(
     if (follow.request) {
       return await follow.request("logs.tail", params, { timeoutMs: null, signal });
     }
-    return await openFollowConnection(opts, params, extra, follow, signal);
+    const firstResult = Promise.withResolvers<unknown>();
+    // The poll deadline may end the connection only until its first response arrives.
+    const connectionAbort = new AbortController();
+    signal.addEventListener("abort", () => follow.request ?? connectionAbort.abort(), {
+      once: true,
+    });
+    const call = callGatewayFromCliWithTransport("logs.tail", opts, params, {
+      ...extra,
+      signal: extra.signal
+        ? AbortSignal.any([extra.signal, connectionAbort.signal])
+        : connectionAbort.signal,
+      timeoutMs: null,
+      onResponse: (request, connectionSignal, result) => {
+        const connection = Promise.withResolvers<void>();
+        const drop = () => {
+          follow.request = undefined;
+          connection.resolve();
+        };
+        follow.request = request;
+        follow.close = drop;
+        connectionSignal.addEventListener("abort", drop, { once: true });
+        firstResult.resolve(result);
+        return connection.promise;
+      },
+    });
+    follow.closed = call.catch(() => undefined);
+    return await Promise.race([firstResult.promise, call]);
   } catch (error) {
     // A failed poll retires the connection; the follow retry path reconnects.
     follow.close?.();
@@ -37,45 +63,4 @@ export async function requestLogsTail(
       ? new Error(`gateway timeout after ${timeoutMs}ms`)
       : error;
   }
-}
-
-async function openFollowConnection(
-  opts: LogsTailCall[1],
-  params: LogsTailCall[2],
-  extra: NonNullable<LogsTailCall[3]>,
-  follow: LogsFollowConnection,
-  pollSignal: AbortSignal,
-): Promise<unknown> {
-  const firstResult = Promise.withResolvers<unknown>();
-  // The poll deadline may end the connection only until its first response arrives.
-  const connectionAbort = new AbortController();
-  let admitted = false;
-  const abortUnadmitted = () => {
-    if (!admitted) {
-      connectionAbort.abort();
-    }
-  };
-  pollSignal.addEventListener("abort", abortUnadmitted, { once: true });
-  const call = callGatewayFromCliWithTransport("logs.tail", opts, params, {
-    ...extra,
-    signal: extra.signal
-      ? AbortSignal.any([extra.signal, connectionAbort.signal])
-      : connectionAbort.signal,
-    timeoutMs: null,
-    onResponse: (request, connectionSignal, result) => {
-      const connection = Promise.withResolvers<void>();
-      const drop = () => {
-        follow.request = undefined;
-        connection.resolve();
-      };
-      admitted = true;
-      follow.request = request;
-      follow.close = drop;
-      connectionSignal.addEventListener("abort", drop, { once: true });
-      firstResult.resolve(result);
-      return connection.promise;
-    },
-  });
-  follow.closed = call.catch(() => undefined);
-  return await Promise.race([firstResult.promise, call]);
 }
