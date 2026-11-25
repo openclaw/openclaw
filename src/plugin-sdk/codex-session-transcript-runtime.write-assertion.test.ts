@@ -94,7 +94,7 @@ describe("Codex mirror write assertion", () => {
     expect(await readTexts(target)).toEqual([]);
   });
 
-  it.each([undefined, "{agentId}/sessions.json"])(
+  it.each([undefined, "(multiple)", "{agentId}/sessions.json"])(
     "rejects a guarded store locator %s that resolves into the configured store",
     async (storePath) => {
       const target = await createUnresolvedTarget();

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
 import type { TranscriptMessageAppendResult } from "../config/sessions/session-accessor.js";
 import type { SessionTranscriptContextVersion } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
@@ -261,8 +262,9 @@ async function withMirrorWrite<T>(
   mode: "lock" | "sequence",
 ): Promise<T> {
   const { assertCurrent, ...locator } = params;
-  const scope = locator.storePath?.trim()
-    ? captureSessionTranscriptTargetBinding({ ...locator, storePath: locator.storePath })
+  const storePath = resolveConcreteSessionStorePath(locator.storePath);
+  const scope = storePath
+    ? captureSessionTranscriptTargetBinding({ ...locator, storePath })
     : locator;
   const { withProjectedSessionTranscriptWriteLock } =
     await import("./session-transcript-lock-runtime.js");
