@@ -367,6 +367,7 @@ async function waitForGatewayReady(
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
   record?: (diagnostic: GatewayReadinessDiagnostic) => void,
+  spawnedAtMs = Date.now(),
 ) {
   const finishPhase = beginUiE2ePhase("gateway-readiness");
   const startedAt = Date.now();
@@ -505,7 +506,7 @@ async function waitForGatewayReady(
             }
             if (
               probe.uptimeMs !== undefined &&
-              probe.uptimeMs > Date.now() - startedAt + GATEWAY_READINESS_UPTIME_SKEW_MS
+              probe.uptimeMs > Date.now() - spawnedAtMs + GATEWAY_READINESS_UPTIME_SKEW_MS
             ) {
               probe.error = "foreign-responder";
               return false;
@@ -575,7 +576,8 @@ async function waitForGatewayReady(
           outcome !== "ready" &&
           (!lastProbe.error ||
             lastProbe.error === "invalid-json" ||
-            lastProbe.error === "body-failed")
+            lastProbe.error === "body-failed" ||
+            lastProbe.error === "foreign-responder")
         ) {
           const { attempt, phase, elapsedMs, status, ready, endpoint, startupStatus, error } =
             lastProbe;
@@ -1092,6 +1094,7 @@ export async function createOpenClawTestInstance(
           const attemptStderr = createBoundedStringLog();
           await releasePort();
           signal?.throwIfAborted();
+          const spawnedAtMs = Date.now();
           let spawned: Awaited<ReturnType<typeof spawnGatewayProcess>>;
           try {
             spawned = await spawnGatewayProcess(gatewayArgs, attemptStderr, deadline);
@@ -1102,7 +1105,7 @@ export async function createOpenClawTestInstance(
             return;
           }
           const attempt = spawned.process;
-          const owner = { ...spawned, ready: false, spawnedAtMs: Date.now() };
+          const owner = { ...spawned, ready: false, spawnedAtMs };
           child = owner;
           constructionCleanup = undefined;
           try {
@@ -1116,6 +1119,7 @@ export async function createOpenClawTestInstance(
               fetch,
               signal,
               (diagnostic) => readiness.push(diagnostic),
+              owner.spawnedAtMs,
             );
             signal?.throwIfAborted();
             owner.ready = true;
