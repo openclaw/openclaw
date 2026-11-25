@@ -544,7 +544,6 @@ describe("runPreparedReply media-only handling", () => {
                     return grant
                       ? withCronManagementGrant(grant, identity, method, async () => {
                           getCronManagementAuthority(identity)!();
-                          expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
                           expect(getCronManagementChannelRequester(identity)).toEqual(
                             channel === "discord" || channel === "telegram"
                               ? {

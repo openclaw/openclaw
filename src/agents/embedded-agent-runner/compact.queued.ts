@@ -308,6 +308,7 @@ async function compactEmbeddedAgentSessionImpl(
     // Run them before generic model preparation so subscription-only CLI sessions do
     // not incorrectly require an OpenClaw model API credential.
     const nativeCliResult = await compactNativeCliSession({
+      sourceAuthority: host.sourceAuthority,
       runtime: runtimeSelection.selectedHarnessRuntime,
       replyOperation: host.replyOperation,
       compactParams: {

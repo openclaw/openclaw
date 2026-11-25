@@ -1,4 +1,6 @@
 /** Read-only inspection of engine-owned container identities, state, labels and ports. */
+import { get, type IncomingMessage } from "node:http";
+import { text } from "node:stream/consumers";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DOCKER_SANDBOX_ENGINE,
@@ -6,6 +8,46 @@ import {
   type SandboxContainerEngine,
 } from "./container-engine.js";
 import { parseInspectedSandboxMounts } from "./docker-mount-source.js";
+
+function isStoppedContainerState(state: unknown): boolean {
+  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+}
+
+/** Check for a stopped sandbox without changing its Docker target. */
+export async function dockerSandboxIsStopped(
+  engine: SandboxContainerEngine,
+  id: string,
+  signal: AbortSignal,
+  endpoint?: string,
+): Promise<boolean> {
+  if (!endpoint) {
+    const result = await execContainer(engine, ["inspect", "-f", "{{json .State}}", id], {
+      signal,
+    });
+    return isStoppedContainerState(JSON.parse(result.stdout));
+  }
+  // The captured Unix endpoint lets the warm path use Docker's inspect API directly.
+  const response = await new Promise<IncomingMessage>((resolve, reject) => {
+    get(
+      {
+        socketPath: endpoint.slice("unix://".length),
+        path: `/containers/${id}/json`,
+        signal,
+        agent: false,
+      },
+      resolve,
+    ).once("error", reject);
+  });
+  if (response.statusCode !== 200) {
+    response.resume();
+    throw new Error(`Docker could not inspect sandbox ${id} (HTTP ${response.statusCode}).`);
+  }
+  const inspected: unknown = JSON.parse(await text(response));
+  if (!isRecord(inspected) || !isRecord(inspected.State)) {
+    throw new Error("Docker inspect did not return sandbox state.");
+  }
+  return isStoppedContainerState(inspected.State);
+}
 
 /** Termination proof is stricter than provisioning's best-effort existence probe. */
 export async function containerHasTerminated(
@@ -29,7 +71,7 @@ export async function containerHasTerminated(
     throw new Error(`Could not verify sandbox ${id} termination: ${inspected.stderr.trim()}`);
   }
   const state: unknown = JSON.parse(inspected.stdout);
-  return isRecord(state) && state.Running === false && state.Paused === false && state.Pid === 0;
+  return isStoppedContainerState(state);
 }
 
 export async function readDockerContainerLabel(

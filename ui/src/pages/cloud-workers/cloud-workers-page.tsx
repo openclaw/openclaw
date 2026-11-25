@@ -362,7 +362,7 @@ export function CloudWorkersPage() {
     );
   }
 
-  function renderDraftInput(
+  function DraftInput(props: {
     field:
       | "id"
       | "backend"
@@ -371,31 +371,29 @@ export function CloudWorkersPage() {
       | "binary"
       | "setupEnv"
       | "readyWorkers"
-      | "suspendAfter",
-    options: {
-      description?: JSX.Element;
-      placeholder?: string;
-      type?: "text" | "number";
-    } = {},
-  ) {
-    const label = field === "id" ? "profileId" : field;
+      | "suspendAfter";
+    description?: JSX.Element;
+    placeholder?: string;
+    type?: "text" | "number";
+  }) {
+    const label = () => (props.field === "id" ? "profileId" : props.field);
     return (
       <SettingsRow
-        title={t(`cloudWorkersPage.fields.${label}`)}
-        description={options.description ?? t(`cloudWorkersPage.fields.${label}Help`)}
+        title={t(`cloudWorkersPage.fields.${label()}`)}
+        description={props.description ?? t(`cloudWorkersPage.fields.${label()}Help`)}
         control={
           <input
             class="settings-input mono"
-            aria-label={t(`cloudWorkersPage.fields.${label}`)}
-            placeholder={options.placeholder}
-            type={options.type}
-            min={field === "readyWorkers" ? "0" : undefined}
-            step={field === "readyWorkers" ? "1" : undefined}
+            aria-label={t(`cloudWorkersPage.fields.${label()}`)}
+            placeholder={props.placeholder}
+            type={props.type}
+            min={props.field === "readyWorkers" ? "0" : undefined}
+            step={props.field === "readyWorkers" ? "1" : undefined}
             autocomplete="off"
             spellcheck="false"
-            value={view.draft[field]}
+            value={view.draft[props.field]}
             disabled={saving()}
-            onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
+            onInput={(event) => patchDraft({ [props.field]: event.currentTarget.value })}
           />
         }
       />
@@ -448,22 +446,23 @@ export function CloudWorkersPage() {
       <SettingsSection
         title={editing() ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile")}
       >
-        <Show when={editing()} fallback={renderDraftInput("id")}>
+        <Show when={editing()} fallback={<DraftInput field="id" />}>
           <SettingsRow
             title={t("cloudWorkersPage.fields.profileId")}
             description={t("cloudWorkersPage.fields.profileIdHelp")}
             control={<SettingsValue value={view.draft.id} mono />}
           />
         </Show>
-        {renderDraftInput("backend", {
-          description: (
+        <DraftInput
+          field="backend"
+          description={
             <>
               {t("cloudWorkersPage.fields.backendHelp")}{" "}
               <DocsLink url={CLOUD_WORKERS_DOCS_URL}>{t("cloudWorkersPage.providerList")}</DocsLink>
             </>
-          ),
-          placeholder: t("cloudWorkersPage.fields.backendPlaceholder"),
-        })}
+          }
+          placeholder={t("cloudWorkersPage.fields.backendPlaceholder")}
+        />
         <Show when={systems().length >= 2 || unadvertised()}>
           <SettingsRow
             title={t("cloudWorkersPage.fields.operatingSystem")}
@@ -506,10 +505,11 @@ export function CloudWorkersPage() {
             />
           }
         />
-        {renderDraftInput("ttl", { placeholder: t("cloudWorkersPage.fields.ttlPlaceholder") })}
-        {renderDraftInput("idleTimeout", {
-          placeholder: t("cloudWorkersPage.fields.idleTimeoutPlaceholder"),
-        })}
+        <DraftInput field="ttl" placeholder={t("cloudWorkersPage.fields.ttlPlaceholder")} />
+        <DraftInput
+          field="idleTimeout"
+          placeholder={t("cloudWorkersPage.fields.idleTimeoutPlaceholder")}
+        />
         <SettingsRow
           title={t("cloudWorkersPage.fields.setup")}
           description={t("cloudWorkersPage.fields.setupHelp")}
@@ -534,9 +534,7 @@ export function CloudWorkersPage() {
           disabled={saving()}
           onChange={(desktop) => patchDraft({ desktop })}
         />
-        {renderDraftInput("binary", {
-          placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
-        })}
+        <DraftInput field="binary" placeholder={t("cloudWorkersPage.fields.binaryPlaceholder")} />
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
           <SettingsSelectRow
             title={t("cloudWorkersPage.fields.warmImage")}
@@ -554,9 +552,9 @@ export function CloudWorkersPage() {
             }))}
           />
           <For each={["setupEnv", "readyWorkers", "suspendAfter"] as const}>
-            {(field) =>
-              renderDraftInput(field, { type: field === "readyWorkers" ? "number" : "text" })
-            }
+            {(field) => (
+              <DraftInput field={field} type={field === "readyWorkers" ? "number" : "text"} />
+            )}
           </For>
         </SettingsSection>
         <Show when={saveState().error}>

@@ -109,5 +109,6 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     39: ["worker_environments"],
     40: ["worker_environments"],
     41: ["operator_approvals"],
+    42: ["worker_session_placements"],
   },
 };

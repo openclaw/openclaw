@@ -44,7 +44,6 @@ it.each(["unlink", "reassign"] as const)(
           profileId: member.profile.id,
           scopes: ["operator.read", "operator.write"],
         });
-        expect(restored.controlUiAdmin).toBe(false);
         await changeCanonicalUserChannelIdentity("unlink", member.profile.id, member.identity);
         if (change === "reassign") {
           const other = expectDefined(admins[1], "replacement owner");

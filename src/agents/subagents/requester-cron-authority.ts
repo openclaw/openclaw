@@ -28,7 +28,6 @@ import {
 
 type RequesterCronAuthority = {
   managementEntitlement?: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -271,7 +270,6 @@ export function prepareRequesterCronAuthority(params: {
         requesterAgentId,
         requesterSessionId: capture.sessionId,
         managementEntitlement: capture.managementEntitlement,
-        requesterOwner: capture.requesterOwner,
         lifecycleGeneration: capture.lifecycleGeneration,
         sessionLifecycleRevision: session.entry.lifecycleRevision,
         sessionFacts,
@@ -562,13 +560,16 @@ export function captureRequesterFollowupAuthority(params: {
     sessionKey: params.requesterSessionKey,
     agentId: params.requesterAgentId,
   });
-  if (!capture?.requesterOwner || capture.sessionId !== params.requesterSessionId) {
+  // A channel owner's followup returns its automation management to the exact requester.
+  if (
+    capture?.managementEntitlement.source !== "channel-owner" ||
+    capture.sessionId !== params.requesterSessionId
+  ) {
     return undefined;
   }
   const authority: RequesterCronAuthority = {
     kind: "followup",
     ...params,
-    requesterOwner: capture.requesterOwner,
     managementEntitlement: capture.managementEntitlement,
     lifecycleGeneration: capture.lifecycleGeneration,
     isFollowupCurrent: params.isCurrent,
@@ -608,7 +609,7 @@ export function captureRequesterFollowupAuthority(params: {
     },
     async run<T>(runId: string, run: () => Promise<T>): Promise<T> {
       // The followup owner retains caller restrictions separately. This scope
-      // supplies only the captured channel identity to the returning parent.
+      // supplies only the captured automation management to the returning parent.
       return await runRequesterFollowupAuthority(authority, runId, run);
     },
   };
@@ -635,7 +636,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
       runId: string;
       callerOrigin: { kind: "unknown" };
       managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
-      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
       isCurrent: () => boolean;
       bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
       release?: () => void;
@@ -662,7 +662,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
-    requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
     ...(dispatch.pause
       ? {
@@ -681,7 +680,6 @@ export function consumeRequesterCronAuthorityAdmission(params: RequesterAdmissio
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
         scope.managementEntitlement !== dispatch.authority.managementEntitlement ||
-        scope.requesterOwner !== dispatch.authority.requesterOwner ||
         scope.callerOrigin.kind !== "unknown" ||
         !scope.active ||
         scope.signal.aborted

@@ -193,10 +193,10 @@ describe.skipIf(!connection)("PostgreSQL physical admission", () => {
       expect(result).toMatchObject({
         catalogReads: [1, 1, 2, 3],
         nativeHasParents: false,
-        facts: { engine: "postgres", namespace, storeId, version: 7 },
+        facts: { engine: "postgres", namespace, storeId, version: 7, minReader: 7 },
         writtenName: "written",
         reusedAdmissionId: result.facts.admissionId,
-        versionError: expect.stringContaining("metadata identity or version mismatch"),
+        versionError: expect.stringContaining("requires minimum reader 8"),
         missingError: expect.stringContaining("restore the matching PostgreSQL schema and anchor"),
       });
       const partial = (kind: string, value: object) =>

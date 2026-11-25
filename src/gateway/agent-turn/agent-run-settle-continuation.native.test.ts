@@ -65,6 +65,7 @@ function makeTurnParams(
     offloadedRefs: [],
     runId,
     client: null,
+    senderIsOwner: false,
     context: createAgentTurnTestContext(),
     ...overrides,
     request: { message, idempotencyKey: runId, ...overrides.request },

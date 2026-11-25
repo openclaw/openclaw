@@ -62,7 +62,6 @@ import { inspectCronJobsForDoctor, repairCronInferenceBindingsForDoctor } from "
 export async function maybeRepairCronInferenceBindings(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
-  publishedStateDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
@@ -173,16 +172,13 @@ export async function maybeRepairCronInferenceBindings(params: {
         modelRef = `${selected.provider}/${selected.model}`;
         const cfg = captureConfig(selected.owner.config);
         if (previous) {
-          shadowRoots ??= readAppliedUpgradeShadowRoots(
-            params.publishedStateDir ?? resolveStateDir(env),
-          );
+          shadowRoots ??= readAppliedUpgradeShadowRoots(resolveStateDir(env));
           // With no receipt, the owner can confirm the current binding but cannot repair a mismatch.
           verifyingSavedAccount = true;
           const authority = await captureAuthProfileAuthorization({
             cfg,
             agentDir: selected.owner.agentDir,
             profileId: previous.profileId,
-            publishedStateDir: params.publishedStateDir,
             upgradeRecovery: { recordedId: previous.authorizationId, shadowRoots },
             assertCurrent() {},
           });
@@ -445,7 +441,6 @@ export async function maybeRepairCronInferenceBindings(params: {
           profileId: candidate.profileId,
           agentDir: selected.owner.agentDir,
           cfg,
-          publishedStateDir: params.publishedStateDir,
           // The credential owner captures and revalidates the Doctor maintenance scope.
           assertCurrent() {},
         });

@@ -4,27 +4,20 @@
  * its id, or when it is withheld with a cause.
  */
 import { randomUUID } from "node:crypto";
-import type {
-  CommandOwnerRequester,
-  SessionEventRequesterOwner,
-} from "../auto-reply/reply/session-event-target.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
 import { readOwedKind, type OwedKind } from "../config/sessions/session-pending-input-value.js";
+import type { QueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { ChatRef } from "./chat-ref.js";
 
 /**
- * Who produced the result, saved as data. Consumption does not read it yet; a later slice
- * intersects it with current policy without a migration.
+ * Who produced the result, saved as data: the requester's recorded source. Restart recovery
+ * admits it again; a row without it (written before this field) wakes as the session principal.
  */
-type OwedOriginFacts = Readonly<{
-  requester?: SessionEventRequesterOwner["requester"];
-  commandOwner?: CommandOwnerRequester;
-  operatorProfileId?: string;
-}>;
+type OwedOriginFacts = Readonly<{ operatorSource?: QueuedOperatorRecoverySource }>;
 
 export type Owed = {
   id: string;

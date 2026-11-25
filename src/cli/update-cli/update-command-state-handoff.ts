@@ -6,13 +6,11 @@ import { suspendUpdateProgressForDoctor } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 /**
- * Restart the Gateway into the updated build without holding the updater's shared-state
- * handles, then reopen by path. The new build's boot upgrade can copy and swap
- * `state/openclaw.sqlite` (the old file stays as `.pre-<build>`); a retained worker owner
- * would pin the old file under the same pathname, so every later open is refused. Once
- * `restart` settles (the new Gateway is verified or the restart failed), handles opened
- * meanwhile are retired and path admissions revoked, so the remaining steps and the run
- * record use the current file. Update Doctor children use the same close, revoke and
+ * Restart the Gateway without holding the updater's shared-state readers, so the
+ * successor can run its in-place boot migrations under exclusive custody. Once
+ * `restart` settles (the new Gateway is verified or the restart failed), handles
+ * opened meanwhile are retired and path admissions revoked before remaining steps
+ * reopen the database. Update Doctor children use the same close, revoke and
  * progress suspension around their exclusive custody.
  */
 export async function withUpdateStateReleasedAcrossRestart<T>(

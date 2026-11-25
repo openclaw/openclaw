@@ -167,6 +167,9 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           sessions: page.map((session) => ({
             threadId: session.beamId,
             exportPolicy: { origin: "imported", automatic: false },
+            ...(session.presentationDigest
+              ? { previewImageDigest: session.presentationDigest }
+              : {}),
             name: session.title,
             status: session.completed ? "completed" : "live",
             createdAt: session.createdAt,
@@ -194,7 +197,25 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       ];
     },
     async read(params) {
-      return readBeamSession(await requireSession(params.hostId, params.threadId), params);
+      const session = await requireSession(params.hostId, params.threadId);
+      const page = readBeamSession(session, params);
+      // Export, import and pagination only read transcript text. A viewer opts in to the preview.
+      if (!params.includePreviewImage || params.cursor || !session.presentationDigest) {
+        return page;
+      }
+      const image = await store.getScreenshot?.(session.beamId, session.presentationDigest);
+      if (!image) {
+        throw new Error("The snapshot image changed or expired. Reload the snapshot.");
+      }
+      return {
+        ...page,
+        previewImage: {
+          name: image.name,
+          digest: image.digest,
+          mimeType: "image/png",
+          data: image.png,
+        },
+      };
     },
     async resolveGatewayConversation(params) {
       const session = await requireSession(params.hostId, params.threadId);

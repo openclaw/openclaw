@@ -72,6 +72,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
       operatorAuthority: run.operatorAuthority,
     }),
     resolveReplyOperatorAuthorityKey(run.operatorAuthority),
+    stableStringify(run.operatorAuthority?.participationCeiling ?? null),
     execution.senderId ?? "",
     JSON.stringify(execution.channelContext ?? null),
     stableStringify(execution.conversationToolPolicy ?? null),
