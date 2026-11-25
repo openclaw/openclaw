@@ -514,6 +514,11 @@ extension OpenClawChatView {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
+            if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
+                ChatDelayedLoadingIndicator()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+
             self.messageListOverlay(hasVisibleContent: hasVisibleContent)
 
             ChatJumpToLatestSlot(
@@ -695,11 +700,6 @@ extension OpenClawChatView {
                     model?.input = prompt.prompt
                     model?.send()
                 })
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
-        if self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent) {
-            ChatLoadingBubble()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
@@ -1251,9 +1251,11 @@ extension OpenClawChatView {
             .padding(.vertical, 8)
     }
 
+    /// A new chat has no transcript to wait for, so it never shows a loading state.
     private func showsCleanLoadingPlaceholder(hasVisibleContent: Bool) -> Bool {
         self.composerChrome == .clean &&
             self.viewModel.isLoading &&
+            !self.viewModel.isNewChatDraft &&
             self.visibleEmptyAssistantIntro == nil &&
             self.activeErrorText == nil &&
             !hasVisibleContent
