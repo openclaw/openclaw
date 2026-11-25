@@ -11,6 +11,42 @@ struct ChatComposerTextViewTests {
         #expect(textView.allowsUndo)
     }
 
+    @Test(arguments: [
+        ("\r\n", NSRange(location: 2, length: 0), false),
+        ("a\u{2028}b", NSRange(location: 2, length: 0), false),
+        ("a\u{2029}b", NSRange(location: 2, length: 0), false),
+        ("ab\nc", NSRange(location: 1, length: 0), true),
+        ("ab\nc", NSRange(location: 0, length: 1), false),
+    ])
+    func `plain Up reports whether the caret is on the first logical line`(
+        _ draft: String,
+        _ selection: NSRange,
+        _ expectedFirstLine: Bool) throws
+    {
+        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
+        textView.string = draft
+        textView.setSelectedRange(selection)
+        var reportedFirstLine: Bool?
+        textView.onKeyCommand = { command, context in
+            guard command == .moveUp else { return false }
+            reportedFirstLine = context.caretOnFirstLine
+            return context.caretOnFirstLine
+        }
+        let up = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "\u{F700}",
+            charactersIgnoringModifiers: "\u{F700}",
+            isARepeat: false,
+            keyCode: 126))
+        textView.keyDown(with: up)
+        #expect(reportedFirstLine == expectedFirstLine)
+    }
+
     @Test func `composer expands for wrapped drafts and shrinks when cleared without moving the caret`() {
         let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
         textView.string = "Keep this draft"

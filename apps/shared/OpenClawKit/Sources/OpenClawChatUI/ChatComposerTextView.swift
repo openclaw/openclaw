@@ -17,13 +17,13 @@ struct ChatComposerKeyCommandContext: Equatable {
     let caretOnFirstLine: Bool
 
     static func resolve(text: String, selectedRange: NSRange) -> Self {
-        let utf16Length = (text as NSString).length
-        guard selectedRange.location != NSNotFound,
-              selectedRange.length == 0,
-              selectedRange.location <= utf16Length
+        let contents = text as NSString
+        guard selectedRange.length == 0,
+              selectedRange.location >= 0,
+              selectedRange.location <= contents.length
         else { return Self(caretOnFirstLine: false) }
-        let prefix = (text as NSString).substring(to: selectedRange.location)
-        return Self(caretOnFirstLine: !prefix.contains("\n") && !prefix.contains("\r"))
+        let line = contents.lineRange(for: selectedRange)
+        return Self(caretOnFirstLine: line.location == 0)
     }
 }
 
