@@ -204,6 +204,23 @@ describe("scanSource", () => {
         "dynamic-code-execution",
         'const box = { run: eval };\nfunction safe() { box.run = x => x; }\nbox.run("1+1");',
       ],
+      [
+        "dangerous-exec",
+        'launch("node", ["-v"]);\nimport { spawn as launch } from "node:child_process";',
+        1,
+      ],
+      ["dangerous-exec", 'proc.exec("id");\nimport * as proc from "child_process";', 1],
+      [
+        "dangerous-exec",
+        'const run = proc.exec;\nrun("id");\nimport proc from "node:child_process";',
+        2,
+      ],
+      [
+        "dangerous-exec",
+        'function example() { launch("node", ["-v"]); }\nimport { spawn as launch } from "child_process";',
+        1,
+      ],
+      ["dangerous-exec", 'const run = exec;\nrun("id");\nimport { exec } from "child_process";', 2],
     ];
     for (const [ruleId, source, expectedLine] of cases) {
       const findings = scanSource(source, "plugin.ts").filter((f) => f.ruleId === ruleId);
@@ -237,6 +254,8 @@ describe("scanSource", () => {
       'const m = require("child_process");\nlet r = m.exec;\nr = x => x;\nr("ok");',
       'const m = require("child_process" && "harmless");\nconst r = m.exec;\nr("ok");',
       'let r = x => x;\nfunction example() { r = eval; }\nr("ok");',
+      'function safe(launch) { launch("ok"); }\nimport { spawn as launch } from "child_process";',
+      'let run = proc.exec;\nrun = x => x;\nrun("ok");\nimport proc from "child_process";',
     ]) {
       expect(scanSource(source, "plugin.ts"), source).toEqual([]);
     }

@@ -199,26 +199,32 @@ export function collectCapabilityCalls(source: string): CallMatches {
           }
         },
       },
-      ImportDeclaration(path) {
-        if (!isProcessModule(path.node.source.value) || path.node.importKind === "type") {
-          return;
-        }
-        for (const specifier of path.node.specifiers) {
-          const imported =
-            specifier.type === "ImportSpecifier"
-              ? specifier.imported.type === "Identifier"
-                ? specifier.imported.name
-                : specifier.imported.value
-              : undefined;
-          assign(
-            specifier.local,
-            specifier.type === "ImportSpecifier"
-              ? specifier.importKind !== "type" && imported && PROCESS_METHODS.has(imported)
-                ? "process-call"
-                : undefined
-              : "process-module",
-            path.scope,
-          );
+      Program(path) {
+        // ESM bindings exist before module evaluation, even when imports follow calls.
+        for (const declaration of path.node.body) {
+          if (declaration.type !== "ImportDeclaration") {
+            continue;
+          }
+          if (!isProcessModule(declaration.source.value) || declaration.importKind === "type") {
+            continue;
+          }
+          for (const specifier of declaration.specifiers) {
+            const imported =
+              specifier.type === "ImportSpecifier"
+                ? specifier.imported.type === "Identifier"
+                  ? specifier.imported.name
+                  : specifier.imported.value
+                : undefined;
+            assign(
+              specifier.local,
+              specifier.type === "ImportSpecifier"
+                ? specifier.importKind !== "type" && imported && PROCESS_METHODS.has(imported)
+                  ? "process-call"
+                  : undefined
+                : "process-module",
+              path.scope,
+            );
+          }
         }
       },
       TSImportEqualsDeclaration(path) {
