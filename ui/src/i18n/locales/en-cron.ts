@@ -48,8 +48,10 @@ const enCron = {
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
       deliveryModeRequired:
         "Choose where to send results, or run openclaw doctor --fix to repair older settings.",
-      webhookUrlRequired: "Webhook URL is required.",
-      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
+      webhookUrlRequired: "Enter the URL where OpenClaw should send results.",
+      webhookUrlProtocol: "Start the URL with https:// or http://.",
+      webhookUrlInvalid: "OpenClaw can’t read this URL. Check it for typos.",
+      webhookUrlWithCredentials: "Use a webhook URL with no username or password in the address.",
       invalidRunTime: "Invalid run time.",
       invalidIntervalAmount: "Invalid interval amount.",
       cronExprRequiredShort: "Cron expression required.",
