@@ -19,11 +19,15 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   postMultipartRequest,
 }));
 
-const provider = buildOpenAIImageGenerationProvider({
-  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
-  listProfilesForProvider: () => [],
-  isProviderApiKeyConfiguredAsync: async () => true,
-});
+function createImageProvider(configured: boolean) {
+  return buildOpenAIImageGenerationProvider({
+    ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+    listProfilesForProvider: () => [],
+    isProviderApiKeyConfiguredAsync: async () => configured,
+  });
+}
+
+const provider = createImageProvider(true);
 const runtimeDeps = { getProvider: () => provider, listProviders: () => [provider] };
 
 function mockGeneratedPngResponse(quality?: string) {
@@ -37,6 +41,13 @@ function mockGeneratedPngResponse(quality?: string) {
 beforeEach(() => {
   postJsonRequest.mockReset();
   postMultipartRequest.mockReset();
+});
+
+it("keeps model auth scoped to each registration on concurrent first use", async () => {
+  const checks = [true, false].map((configured) =>
+    createImageProvider(configured).isConfiguredAsync?.({}),
+  );
+  expect(await Promise.all(checks)).toEqual([true, false]);
 });
 
 describe("OpenAI GPT Image 2.6 models", () => {
