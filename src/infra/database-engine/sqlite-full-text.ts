@@ -52,6 +52,7 @@ export function bindSqliteFullText(store: object, db?: DatabaseSync): FullTextCa
       const start = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.start) : sql.lit("");
       const end = sqliteMatchMarkers ? sql.val(sqliteMatchMarkers.end) : sql.lit("");
       const snippet = createFunctionModule()<string>("snippet", [
+        // kysely-allow-raw: relation() checks the store binding before returning the declared alias or table.
         sql.table(table),
         sql.lit(column),
         start,
