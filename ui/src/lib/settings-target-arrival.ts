@@ -92,7 +92,7 @@ export function createPendingSettingsTarget(host: () => HTMLElement) {
  * after the scroll stops, and focused; a larger block keeps its top-aligned scroll.
  * Nothing is edited. Returns the cleanup for a pending or visible mark.
  */
-function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => void {
+function arriveAtSettingsTarget(target: HTMLElement, finish: () => void): (() => void) | undefined {
   // A row inside a closed disclosure has no place on screen to scroll to.
   for (let parent = target.parentElement; parent; parent = parent.parentElement) {
     if (parent instanceof HTMLDetailsElement && !parent.open) {
@@ -102,7 +102,9 @@ function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => 
   const behavior = resolveScrollBehavior();
   if (!target.matches(SETTINGS_ROW_SELECTOR)) {
     target.scrollIntoView?.({ behavior, block: "start" });
-    return () => {};
+    // Sections have no mark to restore. A redraw must not replay the scroll.
+    finish();
+    return undefined;
   }
   // Centered, the row keeps its neighbors for context and clears any sticky header.
   target.scrollIntoView?.({ behavior, block: "center" });
@@ -165,7 +167,7 @@ function arriveAtSettingsTarget(target: HTMLElement, onRead: () => void): () => 
         type,
         () => {
           clear();
-          onRead();
+          finish();
         },
         { capture: true, passive: true },
       ),

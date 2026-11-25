@@ -58,7 +58,7 @@ const device = {
 suite.define(() => {
   it("opens the GitHub accounts section from Settings search without manual scrolling", async () => {
     await suite.withPage(
-      { locale: "en-US", viewport: { width: 1280, height: 700 } },
+      { locale: "en-US", reducedMotion: "reduce", viewport: { width: 1280, height: 700 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodDelays: { "users.listModelAccounts": 300 },
@@ -91,6 +91,13 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("users.self")).length)
           .toBeGreaterThan(identityReads);
         await heading.waitFor();
+        // Check the reconnected layout after the browser has painted the section.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
         await expect(hero).toBeInViewport();
       },
     );
