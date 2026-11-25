@@ -525,6 +525,22 @@ describe("createVoiceCallRuntime lifecycle", () => {
     );
   });
 
+  it("offers the stay-silent tool only when configured, ahead of configured tools", async () => {
+    const config = createRealtimeConfig({
+      toolPolicy: "none",
+      staySilentTool: true,
+      tools: [
+        { ...customTool, name: "openclaw_stay_silent", description: "Configured replacement" },
+      ],
+    });
+
+    await createRuntime({ config });
+
+    const tools = realtimeArgs()[0].tools;
+    expect(tools.map((tool) => tool.name)).toEqual(["openclaw_end_call", "openclaw_stay_silent"]);
+    expect(tools[1]?.description).not.toBe("Configured replacement");
+  });
+
   it("always exposes the built-in end-call tool without allowing configured replacement", async () => {
     const config = createRealtimeConfig({
       toolPolicy: "none",

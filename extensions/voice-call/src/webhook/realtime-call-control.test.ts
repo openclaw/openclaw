@@ -134,6 +134,27 @@ it("keeps a native consult running when far-side speech arrives during silent mo
     consultResult.resolve({ text: "Finished" });
   }
 });
+it("passes over background speech without replying or ending the call", async () => {
+  const submitToolResult = vi.fn();
+  const { endCall, request, triggerGreeting } = await connectCall("CA-background", {
+    bridge: { submitToolResult },
+  });
+  triggerGreeting.mockClear();
+  request.onToolCall?.({
+    itemId: "silent-1",
+    callId: "silent-1",
+    name: "openclaw_stay_silent",
+    args: {},
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(submitToolResult).toHaveBeenCalledExactlyOnceWith(
+    "silent-1",
+    { ok: true },
+    { suppressResponse: true },
+  );
+  expect(triggerGreeting).not.toHaveBeenCalled();
+  expect(endCall).not.toHaveBeenCalled();
+});
 it("pauses speech-idle hang-up while an agent consult is in flight", async () => {
   const { handler, endCall, request } = await connectCall("CA-idle", { idleHangupMs: 1_000 });
   const consulted = createDeferred<{ text: string }>();

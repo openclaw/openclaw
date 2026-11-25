@@ -212,6 +212,11 @@ const VoiceCallRealtimeConfigSchema = z
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
+    /**
+     * Offer the openclaw_stay_silent tool, so the model can pass over background voices and
+     * noise without answering them.
+     */
+    staySilentTool: z.boolean().optional(),
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema.default(
