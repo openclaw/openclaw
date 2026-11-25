@@ -583,6 +583,7 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.metadata": loadMaintenanceOperations,
     "toolUsage.prune": loadAgentToolUsageOperations,
     "toolUsage.flush": loadAgentToolUsageOperations,
+    "toolUsage.firstSeen": loadAgentToolUsageOperations,
     "toolUsage.reset": loadAgentToolUsageOperations,
     "toolUsage.import": loadAgentToolUsageOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,

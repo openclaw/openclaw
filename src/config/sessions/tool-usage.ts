@@ -104,6 +104,22 @@ export async function readAgentToolUsage(input: AgentToolUsageOptions): Promise<
   return (await readAgentToolUsageStatus(input)).rows;
 }
 
+/** Ranking boundaries read scores and record first sight of any newly offered tools. */
+export async function readAgentToolUsageForRanking(
+  input: AgentToolUsageOptions & { toolIds: readonly string[] },
+): Promise<Pick<AgentToolUsageStatus, "rows" | "firstSeen">> {
+  const now = input.now ?? Date.now();
+  const status = await readAgentToolUsageStatus({ ...input, now });
+  const toolIds = input.toolIds.filter((id) => status.firstSeen[id] === undefined);
+  if (toolIds.length === 0) {
+    return status;
+  }
+  const firstSeen = await withDatabase(input, (options, current) =>
+    write(options, current, "toolUsage.firstSeen", { toolIds, now }),
+  );
+  return { rows: status.rows, firstSeen };
+}
+
 export function flushAgentToolUsage(
   input: AgentToolUsageOptions & {
     rows: readonly ToolUsageRow[];

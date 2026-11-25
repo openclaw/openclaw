@@ -12,6 +12,7 @@ import type { AgentToolUsageState, AgentToolUsageStatus } from "./tool-usage.typ
 
 const scope = "agent-tool-usage";
 const key = "import-state-v1";
+const firstSeenKey = "first-seen-v1";
 const liveScope = "agent-tool-usage-live-runs";
 
 export function emptyAgentToolUsageState(): AgentToolUsageState {
@@ -78,24 +79,76 @@ function readAgentToolUsageStateInDatabase(db: EngineConnection): AgentToolUsage
   };
 }
 
-function writeState(db: EngineConnection, state: AgentToolUsageState, now: number): void {
+function writeEntry(db: EngineConnection, entryKey: string, value: unknown, now: number): void {
+  const valueJson = JSON.stringify(value);
   const query = getNodeSqliteKysely<DB>(db)
     .insertInto("cache_entries")
     .values({
       scope,
-      key,
-      value_json: JSON.stringify(state),
+      key: entryKey,
+      value_json: valueJson,
       blob: null,
       expires_at: null,
       updated_at: now,
     })
     .onConflict((conflict) =>
       conflict.columns(["scope", "key"]).doUpdateSet({
-        value_json: JSON.stringify(state),
+        value_json: valueJson,
         updated_at: now,
       }),
     );
   executeSqliteQuerySync(db, query);
+}
+
+function writeState(db: EngineConnection, state: AgentToolUsageState, now: number): void {
+  writeEntry(db, key, state, now);
+}
+
+/** Undefined means first-seen tracking has not started for this agent. */
+function readAgentToolFirstSeenInDatabase(
+  db: EngineConnection,
+): Record<string, number> | undefined {
+  const query = getNodeSqliteKysely<DB>(db)
+    .selectFrom("cache_entries")
+    .select("value_json")
+    .where("scope", "=", scope)
+    .where("key", "=", firstSeenKey);
+  const stored = executeSqliteQuerySync(db, query).rows[0]?.value_json;
+  if (!stored) {
+    return undefined;
+  }
+  const value: unknown = JSON.parse(stored);
+  if (
+    !isRecord(value) ||
+    !Object.values(value).every(
+      (at) => typeof at === "number" && Number.isSafeInteger(at) && at >= 0,
+    )
+  ) {
+    throw new Error("Invalid tool first-seen metadata; repair the agent database before retrying");
+  }
+  return value as Record<string, number>;
+}
+
+/**
+ * Records when this agent first offered each tool. Tools present when tracking
+ * starts get 0, so only later arrivals count as new. Reset keeps these times.
+ */
+export function recordAgentToolFirstSeenInDatabase(
+  db: EngineConnection,
+  input: { toolIds: readonly string[]; now: number },
+): Record<string, number> {
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const stored = readAgentToolFirstSeenInDatabase(db);
+    const firstSeen = { ...stored };
+    const missing = input.toolIds.filter((id) => firstSeen[id] === undefined);
+    for (const id of missing) {
+      firstSeen[id] = stored ? input.now : 0;
+    }
+    if (missing.length > 0) {
+      writeEntry(db, firstSeenKey, firstSeen, input.now);
+    }
+    return firstSeen;
+  });
 }
 
 export function readAgentToolUsageLiveRunsInDatabase(
@@ -169,7 +222,11 @@ export function readAgentToolUsageInDatabase(
       .where("updated_at", ">=", now - TOOL_USAGE_RETENTION_MS)
       .orderBy("tool_id"),
   ).rows;
-  return { ...readAgentToolUsageStateInDatabase(db), rows };
+  return {
+    ...readAgentToolUsageStateInDatabase(db),
+    rows,
+    firstSeen: readAgentToolFirstSeenInDatabase(db) ?? {},
+  };
 }
 
 export function beginAgentToolUsageInDatabase(

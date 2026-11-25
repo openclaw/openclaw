@@ -16,7 +16,11 @@ export type AgentToolUsageState = {
   importedWindows: { since: number; before: number }[];
   lastImportAt: number | null;
 };
-export type AgentToolUsageStatus = AgentToolUsageState & { rows: ToolUsageRow[] };
+export type AgentToolUsageStatus = AgentToolUsageState & {
+  rows: ToolUsageRow[];
+  /** When this agent first offered each tool to a ranked prompt. */
+  firstSeen: Record<string, number>;
+};
 export type AgentToolUsageImportScan = {
   rows: ToolUsageRow[];
   successfulCalls: number;

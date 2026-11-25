@@ -42,7 +42,7 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
   const current = lease("usage-prefix");
   const entries: SessionEntry[] = [];
   let storedOrder = ids;
-  const readRankedIds = vi.fn(async () => storedOrder);
+  const readUsage = vi.fn(async () => ({ rankedIds: storedOrder, firstSeen: {} }));
   const input = {
     state: current.state,
     routeKey: route,
@@ -50,7 +50,7 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
     enabled: true,
     catalogIds: ids,
     now: 100,
-    readRankedIds,
+    readUsage,
   };
   const initial = await prepareSessionToolUsageRanking(input);
   const prompt = (ranking: ToolUsageRankingSnapshot | undefined) =>
@@ -65,7 +65,7 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
       prepareSessionSystemPrompt({ ...input, systemPrompt: prompt(frozen) }).systemPrompt,
     ).toBe(prompt(initial));
   }
-  expect(readRankedIds).toHaveBeenCalledTimes(1);
+  expect(readUsage).toHaveBeenCalledTimes(1);
   current[Symbol.dispose]();
   const restarted = lease("usage-prefix");
   const restored = await prepareSessionToolUsageRanking({
@@ -74,7 +74,7 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
     now: 200,
   });
   expect(restored).toEqual(initial);
-  expect(readRankedIds).toHaveBeenCalledTimes(1);
+  expect(readUsage).toHaveBeenCalledTimes(1);
   const changedRoute = buildSystemPromptRouteKey({
     provider: "example",
     model: "two",
@@ -91,7 +91,7 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
       })
     )?.orderedToolIds,
   ).toEqual(storedOrder);
-  expect(readRankedIds).toHaveBeenCalledTimes(2);
+  expect(readUsage).toHaveBeenCalledTimes(2);
   entries.push({
     type: "reset",
     reason: "reset",
@@ -105,13 +105,13 @@ it("freezes usage selection through turns and restart, and refreshes only at rou
     routeKey: changedRoute,
     now: 400,
   });
-  expect(readRankedIds).toHaveBeenCalledTimes(3);
+  expect(readUsage).toHaveBeenCalledTimes(3);
   restarted[Symbol.dispose]();
 });
 
 it("does not rewrite restored ranking checkpoints", async () => {
   const entries: SessionEntry[] = [];
-  const readRankedIds = vi.fn(async () => ids);
+  const readUsage = vi.fn(async () => ({ rankedIds: ids, firstSeen: {} }));
   const checkpointCounts: number[] = [];
   for (const catalogIds of [ids, ids, [...ids, "openclaw:new:tool"]]) {
     const current = lease("usage-restored");
@@ -123,7 +123,7 @@ it("does not rewrite restored ranking checkpoints", async () => {
         catalogIds,
         enabled: true,
         now: 100,
-        readRankedIds,
+        readUsage,
       };
       await prepareSessionToolUsageRanking(input);
       prepareSessionToolSurface({ ...input, toolPolicy: "same", tools: [] });
@@ -135,7 +135,7 @@ it("does not rewrite restored ranking checkpoints", async () => {
     }
   }
   expect(checkpointCounts).toEqual([1, 1, 2]);
-  expect(readRankedIds).toHaveBeenCalledOnce();
+  expect(readUsage).toHaveBeenCalledOnce();
 });
 
 it("inherits a durable parent snapshot without reading the child's scores, but never inherits authority", async () => {
@@ -147,13 +147,16 @@ it("inherits a durable parent snapshot without reading the child's scores, but n
     enabled: true,
     catalogIds: ids,
     now: 100,
-    readRankedIds: async () => ids,
+    readUsage: async () => ({ rankedIds: ids, firstSeen: {} }),
   });
   const persistedSeed = structuredClone(getSessionToolUsageRanking("usage-parent"));
   expect(persistedSeed).toEqual(snapshot);
   parent[Symbol.dispose]();
   const child = lease("usage-child");
-  const readRankedIds = vi.fn(async () => ["openclaw:other:private"]);
+  const readUsage = vi.fn(async () => ({
+    rankedIds: ["openclaw:other:private"],
+    firstSeen: {},
+  }));
   const entries: SessionEntry[] = [];
   const input = {
     state: child.state,
@@ -163,11 +166,11 @@ it("inherits a durable parent snapshot without reading the child's scores, but n
     catalogIds: [ids[1]!],
     inherited: persistedSeed,
     now: 200,
-    readRankedIds,
+    readUsage,
   };
   const inherited = await prepareSessionToolUsageRanking(input);
   expect(inherited?.orderedToolIds).toEqual([ids[1]]);
-  expect(readRankedIds).not.toHaveBeenCalled();
+  expect(readUsage).not.toHaveBeenCalled();
   prepareSessionSystemPrompt({ ...input, systemPrompt: "child authorized catalog only" }).commit();
   await persistSessionSystemPrompt(child.state, writer(entries));
   child[Symbol.dispose]();
@@ -175,13 +178,13 @@ it("inherits a durable parent snapshot without reading the child's scores, but n
   expect(
     await prepareSessionToolUsageRanking({ ...input, state: resumed.state, inherited: undefined }),
   ).toEqual(inherited);
-  expect(readRankedIds).not.toHaveBeenCalled();
+  expect(readUsage).not.toHaveBeenCalled();
   resumed[Symbol.dispose]();
 });
 
 it("keeps disabled sessions read-free and admits catalog newcomers without refreshing learned order", async () => {
   const current = lease("usage-disabled");
-  const readRankedIds = vi.fn(async () => ids);
+  const readUsage = vi.fn(async () => ({ rankedIds: ids, firstSeen: {} }));
   const input = {
     state: current.state,
     routeKey: route,
@@ -189,11 +192,11 @@ it("keeps disabled sessions read-free and admits catalog newcomers without refre
     enabled: false,
     catalogIds: ids,
     now: 100,
-    readRankedIds,
+    readUsage,
   };
   expect(await prepareSessionToolUsageRanking(input)).toBeUndefined();
   expect(await prepareSessionToolUsageRanking({ ...input, enabled: true })).toBeUndefined();
-  expect(readRankedIds).not.toHaveBeenCalled();
+  expect(readUsage).not.toHaveBeenCalled();
   const switched = {
     ...input,
     enabled: true,
@@ -212,6 +215,6 @@ it("keeps disabled sessions read-free and admits catalog newcomers without refre
   expect(next?.orderedToolIds).toEqual(first?.orderedToolIds);
   expect(next?.at).toBe(first?.at);
   expect(next?.newcomers?.["openclaw:new:tool"]).toBe(150);
-  expect(readRankedIds).toHaveBeenCalledTimes(1);
+  expect(readUsage).toHaveBeenCalledTimes(1);
   current[Symbol.dispose]();
 });

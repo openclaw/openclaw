@@ -203,33 +203,40 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       return undefined;
     }
     const now = Date.now();
+    const catalogIds = toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [];
     usageRanking = await prepareSessionToolUsageRanking({
       state: sessionPromptState,
       routeKey: promptRouteKey,
       entries: sessionManager[sessionManagerReadTranscriptBranch](),
       historyBoundaryCount: sessionManager.getBoundaryCount(),
       enabled: rankingEnabled,
-      catalogIds: toolSearchCatalogRef?.current?.entries.map((entry) => entry.id) ?? [],
+      catalogIds,
       inherited: inheritedRanking,
       now,
-      readRankedIds: async () => {
+      readUsage: async () => {
         try {
-          const { readAgentToolUsage } = await import("../../../config/sessions/tool-usage.js");
-          const usage = await readAgentToolUsage({
+          const { readAgentToolUsageForRanking } =
+            await import("../../../config/sessions/tool-usage.js");
+          const usage = await readAgentToolUsageForRanking({
             agentId: sessionAgentId,
             config: attempt.config,
+            toolIds: catalogIds,
+            now,
           });
           sessionPreparation.assertCurrent();
-          return usage
-            .toSorted(
-              (a, b) =>
-                decayToolUsage(b, now) - decayToolUsage(a, now) ||
-                (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
-            )
-            .map((row) => row.toolId);
+          return {
+            rankedIds: usage.rows
+              .toSorted(
+                (a, b) =>
+                  decayToolUsage(b, now) - decayToolUsage(a, now) ||
+                  (a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0),
+              )
+              .map((row) => row.toolId),
+            firstSeen: usage.firstSeen,
+          };
         } catch (error) {
           log.warn(`Tool usage ranking unavailable: ${String(error)}`);
-          return [];
+          return { rankedIds: [], firstSeen: {} };
         }
       },
     });

@@ -480,7 +480,7 @@ const reviewedOperations = new Map([
           "resetAgentToolUsageInDatabase",
         ],
         evidence:
-          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
+          "Begin/flush run in session-actor-append.worker.ts inside the transcript actor transaction; prune/flush/firstSeen/reset/import run only in the toolUsage.* handlers that openclaw-agent-execution-operations.ts loads from openclaw-agent-execution-tool-usage.worker.ts in the agent execution worker; status and live-run reads run in tool-usage-read.worker.ts under session-history-read-operation.worker.ts. Host imports are types.",
       },
       {
         tier: "T3",

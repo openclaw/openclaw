@@ -4,6 +4,7 @@ import {
   flushAgentToolUsage,
   importAgentToolUsage,
   readAgentToolUsage,
+  readAgentToolUsageForRanking,
 } from "../../config/sessions/tool-usage.js";
 import { seedAgentToolUsageRunForTest } from "../../config/sessions/tool-usage.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -117,14 +118,21 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
         surface: "tools",
       });
       let reads = 0;
-      const readRankedIds = async () => {
+      const readUsage = async () => {
         reads++;
-        return (await readAgentToolUsage(options))
-          .toSorted(
-            (a, b) =>
-              decayToolUsage(b, now) - decayToolUsage(a, now) || a.toolId.localeCompare(b.toolId),
-          )
-          .map((row) => row.toolId);
+        const usage = await readAgentToolUsageForRanking({
+          ...options,
+          toolIds: catalog.map((entry) => entry.id),
+        });
+        return {
+          rankedIds: usage.rows
+            .toSorted(
+              (a, b) =>
+                decayToolUsage(b, now) - decayToolUsage(a, now) || a.toolId.localeCompare(b.toolId),
+            )
+            .map((row) => row.toolId),
+          firstSeen: usage.firstSeen,
+        };
       };
       const lease = retainEmbeddedSessionPromptState("usage-worker-prefix");
       const input = {
@@ -134,7 +142,7 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
         enabled: true,
         catalogIds: catalog.map((entry) => entry.id),
         now,
-        readRankedIds,
+        readUsage,
       };
       try {
         const snapshot = await prepareSessionToolUsageRanking(input);
@@ -182,6 +190,60 @@ it("imports stored transcript calls into both real listings and freezes bytes wh
       } finally {
         lease[Symbol.dispose]();
       }
+    },
+  );
+});
+
+it("ages newcomers from the agent's first sight of a tool, not each fresh session", async () => {
+  await withOpenClawTestState(
+    { label: "usage-ranked-first-seen", scenario: "minimal" },
+    async ({ env }) => {
+      const day = 24 * 60 * 60 * 1000;
+      const start = Date.UTC(2026, 10, 1);
+      const [old, added] = ["openclaw:core:fixture_old", "openclaw:core:fixture_added"];
+      const route = buildSystemPromptRouteKey({
+        provider: "synthetic",
+        model: "fixture",
+        harness: "openclaw",
+        surface: "tools",
+      });
+      const freshSession = async (id: string, now: number, catalogIds: string[]) => {
+        const lease = retainEmbeddedSessionPromptState(id);
+        try {
+          return (
+            await prepareSessionToolUsageRanking({
+              state: lease.state,
+              routeKey: route,
+              entries: [],
+              enabled: true,
+              catalogIds,
+              now,
+              readUsage: async () => {
+                const usage = await readAgentToolUsageForRanking({
+                  agentId: "main",
+                  env,
+                  now,
+                  toolIds: catalogIds,
+                });
+                return { rankedIds: [], firstSeen: usage.firstSeen };
+              },
+            })
+          )?.newcomers;
+        } finally {
+          lease[Symbol.dispose]();
+        }
+      };
+      // Tools present when tracking starts are not new.
+      expect(await freshSession("first-seen-a", start, [old])).toEqual({ [old]: 0 });
+      expect(await freshSession("first-seen-b", start + day, [old, added])).toEqual({
+        [old]: 0,
+        [added]: start + day,
+      });
+      // A later fresh session keeps the original sighting, so the window can expire.
+      expect(await freshSession("first-seen-c", start + 20 * day, [old, added])).toEqual({
+        [old]: 0,
+        [added]: start + day,
+      });
     },
   );
 });
