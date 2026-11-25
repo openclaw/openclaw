@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 function runLogs(args: string[], logError = "", jobStatus?: string) {
@@ -29,14 +29,18 @@ process.stdout.write("\\u001b[31mFAIL first\\u001b[0m\\npass second\\nFAIL third
 `,
   );
   chmodSync(gh, 0o755);
-  return spawnSync(
-    process.execPath,
-    [resolve("scripts/frv.mjs"), "logs", "--job", "123", ...args],
-    {
-      encoding: "utf8",
-      env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH ?? ""}` },
-    },
-  );
+  try {
+    return spawnSync(
+      process.execPath,
+      [resolve("scripts/frv.mjs"), "logs", "--job", "123", ...args],
+      {
+        encoding: "utf8",
+        env: { HOME: root, PATH: root },
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 describe("frv logs", () => {
