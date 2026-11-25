@@ -395,6 +395,38 @@ extension OpenClawChatComposer {
         return nil
     }
 
+    enum CleanPrimaryControl {
+        case talk
+        case send
+        case none
+    }
+
+    var cleanShowsSeparateTalkControl: Bool {
+        #if os(iOS)
+        self.talkControl?.isEnabled == true
+        #else
+        false
+        #endif
+    }
+
+    var cleanPrimaryControl: CleanPrimaryControl {
+        if self.cleanShowsSeparateTalkControl {
+            return self.viewModel.hasDraftToSend || self.viewModel.hasBlockingRunActivity ? .send : .none
+        }
+        let showsTalk = Self.showsCompactTalkControl(
+            hasDraftToSend: self.viewModel.hasDraftToSend,
+            hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
+            isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)
+        return showsTalk && self.talkControl != nil ? .talk : .send
+    }
+
+    private var isLocalVoiceCaptureActive: Bool {
+        self.dictationTask != nil ||
+            self.dictationControl?.isActive == true ||
+            self.voiceNoteControl?.recorder.isRecording == true ||
+            self.voiceNoteControl?.recorder.isRequestingPermission == true
+    }
+
     /// Send/Talk observes the draft independently of the expensive model menu.
     var cleanCaptureAndPrimaryControls: some View {
         ChatComposerSection { self.cleanCaptureAndPrimaryContent }

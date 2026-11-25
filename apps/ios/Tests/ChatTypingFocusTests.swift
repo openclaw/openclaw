@@ -174,10 +174,13 @@ final class ChatTypingFocusTests: XCTestCase {
                 // Exercise the production SwiftUI builders, not their new presentation properties.
                 // With no optional camera or local-capture controls, the extra button must be End Talk.
                 XCTAssertEqual(
-                    try Self.renderedControlCount(composer.cleanCaptureAndPrimaryControls.body), expected, context)
+                    try Self.renderedControlCount(composer.cleanCaptureAndPrimaryControls.body),
+                    expected,
+                    context)
                 XCTAssertEqual(
                     try Self.renderedControlCount(composer.cleanTrailingControl),
-                    talkActive ? expected - 1 : expected, context)
+                    talkActive ? expected - 1 : expected,
+                    context)
             }
         }
     }
@@ -225,7 +228,8 @@ final class ChatTypingFocusTests: XCTestCase {
         self.add(attachment)
 
         XCTAssertEqual(
-            try Self.renderedControlCount(composer.cleanTrailingControl), 2,
+            try Self.renderedControlCount(composer.cleanTrailingControl),
+            2,
             "A draft must retain both Stop and Send")
         model.input = ""
         XCTAssertEqual(try Self.renderedControlCount(composer.cleanTrailingControl), 1)

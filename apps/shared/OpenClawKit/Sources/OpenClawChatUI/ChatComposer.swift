@@ -820,31 +820,6 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    enum CleanPrimaryControl {
-        case talk
-        case send
-        case none
-    }
-
-    var cleanShowsSeparateTalkControl: Bool {
-        #if os(iOS)
-        self.talkControl?.isEnabled == true
-        #else
-        false
-        #endif
-    }
-
-    var cleanPrimaryControl: CleanPrimaryControl {
-        if self.cleanShowsSeparateTalkControl {
-            return self.viewModel.hasDraftToSend || self.viewModel.hasBlockingRunActivity ? .send : .none
-        }
-        let showsTalk = Self.showsCompactTalkControl(
-            hasDraftToSend: self.viewModel.hasDraftToSend,
-            hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
-            isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)
-        return showsTalk && self.talkControl != nil ? .talk : .send
-    }
-
     func compactTalkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
         ChatTalkButton(
             control: talkControl,
@@ -853,13 +828,6 @@ struct OpenClawChatComposer: View {
             style: .compact(
                 controlHeight: self.cleanControlHeight,
                 iconControlSize: self.cleanIconControlSize))
-    }
-
-    private var isLocalVoiceCaptureActive: Bool {
-        self.dictationTask != nil ||
-            self.dictationControl?.isActive == true ||
-            self.voiceNoteControl?.recorder.isRecording == true ||
-            self.voiceNoteControl?.recorder.isRequestingPermission == true
     }
 
     private func talkHelpText(_ talkControl: OpenClawChatTalkControl) -> String {
