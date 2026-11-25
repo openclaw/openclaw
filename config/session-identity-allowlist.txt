@@ -1065,7 +1065,6 @@ src/gateway/session-sharing-target-read.ts	4
 src/gateway/session-sharing.ts	5
 src/gateway/session-subagent-reactivation.ts	4
 src/gateway/session-subagent-resume.ts	14
-src/gateway/session-system-turn-authority.ts	2
 src/gateway/session-transcript-files.fs.ts	4
 src/gateway/session-transcript-memory-reader.ts	3
 src/gateway/session-transcript-read-kernel.ts	2
