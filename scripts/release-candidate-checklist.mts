@@ -53,6 +53,7 @@ import {
 import {
   PluginSdkApiAcknowledgementError,
   findPluginSdkApiReleaseNoteOmissions,
+  isPluginSdkApiAcknowledgement,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -331,9 +332,11 @@ export function parseArgs(argv: string[]) {
   }
   if (
     options.pluginSdkApiAcknowledgement &&
-    !/^[a-f0-9]{8}$/u.test(options.pluginSdkApiAcknowledgement)
+    !isPluginSdkApiAcknowledgement(options.pluginSdkApiAcknowledgement)
   ) {
-    throw new Error("--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest");
+    throw new Error(
+      "--plugin-sdk-api-acknowledgement must be an 8-character lowercase digest, optionally followed by @<qualified-predecessor-tag>",
+    );
   }
   options.workflowRef ||= "main";
   if (options.workflowRef !== "main") {
