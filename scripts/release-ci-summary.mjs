@@ -686,15 +686,15 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
     throw new Error("cached publication plan differs from its authenticated original");
   }
   const source = validatePublicationSourceBinding(plan);
-  // Older Q bound an explicit empty, retired publication-artifact input.
-  // Its signed source bytes stay untouched; only compare the effective operands.
-  const effectiveCoverage = (coverage) => {
-    if (coverage.publication_artifact_source_json !== "") {
-      return coverage;
-    }
-    const { publication_artifact_source_json: _retired, ...current } = coverage;
-    return current;
-  };
+  // Older Q bound explicit empty values for these retired inputs. Its signed
+  // source bytes stay untouched; only compare the effective operands.
+  const effectiveCoverage = (coverage) =>
+    Object.fromEntries(
+      Object.entries(coverage).filter(
+        ([key, value]) =>
+          value !== "" || (key !== "publication_artifact_source_json" && key !== "telegram_waiver"),
+      ),
+    );
   if (
     publicationSourceJson(effectiveCoverage(source.coverage)) !==
       publicationSourceJson(effectiveCoverage(request.coverage)) ||

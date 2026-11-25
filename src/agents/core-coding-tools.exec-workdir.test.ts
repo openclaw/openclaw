@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { intersectExecPolicyCeilings } from "../infra/exec-policy.js";
 import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -11,6 +12,7 @@ import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -116,6 +118,46 @@ describe("coding-tool exec working directory", () => {
       });
     }
   });
+
+  it.each(["on-miss", "always"] as const)(
+    "does not reopen retained allowlist misses through host %s",
+    async (ask) => {
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "full", ask, askFallback: "full" },
+        agents: {},
+      });
+      const reviewer = vi.fn(
+        () => ({ decision: "allow-once", risk: "low", rationale: "fixture" }) as const,
+      );
+      const tool = createExecTool(undefined, true, {
+        ...projectEffectiveExecPolicy({
+          base: {},
+          participationCeiling: {
+            kind: "send",
+            sessionKey: "agent:main:original",
+            profileId: "guest",
+            permission: "workspace",
+            execPolicy: intersectExecPolicyCeilings(
+              { security: "allowlist", ask: "off" },
+              { security: "full", ask },
+            ),
+          },
+        }),
+        autoReviewer: reviewer,
+      });
+      const result = await tool.execute("denied-miss", {
+        command: nodeCommand('console.log("forbidden")'),
+      });
+      expect(result.details).toMatchObject({ status: "failed", exitCode: null, durationMs: 0 });
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining("participant-allowlist-miss") }),
+        ]),
+      );
+      expect(reviewer).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps temporary files in the checkout scratch root when exec changes directory", async () => {
     const result = await createExecTool().execute("coding-scratch", {

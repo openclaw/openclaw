@@ -174,7 +174,7 @@ it.for(
 // An operator-source job (created from a Control UI turn) repaired in its source conversation.
 const operatorOutcomes = {
   // A Control UI administrator's restored source keeps owner tools, as its in-session runs do.
-  "control-ui-admin": { update: "ok", description: "fixed by repair" },
+  operator: { update: "ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
   "device-revoked": { update: "not run", description: "original" },

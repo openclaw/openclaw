@@ -82,6 +82,7 @@ function followupRequest(): FollowupRequest {
       assertCurrent: () => {},
       release: vi.fn(),
       run: (work) => work(),
+      runWithRequester: (work) => work(),
     },
   };
 }

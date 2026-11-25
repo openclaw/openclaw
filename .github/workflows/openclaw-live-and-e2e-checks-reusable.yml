@@ -4731,6 +4731,14 @@ jobs:
           fetch-depth: 1
           path: .release-harness
 
+      - name: Report missing decision provider coverage
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
+        shell: bash
+        run: |
+          if [[ -f test/decision-index-providers.live.test.ts && -z "${CELERIS_API_KEY:-}${FASTINO_API_KEY:-}${NACE_API_KEY:-}${PERPLEXITY_API_KEY:-}" ]]; then
+            echo "::warning file=test/decision-index-providers.live.test.ts::No Celeris, Fastino, Nace, or Perplexity key is available to this job. Their live decision cases will skip. Check the job's credential configuration. The remaining tests will run."
+          fi
+
       - name: Setup Node environment
         if: steps.selection.outputs.run == 'true'
         uses: ./.github/actions/setup-node-env

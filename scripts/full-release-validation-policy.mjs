@@ -3036,10 +3036,17 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   return lines;
 }
 
-export function formatReleaseStateOutcome(payload) {
-  const lines = [`Full Release Validation state: ${payload.state}`];
+export function formatReleaseStateOutcome(payload, { observedDrainStatus } = {}) {
+  const label =
+    observedDrainStatus === undefined
+      ? "Full Release Validation state"
+      : "Release Decision snapshot";
+  const lines = [`${label}: ${payload.state}`];
   lines.push(...releaseStateDetailLines(payload));
-  if (payload.state === "blocked_diagnostics_running") {
+  if (
+    payload.state === "blocked_diagnostics_running" &&
+    (observedDrainStatus === undefined || observedDrainStatus === "in_progress")
+  ) {
     lines.push(
       "Diagnostic Drain is still collecting terminal evidence; diagnose now, retry later.",
     );
@@ -3086,9 +3093,46 @@ export function resolveAdmittedQualificationScope(admission) {
   };
 }
 
+function normalCiAndroidOverride(parentWorkflowSource, ciReleaseScope) {
+  const blocks = [...(parentWorkflowSource ?? "").matchAll(/^ +ci\)\r?\n([\s\S]*?)^ +;; *$/gmu)];
+  const lines = blocks[0]?.[1]
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.trim());
+  const dispatch = 'dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"';
+  const argsPrefix = 'args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope"';
+  const argsSuffix = ' -f dispatch_id="$dispatch_id")';
+  const args = lines?.filter((line) => line.startsWith("args=("));
+  if (blocks.length !== 1 || lines?.at(-1) !== dispatch || args?.length !== 1) {
+    throw new Error("Unrecognized frozen Normal CI dispatch");
+  }
+  const androidLines = lines.filter((line) => line.includes("include_android"));
+  if (args[0] === argsPrefix + argsSuffix && androidLines.length === 0) {
+    return undefined; // Gateway FRV omitted this input; use frozen ci.yml's default.
+  }
+  const legacyArgs = argsPrefix + ' -f include_android="$include_android"' + argsSuffix;
+  if (
+    args[0] === legacyArgs &&
+    isDeepStrictEqual(androidLines, [
+      "include_android=true",
+      'if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi',
+      legacyArgs,
+    ])
+  ) {
+    return ciReleaseScope !== "npm-beta" && ciReleaseScope !== "npm-stable";
+  }
+  throw new Error("Unrecognized frozen Normal CI Android dispatch");
+}
+
 // Derive operands from the independently admitted request, not caller-supplied
 // receipt.inputs. The immutable Q workflow supplies all unsupplied defaults.
-export function qualificationChildDispatchInputs(role, admission, binding, workflowSource) {
+export function qualificationChildDispatchInputs(
+  role,
+  admission,
+  binding,
+  workflowSource,
+  parentWorkflowSource,
+) {
   const input = admission.request.inputs;
   const lane = JSON.parse(input.trusted_workflow_json).laneInputs ?? {};
   const target = admission.request.candidateSha;
@@ -3104,7 +3148,10 @@ export function qualificationChildDispatchInputs(role, admission, binding, workf
   if (role === "normalCi") {
     add("target_ref", target);
     add("release_scope", scope.ciReleaseScope);
-    add("include_android", scope.ciReleaseScope === "full");
+    const android = normalCiAndroidOverride(parentWorkflowSource, scope.ciReleaseScope);
+    if (android !== undefined) {
+      add("include_android", android);
+    }
     const ref = (context || input.ref).replace(/^refs\/(?:heads|tags)\//u, "");
     if (/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+|-[1-9][0-9]*)?$/u.test(ref)) {
       add("historical_target_tag", ref);

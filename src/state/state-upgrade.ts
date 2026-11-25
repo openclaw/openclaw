@@ -28,7 +28,13 @@ import {
   type SetAsideRow,
   type SqliteSwapReport,
 } from "./sqlite-copy-swap.js";
-import { copyUpgradeConfigInputs, readUpgradeConfig } from "./state-upgrade-config.js";
+import {
+  copyUpgradeConfigInputs,
+  readUpgradeConfig,
+  rewriteFilePrefix,
+  configPublicationRefusal,
+  stageUpgradeConfigs,
+} from "./state-upgrade-config.js";
 import {
   discoverDatabases,
   expectedVersion,
@@ -62,7 +68,6 @@ import {
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
-  rewriteFilePrefix,
   rewriteSqlitePrefix,
   writePlan,
   type UpgradeOp,
@@ -423,6 +428,7 @@ export async function upgradeStateDirectory(params: {
     const configInputs = copyUpgradeConfigInputs({
       configPath,
       shadowConfig,
+      workDir,
       files: configFiles,
       baseline: configInside ? baseline : undefined,
     });
@@ -461,7 +467,7 @@ export async function upgradeStateDirectory(params: {
       rewriteFilePrefix(target, stateDir, shadowRoot);
       if (!configInside) {
         for (const [source, shadow] of configInputs) {
-          rewriteFilePrefix(target, source, shadow);
+          rewriteFilePrefix(target, source.replaceAll(stateDir, shadowRoot), shadow);
         }
       }
     }
@@ -572,7 +578,7 @@ export async function upgradeStateDirectory(params: {
         if (fs.existsSync(target)) {
           rewriteFilePrefix(target, shadowRoot, stateDir);
           for (const [source, shadow] of configInputs) {
-            rewriteFilePrefix(target, shadow, source);
+            rewriteFilePrefix(target, shadow.replaceAll(shadowRoot, stateDir), source);
           }
         }
       }
@@ -605,6 +611,14 @@ export async function upgradeStateDirectory(params: {
     }
     // Include changes participate in the same durable plan as the root config.
     const publishedConfigTargets = new Set<string>();
+    const configRefusal = configPublicationRefusal(
+      configInputs,
+      ops,
+      mode === "chain" && configInside,
+    );
+    if (configRefusal) {
+      return { status: "refused", reason: configRefusal };
+    }
     if (mode === "fallback" || !configInside) {
       for (const [file, target] of configInputs) {
         if (!fs.existsSync(target)) {
@@ -675,41 +689,14 @@ export async function upgradeStateDirectory(params: {
     );
     checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
-    // A workspace include can be on another filesystem even when the root is not.
-    // Stage its planned writes (including Doctor backups) beside their destinations.
-    const configDirectories = new Set(
-      [...configInputs.keys()].flatMap((file) => [
-        path.dirname(file),
-        path.dirname(configFiles.get(file)?.canonicalPath ?? file),
-      ]),
-    );
-    for (const op of ops) {
-      if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
-        const staged = path.join(
-          path.dirname(op.live),
-          `.${path.basename(op.live)}${path.basename(workDir)}`,
-        );
-        stagedConfigs.add(staged);
-        fs.cpSync(op.next, staged, { verbatimSymlinks: true });
-        op.next = staged;
-      }
-      if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
-        fsyncPath(op.next);
-        fsyncPath(path.dirname(op.next), true);
-      }
-    }
+    stageUpgradeConfigs(configInputs, configFiles, ops, workDir, stagedConfigs);
     await params.beforeSwap?.();
     const recovery = publishStateUpgradeRestore(restore, { ops });
     if (restore) {
       trialGenerations.add(restore.generation);
       params.log.info(
-        `Prepared update recovery manifest: ${recovery.linked} new hard links, ${recovery.copied.length} byte-copy fallbacks, ${recovery.symlinks} symlinks.`,
+        `Prepared update recovery manifest: ${recovery.files} new file images, ${recovery.symlinks} symlinks.`,
       );
-      if (recovery.copied.length > 0) {
-        params.log.warn(
-          `Recovery hard links were unavailable; copied ${recovery.copied.join(", ")}.`,
-        );
-      }
     }
     writePlan(workDir, { appVersion: generation(), ops });
     planWritten = true;

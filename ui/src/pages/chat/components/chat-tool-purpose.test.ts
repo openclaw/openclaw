@@ -1,10 +1,123 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
+import { projectCatalogItemForDisplay } from "../../../../../src/chat/session-catalog-display.js";
+import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 const text = (container: ParentNode, selector: string) =>
   container.querySelector(selector)?.textContent;
+
+it.each([
+  [
+    "message",
+    { emoji: "✅" },
+    { ok: false, added: "✅", warning: "Reaction unavailable: ✅" },
+    "React to message",
+  ],
+  [
+    "tool_call",
+    { emoji: "" },
+    {
+      ok: false,
+      reason: "disabled",
+      hint: "Telegram reactions are disabled via actions.reactions. Do not retry.",
+    },
+    "Clear reactions",
+  ],
+] as const)(
+  "keeps a refused Telegram reaction neutral through %s",
+  async (name, intent, receipt, label) => {
+    const args = { action: "react", channel: "telegram", messageId: "456", ...intent };
+    const result = jsonResult(receipt);
+    const tool = { id: "message", name: "message", source: "openclaw" };
+    const dispatch = name === "tool_call";
+    const input = dispatch ? { id: tool.id, args } : args;
+    const details = dispatch ? { tool, result, status: "failed" } : result.details;
+    const toolCallId = "telegram-reaction";
+    const host = createHost({ chatRunId: toolCallId });
+    handleAgentEvent(
+      host,
+      agentEvent(toolCallId, 1, "tool", { phase: "start", toolCallId, name, args: input }),
+    );
+    // A capture without outer text must still honor the dispatcher's inner details.
+    handleAgentEvent(
+      host,
+      agentEvent(toolCallId, 2, "tool", {
+        phase: "result",
+        toolCallId,
+        name,
+        result: dispatch ? { text: "", details } : result,
+      }),
+    );
+    // A completed catalog call can retain just the serialized result, without native details.
+    const history = projectCatalogItemForDisplay({
+      type: "toolResult",
+      toolName: name,
+      toolCallId,
+      toolInput: input,
+      isError: false,
+      raw: { result: dispatch ? { tool, result: { content: result.content } } : receipt },
+    });
+    const titles = [];
+    for (const message of [host.chatToolMessages[0], history]) {
+      const card = extractToolCardsCached(message)[0]!;
+      const container = await mountCard(card, { expanded: false });
+      titles.push(text(container, ".chat-tool-row__title"));
+      if (!dispatch || message === history) {
+        await mountCard(card, { expanded: true }, container);
+        expect(text(container, ".chat-tool-msg-body")).toContain(
+          "warning" in receipt ? receipt.warning : receipt.hint,
+        );
+      }
+    }
+    expect(titles).toEqual([label, label]);
+  },
+);
+
+it.each([
+  [{ ok: true, messageId: "reply-guid", repliedTo: "parent-guid" }, "Replied to message"],
+  [{ ok: true, messageId: "unknown", repliedTo: "parent-guid" }, "Reply to message"],
+  [{ ok: true, messageId: "ok", repliedTo: "parent-guid" }, "Reply to message"],
+  [{ ok: true, dryRun: true, channel: "imessage", action: "reply" }, "Reply to message"],
+  [{ status: "suppressed", reason: "poll_vote_echo" }, "Reply to message"],
+  [{ error: "iMessage action timed out after 5000ms" }, "Reply to message"],
+  [undefined, "Reply to message"],
+] as const)(
+  "labels a recorded iMessage reply from its outbound receipt: %j",
+  async (payload, label) => {
+    const args = {
+      action: "reply",
+      channel: "imessage",
+      chatGuid: "iMessage;+;fixture",
+      messageId: "parent-guid",
+      message: "Fixture reply",
+    };
+    const result = payload && jsonResult(payload);
+    const isError = Boolean(payload && "error" in payload);
+    const [card] = extractToolCardsCached({
+      role: "assistant",
+      content: [
+        { type: "toolcall", id: "reply", name: "message", arguments: args },
+        {
+          type: "toolresult",
+          id: "reply",
+          name: "message",
+          isError,
+          content: result?.content ?? [],
+          details: projectToolResultDetails(result?.details, 4_096, { name: "message" }).details,
+        },
+      ],
+    });
+    expect(card?.args).toEqual(args);
+    const container = await mountCard(card!, { expanded: false });
+    expect(text(container, ".chat-tool-row__title")).toBe(label);
+  },
+);
 
 it.each([
   [{ live: true }, "Checking goal"],
@@ -270,6 +383,88 @@ it.each([
     expect(text(container, ".chat-tool-disclosure__content")).toBe(expected);
   },
 );
+
+// Captured from createMediaGenerateDuplicateGuardResult for an already queued music task.
+const queuedMusic = {
+  action: "status",
+  duplicateGuard: true,
+  async: true,
+  active: true,
+  existingTask: true,
+  status: "queued",
+  task: { taskId: "task-active", runId: "run-active" },
+  taskKind: "music_generation",
+  progressSummary: "Queued music generation",
+  sourceId: "music_generate:fixture",
+  provider: "fixture",
+};
+const queuedMusicText =
+  "Music generation task task-active is already queued with fixture.\nProgress: Queued music generation.\nDo not call music_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished music here.";
+const reviewStart =
+  "Review-before-delivery is enabled. Produced candidates remain private until an exact-task delivery decision; do not send them automatically.\nBackground task started for image generation (task-new). Do not call image_generate again for this request.";
+
+it.each([
+  ["duplicate guard", "music_generate", queuedMusic, queuedMusicText, "Generate music"],
+  ["missing receipt", "image_generate", undefined, undefined, "Generate image"],
+  [
+    "generic count",
+    "music_generate",
+    { count: 2 },
+    "Generated 2 tracks.\nPrompt: Background task started for music generation (task-from-prompt).",
+    "Generate music",
+  ],
+  [
+    "review start",
+    "image_generate",
+    { async: true, status: "started", taskId: "task-new" },
+    reviewStart,
+    "Requested image generation",
+  ],
+  [
+    "generated attachment",
+    "music_generate",
+    { attachments: [{ type: "audio", path: "/fixture/track.mp3" }] },
+    "Generated 1 track with fixture/model.",
+    "Generated music",
+  ],
+] as const)(
+  "labels the %s in direct and historical media rows",
+  async (_case, name, details, outputText, label) => {
+    const args = { prompt: "Background task started for image generation (task-from-prompt)." };
+    const tool = { id: name, name, source: "openclaw" };
+    const content = outputText ? [{ type: "text", text: outputText }] : [];
+    const [history] = extractToolCardsCached({
+      role: "assistant",
+      content: [
+        { type: "toolcall", id: "media", name: "tool_call", arguments: { id: name, args } },
+        {
+          type: "toolresult",
+          id: "media",
+          name: "tool_call",
+          content: jsonResult({ tool, result: { content } }).content,
+          details: projectToolResultDetails({ tool, result: { content, details } }, 4_096, {
+            name: "tool_call",
+          }).details,
+        },
+      ],
+    });
+    for (const card of [{ id: name, name, args, details, outputText, completed: true }, history!]) {
+      const container = await mountCard(card, { expanded: false });
+      expect(text(container, ".chat-tool-row__title")).toBe(label);
+    }
+  },
+);
+
+it.each([
+  ["status", "Checked music generation"],
+  ["list", "Listed music models"],
+])("keeps an explicit media %s action", async (action, label) => {
+  const container = await mountCard(
+    { id: "music", name: "music_generate", args: { action }, completed: true },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-row__title")).toBe(label);
+});
 
 const stop = (details: object, args: object = {}) => ({
   name: "sessions",
