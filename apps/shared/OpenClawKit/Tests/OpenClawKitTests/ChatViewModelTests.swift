@@ -8514,6 +8514,49 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.composerSkillEnabled(skill) })
     }
 
+    @Test func `turning a skill on inserts it only after the change is saved`() async throws {
+        let skill = OpenClawChatComposerSkill(
+            key: "release",
+            name: "Release",
+            baseEnabled: true,
+            missingDependencies: false,
+            blocked: false,
+            agentFiltered: true)
+        let catalog = OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            skills: [skill],
+            skillsAvailable: true,
+            permissionMutationAvailable: true,
+            sessionSettingsCASAvailable: true,
+            toolOverrideMutationAvailable: true)
+        let failNext = TestFlag()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse([sessionEntry(key: "main", updatedAt: 1)])],
+            sessionSettingsPatchHook: { _ in
+                if await failNext.take() {
+                    throw NSError(domain: "Test", code: 1, userInfo: [NSLocalizedDescriptionKey: "Couldn’t save."])
+                }
+                return nil
+            },
+            composerCapabilityCatalog: catalog)
+        try await loadAndWaitBootstrap(vm: vm)
+        await vm.loadComposerCapabilities()
+        await MainActor.run { vm.input = "Check the release" }
+        #expect(await MainActor.run { !vm.composerSkillEnabled(skill) })
+
+        await failNext.set()
+        #expect(await vm.turnOnComposerSkillAndInsert(skill) == false)
+        #expect(await transport.sessionSettingsPatches().count == 1)
+        #expect(await MainActor.run { vm.input } == "Check the release")
+        #expect(await MainActor.run { !vm.composerSkillEnabled(skill) })
+        #expect(await MainActor.run { vm.composerCapabilityErrorMessage } == "Couldn’t save.")
+
+        #expect(await vm.turnOnComposerSkillAndInsert(skill))
+        #expect(await MainActor.run { vm.composerSkillEnabled(skill) })
+        #expect(await MainActor.run { vm.input } == "/release Check the release")
+    }
+
     @Test func `old gateway hides capability controls and rejects their mutations`() async throws {
         let skill = OpenClawChatComposerSkill(
             key: "weather",
@@ -15675,3 +15718,17 @@ struct ChatObscuredStreamPacingTests {
     }
 }
 #endif
+
+private actor TestFlag {
+    private var value = false
+
+    func set() {
+        self.value = true
+    }
+
+    /// Returns whether the flag was set, and clears it.
+    func take() -> Bool {
+        defer { self.value = false }
+        return self.value
+    }
+}
