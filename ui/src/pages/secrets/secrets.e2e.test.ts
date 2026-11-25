@@ -208,6 +208,7 @@ suite.define(() => {
             }),
           ).toBe(1);
           await attribution.locator("summary").press("Enter");
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the rendered visible text.
           expect(await attribution.locator(":scope > span").innerText()).toContain(
             region.updatedBy,
           );
