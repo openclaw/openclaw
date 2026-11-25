@@ -732,12 +732,12 @@ describe("buildCodexMigrationProvider", () => {
 
   it.each([
     { name: "ChatGPT subscription", account: chatGptAccount(), verify: false, reason: undefined },
-    {
-      name: "API key",
-      account: { account: { type: "apiKey" }, requiresOpenaiAuth: true },
-      verify: false,
+    ...(["apiKey", "gcp"] as const).map((type) => ({
+      name: type,
+      account: { account: { type }, requiresOpenaiAuth: type === "apiKey" },
+      verify: type === "gcp",
       reason: "codex_subscription_required",
-    },
+    })),
     {
       name: "missing account",
       account: { account: null, requiresOpenaiAuth: true },
@@ -772,7 +772,7 @@ describe("buildCodexMigrationProvider", () => {
     );
     expect(
       appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/installed"),
-    ).toHaveLength(verify ? 1 : 0);
+    ).toHaveLength(verify && reason !== "codex_subscription_required" ? 1 : 0);
     if (!reason) {
       expectRecordFields(findItem(plan.items, "plugin:gmail"), {
         kind: "plugin",
