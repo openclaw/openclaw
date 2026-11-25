@@ -78,6 +78,7 @@ export interface SessionListHost {
     | "refreshSessionCatalogs"
     | "refreshSidebarSessions"
     | "retryChildSessions"
+    | "wakeSidebarSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionListError"
     | "visibleSessionLimits"

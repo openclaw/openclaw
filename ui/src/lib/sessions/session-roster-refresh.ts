@@ -432,6 +432,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         ...(options.offset !== undefined ? { offset: options.offset } : {}),
       });
     },
+    wakeList(this: void, scope: SessionListScope) {
+      (isPrimarySessionListQuery(scope)
+        ? eventRefreshCoordinator
+        : managedList(scope).coordinator
+      ).wake();
+    },
     isPrimaryList: isPrimarySessionListQuery,
     async refreshManagedLists() {
       const scope = host.connection.capture();

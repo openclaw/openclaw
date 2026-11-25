@@ -239,10 +239,11 @@ export async function patchPersonalSessionPins(
       });
     }
     if (accepted.size) {
+      // Admission fixes the requester. Later checks keep Stop/lifetime, target and CAS
+      // preconditions, not the connection's current profile selection.
       profiles.admit();
       const recheck = () => {
         owner.assertCurrent();
-        profiles.readCurrent();
         let stale: SessionMutationAuthorizationChangedError | undefined;
         for (const [key, item] of accepted) {
           try {

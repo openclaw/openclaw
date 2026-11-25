@@ -177,6 +177,12 @@ export function createSessionEventRefreshCoordinator({
         }
       };
     },
+    /** A consumer's Gateway deadline outside this window's receipt; shares the cutoff's read and retry. */
+    wake() {
+      windowWake ??= { queued: true, retryAt: null, dueAt: monotonicNow() };
+      windowWake.queued = true;
+      arm(false);
+    },
     scheduleFallback() {
       fallback ??= setTimeout(() => {
         fallback = undefined;
