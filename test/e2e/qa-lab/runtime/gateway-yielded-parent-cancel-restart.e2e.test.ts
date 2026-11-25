@@ -383,7 +383,7 @@ describe("yielded parent cancellation across Gateway restart", () => {
       senderId: CONVERSATION.id,
       text: FRESH_PROMPT,
     });
-    await transport.waitForCompletedReply({ inbound: freshInbound, timeoutMs: 60_000 });
+    await transport.waitForCompletedReply({ inbound: freshInbound, gateway, timeoutMs: 60_000 });
 
     await gateway.stop();
     const outbound = state
