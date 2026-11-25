@@ -26,7 +26,7 @@ on:
         default: ""
         type: string
       plugin_sdk_api_acknowledgement:
-        description: Optional override for the Plugin SDK API acknowledgement sealed by Full Release Validation
+        description: Explicit Plugin SDK API acknowledgement, or reuse:<publisher-run-id>/<attempt> for Docker-only recovery
         required: false
         default: ""
         type: string
@@ -160,6 +160,7 @@ jobs:
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
       preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
+      sdk_review: ${{ steps.manifest.outputs.sdk_review }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
       plugin_npm_artifact: ${{ steps.full_manifest.outputs.plugin_npm_artifact }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
@@ -180,6 +181,7 @@ jobs:
       - name: Validate inputs
         id: inputs
         env:
+          SDK_ACKNOWLEDGEMENT_REUSE: ${{ startsWith(inputs.plugin_sdk_api_acknowledgement, 'reuse:') && inputs.plugin_sdk_api_acknowledgement || '' }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
@@ -204,6 +206,11 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [[ -n "${SDK_ACKNOWLEDGEMENT_REUSE:-}" ]] &&
+             [[ ! "$SDK_ACKNOWLEDGEMENT_REUSE" =~ ^reuse:[1-9][0-9]*/[1-9][0-9]*$ || "$PUBLISH_DOCKER_ONLY" != "true" || "$PUBLISH_OPENCLAW_NPM" != "false" || "$CLAWHUB_ONLY" == "true" || "$RELEASE_EVIDENCE_MODE" != "full-release-validation" || -z "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
+            echo "SDK acknowledgement reuse requires reuse:<publisher-run-id>/<attempt>, Docker-only scope and full release validation evidence." >&2
+            exit 1
+          fi
           # Approval intent is not an artifact descriptor or a route conversion.
           if [[ -n "$PREPARED_PLUGINS" ]]; then
             PREPARED_PLUGINS="$(jq -cr 'if type != "object" then error("prepared_plugins must be an object") elif keys == ["corePluginDeferrals"] then "" else del(.corePluginDeferrals) | tojson end' <<< "$PREPARED_PLUGINS")"
@@ -758,7 +765,7 @@ jobs:
         id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
         env:
-          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
+          PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ !startsWith(inputs.plugin_sdk_api_acknowledgement, 'reuse:') && inputs.plugin_sdk_api_acknowledgement || '' }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -858,6 +865,7 @@ jobs:
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ fromJSON(steps.full_manifest.outcome == 'success' && toJSON(steps.full_manifest.outputs.plugin_sdk_api_acknowledgement) || toJSON(inputs.plugin_sdk_api_acknowledgement)) }}
           PLUGIN_SDK_API_VALIDATOR: ${{ github.workspace }}/.release-validation-tooling/scripts/plugin-sdk-api-release-evidence.mjs
+          SDK_ACKNOWLEDGEMENT_REUSE: ${{ startsWith(inputs.plugin_sdk_api_acknowledgement, 'reuse:') && inputs.plugin_sdk_api_acknowledgement || '' }}
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_artifact.outputs.head_sha }}
           PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_artifact.outputs.head_branch }}
           PREFLIGHT_RUN_ID: ${{ steps.preflight_artifact.outputs.run_id }}
@@ -941,15 +949,26 @@ jobs:
               --run-id "$PREFLIGHT_RUN_ID" --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           fi
           if [[ "$(jq -r '.version' "$manifest")" != "4" ]]; then
-            node "$PLUGIN_SDK_API_VALIDATOR" \
+            acknowledgement="$PLUGIN_SDK_API_ACKNOWLEDGEMENT"
+            if [[ -n "$SDK_ACKNOWLEDGEMENT_REUSE" ]]; then
+              acknowledgement="$(node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/recover-release-sdk-acknowledgement.mjs" "$manifest")"
+            fi
+            sdk_review="$(node "$PLUGIN_SDK_API_VALIDATOR" \
               --manifest "$manifest" \
               --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
               --head "$EXPECTED_SHA" \
-              --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
+              --acknowledge "$acknowledgement" \
               --current-selector-ref "$current_selector_ref" \
               --current-selector-sha "$current_selector_sha" \
               --target-ref "$RELEASE_TAG" \
-              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA"
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA")"
+            echo "$sdk_review"
+            if [[ -n "$acknowledgement" ]]; then
+              echo "sdk_review=$(jq -c --arg ack "$acknowledgement" '{digest, acknowledgement: $ack}' <<< "$sdk_review")" >> "$GITHUB_OUTPUT"
+            fi
+          elif [[ -n "$SDK_ACKNOWLEDGEMENT_REUSE" ]]; then
+            echo "SDK acknowledgement reuse requires qualified SDK evidence, not a build-only preflight." >&2
+            exit 1
           fi
           if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
@@ -1543,6 +1562,39 @@ jobs:
         with:
           name: ${{ steps.approval_receipt.outputs.artifact_name }}
           path: ${{ runner.temp }}/openclaw-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Record reviewed Plugin SDK API acknowledgement
+        id: record_sdk_review
+        if: inputs.publish_openclaw_npm && startsWith(github.ref, 'refs/tags/release-publish/') && needs.resolve_release_target.outputs.sdk_review != ''
+        continue-on-error: true
+        env:
+          SDK_REVIEW: ${{ needs.resolve_release_target.outputs.sdk_review }}
+        run: |
+          set -euo pipefail
+          directory="$RUNNER_TEMP/release-sdk-acknowledgement"
+          mkdir -p "$directory"
+          jq -c --arg runId "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg releaseTag "$RELEASE_TAG" --arg targetSha "$TARGET_SHA" \
+            --arg npmDistTag "$RELEASE_NPM_DIST_TAG" \
+            '. + {$runId, $attempt, $releaseTag, $targetSha, $npmDistTag}' <<< "$SDK_REVIEW" > "$directory/review.json"
+
+      - name: Attest reviewed Plugin SDK API acknowledgement
+        id: attest_sdk_review
+        if: steps.record_sdk_review.outcome == 'success'
+        continue-on-error: true
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/release-sdk-acknowledgement/review.json
+
+      - name: Retain reviewed Plugin SDK API acknowledgement
+        if: steps.attest_sdk_review.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-sdk-acknowledgement-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-sdk-acknowledgement/review.json
           if-no-files-found: error
           retention-days: 30
 

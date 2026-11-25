@@ -2068,6 +2068,13 @@ describe("release validation no-push transport", () => {
       ["Extended-stable core npm publication stays on the canonical extended-stable release flow"],
     );
     expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
+    const validateNpm = step(resolveTarget, "Validate OpenClaw npm preflight manifest");
+    expect(validateNpm.run).toContain("recover-release-sdk-acknowledgement.mjs");
+    expect(validateNpm.run).toContain('--acknowledge "$acknowledgement"');
+    expect(publishJob.environment).toBe("npm-release");
+    expect(
+      step(publishJob, "Attest reviewed Plugin SDK API acknowledgement").with?.["subject-path"],
+    ).toBe("${{ runner.temp }}/release-sdk-acknowledgement/review.json");
     expect(validateEvidence.env?.TRUSTED_WORKFLOW_FULL_REF).toBe("${{ github.ref }}");
     expectText(validateReleaseBranch.run, [
       'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
@@ -2232,6 +2239,18 @@ describe("release validation no-push transport", () => {
       throw new Error("Missing release input projection");
     }
     expect(projection).toContain("prepared_plugins=%s");
+    const npmReuse = runWorkflowShellScript(projection, {
+      linuxWorkflow: true,
+      env: {
+        SDK_ACKNOWLEDGEMENT_REUSE: "reuse:42/2",
+        PUBLISH_DOCKER_ONLY: "false",
+        PUBLISH_OPENCLAW_NPM: "true",
+        PREPARED_PLUGINS: "",
+        GITHUB_OUTPUT: join(tempDirs.make("release-sdk-reuse-scope-"), "output"),
+      },
+    });
+    expect(npmReuse.status, npmReuse.stderr).toBe(1);
+    expect(npmReuse.stderr).toContain("Docker-only scope");
     const descriptors = {
       npm: { artifact: "original-npm" },
       clawhub: { artifact: "original-clawhub" },

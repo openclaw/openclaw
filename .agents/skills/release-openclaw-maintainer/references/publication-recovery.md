@@ -20,6 +20,15 @@ The regular and extended-stable publish parent runs from the protected
 use the regular candidate helper's printed command or the extended-stable
 publication reference for that track. Do not dispatch npm/plugin/ClawHub
 publication from a moving main parent. Docker-only recovery may use main.
+For Docker-only recovery with full validation, set
+`plugin_sdk_api_acknowledgement=reuse:<publisher-run-id>/<attempt>` to reuse the
+SDK acknowledgement recorded by an earlier protected Release Publish run for
+the same tag, commit, npm channel, and SDK evidence digest. Use the completed
+original run and exact attempt, even if it failed after npm publication. The
+30-day `release-sdk-acknowledgement-<run-id>-<attempt>` artifact must have been
+attested by that publisher. If the artifact is unavailable (including older
+runs) or does not match, use the normal explicit acknowledgement after checking
+the SDK evidence. This does not replace npm readback or Docker approval.
 Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
