@@ -6,7 +6,6 @@ import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/a
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
-import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
@@ -287,8 +286,6 @@ async function generateDashboardSessionTitle(params: {
   entry?: DashboardSessionTitleModelEntry;
   sourceText: string;
   utilityOnly?: boolean;
-  /** The caller keeps its own name when no model answers, instead of a crustacean slug. */
-  callerFallback?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -298,12 +295,9 @@ async function generateDashboardSessionTitle(params: {
   const sourceText = params.sourceText;
   const regularModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   if (!regularModel) {
-    // No configured model can write a title; take the same fallback as a failed model.
-    if (params.utilityOnly || params.callerFallback) {
-      return null;
-    }
+    // No configured model can write a title; report it like a failed model.
     params.onFallback?.();
-    return createCrustaceanSlug();
+    return null;
   }
   const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
     provider: regularModel.provider,
@@ -365,14 +359,10 @@ async function generateDashboardSessionTitle(params: {
   if (title) {
     return title;
   }
-  // Speculative utility-only naming must not persist a provisional title that
-  // would skip the healthy primary-model pass after send.
-  if (params.utilityOnly || params.callerFallback) {
-    return null;
-  }
-  // Saved titles also name Git branches; never persist raw prompt text as a fallback.
+  // Save nothing: clients show the first message, and the next message retries.
+  // Saved titles also name worktree branches, so a raw prompt never becomes one.
   params.onFallback?.();
-  return createCrustaceanSlug();
+  return null;
 }
 
 /** Prepares a creation draft's title without creating or updating a session. */
@@ -416,9 +406,7 @@ export async function generateAutomationName(params: {
   operatorAuthority: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = resolveSessionTitleSource(params.message);
-  return sourceText
-    ? await generateDashboardSessionTitle({ ...params, sourceText, callerFallback: true })
-    : null;
+  return sourceText ? await generateDashboardSessionTitle({ ...params, sourceText }) : null;
 }
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */

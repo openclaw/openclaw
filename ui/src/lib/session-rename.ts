@@ -3,13 +3,12 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { parseAgentSessionKey } from "./sessions/session-key.ts";
 
 export function resolveSessionRenameValue(
-  row: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle" | "worktree">,
+  row: Pick<GatewaySessionRow, "key" | "label" | "displayName" | "derivedTitle">,
 ): string {
   const label = normalizeOptionalString(row.label);
   // Dashboard titles are editable session text; channel/account decoration is not.
   const generatedTitle = parseAgentSessionKey(row.key)?.rest.startsWith("dashboard:")
-    ? (normalizeOptionalString(row.displayName) ??
-      (row.worktree ? undefined : normalizeOptionalString(row.derivedTitle)))
+    ? (normalizeOptionalString(row.displayName) ?? normalizeOptionalString(row.derivedTitle))
     : undefined;
   return label ?? generatedTitle ?? "";
 }

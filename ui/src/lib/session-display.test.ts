@@ -79,19 +79,24 @@ describe("resolveSessionDisplayName", () => {
     );
   });
 
-  it("keeps explicit and worktree names ahead of derived titles", () => {
+  it("names unnamed worktree sessions after their first message before their checkout", () => {
+    const worktree = { branch: "openclaw/warm-krill-066e9a", repoRoot: "/repo/openclaw" };
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
         label: "Release room",
+        worktree,
         derivedTitle: "Quarterly launch plan",
       }),
     ).toBe("Release room");
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/repo/clawdbot" },
+        worktree,
         derivedTitle: "Quarterly launch plan",
       }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
+    ).toBe("Quarterly launch plan");
+    expect(resolveSessionDisplayName("agent:main:dashboard:uuid", { worktree })).toBe(
+      "openclaw ⎇ warm-krill-066e9a",
+    );
   });
 
   it("names named subsessions after their slug, never the raw agent key", () => {

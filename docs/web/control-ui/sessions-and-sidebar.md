@@ -281,17 +281,19 @@ The sidebar adds no placeholder row while a session is being created: the row
 appears once the Gateway lists the session and fades in. While a name is
 pending, the chat header shows a subtle loading bar instead of “New session,”
 and the sidebar row keeps its title blank; the name fades in when it is ready. If
-naming ends without a name, the ordinary fallback label appears. Reduced-motion
+naming ends without a saved name, the fallback title appears. Reduced-motion
 preferences skip the fades and keep the placeholder still.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
 
-If automatic naming fails after submission, the session receives a two-word,
-crustacean-themed name. New worktree branches use the saved session title when
-available, with the same two-word fallback if naming has not finished. They never
-use the first-message text as a branch-name fallback. A title that arrives later
-updates the sidebar without renaming an existing branch.
+If automatic naming fails after submission, no name is saved. The sidebar shows a
+shortened version of the first message, and the next message tries naming again.
+If the first message has no text, such as an image alone, the sidebar shows the
+session's worktree checkout or "New session". New worktree branches use the saved
+session title when available, or a two-word crustacean-themed name if naming fails
+or has not finished. They never use the first-message text as a branch name. A
+title that arrives later updates the sidebar without renaming an existing branch.
 
 ## New-session preferences and recents
 
@@ -674,7 +676,7 @@ original session's checkbox, preserving a replacement you selected meanwhile.
 
 While you edit a title inline, existing rows in that sidebar section keep their order. Status changes still appear, removed sessions leave the list, and new sessions appear after the existing rows. The selected sort resumes when you save or cancel.
 
-Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. Empty or quote-only model output uses a readable crustacean-themed fallback name.
+Automatic titles follow the language of the first message, including short instructions with quoted literals. Titles are capped at 60 characters and unmatched quotation marks are removed after truncation. If the model returns empty or quote-only output, no title is saved and the sidebar keeps showing a shortened version of the first message.
 
 **New group** from the sidebar, chat header, or Sessions page keeps the original session selection while the dialog is open and the group is being saved. A deleted or replaced session is not moved; an error is shown and the new group remains available. For a sidebar multi-selection, sessions that still exist can move even if another target fails. Paging a selected session out of the visible list does not cancel its move.
 

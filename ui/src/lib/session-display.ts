@@ -300,13 +300,14 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
     name = applyTypedPrefix(label);
   } else if (displayName && displayName !== key) {
     name = applyTypedPrefix(displayName);
+  } else if (derivedTitle && derivedTitle !== key) {
+    // The first message names the conversation better than its checkout.
+    name = applyTypedPrefix(derivedTitle);
   } else {
-    // Unnamed work sessions read as their checkout instead of an opaque key.
+    // Unnamed work sessions without text read as their checkout instead of an opaque key.
     const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
     if (workSubtitle && row?.worktree) {
       name = applyTypedPrefix(workSubtitle);
-    } else if (derivedTitle && derivedTitle !== key) {
-      name = applyTypedPrefix(derivedTitle);
     }
   }
   if (!accountId || accountId === "default") {
