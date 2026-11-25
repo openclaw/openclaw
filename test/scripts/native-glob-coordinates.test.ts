@@ -195,10 +195,11 @@ type WatchRecord = {
   cached?: string[];
   owners?: string[];
   errors?: number;
+  projects?: Array<{ name: string; root: string; dir: string }>;
 };
 
 // This fixture requires the native POSIX process-group join contract.
-it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
+it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
   "discovers new files with native owner scopes and discovery dir %s",
   { timeout: 120_000 },
   async (discoveryDir, { onTestFinished, signal }) => {
@@ -220,16 +221,41 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
         const body = `it('generation ${generation}',()=>{
           expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});
           expect(${generation}).toBeGreaterThan(0);
+          expect(vi.fn(()=>${generation})()).toBe(${generation});
         });`;
+        // Exercise ordinary tooling, rather than the separate pure unit-fast owner.
         return inSource
-          ? `if(import.meta.vitest){const {it,expect}=import.meta.vitest;${body}}`
-          : `import {it,expect} from 'vitest';${body}`;
+          ? `if(import.meta.vitest){const {it,expect,vi}=import.meta.vitest;${body}}`
+          : `import {it,expect,vi} from 'vitest';${body}`;
       };
+      fs.mkdirSync(path.resolve(directory, discoveryDir), { recursive: true });
       write(directory, seed, source(1));
-      write(
-        directory,
+      for (const file of [
         "test/scripts/blocked/initial.test.ts",
-        "throw new Error('excluded fixture');",
+        "test/scripts/inherited-blocked-initial.test.ts",
+        "test/helpers/vendor/initial.test.ts",
+        "test/helpers/node_modules/initial.test.ts",
+      ])
+        write(directory, file, "throw new Error('excluded fixture');");
+      const absolute = (pattern: string) => `${convertPathToPattern(directory)}/${pattern}`;
+      const excluded = [
+        "test/**/inherited-blocked*.test.ts",
+        "test/scripts/blocked/**",
+        "test/scripts/no-run.test.ts",
+        "src/ignored.source.ts",
+      ].map((pattern) => `!${absolute(pattern)}`);
+      // Each baseline owner receives its own unexpanded selection. The broader
+      // cross-owner selection/intersection belongs to the prepared-watch change.
+      const selections = [
+        ["test/**/*.test.ts"],
+        ["test/scripts/vitest-fork-shutdown.test.ts"],
+        ["test/scripts/docker-build-helper.test.ts"],
+      ].map((patterns, index) =>
+        write(
+          directory,
+          `include-${index}.json`,
+          JSON.stringify([...patterns.map(absolute), ...excluded]),
+        ),
       );
       const reporter = write(
         directory,
@@ -266,6 +292,8 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
               });
             }
             record({kind:'ready',
+              projects:this.ctx.projects.map(project=>({name:project.name,
+                root:project.config.root,dir:project.config.dir})),
               cached:this.ctx.projects.filter(project=>project._isCachedTestFile(${JSON.stringify(slash(path.join(directory, seed)))})).map(project=>project.name)},'ready');
             for(const completed of this.completed??[])sendReceipt(observed,'ready:'+completed);
             this.completed=[];
@@ -278,23 +306,22 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
         "vitest.config.mts",
         `
         import path from 'node:path';
-        import {convertPathToPattern} from 'tinyglobby';
         import {createToolingVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling.config.ts")).href)};
         import {createToolingIsolatedVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling-isolated.config.ts")).href)};
         import {createToolingDockerVitestConfig} from ${JSON.stringify(pathToFileURL(path.join(root, "test/vitest/vitest.tooling-docker.config.ts")).href)};
-        const root=${JSON.stringify(directory)},repo=${JSON.stringify(root)};
-        const anchor=pattern=>path.isAbsolute(pattern)
-          ? convertPathToPattern(root)+'/'+path.relative(repo,pattern).split(path.sep).join('/')
-          : convertPathToPattern(root)+'/'+pattern;
-        const projects=[createToolingVitestConfig({}),createToolingIsolatedVitestConfig({}),createToolingDockerVitestConfig({})].map(config=>({
-          extends:false,root,test:{
-            name:config.test.name,dir:path.resolve(root,${JSON.stringify(discoveryDir)}),
-            include:config.test.include.map(anchor),
-            exclude:[...config.test.exclude.map(anchor),'**/blocked/**',anchor('test/scripts/no-run.test.ts'),anchor('src/ignored.source.ts')],
-            includeSource:config.test.name==='tooling'?[anchor('**/*.source.ts')]:[],
-            environment:'node',pool:'forks',maxWorkers:1,isolate:true,setupFiles:[],
-          }
-        }));
+        const root=${JSON.stringify(directory)},selections=${JSON.stringify(selections)};
+        const projects=[createToolingVitestConfig,createToolingIsolatedVitestConfig,createToolingDockerVitestConfig]
+          .map((create,index)=>{
+            const config=create({OPENCLAW_VITEST_INCLUDE_FILE:selections[index]});
+            return {...config,extends:false,root,test:{
+              ...config.test,root,
+              // Native root CLI dir is not forwarded to children. This is each
+              // leaf's effective config dir, resolved by its real production hook.
+              dir:path.resolve(root,${JSON.stringify(discoveryDir)}),
+              includeSource:config.test.name==='tooling'?[${JSON.stringify(absolute("**/*.source.ts"))}]:[],
+              environment:'node',pool:'forks',maxWorkers:1,isolate:true,runner:undefined,setupFiles:[],
+            }};
+          });
         export default {root,server:{watch:{usePolling:true}},test:{
           projects,reporters:[${JSON.stringify(reporter)}],maxWorkers:1,fileParallelism:false
         }};
@@ -305,14 +332,16 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
         pnpmArgs: [
           "exec",
           "node",
-          "node_modules/vitest/vitest.mjs",
+          path.join(root, "node_modules/vitest/vitest.mjs"),
           "--watch",
           "--config",
           config,
           "--configLoader",
           "runner",
+          "--dir",
+          discoveryDir,
         ],
-        spawnParams: resolveVitestSpawnParams(env),
+        spawnParams: { ...resolveVitestSpawnParams(env), cwd: directory },
         env,
       });
       const wait = (token: string) =>
@@ -335,8 +364,17 @@ it.skipIf(process.platform === "win32").for([".", "test/scripts"])(
         await Promise.all([wait(`module:${seed}:generation 1`), wait("ready")]);
         const initial = records().filter((record) => record.kind === "module");
         expect(initial.map((record) => [record.file, record.owner])).toEqual([[seed, "tooling"]]);
+        expect(records().find((record) => record.kind === "ready")?.projects).toEqual(
+          ["tooling", "tooling-isolated", "tooling-docker"].map((name) => ({
+            name,
+            root: directory,
+            dir: path.resolve(directory, discoveryDir),
+          })),
+        );
         const negatives = [
           "test/scripts/blocked/later.test.ts",
+          "test/scripts/inherited-blocked-later.test.ts",
+          "test/helpers/vendor/later.test.ts",
           "test/scripts/no-run.test.ts",
           "src/ignored.source.ts",
           "src/not-a-test.source.ts",

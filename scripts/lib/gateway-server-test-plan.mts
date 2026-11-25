@@ -4,7 +4,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { isGatewayServerTestFile } from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
+import type { GlobMatcher } from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  matchesVitestCliSelection,
+  matchesVitestGlob,
+} from "../../test/vitest/vitest.pattern-file.ts";
 import { splitTestTargetChunks } from "./test-target-chunks.mts";
 import {
   collectVitestFileFilters,
@@ -64,6 +68,7 @@ export function createGatewayServerTestTargetChunks(
   args: string[] = [],
   env: NodeJS.ProcessEnv = {},
   includePatterns?: readonly string[] | null,
+  matchesGlob: GlobMatcher = matchesVitestGlob,
 ): string[][] {
   // Native sharding must see the whole selection before runtime filtering.
   // Stateful/output modifiers likewise retain their single-invocation semantics.
@@ -83,7 +88,7 @@ export function createGatewayServerTestTargetChunks(
     return [];
   }
   const targets = listGatewayServerTestTargets(cwd).filter((file) =>
-    matchesVitestCliSelection(file, [file], args, "src/gateway", env, includePatterns),
+    matchesVitestCliSelection(file, [file], args, "src/gateway", env, includePatterns, matchesGlob),
   );
   return splitTestTargetChunks(targets, Math.ceil(targets.length / GATEWAY_SERVER_TEST_FILE_LIMIT));
 }

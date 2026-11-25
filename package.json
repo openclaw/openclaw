@@ -2561,6 +2561,7 @@
     "oxlint": "1.89.0",
     "oxlint-tsgolint": "7.0.2005",
     "pako": "3.0.3",
+    "picomatch": "4.0.7",
     "playwright": "1.64.1",
     "postcss": "8.5.32",
     "postcss-selector-parser": "7.1.7",

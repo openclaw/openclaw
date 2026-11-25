@@ -5,14 +5,17 @@ import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
 import {
+  type GlobMatcher,
   isPlainRepoRelativePath,
   narrowIncludePatterns,
   resolveNonBrowserTestPattern,
+  splitIncludePatterns,
 } from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
 const globMatchers = new Map<string, Minimatch>();
+const nativeGlobMatchers = new Map<string, (value: string) => boolean>();
 
 // Match Vitest's script-extension grammar so broad selectors cannot leak opt-in suites.
 export const vitestE2eTestGlob = "**/*.e2e.test.?(c|m)[jt]s?(x)";
@@ -73,6 +76,32 @@ export function matchesVitestGlob(value: string, pattern: string): boolean {
   return matcher.match(value);
 }
 
+/** Installed discovery uses tinyglobby's Picomatch grammar, including escaped literals. */
+export function matchesNativeVitestGlob(value: string, pattern: string): boolean {
+  const normalized = path.posix.normalize(pattern);
+  let matcher = nativeGlobMatchers.get(normalized);
+  if (!matcher) {
+    // Keep this require inside the installed-runtime path; CI planning runs before install.
+    const picomatch: (
+      pattern: string,
+      options: { dot: boolean; posix: boolean },
+    ) => (value: string) => boolean = require("picomatch");
+    matcher = picomatch(normalized, { dot: true, posix: true });
+    nativeGlobMatchers.set(normalized, matcher);
+    if (nativeGlobMatchers.size > 250) {
+      nativeGlobMatchers.delete(nativeGlobMatchers.keys().next().value!);
+    }
+  }
+  return matcher(value);
+}
+
+/** Escape only a physical origin; glob suffixes already carry native pattern syntax. */
+export function resolveNativeVitestPattern(pattern: string, basis: string): string {
+  if (path.isAbsolute(pattern)) return pattern;
+  const { convertPathToPattern }: typeof import("tinyglobby") = require("tinyglobby");
+  return path.posix.normalize(`${convertPathToPattern(path.resolve(basis))}/${pattern}`);
+}
+
 function normalizeCliPattern(value: string): string {
   let normalized = value
     .trim()
@@ -89,7 +118,7 @@ function normalizeCliPattern(value: string): string {
 }
 
 function normalizeScopedDir(value: string | undefined): string {
-  return value?.trim().replaceAll("\\", "/").replace(/\/+$/u, "") ?? "";
+  return value ? normalizeVitestPath(value.trim()).replace(/\/+$/u, "") : "";
 }
 
 function hasRepoRootPrefix(value: string): boolean {
@@ -106,10 +135,7 @@ function looksLikeDirRelativePath(value: string): boolean {
 }
 
 function applyScopedDir(value: string, scopedDir: string): string {
-  const normalizedValue = value
-    .trim()
-    .replace(/^\.\/+/u, "")
-    .replaceAll("\\", "/");
+  const normalizedValue = normalizeVitestPath(value.trim().replace(/^\.\/+/u, ""));
   if (
     !scopedDir ||
     hasRepoRootPrefix(normalizedValue) ||
@@ -178,49 +204,74 @@ function normalizeCliFileFilter(filter: string): string {
   return normalizeVitestPath(filter.replace(/:\d+$/u, ""));
 }
 
-function loadPatternListFromArgvForScope(
-  argv: string[] = process.argv,
-  options: { scopedDir?: string } = {},
-): string[] | null {
+function narrowIncludePatternsForFilters(
+  includePatterns: string[],
+  filters: string[],
+  options: { scopedDir?: string; root?: string; matchesGlob?: GlobMatcher },
+) {
   const scopedDir = normalizeScopedDir(options.scopedDir);
-  const patterns = collectVitestFileFilters(argv.slice(2))
-    .map(normalizeCliFileFilter)
+  const patterns = filters
     .map((value) => applyScopedDir(value, scopedDir))
     .filter(looksLikeCliIncludePattern)
     .map(normalizeCliPattern);
-
-  return patterns.length > 0 ? [...new Set(patterns)] : null;
+  if (patterns.length === 0) return null;
+  const root = options.root ?? repoRoot;
+  return narrowIncludePatterns(includePatterns, [...new Set(patterns)], (value, pattern) =>
+    (options.matchesGlob ?? matchesVitestGlob)(
+      path.resolve(root, value),
+      options.matchesGlob === matchesNativeVitestGlob
+        ? resolveNativeVitestPattern(pattern, root)
+        : path.resolve(root, pattern),
+    ),
+  );
 }
 
 export function narrowIncludePatternsForCli(
   includePatterns: string[],
   argv: string[] = process.argv,
-  options: { scopedDir?: string } = {},
+  options: { scopedDir?: string; root?: string; matchesGlob?: GlobMatcher } = {},
 ): string[] | null {
-  const cliPatterns = loadPatternListFromArgvForScope(argv, options);
-  if (!cliPatterns) {
-    return null;
-  }
-
   // CLI operands may be absolute while canonical project ownership is repo-relative.
-  return narrowIncludePatterns(includePatterns, cliPatterns, (value, pattern) =>
-    matchesVitestGlob(path.resolve(repoRoot, value), path.resolve(repoRoot, pattern)),
+  return narrowIncludePatternsForFilters(
+    includePatterns,
+    collectVitestFileFilters(argv.slice(2)).map(normalizeCliFileFilter),
+    options,
   );
 }
 
 export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
-  const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
+  const normalizedDir = normalizeVitestPath(dir).replace(/\/+$/u, "");
   return values.map((value) => {
-    const normalized = value.replaceAll("\\", "/");
+    const sign = value[0] === "!" && value[1] !== "(" ? "!" : "";
+    const normalized = value.slice(sign.length);
     if (!normalizedDir) {
-      return normalized;
+      return sign + normalized;
     }
     if (normalized === normalizedDir) {
-      return ".";
+      return sign + ".";
     }
     const prefix = `${normalizedDir}/`;
-    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+    return sign + (normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized);
   });
+}
+
+/** Absolute selections keep owner exclusions in the same physical project, even under --dir. */
+export function resolveNativeVitestExcludes(
+  values: readonly string[],
+  include: readonly string[],
+  dir: string,
+  effectiveDir = dir,
+): string[] {
+  const exclude = splitIncludePatterns(values).include;
+  if (
+    path.resolve(dir) === path.resolve(effectiveDir) &&
+    !splitIncludePatterns(include).include.some((pattern) => path.isAbsolute(pattern))
+  ) {
+    return exclude;
+  }
+  const { convertPathToPattern }: typeof import("tinyglobby") = require("tinyglobby");
+  const base = convertPathToPattern(path.resolve(dir));
+  return exclude.map((value) => (path.isAbsolute(value) ? value : `${base}/${value}`));
 }
 
 /** Project one candidate through the same scoped include and CLI file filters as Vitest. */
@@ -231,24 +282,30 @@ export function matchesVitestCliSelection(
   scopedDir: string,
   env: NodeJS.ProcessEnv,
   selectedPatterns?: readonly string[] | null,
+  matchesGlob: GlobMatcher = matchesVitestGlob,
 ): boolean {
   const patterns =
     selectedPatterns ??
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
-    narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
+    narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir, matchesGlob }) ??
     include;
+  const selection = splitIncludePatterns(patterns);
   const relativeFile = path.posix.relative(scopedDir, file);
   const absoluteFile = normalizeVitestPath(path.resolve(repoRoot, file));
   // Unscoped exact inventory membership needs no glob compilation. Keep wildcard paths
   // on the matcher and still apply exclusions and CLI filters below.
-  const includedLiteral = !scopedDir && isPlainRepoRelativePath(file) && patterns.includes(file);
+  const includedLiteral =
+    !scopedDir && isPlainRepoRelativePath(file) && selection.include.includes(file);
   if (
     (!includedLiteral &&
-      !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
-        matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+      !relativizeScopedPatterns(selection.include, scopedDir).some((pattern) =>
+        matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
       )) ||
-    collectVitestExcludePatterns(args).some((pattern) =>
-      matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+    [
+      ...relativizeScopedPatterns(selection.exclude, scopedDir),
+      ...splitIncludePatterns(collectVitestExcludePatterns(args)).include,
+    ].some((pattern) =>
+      matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     )
   ) {
     return false;

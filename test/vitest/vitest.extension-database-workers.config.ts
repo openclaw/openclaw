@@ -7,9 +7,10 @@ import { pluginControlUiPathGlob } from "./vitest.ui-paths.mjs";
 
 export function createExtensionDatabaseWorkersVitestConfig(
   env: Record<string, string | undefined> = process.env,
+  include?: string[],
 ) {
   return createScopedVitestConfig(
-    [
+    include ?? [
       ...databaseWorkerExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
       ...databaseWorkerExtensionTestFiles,
     ],
@@ -17,6 +18,7 @@ export function createExtensionDatabaseWorkersVitestConfig(
       dir: "extensions",
       env,
       name: "extension-database-workers",
+      intersectIncludeFile: include !== undefined,
       // The database broker runs in the application main thread and owns its SQLite workers.
       pool: "forks",
       isolate: true,

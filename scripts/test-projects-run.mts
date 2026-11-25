@@ -5,7 +5,11 @@ import fs from "node:fs";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
-import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
+import {
+  loadPatternListFromEnv,
+  matchesNativeVitestGlob,
+  resolveNativeVitestPattern,
+} from "../test/vitest/vitest.pattern-file.ts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
@@ -159,6 +163,8 @@ async function runVitestSpec(
   if (spec.includeFilePath && spec.includePatterns) {
     writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns, {
       expandGlobs: !spec.watchMode,
+      matchesGlob: matchesNativeVitestGlob,
+      resolvePattern: resolveNativeVitestPattern,
     });
   }
   try {
@@ -384,6 +390,8 @@ export async function runTestProjects(
           baseEnv,
           cwd: process.cwd(),
           changedTargetArgs,
+          matchesGlob: matchesNativeVitestGlob,
+          resolvePattern: resolveNativeVitestPattern,
         });
   const inheritedIncludePatterns = rawRunSpecs.some((spec) => !spec.includeFilePath)
     ? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", baseEnv)

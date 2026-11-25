@@ -2,12 +2,16 @@
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 import { infraTestOwner } from "./vitest.test-shards.mjs";
 
-export function createInfraVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(infraTestOwner.include, {
+export function createInfraVitestConfig(
+  env?: Record<string, string | undefined>,
+  include?: string[],
+) {
+  return createScopedVitestConfig(include ?? infraTestOwner.include, {
     env,
     exclude: infraTestOwner.exclude,
     isolate: true,
     name: "infra",
+    intersectIncludeFile: include !== undefined,
     passWithNoTests: true,
     pool: "forks",
   });

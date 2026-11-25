@@ -1,7 +1,6 @@
 // Vitest plugins config wires the plugins test shard.
 import { defineConfig } from "vitest/config";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
-import { relativizeScopedPatterns } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 // These suites exercise the plugin loader's own native require()/import()
@@ -44,6 +43,11 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
     ...options,
     name: "plugins",
   });
+  const ordinary = createScopedVitestConfig(["src/plugins/**/*.test.ts"], {
+    ...options,
+    exclude: [...options.exclude, ...nativeLoaderPluginTestFiles],
+    name: "plugins",
+  });
   const nativeLoader = createScopedVitestConfig(nativeLoaderPluginTestFiles, {
     ...options,
     execArgv: process.versions.bun ? ["--no-install"] : [],
@@ -56,17 +60,7 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
       ...config.test,
       // Config discovery retains the complete inventory; only the inline leaves run.
       projects: [
-        {
-          ...config,
-          extends: false,
-          test: {
-            ...config.test,
-            exclude: [
-              ...(config.test?.exclude ?? []),
-              ...relativizeScopedPatterns(nativeLoaderPluginTestFiles, options.dir),
-            ],
-          },
-        },
+        { ...ordinary, extends: false },
         { ...nativeLoader, extends: false },
       ],
     },

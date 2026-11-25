@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { globSync } from "tinyglobby";
+import { convertPathToPattern, globSync } from "tinyglobby";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import * as cliPatterns from "./vitest.include-patterns.ts";
@@ -13,7 +13,7 @@ const testPaths = (dir: string, names: string[]) => names.map((name) => `${dir}/
 const filterFiles = (files: string[], patterns: string[]) =>
   cliPatterns.filterFilesByPatterns(files, patterns, [], cli.matchesVitestGlob);
 const intersect = (owner: string[], requested: string[]) =>
-  cliPatterns.intersectIncludePatterns(owner, requested, cli.matchesVitestGlob);
+  cliPatterns.intersectIncludePatterns(owner, requested, cli.matchesVitestGlob)?.include ?? null;
 const narrow = (include: string[], ...args: string[]) =>
   cli.narrowIncludePatternsForCli(include, ["node", "vitest", "run", ...args]);
 const matches = (file: string, include: string[], ...args: string[]) =>
@@ -23,6 +23,302 @@ function fixturePath(root: string, file: string) {
   mkdirSync(path.dirname(target), { recursive: true });
   return target;
 }
+
+it("rejects parent traversal outside the owner without rejecting explicit outside ownership", () => {
+  for (const root of [undefined, "/repo"]) {
+    for (const [owner, requested] of [
+      ["**/*.test.ts", "../outside/**/*.test.ts"],
+      ["test/**/*.test.ts", "test/../src/**/*.test.ts"],
+      ["test/**/*.test.ts", "test/**/../../src/*.test.ts"],
+    ]) {
+      let selection;
+      try {
+        selection = cliPatterns.intersectIncludePatterns(
+          [owner!],
+          [requested!],
+          cli.matchesNativeVitestGlob,
+          root,
+          root,
+          cli.resolveNativeVitestPattern,
+        );
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain("cannot safely intersect");
+        continue;
+      }
+      expect(selection?.include).toEqual([]);
+    }
+    expect(
+      cliPatterns.intersectIncludePatterns(
+        ["../outside/**/*.test.ts"],
+        ["../outside/nested/**/*.test.ts"],
+        cli.matchesNativeVitestGlob,
+        root,
+        root,
+        cli.resolveNativeVitestPattern,
+      )?.include,
+    ).toEqual(["../outside/nested/**/*.test.ts"]);
+  }
+});
+
+it("retains native escaped exclusions in either operand and installed CLI selection", () => {
+  const root = tempDirs.make("openclaw-native-negative-");
+  const files = ["test/keep.test.ts", "test/a[1].test.ts"];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const include = ["test/**/*.test.ts"];
+  const negative = "!test/a\\[1\\].test.ts";
+  for (const [owner, candidate] of [
+    [include, [...include, negative]],
+    [[...include, negative], include],
+  ]) {
+    const selected = cliPatterns.intersectIncludePatterns(
+      owner!,
+      candidate!,
+      cli.matchesNativeVitestGlob,
+    )!;
+    expect(
+      cliPatterns.filterFilesByPatterns(
+        files,
+        selected.include,
+        selected.exclude,
+        cli.matchesNativeVitestGlob,
+      ),
+    ).toEqual([files[0]]);
+    expect(globSync(selected.include, { cwd: root, dot: true, ignore: selected.exclude })).toEqual([
+      files[0],
+    ]);
+    expect(
+      files.filter((file) =>
+        cli.matchesVitestCliSelection(
+          file,
+          include,
+          ["run"],
+          "",
+          {},
+          cliPatterns.serializeIncludePatterns(selected),
+          cli.matchesNativeVitestGlob,
+        ),
+      ),
+    ).toEqual([files[0]]);
+  }
+  expect(
+    files.filter((file) =>
+      cli.matchesVitestCliSelection(
+        file,
+        include,
+        ["run", "--exclude", negative.slice(1)],
+        "",
+        {},
+        include,
+        cli.matchesNativeVitestGlob,
+      ),
+    ),
+  ).toEqual([files[0]]);
+  for (const ignoredNegative of ["!test/a\\[1\\].test.ts", "!!test/keep.test.ts"]) {
+    expect(
+      files
+        .filter((file) =>
+          cli.matchesVitestCliSelection(
+            file,
+            include,
+            ["run", "--exclude", ignoredNegative],
+            "",
+            {},
+            include,
+            cli.matchesNativeVitestGlob,
+          ),
+        )
+        .toSorted(),
+    ).toEqual(globSync(include, { cwd: root, dot: true, ignore: [ignoredNegative] }).toSorted());
+  }
+});
+
+it("escapes physical prefixes while preserving positive and negative pattern syntax", () => {
+  const root = path.join(tempDirs.make("openclaw-native-prefix-"), "work[1]{a,b}");
+  const dir = path.join(root, "sub");
+  mkdirSync(dir, { recursive: true });
+  const files = ["test/keep.test.ts", "test/a[1].test.ts"];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const relative = "test/**/*.test.ts";
+  const absolute = cli.resolveNativeVitestPattern(relative, root);
+  for (const owner of [
+    [relative, absolute],
+    [absolute, relative],
+  ]) {
+    const selected = cliPatterns.intersectIncludePatterns(
+      [...owner, "!test/a\\[1\\].test.ts"],
+      ["../test/**/*.test.ts"],
+      cli.matchesNativeVitestGlob,
+      root,
+      dir,
+      cli.resolveNativeVitestPattern,
+    )!;
+    expect(selected.include).toEqual(
+      owner.map((pattern) => (pattern === relative ? "../test/**/*.test.ts" : absolute)),
+    );
+    expect(selected.exclude).toEqual([
+      cli.resolveNativeVitestPattern("test/a\\[1\\].test.ts", root),
+    ]);
+    expect(
+      globSync(selected.include, { cwd: dir, dot: true, absolute: true, ignore: selected.exclude }),
+    ).toEqual([path.join(root, files[0]!)]);
+  }
+});
+
+it.skipIf(process.platform === "win32")(
+  "preserves POSIX glob escapes through coordinate projection",
+  () => {
+    const root = path.join(tempDirs.make("openclaw-pattern-escapes-"), "root[1]");
+    for (const file of ["test/a[1].test.ts", "test/a\\b.test.ts"]) {
+      writeFileSync(fixturePath(root, file), "");
+      const pattern = convertPathToPattern(file);
+      const selected = cliPatterns.intersectIncludePatterns(
+        [pattern],
+        [pattern],
+        cli.matchesNativeVitestGlob,
+        root,
+        root,
+        cli.resolveNativeVitestPattern,
+      )!;
+      expect(selected.include).toEqual([pattern]);
+      expect(cli.matchesNativeVitestGlob(file, pattern)).toBe(true);
+      expect(
+        cliPatterns.filterFilesByPatterns(
+          [file],
+          selected.include,
+          selected.exclude,
+          cli.matchesNativeVitestGlob,
+        ),
+      ).toEqual([file]);
+      expect(globSync(selected.include, { cwd: root, ignore: selected.exclude })).toEqual([file]);
+    }
+  },
+);
+
+it("retains negative constraints from either operand without treating extglobs as exclusions", () => {
+  const files = testPaths("test/scripts", ["keep", "blocked"]);
+  const operands: [string[], string[]][] = [
+    [files, ["test/scripts/**/*.test.ts", "!test/scripts/blocked.test.ts"]],
+    [[...files, "!test/scripts/blocked.test.ts"], ["test/scripts/**/*.test.ts"]],
+  ];
+  for (const [owner, requested] of operands) {
+    const selected = cliPatterns.intersectIncludePatterns(owner, requested, cli.matchesVitestGlob)!;
+    expect(selected.exclude).toEqual(["test/scripts/blocked.test.ts"]);
+    expect(
+      cliPatterns.filterFilesByPatterns(
+        files,
+        selected.include,
+        selected.exclude,
+        cli.matchesVitestGlob,
+      ),
+    ).toEqual([files[0]]);
+    expect(filterFiles(files, cliPatterns.serializeIncludePatterns(selected))).toEqual([files[0]]);
+  }
+  expect(
+    cliPatterns.splitIncludePatterns(["!file", "!(file)", "!!file", "!!(file)", "\\!file"]),
+  ).toEqual({ include: ["!(file)", "\\!file"], exclude: ["file", "!(file)"] });
+  expect(
+    cliPatterns.intersectIncludePatterns(
+      files,
+      ["!test/scripts/blocked.test.ts"],
+      cli.matchesVitestGlob,
+    ),
+  ).toEqual({ include: [], exclude: ["test/scripts/blocked.test.ts"] });
+  expect(cliPatterns.intersectIncludePatterns(files, null, cli.matchesVitestGlob)).toBeNull();
+});
+
+it("preserves each origin when narrowing a recursive basename beneath a directory", () => {
+  const root = tempDirs.make("openclaw-pattern-origins-");
+  const relative = "src/agents/**/*.test.ts";
+  const absolute = `${root}/src/agents/**/run*.test.ts`;
+  const requested = ["src/agents/runner/**/*.test.ts"];
+  for (const owner of [
+    [relative, absolute],
+    [absolute, relative],
+  ]) {
+    const selected = cliPatterns.intersectIncludePatterns(
+      owner,
+      requested,
+      cli.matchesVitestGlob,
+      root,
+    )!;
+    expect(selected.include).toEqual(
+      owner.map((pattern) =>
+        pattern === relative ? requested[0] : `${root}/src/agents/runner/**/run*.test.ts`,
+      ),
+    );
+  }
+  expect(() =>
+    cliPatterns.intersectIncludePatterns(
+      ["src/agents/**/nested/run*.test.ts"],
+      ["src/agents/nested/**/*.test.ts"],
+      cli.matchesVitestGlob,
+      root,
+    ),
+  ).toThrow("cannot safely intersect");
+  for (const prefix of ["", `${root}/`]) {
+    const owner = `${prefix}src/agents**/run*.test.ts`;
+    const requested = `${prefix}src/agents/sub/**/*.test.ts`;
+    writeFileSync(fixturePath(root, "src/agents/sub/run-one.test.ts"), "");
+    expect(globSync(owner, { cwd: root })).toEqual([]);
+    expect(globSync(requested, { cwd: root })).toHaveLength(1);
+    expect(() =>
+      cliPatterns.intersectIncludePatterns([owner], [requested], cli.matchesVitestGlob, root),
+    ).toThrow("cannot safely intersect");
+  }
+});
+
+it("compares owner paths with inherited paths on the effective native directory", () => {
+  const root = tempDirs.make("openclaw-pattern-basis-");
+  const files = testPaths("test/scripts", ["keep", "blocked"]);
+  const selected = cliPatterns.intersectIncludePatterns(
+    files,
+    ["*.test.ts", "!blocked.test.ts"],
+    cli.matchesVitestGlob,
+    root,
+    path.join(root, "test/scripts"),
+  )!;
+  expect(selected).toEqual({
+    include: ["keep.test.ts", "blocked.test.ts"],
+    exclude: ["blocked.test.ts"],
+  });
+});
+
+it("keeps globstar owner exclusions active outside the native discovery directory", () => {
+  const root = tempDirs.make("openclaw-pattern-exclusions-");
+  const files = [
+    "test/scripts/keep.test.ts",
+    "test/scripts/vendor/leak.test.ts",
+    "test/scripts/node_modules/leak.test.ts",
+    "test/scripts/leak.live.test.ts",
+    "test/scripts/blocked.test.ts",
+  ];
+  for (const file of files) writeFileSync(fixturePath(root, file), "");
+  const dir = path.join(root, "test/helpers");
+  mkdirSync(dir, { recursive: true });
+  const selected = cliPatterns.intersectIncludePatterns(
+    ["test/scripts/**/*.test.ts", "!test/scripts/blocked.test.ts"],
+    [`${root}/test/scripts/**/*.test.ts`],
+    cli.matchesVitestGlob,
+    root,
+    dir,
+  )!;
+  expect(
+    globSync(selected.include, {
+      cwd: dir,
+      absolute: true,
+      ignore: [
+        ...cli.resolveNativeVitestExcludes(
+          cli.sharedVitestExcludePatterns,
+          selected.include,
+          root,
+          dir,
+        ),
+        ...selected.exclude,
+      ],
+    }),
+  ).toEqual([path.join(root, files[0]!)]);
+});
 
 it.each([
   ...["ts", "tsx", "cts", "ctsx", "mts", "mtsx", "js", "jsx", "cjs", "cjsx", "mjs", "mjsx"].map(
@@ -100,6 +396,28 @@ it("keeps absolute Windows operands selected after discovery", async () => {
     expect(selectedBy(include)).toBe(true);
     expect(selectedBy(include, [...args, "--exclude", infraFile])).toBe(false);
     expect(selectedBy(["extensions/qa-lab/**/*.test.ts"])).toBe(false);
+    const nativePatterns = await import("./vitest.include-patterns.ts");
+    expect(() =>
+      nativePatterns.intersectIncludePatterns(
+        ["test/a/**/*.test.ts"],
+        ["test/a\\[1\\].test.ts"],
+        selector.matchesNativeVitestGlob,
+      ),
+    ).toThrow("cannot safely intersect");
+    const root = "C:/work[1]{a,b}";
+    const absolutePattern = (pattern: string, basis: string) =>
+      windowsPath.isAbsolute(pattern)
+        ? pattern
+        : path.posix.normalize(`${convertPathToPattern(basis)}/${pattern}`);
+    const projected = nativePatterns.intersectIncludePatterns(
+      ["test/**/*.test.ts", "!test/a\\[1\\].test.ts"],
+      ["../test/**/*.test.ts"],
+      selector.matchesNativeVitestGlob,
+      root,
+      `${root}/sub`,
+      absolutePattern,
+    );
+    expect(projected?.exclude).toEqual([`${convertPathToPattern(root)}/test/a\\[1\\].test.ts`]);
   } finally {
     vi.unstubAllGlobals();
     vi.doUnmock("node:path");

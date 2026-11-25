@@ -585,6 +585,9 @@ importers:
       pako:
         specifier: 3.0.3
         version: 3.0.3
+      picomatch:
+        specifier: 4.0.7
+        version: 4.0.7
       playwright:
         specifier: 1.64.1
         version: 1.64.1

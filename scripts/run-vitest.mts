@@ -5,6 +5,7 @@ import { constants as osConstants } from "node:os";
 import path from "node:path";
 import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import { agentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
+import { matchesNativeVitestGlob } from "../test/vitest/vitest.pattern-file.ts";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
 import {
   isPluginControlUiPath,
@@ -218,7 +219,8 @@ export function resolveBoundedVitestInvocations(
     ]);
   }
   const chunks =
-    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+    options.gatewayServerTargetChunks ??
+    createGatewayServerTestTargetChunks(cwd, argv, env, undefined, matchesNativeVitestGlob);
   return chunks.length > 1
     ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
     : [argv];

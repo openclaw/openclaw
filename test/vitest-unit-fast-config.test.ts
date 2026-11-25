@@ -103,6 +103,51 @@ describe("unit-fast vitest lane", () => {
     unitFastAnalysis = paths.collectUnitFastTestFileAnalysis();
   });
 
+  it("keeps all three fast owners and ordinary exclusions on the invocation root", () => {
+    const rootA = tempDirs.make("fast-root-a-");
+    const rootB = tempDirs.make("fast-root-b-");
+    const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
+    const result = spawnNodeEvalSync(
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs";
+      import path from "node:path";
+      import {spawnSync} from "node:child_process";
+      import {resolveConfig} from "vitest/node";
+      const roots=${JSON.stringify([rootA, rootB])};
+      for(const root of roots) assert.equal(spawnSync("git",["init"],{cwd:root}).status,0);
+      const files=["src/agents/proof-pure.test.ts","src/test-utils/temp-home.test.ts","src/utils.test.ts"];
+      for(const [index,file] of files.entries()){
+        const target=path.join(roots[1],file);
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.writeFileSync(target,index===2
+          ? 'import {vi,it} from "vitest"; vi.useFakeTimers(); it("timer",()=>{});'
+          : ${JSON.stringify(pureTest)});
+      }
+      process.chdir(roots[0]);
+      const {createUnitFastVitestConfig:ordinary}=await import(${moduleUrl("test/vitest/vitest.unit-fast.config.ts")});
+      const {createUnitFastIsolatedVitestConfig:isolated}=await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
+      const {createUnitFastFakeTimersVitestConfig:timers}=await import(${moduleUrl("test/vitest/vitest.unit-fast-fake-timers.config.ts")});
+      const {createScopedVitestConfig}=await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
+      for(const root of [roots[0],roots[1],roots[0]]){
+        const includeFile=path.join(root,"selection.json");
+        fs.writeFileSync(includeFile,JSON.stringify(files));
+        const env={OPENCLAW_VITEST_INCLUDE_FILE:includeFile};
+        for(const [index,create] of [ordinary,isolated,timers].entries()){
+          const {test}=await resolveConfig({config:false,root,dir:root},create(env,{argv:["node","vitest","run"]}));
+          assert.deepEqual(test.include,root===roots[1]?[files[index]]:[]);
+        }
+        const {test}=await resolveConfig({config:false,root,dir:root},
+          createScopedVitestConfig(files,{env,argv:["node","vitest","run"]}));
+        assert.deepEqual(files.filter(file=>test.exclude.includes(file)),root===roots[1]?files:[]);
+      }
+      assert.equal(process.cwd(),roots[0]);
+    `,
+      { evalFlag: "-e", imports: ["tsx"] },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("classifies selected sources without truncating full ownership or lifecycle drains", () => {
     const script = `
       import assert from "node:assert/strict";

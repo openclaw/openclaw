@@ -699,7 +699,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     }
     Object.assign(baseEnv, preparedBuildEnv);
     if (baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1") {
-      const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
+      const { matchesVitestCliSelection, matchesNativeVitestGlob } =
+        await import("../test/vitest/vitest.pattern-file.ts");
       const uiSelections = [];
       for (const entry of plans) {
         const selection =
@@ -724,6 +725,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 "",
                 childEnv,
                 includePatterns,
+                matchesNativeVitestGlob,
               ),
           });
         }
