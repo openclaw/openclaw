@@ -82,7 +82,7 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 });
 
 describe("standalone plugin file startup intent", () => {
-  const warning = "only when your config activates it";
+  const warning = "only when your settings activate it";
   const enabled = { entries: { "tool-policy": { enabled: true } } };
 
   it.each([

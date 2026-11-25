@@ -150,7 +150,7 @@ function pushStandaloneFileStartupIntentDiagnostic(params: {
     pluginId: sanitizeForLog(record.id),
     source: sanitizeForLog(record.manifestPath),
     message:
-      "OpenClaw starts this plugin with the Gateway only when your config activates it, because its manifest doesn't set activation. Set activation.onStartup to true to start it with the Gateway, or to false to leave it out of startup.",
+      "OpenClaw starts this plugin with the Gateway only when your settings activate it, because its manifest doesn’t set activation. Set activation.onStartup to true to start it with the Gateway, or to false to leave it out of startup. See the activation reference: https://docs.openclaw.ai/plugins/manifest/capabilities#activation-reference",
   });
 }
 
