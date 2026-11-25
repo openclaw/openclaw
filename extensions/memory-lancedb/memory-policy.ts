@@ -186,7 +186,7 @@ export function looksLikePromptInjection(text: string): boolean {
 const SYSTEM_TURN_PROMPT_PREFIX = "[System]";
 
 /** True for an OpenClaw-generated system turn, which is not something the user said. */
-export function isSystemTurnPromptText(text: string): boolean {
+function isSystemTurnPromptText(text: string): boolean {
   return stripLeadingTimestampPrefix(text.trimStart()).startsWith(SYSTEM_TURN_PROMPT_PREFIX);
 }
 
@@ -262,17 +262,13 @@ function matchesCustomTrigger(text: string, customTriggers?: string[]): boolean 
   return customTriggers.some((trigger) => lower.includes(trigger.toLocaleLowerCase()));
 }
 
-/** The text auto-capture stores for one user text block, or undefined when it must not be stored. */
-export function capturableUserText(
-  text: string,
-  options?: { customTriggers?: string[]; maxChars?: number },
-): string | undefined {
+/** The user's own text to run capture rules on, or undefined for an OpenClaw system turn. */
+export function userTextForCapture(text: string): string | undefined {
   // Check the raw turn: sanitizing can drop the marker line along with a quoted context block.
   if (isSystemTurnPromptText(text)) {
     return undefined;
   }
-  const sanitized = sanitizeForMemoryCapture(text);
-  return sanitized && shouldCapture(sanitized, options) ? sanitized : undefined;
+  return sanitizeForMemoryCapture(text) || undefined;
 }
 
 export function shouldCapture(

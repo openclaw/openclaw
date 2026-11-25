@@ -36,7 +36,6 @@ import { dropMediaNoteLines } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
   type AutoCaptureMessageProgress,
-  capturableUserText,
   captureFingerprint,
   cleanMemorySearchResults,
   detectCategory,
@@ -48,6 +47,8 @@ import {
   normalizeRecallQuery,
   prepareAutoCaptureMessages,
   projectMemorySearchResult,
+  shouldCapture,
+  userTextForCapture,
 } from "./memory-policy.js";
 import {
   createEmbeddingHealthTracker,
@@ -627,11 +628,14 @@ export default definePluginEntry({
                 continue;
               }
               for (const text of extractUserTextContent(message)) {
-                const sanitized = capturableUserText(text, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
-                });
-                if (!sanitized) {
+                const sanitized = userTextForCapture(text);
+                if (
+                  !sanitized ||
+                  !shouldCapture(sanitized, {
+                    customTriggers: currentCfg.customTriggers,
+                    maxChars: currentCfg.captureMaxChars,
+                  })
+                ) {
                   continue;
                 }
                 const textFingerprint = captureFingerprint(sanitized);

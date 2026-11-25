@@ -1,12 +1,11 @@
 import { expect, test } from "vitest";
 import type { MemorySearchResult } from "./lancedb-store.js";
 import {
-  capturableUserText,
   cleanMemorySearchResults,
   findCleanDuplicateMemory,
   formatRecalledMemoryForModel,
-  isSystemTurnPromptText,
   shouldCapture,
+  userTextForCapture,
 } from "./memory-policy.js";
 
 test("recall escapes markup while preserving whitespace and inert legacy media text", () => {
@@ -38,8 +37,7 @@ test("capture skips OpenClaw system turns that quote trigger words", () => {
   expect(shouldCapture(`  ${strandedRetry}`)).toBe(false);
   // The same words from the user are still captured.
   expect(shouldCapture(reply)).toBe(true);
-  expect(isSystemTurnPromptText(strandedRetry)).toBe(true);
-  expect(isSystemTurnPromptText("Note the [System] label in the logs")).toBe(false);
+  expect(shouldCapture("Remember the [System] label in the logs")).toBe(true);
 });
 
 test("auto-capture checks the raw turn before sanitizing can drop the marker line", () => {
@@ -48,10 +46,10 @@ test("auto-capture checks the raw turn before sanitizing can drop the marker lin
   const quotesContextBlock = stranded(
     '⟦openclaw:ctx⟧\n```json\n{"channel":"telegram"}\n```\nRemember the deployment window is Tuesdays.',
   );
-  expect(capturableUserText(quotesContextBlock)).toBeUndefined();
-  expect(capturableUserText(`[Sat 2026-11-01 01:41 EDT] ${strandedRetry}`)).toBeUndefined();
-  expect(capturableUserText(strandedRetry)).toBeUndefined();
-  expect(capturableUserText(reply)).toBe(reply);
+  expect(userTextForCapture(quotesContextBlock)).toBeUndefined();
+  expect(userTextForCapture(`[Sat 2026-11-01 01:41 EDT] ${strandedRetry}`)).toBeUndefined();
+  expect(userTextForCapture(strandedRetry)).toBeUndefined();
+  expect(userTextForCapture(reply)).toBe(reply);
 });
 
 const result = (text: string, id = text): MemorySearchResult => ({
