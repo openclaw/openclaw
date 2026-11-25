@@ -1,4 +1,5 @@
 import { isAnthropicOAuthApiKey, isDirectAnthropicModel } from "@openclaw/ai/internal/anthropic";
+import { isOpenAIResponsesApi } from "@openclaw/ai/transports";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { getOwnedSessionTranscriptReader } from "../../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -65,6 +66,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
+  persistCompactedCurrentUserTurnReplay,
   prepareForeignPendingUserTurns,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
@@ -285,6 +287,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         // A recovery resumes its admitted history, including accepted steering.
         // Its newer user tail is not an orphan to replace with the original input.
         if (attempt.replayCurrentTranscript) {
+          await persistCompactedCurrentUserTurnReplay({
+            activeSession,
+            sessionManager,
+            currentUserTurnMessage,
+          });
           return undefined;
         }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
@@ -486,10 +493,7 @@ export async function prepareEmbeddedAttemptSessionManager(
     config: attempt.config,
     env: process.env,
   });
-  const isOpenAIResponsesApi =
-    attempt.model.api === "openai-responses" ||
-    attempt.model.api === "azure-openai-responses" ||
-    attempt.model.api === "openai-chatgpt-responses";
+  const responsesApi = isOpenAIResponsesApi(attempt.model.api);
 
   const preparedUserTurnMessage =
     attempt.skipPreparedUserTurnMessage || attempt.replayCurrentTranscript
@@ -594,7 +598,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? attempt.userTurnTranscriptRecorder
       : undefined,
     allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-    missingToolResultText: isOpenAIResponsesApi ? "aborted" : undefined,
+    missingToolResultText: responsesApi ? "aborted" : undefined,
     trigger: attempt.trigger,
     suppressNextUserMessagePersistence:
       prepareInitialUserTurnReplay !== undefined || attempt.suppressNextUserMessagePersistence,
@@ -716,7 +720,7 @@ export async function prepareEmbeddedAttemptSessionManager(
       },
       preparedUserTurnMessage,
     },
-    isOpenAIResponsesApi,
+    isOpenAIResponsesApi: responsesApi,
     preparedUserTurnMessage,
     sessionManager,
     transcriptPolicy,

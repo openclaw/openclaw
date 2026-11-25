@@ -98,10 +98,15 @@ async function admitPluginHarnessRunForTest(params: {
     createOperationalRunInstanceRef,
     prepareAgentRunAdmission,
   } = await import("../agents/admitted-run-context.js");
+  const { decideTurnGrant } = await import("../gateway/operator-admission.js");
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
     operatorAuthority: params.operatorSource
-      ? createAdmittedRunOperatorAuthority({ ...params.operatorSource, canonicalIdentity: null })
+      ? createAdmittedRunOperatorAuthority({
+          ...params.operatorSource,
+          canonicalIdentity: null,
+          grant: decideTurnGrant(params.operatorSource.scopes),
+        })
       : undefined,
     facts: {
       runId: params.attempt.runId,

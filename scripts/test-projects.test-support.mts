@@ -183,7 +183,7 @@ type ChangedTestTargetOptions = {
   aggressive?: {
     maxDirectImporters: number;
     maxDirectoryTests: number;
-    /** Owners whose behavior tests sit many imports away select every transitive importer. */
+    /** Owners whose behavior tests sit many imports away also select importers in their directory. */
     transitiveOwners?: RegExp;
   };
   adaptiveMarkdown?: { isIndependentCompanion: (file: string) => boolean };
@@ -4863,13 +4863,26 @@ function resolveBoundedChangedTestTargetPlan(
       graph ??= getImportGraph(cwd, graphOptions, changedPaths);
       directImporters = new Set(walkAffectedTestsFromImportGraph([changedPath], graph, 1));
       const directCount = new Set(graph.reverseImports.get(changedPath)).size;
-      const depth =
-        !options.aggressive || options.aggressive.transitiveOwners?.test(changedPath)
-          ? undefined
-          : directCount < options.aggressive.maxDirectImporters
-            ? 2
-            : 1;
+      const depth = !options.aggressive
+        ? undefined
+        : directCount < options.aggressive.maxDirectImporters
+          ? 2
+          : 1;
       affectedTests = walkAffectedTestsFromImportGraph([changedPath], graph, depth);
+      if (options.aggressive?.transitiveOwners?.test(changedPath)) {
+        // Every transitive importer in the owner's own directory; a package root reaches its
+        // whole package, so it relies on the declared behavior set instead.
+        const directory = path.posix.dirname(changedPath);
+        const packageRoot = /^(?:src|packages|extensions)\/[^/]+(?:\/src)?$/u.test(directory);
+        if (!packageRoot) {
+          affectedTests = uniqueOrdered([
+            ...affectedTests,
+            ...walkAffectedTestsFromImportGraph([changedPath], graph).filter((file) =>
+              file.startsWith(`${directory}/`),
+            ),
+          ]);
+        }
+      }
     }
     if (graph) {
       const changedExports =

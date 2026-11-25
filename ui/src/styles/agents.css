@@ -72,51 +72,24 @@
   border-color: var(--accent);
 }
 
-/* Short values and pickers share one column so the panel's controls start on the
-   same edge. Long model ids widen a picker rather than truncating. */
-.agent-overview {
-  --agent-overview-control-width: 340px;
-}
-
-.agent-overview .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input {
-  width: var(--agent-overview-control-width);
-}
-
-.agent-overview .settings-row__control > .model-picker {
-  min-width: min(var(--agent-overview-control-width), 100%);
-}
-
-.agent-overview .settings-row__control > .agent-fallbacks {
-  width: fit-content;
-  min-width: min(var(--agent-overview-control-width), 100%);
-  max-width: 100%;
-}
-
-/* Selects and chips read at the row's value size and stay on one line. Only the real
-   text inputs keep the touch floor that stops iOS zooming on focus. */
-.agent-overview .settings-row__control .settings-select .picker-select__trigger {
+.model-settings__fallback-control .multi-select__input::placeholder {
   font-size: var(--field-font-size);
 }
 
-.agent-overview .agent-fallbacks .multi-select__input::placeholder {
-  font-size: var(--field-font-size);
-}
-
-.agent-overview .agent-fallbacks .multi-select__chip {
+.model-settings__fallback-control .multi-select__chip {
   min-width: 0;
   padding-block: 1px;
   font-size: var(--field-font-size);
 }
 
-.agent-overview .agent-fallbacks .multi-select__chip-icon {
+.model-settings__fallback-control .multi-select__chip-icon {
   width: 20px;
   height: 20px;
   flex-basis: 20px;
 }
 
 /* The add input takes its line only while focused, so a filled chain ends at its last chip. */
-.agent-overview
-  .agent-fallbacks
+.model-settings__fallback-control
   .multi-select:has(.multi-select__chip):not(:focus-within)
   .multi-select__input {
   position: absolute;
@@ -130,21 +103,21 @@
 /* Touch has no title tooltip and the list leaves out chosen models, so tapping the field
    shows the chain's full ids until focus leaves it. */
 @media (pointer: coarse), (max-width: 640px) {
-  .agent-overview .agent-fallbacks .multi-select__chip {
+  .model-settings__fallback-control .multi-select__chip {
     padding-inline: var(--space-2);
   }
 
-  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip {
+  .model-settings__fallback-control .multi-select:focus-within .multi-select__chip {
     border-radius: var(--radius-md);
   }
 
-  .agent-overview .agent-fallbacks .multi-select:focus-within .multi-select__chip-label {
+  .model-settings__fallback-control .multi-select:focus-within .multi-select__chip-label {
     overflow-wrap: anywhere;
     white-space: normal;
   }
 
   /* The mark stays chip-sized; its touch target reaches past it, up to the next chip. */
-  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove {
+  .model-settings__fallback-control .multi-select__chip .chip-remove {
     position: relative;
     width: 24px;
     min-width: 0;
@@ -152,7 +125,7 @@
     min-height: 0;
   }
 
-  .agent-overview .agent-fallbacks .multi-select__chip .chip-remove::after {
+  .model-settings__fallback-control .multi-select__chip .chip-remove::after {
     position: absolute;
     inset: -6px -10px;
     content: "";
@@ -168,11 +141,6 @@
     flex: 0 1 auto;
     width: auto;
     min-width: 0;
-  }
-
-  /* The list wraps long ids inside the select's own width. */
-  .agent-overview .picker-select__menu.oc-overlay {
-    max-width: anchor-size(width);
   }
 }
 
@@ -347,10 +315,6 @@
 }
 
 @media (max-width: 640px) {
-  .agent-overview .settings-row__control > .agent-fallbacks {
-    width: 100%;
-  }
-
   /* The name and emoji stack beside the avatar, so the name keeps its full width. */
   .agent-identity-editor__fields {
     grid-template-columns: minmax(0, 1fr);

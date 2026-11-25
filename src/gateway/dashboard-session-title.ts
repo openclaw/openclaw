@@ -164,7 +164,7 @@ function resolveDashboardTitleAuthProfile(params: {
 // "Concise title for this session:" or "Sitzungstitel:"; topics such as
 // "Fix button label:" stay part of the title.
 const TITLE_LEAD_IN =
-  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
+  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label|título)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
 
 function stripTitleLeadIn(line: string): { text: string; introduced: boolean } {
   const collapsed = line.replace(/\s+/g, " ").trim();
@@ -489,18 +489,6 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
-  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
-    return false;
-  }
-  const skillParams = {
-    cfg: params.cfg,
-    agentId: params.agentId,
-    entry,
-    sessionKey,
-    assertCurrent: assertMemoryCurrent,
-  };
-
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -551,10 +539,23 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : await persist();
   };
 
-  const run = async () => {
+  const run = async (markStarted: () => void) => {
+    // Own this session's eligibility read too. Otherwise a read of the unnamed
+    // row could return after the winning title is committed and its request evicted.
+    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+    if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+      return false;
+    }
+    markStarted();
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands(skillParams);
+    const skillCommands = await prepareTitleSkillCommands({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      entry,
+      sessionKey,
+      assertCurrent: assertMemoryCurrent,
+    });
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,

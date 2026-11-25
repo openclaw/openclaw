@@ -416,6 +416,59 @@ function verifyProducer(producer, runGh, completed) {
   };
 }
 
+// Recovery uses the same protected P and human-operator authority as admission.
+// It does not grant authority to the original Q run or replace its admission.
+export function verifyReleaseRecoveryProducer({
+  producer,
+  completed = true,
+  runGh = runQualificationAdmissionGh,
+}) {
+  const observed = verifyProducer(producer, runGh, completed);
+  const current = api(producer.repository, "actions/runs/" + producer.runId, runGh);
+  requireValue(current.run_attempt === producer.runAttempt, "Recovery producer attempt changed");
+  const source = readSource(
+    producer.repository,
+    producer.workflowSha,
+    QUALIFICATION_ADMISSION_WORKFLOW,
+    runGh,
+  ).toString("utf8");
+  requireValue(
+    /^ {2}RELEASE_RECOVERY_CONTRACT: "1"$/mu.test(source),
+    "Missing P recovery contract",
+  );
+  const inventory = api(
+    producer.repository,
+    "actions/runs/" + producer.runId + "/attempts/" + producer.runAttempt + "/jobs?per_page=100",
+    runGh,
+  );
+  requireValue(
+    Array.isArray(inventory.jobs) && inventory.jobs.length === inventory.total_count,
+    "Incomplete recovery producer inventory",
+  );
+  const jobs = inventory.jobs.filter((job) => job.name === "Seal retained qualification");
+  requireValue(
+    jobs.length === 1 &&
+      jobs[0].run_id === producer.runId &&
+      jobs[0].run_attempt === producer.runAttempt &&
+      jobs[0].status === (completed ? "completed" : "in_progress") &&
+      (completed ? jobs[0].conclusion === "success" : jobs[0].conclusion === null),
+    "Recovery sealer identity or outcome changed",
+  );
+  for (const name of [
+    "Checkout authenticated P recovery owner",
+    ...(completed
+      ? ["Verify and seal original qualification", "Upload immutable recovery aggregate"]
+      : []),
+  ]) {
+    const steps = jobs[0].steps.filter((step) => step.name === name);
+    requireValue(
+      steps.length === 1 && steps[0].status === "completed" && steps[0].conclusion === "success",
+      "Recovery producer step failed: " + name,
+    );
+  }
+  return observed;
+}
+
 function verifyProducerContract(producer, runGh) {
   const source = readSource(
     producer.repository,

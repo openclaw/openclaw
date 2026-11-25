@@ -402,7 +402,6 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
     }).run(step("Dispatch publish workflows").run!, {
       PUBLISH_OPENCLAW_NPM: "false",
       CLAWHUB_ONLY: "true",
-      WAIT_FOR_CLAWHUB: "false",
     });
     expect(result.status, result.stderr).toBe(1);
     expect(result.outputs).toBe("plugin_clawhub_run_id=92\n");
@@ -512,7 +511,6 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
 `,
   }).run(step("Dispatch publish workflows").run!, {
     PUBLISH_OPENCLAW_NPM: "true",
-    WAIT_FOR_CLAWHUB: "false",
     RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
   });
   expect(result.status, result.stderr).toBe(0);
@@ -786,7 +784,6 @@ verify_published_release() {
       CORE_START_OUTCOME: "success",
       CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
       CLAWHUB_RECEIPT_OUTCOME: "skipped",
-      WAIT_FOR_CLAWHUB: "false",
       RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: transientRegistry ? "1800" : "0",
       ...(sync !== "absent" ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {}),
       ...(sync === "timeout" ? { RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "900" } : {}),

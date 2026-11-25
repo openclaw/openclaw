@@ -235,7 +235,9 @@ describe("device pairing setup state", () => {
   });
 
   it("keeps the selected access and the failure when setup creation fails", async () => {
-    const failure = new Error("setup unavailable");
+    const failure = Object.assign(new Error("setup unavailable"), {
+      details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+    });
     const request = vi.fn().mockRejectedValue(failure);
     const state = stateWithClient({ request } as unknown as DevicePairSetupState["client"]);
 
@@ -245,7 +247,10 @@ describe("device pairing setup state", () => {
       phase: "error",
       source: "create",
       access: "full",
-      error: failure,
+      error: expect.objectContaining({
+        message: "setup unavailable",
+        details: { code: "DEVICE_PAIR_GATEWAY_LOOPBACK_ONLY" },
+      }),
     });
     expect(state.devicePairSetupExpiryTimer).toBeNull();
   });

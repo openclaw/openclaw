@@ -47,6 +47,7 @@ type ActionRun = {
 };
 type Remote = {
   latest: string | null;
+  publicManifests?: Record<string, string>;
   releases: Record<string, Release>;
   calls: string[][];
   uploads: number;
@@ -308,6 +309,20 @@ if (args[0] === 'api') {
 } else {
   fail('Unexpected command: ' + args.join(' '));
 }
+`,
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(bin, "curl"),
+    `#!/usr/bin/env node
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(process.env.GH_MOCK_STATE, 'utf8'));
+const url = new URL(process.argv.at(-1));
+const parts = url.pathname.split('/');
+const tag = parts[4] === 'latest' ? state.latest : parts[5];
+const bytes = state.publicManifests?.[url.pathname] ?? state.releases[tag]?.manifest;
+if (url.origin !== 'https://github.com' || !bytes) process.exit(22);
+process.stdout.write(bytes);
 `,
     { mode: 0o755 },
   );
@@ -642,6 +657,24 @@ it.each(["current", "missing", "older", "replaced-release", "replaced-asset"])(
     );
     expect(remote.read().uploads).toBe(0);
     expect(remote.read().requests ?? []).toHaveLength(kind === "current" ? 0 : 1);
+  },
+);
+
+it.each(["releases/latest/download/latest.json", `releases/download/${sourceTag}/latest.json`])(
+  "does not report Linux complete when only the public %s is stale",
+  (path) => {
+    const remote = fixture(
+      { publicManifests: { [`/${repository}/${path}`]: manifest("2026.9.3") } },
+      (state) => {
+        const source = publishedRelease();
+        source.manifest = source.immutable;
+        publishFixture(state, source);
+      },
+    );
+    const dispatch = remote.dispatch();
+    expect(dispatch.status, dispatch.stderr).toBe(0);
+    expect(dispatch.evidence.state).toBe("request-dispatched");
+    expect(dispatch.stderr).toContain(path);
   },
 );
 

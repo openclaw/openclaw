@@ -183,6 +183,7 @@ const domains = {
     "owner.assign": true,
     participant: true,
     remove: true,
+    "set-access": true,
     "suggestion.add": true,
     "suggestion.claim": true,
     "suggestion.finalize": true,

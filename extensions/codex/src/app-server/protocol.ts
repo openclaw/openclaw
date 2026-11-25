@@ -465,6 +465,7 @@ export type CodexGetAccountResponse = {
     | { type: "apiKey" }
     | { type: "chatgpt"; email: string | null; planType: string }
     | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean }
+    | { type: "gcp" }
     | null;
   requiresOpenaiAuth: boolean;
 };
