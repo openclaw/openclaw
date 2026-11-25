@@ -55,6 +55,12 @@ it("classifies only complete matching WebKit cache-miss URL multisets", () => {
     { fetchAttempts: [attempt, { ...attempt, mode: "cors" as const }] },
     { fetchAttempts: [attempt, { ...attempt, outcome: "fulfilled" as const }] },
     { failedRequests: input.failedRequests.slice(0, 1) },
+    {
+      failedRequests: input.failedRequests.map((request) => ({
+        ...request,
+        resourceType: "image",
+      })),
+    },
     { consoleErrors: [consoleError, { ...consoleError, message: "Other failure" }] },
   ]) {
     const result = classifyMediaErrors({ ...input, ...override });
