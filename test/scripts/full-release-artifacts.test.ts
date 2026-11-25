@@ -123,13 +123,20 @@ function fixture() {
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require("node:fs");
+const { appendFileSync, readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["gh", ...args]) + "\\n");
 if (args[0] !== "api" || args.includes("POST")) throw new Error("Unexpected GitHub mutation");
-const { responses } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const fixture = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const { responses } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
-const response = responses[args[1]];
+const entry = responses[args[1]];
+let response = entry;
+if (entry.fixtureFirstResponse) {
+  response = entry.fixtureFirstResponse;
+  delete entry.fixtureFirstResponse;
+  writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
+}
 if (response.fixtureError) { process.stderr.write(response.fixtureError); process.exit(1); }
 process.stdout.write(JSON.stringify(response));
 `,
@@ -829,6 +836,52 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       FIXTURE_STOP_ON_WAIT: "true",
     });
     expectRejected(result, "Fixture reached another artifact poll");
+  });
+
+  it("re-reads the whole live inventory before acting on a job failure", () => {
+    const test = fixture();
+    const path = "actions/runs/81/attempts/1/jobs?per_page=100&page=1";
+    const failed = { ...test.jobs[0], conclusion: "failure" };
+    test.api(path, {
+      total_count: 2,
+      jobs: [failed, test.jobs[1]],
+      fixtureFirstResponse: { total_count: 2, jobs: [failed] },
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: "receipt",
+      FIXTURE_ADVANCE_RETRY_CLOCK: "true",
+    });
+    expectRejected(result, "ended with failure");
+    expect(
+      result.calls.filter((call) => call[2] === ["repos", REPOSITORY, path].join("/")),
+    ).toHaveLength(2);
+  });
+
+  it("rejects changed job identity even on an incomplete live page", () => {
+    const test = fixture();
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 2,
+      jobs: [{ ...test.jobs[0], head_sha: "c".repeat(40) }],
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: "receipt",
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, "Artifact producer job identity changed");
+  });
+
+  it("refuses a persistently short inventory as proof of raw production", () => {
+    const test = fixture();
+    const completed = workflowRun({ status: "completed", conclusion: "success" });
+    test.api("actions/runs/81", completed);
+    test.api("actions/runs/81/attempts/1", completed);
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 2,
+      jobs: [test.jobs[0]],
+    });
+    test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
+    const result = test.run("wait", { ARTIFACT_OUTPUT: "raw" });
+    expectRejected(result, "Raw npm bundle requires its unique exact completed producer job");
   });
 
   it("keeps waiting when the raw descriptor appears before its producer completes", () => {
