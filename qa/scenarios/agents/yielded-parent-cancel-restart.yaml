@@ -13,7 +13,7 @@ scenario:
   objective: Verify an operator-stopped yielded parent closes its held child and remains terminal across Gateway restart.
   successCriteria:
     - A real QA Channel parent spawns one held native child and ends its turn with sessions_yield.
-    - Operator Stop cancels the yielded parent and child before acknowledging success.
+    - Operator Stop is observed to cancel the yielded parent and child before restart.
     - The same persisted Gateway state restarts without redispatching the cancelled child.
     - The held child provider request closes during cancellation and cannot wake the parent or deliver child output.
     - A fresh independent turn still produces exactly one visible reply after restart.
