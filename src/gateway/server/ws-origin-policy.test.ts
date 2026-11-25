@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
@@ -234,9 +235,9 @@ describe("committed authentication policy", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const person = ensureProfileForEmail("widened@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const viewer = {
-        sessions: { others: "view" as const },
-        agents: "*" as const,
+      const viewer: GatewayOperatorRoleDefinition = {
+        sessions: { others: "view" },
+        agents: "*",
         scopes: ["operator.sessions.read"],
       };
       const enforced: OpenClawConfig = {

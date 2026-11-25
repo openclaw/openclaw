@@ -1,5 +1,6 @@
 // Plain owner logic for the Roles settings page: reads gateway.roles from a config snapshot and
 // turns one role change into a config.patch request. The Gateway validates and owns the result.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { DEFAULT_PARTICIPATION_TOOLS } from "../../../../src/shared/participation-tools.js";
 
 export type SessionsOthers = "none" | "invited" | "view" | "suggest" | "write";
@@ -33,10 +34,6 @@ export type RolePatchError = { error: "changed" | "exists" | "missing" | "defaul
 export const ADMIN_SCOPE = "operator.admin";
 export const DEFAULT_PARTICIPANT_TOOLS: readonly string[] = DEFAULT_PARTICIPATION_TOOLS;
 const ROLE_NAME = /^[a-z][a-z0-9_-]{0,63}$/u;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function rolesSection(config: Readonly<Record<string, unknown>> | null | undefined) {
   const gateway = config?.gateway;

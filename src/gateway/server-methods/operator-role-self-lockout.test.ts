@@ -6,7 +6,7 @@ import {
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE } from "../operator-role-self-lockout.js";
+import { OPERATOR_ROLE_SELF_LOCKOUT_MESSAGE } from "../operator-role-policy.js";
 import {
   createContext,
   createOperatorClient,

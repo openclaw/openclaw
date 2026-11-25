@@ -55,7 +55,7 @@ import {
   resolveControlPlaneActor,
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
-import { resolveOperatorRoleSelfLockout } from "../operator-role-self-lockout.js";
+import { resolveOperatorRoleSelfLockout } from "../operator-role-policy.js";
 import { SerializedJsonPayload } from "../serialized-json.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
