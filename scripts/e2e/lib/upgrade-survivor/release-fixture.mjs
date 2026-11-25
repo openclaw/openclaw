@@ -1,60 +1,51 @@
 // Build a disposable successor from the same source as the packed PR head.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertPackedSource,
+  buildTypedFixture,
+  fixtureGit,
+  readFixtureJson,
+  readPackedFixture,
+  readPrebuiltFixture,
+  withArchivedFixture,
+  writeFixtureJson,
+} from "./packed-release-fixture.mjs";
 
-const [repo, sourceTarball, directory] = process.argv.slice(2);
-const startedAt = performance.now();
-const readPacked = (file) =>
-  JSON.parse(execFileSync("tar", ["-xOf", sourceTarball, `package/${file}`], { encoding: "utf8" }));
-const manifest = readPacked("package.json");
-const build = readPacked("dist/build-info.json");
-const previous = {
-  version: manifest.version,
-  buildId: build.buildId,
-  commit: build.commit,
-  schema: manifest.openclaw.schemaVersions.state,
-};
-assert(previous.buildId && previous.commit, "T must carry its source/build identity");
-assert.equal(
-  execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
-  previous.commit,
-  "T must be built from the selected source",
-);
-const tree = path.join(directory, "source");
-fs.mkdirSync(tree, { recursive: true });
-execFileSync("git", ["archive", "--output", path.join(directory, "source.tar"), "HEAD"], {
-  cwd: repo,
-});
-execFileSync("tar", ["-xf", path.join(directory, "source.tar"), "-C", tree]);
-fs.unlinkSync(path.join(directory, "source.tar"));
-const sourceManifest = JSON.parse(fs.readFileSync(path.join(tree, "package.json"), "utf8"));
-assert.equal(sourceManifest.version, manifest.version);
-const patch = (file, before, after) => {
-  const filename = path.join(tree, file);
-  const source = fs.readFileSync(filename, "utf8");
-  assert.equal(source.split(before).length, 2, `fixture setup: moved anchor in ${file}`);
-  fs.writeFileSync(filename, source.replace(before, after));
-};
-const schema = previous.schema + 1;
-const version = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.-]+)?$/u.exec(manifest.version);
-assert(version, "T must have a release version");
-manifest.version = `${version[1]}.${version[2]}.${Number(version[3]) + 1}-beta.1`;
-sourceManifest.version = manifest.version;
-sourceManifest.openclaw.schemaVersions.state = schema;
-fs.writeFileSync(path.join(tree, "package.json"), `${JSON.stringify(sourceManifest, null, 2)}\n`);
-const ddl =
-  "CREATE TABLE IF NOT EXISTS fixture_update_migration (\n  fixture_id TEXT NOT NULL PRIMARY KEY,\n  migrated_to INTEGER NOT NULL\n) STRICT;\n";
-patch(
-  "src/state/openclaw-schema-versions.ts",
-  `export const OPENCLAW_STATE_SCHEMA_VERSION = ${previous.schema};`,
-  `export const OPENCLAW_STATE_SCHEMA_VERSION = ${schema};`,
-);
-fs.appendFileSync(path.join(tree, "src/state/openclaw-state-schema.sql"), `\n${ddl}`);
-fs.writeFileSync(
-  path.join(tree, "src/state/openclaw-state-db-schema-fixture.ts"),
-  `
+function releaseSource(repo) {
+  const commit = fixtureGit(repo, "rev-parse", "HEAD");
+  const manifest = JSON.parse(fixtureGit(repo, "show", "HEAD:package.json"));
+  const previousSchema = manifest.openclaw.schemaVersions.state;
+  assert(Number.isSafeInteger(previousSchema) && previousSchema > 0, "invalid source state schema");
+  const version = /^(\d+)\.(\d+)\.(\d+)(?:-[\w.-]+)?$/u.exec(manifest.version);
+  assert(version, "T must have a release version");
+  const successor = structuredClone(manifest);
+  successor.version = `${version[1]}.${version[2]}.${Number(version[3]) + 1}-beta.1`;
+  successor.openclaw.schemaVersions.state = previousSchema + 1;
+  return { commit, manifest, successor };
+}
+
+function patchSource(tree, previousSchema, sourceManifest) {
+  const schema = sourceManifest.openclaw.schemaVersions.state;
+  const patch = (file, before, after) => {
+    const filename = path.join(tree, file);
+    const source = fs.readFileSync(filename, "utf8");
+    assert.equal(source.split(before).length, 2, `fixture setup: moved anchor in ${file}`);
+    fs.writeFileSync(filename, source.replace(before, after));
+  };
+  writeFixtureJson(path.join(tree, "package.json"), sourceManifest);
+  const ddl =
+    "CREATE TABLE IF NOT EXISTS fixture_update_migration (\n  fixture_id TEXT NOT NULL PRIMARY KEY,\n  migrated_to INTEGER NOT NULL\n) STRICT;\n";
+  patch(
+    "src/state/openclaw-schema-versions.ts",
+    `export const OPENCLAW_STATE_SCHEMA_VERSION = ${previousSchema};`,
+    `export const OPENCLAW_STATE_SCHEMA_VERSION = ${schema};`,
+  );
+  fs.appendFileSync(path.join(tree, "src/state/openclaw-state-schema.sql"), `\n${ddl}`);
+  fs.writeFileSync(
+    path.join(tree, "src/state/openclaw-state-db-schema-fixture.ts"),
+    `
 import type { DatabaseSync } from "node:sqlite";
 export const fixtureUpdateMigration = {
   version: ${schema}, tables: ["fixture_update_migration", "mcp_oauth_stores"], columns: [],
@@ -67,94 +58,125 @@ export const fixtureUpdateMigration = {
   }, applied: "Applied release survivor fixture migration",
 };
 `,
-);
-const maintenance = "src/state/openclaw-state-db-maintenance.ts";
-patch(
-  maintenance,
-  'import type { DatabaseSync } from "node:sqlite";',
-  'import type { DatabaseSync } from "node:sqlite";\nimport { fixtureUpdateMigration } from "./openclaw-state-db-schema-fixture.js";',
-);
-patch(
-  maintenance,
-  "  stateApprovalProfileMigration,\n] as const;",
-  "  stateApprovalProfileMigration,\n  fixtureUpdateMigration,\n] as const;",
-);
-patch(
-  maintenance,
-  "    stateApprovalProfileMigration,\n  ];",
-  "    stateApprovalProfileMigration,\n    fixtureUpdateMigration,\n  ];",
-);
-patch(
-  "src/state/openclaw-state-schema-runtime.ts",
-  "  let schema = OPENCLAW_STATE_SCHEMA_SQL;",
-  `  let schema = OPENCLAW_STATE_SCHEMA_SQL;\n  if (version < ${schema}) schema = schema.replace(${JSON.stringify(ddl)}, "");`,
-);
-patch(
-  "scripts/lib/sqlite-schema-inputs.mts",
-  `for (const version of [${previous.schema},`,
-  `for (const version of [${schema}, ${previous.schema},`,
-);
-patch(
-  "scripts/lib/sqlite-schema-inputs.mts",
-  "      for (const [era, schema] of [",
-  `      for (const [era, schema] of [\n        ["before-v${schema}", getOpenClawStatePredecessorSchema(${previous.schema})],`,
-);
-patch(
-  "src/infra/database-engine/state-port-descriptor.ts",
-  `OPENCLAW_STATE_SCHEMA_VERSION !== ${previous.schema}`,
-  `OPENCLAW_STATE_SCHEMA_VERSION !== ${schema}`,
-);
-patch(
-  "src/infra/database-engine/state-port-descriptor.ts",
-  "38, 39, 40].includes(sourceVersion)",
-  `38, 39, 40, ${previous.schema}].includes(sourceVersion)`,
-);
-const env = {
-  ...process.env,
-  GIT_COMMIT: previous.commit,
-  OPENCLAW_CONTROL_UI_BUILD_ID: `${previous.buildId}-schema-${schema}`,
-};
-const timingsMs = { sourceSetup: Math.round(performance.now() - startedAt) };
-const run = (phase, program, args) => {
-  const start = performance.now();
-  execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
-  timingsMs[phase] = Math.round(performance.now() - start);
-};
-run("install", "pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
-run("schemaGeneration", "pnpm", ["db:postgres:gen"]);
-// Match the baseline package profile. The private package is a runtime fixture;
-// declaration-complete package consumers still build a typed successor.
-const runtimeOnly = manifest.private === true;
-if (!runtimeOnly) {
-  run("build", "pnpm", ["build:ci-artifacts"]);
-  run("declarations", "node", [
-    "--import",
-    "./scripts/tsx.mjs",
-    "scripts/write-unified-entry-dts.ts",
-  ]);
+  );
+  const maintenance = "src/state/openclaw-state-db-maintenance.ts";
+  patch(
+    maintenance,
+    'import type { DatabaseSync } from "node:sqlite";',
+    'import type { DatabaseSync } from "node:sqlite";\nimport { fixtureUpdateMigration } from "./openclaw-state-db-schema-fixture.js";',
+  );
+  patch(
+    maintenance,
+    "  stateApprovalProfileMigration,\n] as const;",
+    "  stateApprovalProfileMigration,\n  fixtureUpdateMigration,\n] as const;",
+  );
+  patch(
+    maintenance,
+    "    stateApprovalProfileMigration,\n  ];",
+    "    stateApprovalProfileMigration,\n    fixtureUpdateMigration,\n  ];",
+  );
+  patch(
+    "src/state/openclaw-state-schema-runtime.ts",
+    "  let schema = OPENCLAW_STATE_SCHEMA_SQL;",
+    `  let schema = OPENCLAW_STATE_SCHEMA_SQL;\n  if (version < ${schema}) schema = schema.replace(${JSON.stringify(ddl)}, "");`,
+  );
+  patch(
+    "scripts/lib/sqlite-schema-inputs.mts",
+    `for (const version of [${previousSchema},`,
+    `for (const version of [${schema}, ${previousSchema},`,
+  );
+  patch(
+    "scripts/lib/sqlite-schema-inputs.mts",
+    "      for (const [era, schema] of [",
+    `      for (const [era, schema] of [\n        ["before-v${schema}", getOpenClawStatePredecessorSchema(${previousSchema})],`,
+  );
+  patch(
+    "src/infra/database-engine/state-port-descriptor.ts",
+    `OPENCLAW_STATE_SCHEMA_VERSION !== ${previousSchema}`,
+    `OPENCLAW_STATE_SCHEMA_VERSION !== ${schema}`,
+  );
+  patch(
+    "src/infra/database-engine/state-port-descriptor.ts",
+    "38, 39, 40].includes(sourceVersion)",
+    `38, 39, 40, ${previousSchema}].includes(sourceVersion)`,
+  );
 }
-run("package", "node", [
-  "scripts/package-openclaw-for-docker.mjs",
-  runtimeOnly ? "--runtime-only" : "--skip-build",
-  "--allow-unreleased-changelog",
-  "--output-dir",
-  directory,
-  "--output-name",
-  "next.tgz",
-]);
-const nextBuild = JSON.parse(fs.readFileSync(path.join(tree, "dist/build-info.json"), "utf8"));
-assert.equal(nextBuild.commit, previous.commit);
-assert.notEqual(nextBuild.buildId, previous.buildId);
-fs.writeFileSync(
-  path.join(directory, "fixture.json"),
-  JSON.stringify(
-    {
-      previous,
-      next: { version: manifest.version, buildId: nextBuild.buildId, schema },
-      timingsMs,
+
+async function buildSuccessor(tree, directory, source, startedAt, install) {
+  const { commit, manifest, successor } = source;
+  patchSource(tree, manifest.openclaw.schemaVersions.state, successor);
+  const timingsMs = { sourceSetup: Math.round(performance.now() - startedAt) };
+  const tarball = path.join(directory, "next.tgz");
+  const metadata = await buildTypedFixture({
+    tree,
+    tarball,
+    commit,
+    buildId: `fixture-next-${commit}-schema-${successor.openclaw.schemaVersions.state}`,
+    install,
+    generateSchema: true,
+    timingsMs,
+  });
+  assertPackedSource(metadata.packed, commit, successor, "T+1");
+  const prepared = { ...metadata, timingsMs };
+  writeFixtureJson(path.join(directory, "next-source.json"), prepared);
+  return prepared;
+}
+
+function readBaseline(tarball, { commit, manifest }) {
+  const packed = readPackedFixture(tarball);
+  assertPackedSource(packed, commit, manifest, "T");
+  const { version, buildId } = packed.build;
+  return { version, buildId, commit, schema: packed.schemaVersions.state };
+}
+
+function writeRunnerFixture(directory, previous, { commit, successor }, next, timingsMs) {
+  assertPackedSource(next, commit, successor, "T+1");
+  assert.notEqual(next.build.buildId, previous.buildId, "T and T+1 must have distinct build IDs");
+  for (const phase of ["sourceSetup", "schemaGeneration", "build", "declarations", "package"]) {
+    const value = timingsMs?.[phase];
+    assert(Number.isSafeInteger(value) && value >= 0, `invalid T+1 ${phase} timing`);
+  }
+  writeFixtureJson(path.join(directory, "fixture.json"), {
+    previous,
+    next: {
+      version: next.build.version,
+      buildId: next.build.buildId,
+      schema: next.schemaVersions.state,
     },
-    null,
-    2,
-  ),
-);
-fs.rmSync(tree, { recursive: true, force: true });
+    timingsMs,
+  });
+}
+
+const [command, ...args] = process.argv.slice(2);
+if (command === "--prepare") {
+  const [repo, output] = args;
+  const startedAt = performance.now();
+  const directory = path.resolve(output);
+  const source = releaseSource(repo);
+  assert.equal(
+    fixtureGit(repo, "status", "--porcelain", "--untracked-files=no"),
+    "",
+    "T+1 needs a clean, dedicated checkout",
+  );
+  fs.mkdirSync(directory, { recursive: true });
+  await buildSuccessor(repo, directory, source, startedAt, false);
+} else {
+  const [repo, tarball, output] = command === "--verify" ? args : [command, ...args];
+  assert(!repo.startsWith("--"), "unknown release fixture mode");
+  const startedAt = performance.now();
+  const directory = path.resolve(output);
+  fs.rmSync(path.join(directory, "fixture.json"), { force: true });
+  const source = releaseSource(repo);
+  const previous = readBaseline(tarball, source);
+  if (command === "--verify") {
+    const metadata = readFixtureJson(path.join(directory, "next-source.json"));
+    const next = await readPrebuiltFixture(path.join(directory, "next.tgz"), metadata);
+    writeRunnerFixture(directory, previous, source, next, metadata.timingsMs);
+  } else {
+    fs.mkdirSync(directory, { recursive: true });
+    await withArchivedFixture(repo, source.commit, directory, "source", async (tree) => {
+      const metadata = await buildSuccessor(tree, directory, source, startedAt, true);
+      writeRunnerFixture(directory, previous, source, metadata.packed, metadata.timingsMs);
+    });
+  }
+}

@@ -1,9 +1,18 @@
 // The previous reader is the real fork point, not a relabeled candidate package.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  assertPackedSource,
+  buildTypedFixture,
+  fixtureGit,
+  readFixtureJson,
+  readPackedFixture,
+  readPrebuiltFixture,
+  withArchivedFixture,
+  writeFixtureJson,
+} from "./packed-release-fixture.mjs";
 
 export function needsSchemaDowngrade(before, after, changedPaths) {
   if (
@@ -21,74 +30,126 @@ export function needsSchemaDowngrade(before, after, changedPaths) {
       /\.(?:[cm]?[jt]s|sql)$/u.test(file),
   );
 }
-function prepareSchemaDowngrade(repo, sourceTarball, directory, base) {
-  const receiptFile = path.join(directory, "downgrade-source.json");
+
+function selectDowngrade(repo, base) {
   if (!base) {
-    fs.writeFileSync(
-      receiptFile,
-      JSON.stringify({ selected: false, reason: "not-a-pull-request" }),
-    );
-    return;
+    return { receipt: { selected: false, reason: "not-a-pull-request" } };
   }
   assert(/^[a-f0-9]{40}$/u.test(base), "downgrade requires an immutable fork-point SHA");
-  const git = (...args) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
-  const head = git("rev-parse", "HEAD");
-  const previous = JSON.parse(git("show", `${base}:package.json`));
-  const candidate = JSON.parse(git("show", `${head}:package.json`));
-  const changedPaths = git("diff", "--name-only", base, head).split("\n").filter(Boolean);
+  const head = fixtureGit(repo, "rev-parse", "HEAD");
+  const previous = JSON.parse(fixtureGit(repo, "show", `${base}:package.json`));
+  const candidate = JSON.parse(fixtureGit(repo, "show", "HEAD:package.json"));
+  const changedPaths = fixtureGit(repo, "diff", "--name-only", base, head)
+    .split("\n")
+    .filter(Boolean);
   const selected = needsSchemaDowngrade(previous, candidate, changedPaths);
-  const receipt = { selected, previousSource: base, candidateSource: head, changedPaths };
-  if (!selected) {
-    fs.writeFileSync(receiptFile, JSON.stringify(receipt));
-    return;
-  }
-  const packedBuild = JSON.parse(
-    execFileSync("tar", ["-xOf", sourceTarball, "package/dist/build-info.json"], {
-      encoding: "utf8",
-    }),
-  );
-  assert.equal(packedBuild.commit, head, "candidate tarball is not the tested merge source");
-  receipt.candidateBuild = {
-    ...packedBuild,
+  return {
+    receipt: { selected, previousSource: base, candidateSource: head, changedPaths },
+    previous,
+    candidate,
+  };
+}
+
+async function buildPrevious(tree, directory, commit, manifest, install) {
+  const metadata = await buildTypedFixture({
+    tree,
+    tarball: path.join(directory, "previous.tgz"),
+    commit,
+    buildId: `fixture-previous-${commit}`,
+    install,
+  });
+  assertPackedSource(metadata.packed, commit, manifest, "previous reader");
+  writeFixtureJson(path.join(directory, "previous-source.json"), metadata);
+  return metadata;
+}
+
+function readCandidate(repo, tarball, { receipt, candidate }) {
+  const packed = readPackedFixture(tarball);
+  assertPackedSource(packed, receipt.candidateSource, candidate, "downgrade candidate");
+  return {
+    ...packed.build,
     readerFloorSupported: /export function readStateSchemaMinReader\(/u.test(
-      git("show", `${head}:src/state/openclaw-state-db-schema-version.ts`),
+      fixtureGit(repo, "show", "HEAD:src/state/openclaw-state-db-schema-version.ts"),
     ),
   };
-  const tree = path.join(directory, "previous-source");
-  fs.mkdirSync(tree);
-  const archive = path.join(directory, "previous-source.tar");
-  execFileSync("git", ["archive", "--output", archive, base], { cwd: repo });
-  execFileSync("tar", ["-xf", archive, "-C", tree]);
-  fs.unlinkSync(archive);
-  const env = {
-    ...process.env,
-    GIT_COMMIT: base,
-    OPENCLAW_CONTROL_UI_BUILD_ID: `${packedBuild.buildId}-previous-${base.slice(0, 12)}`,
-  };
-  const run = (program, args) => execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
-  try {
-    run("pnpm", ["install", "--frozen-lockfile", "--prefer-offline"]);
-    run("pnpm", ["build:ci-artifacts"]);
-    run("node", ["--import", "./scripts/tsx.mjs", "scripts/write-unified-entry-dts.ts"]);
-    run("node", [
-      "scripts/package-openclaw-for-docker.mjs",
-      "--skip-build",
-      "--allow-unreleased-changelog",
-      "--output-dir",
-      directory,
-      "--output-name",
-      "previous.tgz",
-    ]);
-    receipt.previousBuild = JSON.parse(
-      fs.readFileSync(path.join(tree, "dist/build-info.json"), "utf8"),
+}
+
+function writeRunnerReceipt(directory, { receipt, previous }, candidateBuild, packed) {
+  assertPackedSource(packed, receipt.previousSource, previous, "previous reader");
+  assert.notEqual(
+    packed.build.buildId,
+    candidateBuild.buildId,
+    "downgrade requires distinct build IDs",
+  );
+  writeFixtureJson(path.join(directory, "downgrade-source.json"), {
+    ...receipt,
+    candidateBuild,
+    previousBuild: packed.build,
+  });
+}
+
+async function runCli([command, ...args]) {
+  if (command === "--select") {
+    const [repo, output, base] = args;
+    const { receipt } = selectDowngrade(repo, base);
+    fs.mkdirSync(output, { recursive: true });
+    writeFixtureJson(path.join(output, "downgrade-source.json"), receipt);
+    return;
+  }
+  if (command === "--build") {
+    const [repo, output] = args;
+    const directory = path.resolve(output);
+    const selection = readFixtureJson(path.join(directory, "downgrade-source.json"));
+    if (!selection.selected) {
+      return;
+    }
+    const commit = fixtureGit(repo, "rev-parse", "HEAD");
+    assert.equal(commit, selection.previousSource, "wrong fork-point checkout for previous reader");
+    assert.equal(
+      fixtureGit(repo, "status", "--porcelain", "--untracked-files=no"),
+      "",
+      "previous reader needs a clean checkout",
     );
-    assert.equal(receipt.previousBuild.commit, base);
-    assert.notEqual(receipt.previousBuild.buildId, packedBuild.buildId);
-    fs.writeFileSync(receiptFile, `${JSON.stringify(receipt, null, 2)}\n`);
-  } finally {
-    fs.rmSync(tree, { recursive: true, force: true });
+    const manifest = JSON.parse(fixtureGit(repo, "show", "HEAD:package.json"));
+    await buildPrevious(repo, directory, commit, manifest, false);
+    return;
+  }
+
+  const verify = command === "--verify";
+  const [repo, tarball, output, base] = verify ? args : [command, ...args];
+  assert(!repo.startsWith("--"), "unknown downgrade fixture mode");
+  const directory = path.resolve(output);
+  const receiptPath = path.join(directory, "downgrade-source.json");
+  const savedSelection = verify ? readFixtureJson(receiptPath) : null;
+  fs.rmSync(receiptPath, { force: true });
+  const selection = selectDowngrade(repo, base);
+  const { receipt, previous } = selection;
+  if (verify) {
+    assert.deepEqual(
+      savedSelection,
+      receipt,
+      "downgrade selection does not match the requested fork point and candidate",
+    );
+  } else {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  if (!receipt.selected) {
+    writeFixtureJson(receiptPath, receipt);
+    return;
+  }
+  const candidateBuild = readCandidate(repo, tarball, selection);
+  if (verify) {
+    const metadata = readFixtureJson(path.join(directory, "previous-source.json"));
+    const packed = await readPrebuiltFixture(path.join(directory, "previous.tgz"), metadata);
+    writeRunnerReceipt(directory, selection, candidateBuild, packed);
+  } else {
+    await withArchivedFixture(repo, base, directory, "previous-source", async (tree) => {
+      const metadata = await buildPrevious(tree, directory, base, previous, true);
+      writeRunnerReceipt(directory, selection, candidateBuild, metadata.packed);
+    });
   }
 }
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  prepareSchemaDowngrade(...process.argv.slice(2));
+  await runCli(process.argv.slice(2));
 }
