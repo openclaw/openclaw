@@ -19,6 +19,7 @@ import {
   tryAdoptInstalledPackageForGateway,
   waitForReleaseUpdateFailure,
 } from "./cli.js";
+import * as installationIdentity from "./installation-identity.js";
 import { TRIAL_BUDGET_MS } from "./launcher.js";
 import { createTrialPending, resolvePrefix, switchLink, writeTrial } from "./store.js";
 import * as releaseStore from "./store.js";
@@ -441,6 +442,34 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   expect(prepared).toEqual([]);
   expect(maintainRuntimes).not.toHaveBeenCalled();
 });
+
+it("lets an accessible Gateway take over an opaque first-conversion owner", async () => {
+  vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+    new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+  );
+  runsGet.push(() => ({
+    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
+  expect(sent).toEqual([{}]);
+  expect(prepared).toEqual([]);
+});
+
+it.each([{ restart: false }, { restart: true, tag: "beta" }])(
+  "refuses opaque foreground ownership when RPC cannot carry the update: %j",
+  async (opts) => {
+    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+      new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+    );
+    await expect(runReleaseUpdateCli({ json: true, runningRoot: root, ...opts })).rejects.toThrow(
+      "operator access",
+    );
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(createRun).not.toHaveBeenCalled();
+    expect(maintainRuntimes).not.toHaveBeenCalled();
+  },
+);
 
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
   install.kind = "package";
