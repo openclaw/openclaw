@@ -117,8 +117,16 @@ export function isCompatibleAdditiveColumnDefinition(definition: string): boolea
       deterministic.add(String(entry.name));
     }
   }
-  probe.setAuthorizer((action, _first, second) =>
+  probe.setAuthorizer((action, first, second) =>
     action === constants.SQLITE_SELECT ||
+    // Native observers may inspect this empty, private probe's read-only catalog.
+    (action === constants.SQLITE_PRAGMA &&
+      second === null &&
+      ["database_list", "schema_version", "table_list"].includes(first ?? "")) ||
+    (action === constants.SQLITE_READ &&
+      ["sqlite_master", "sqlite_schema", "sqlite_temp_master", "sqlite_temp_schema"].includes(
+        first ?? "",
+      )) ||
     (action === constants.SQLITE_FUNCTION && deterministic.has(second ?? ""))
       ? constants.SQLITE_OK
       : constants.SQLITE_DENY,
@@ -141,5 +149,7 @@ export function isCompatibleAdditiveColumnDefinition(definition: string): boolea
     return true;
   } catch {
     return false;
+  } finally {
+    probe.setAuthorizer(null);
   }
 }
