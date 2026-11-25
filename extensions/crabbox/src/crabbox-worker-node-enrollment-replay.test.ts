@@ -133,6 +133,9 @@ async function replay(
       if (failure === "unavailable") {
         throw new Error("Unreadable process identity");
       }
+      if (file === "/proc/123/stat") {
+        return "123 (openclaw-connect) S 1";
+      }
       if (file === "/proc/123/cmdline") {
         return failure === "original-argv" ? `/usr/bin/node\0${cli}\0connect\0` : command + "\0";
       }

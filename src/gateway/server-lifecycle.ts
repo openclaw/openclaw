@@ -147,8 +147,13 @@ export async function prepareGatewayLifecycle(params: {
     streamBroker: nodeDesktopStreamBroker,
   });
   nodeDesktopServiceRef.current = nodeDesktopService;
-  workerPlacementRuntime?.bindNodeWorkerAvailability((nodeId, options) =>
-    waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options),
+  workerPlacementRuntime?.bindNodeWorkerAvailability(
+    (nodeId, options) => waitForNodeWorkerSupervisor(nodeRegistry, nodeId, options),
+    (nodeId) => {
+      const node = nodeRegistry.get(nodeId);
+      return node?.platform === "linux" ? node.version : undefined;
+    },
+    (nodeId) => nodeRegistry.get(nodeId)?.client.connect.client.buildId,
   );
   bindDeviceNodeControl?.(nodeWorkerSupervisorTransport);
   bindWorkerNodeDesktopControl?.(nodeWorkerSupervisorTransport);
@@ -694,7 +699,6 @@ export async function prepareGatewayLifecycle(params: {
     watchNodeHttpRuntime,
     terminalSessions,
     runtimeState,
-    unavailableGatewayMethods,
     kernel,
     pluginHostServices: {
       get cron() {
@@ -702,7 +706,6 @@ export async function prepareGatewayLifecycle(params: {
       },
     },
     shutdownRuntime,
-    lifecycle,
     cronReconciliation,
     getRuntimeSnapshot,
     startChannels,

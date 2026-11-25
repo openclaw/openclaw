@@ -192,6 +192,23 @@ describe("connect cli", () => {
     },
   );
 
+  it.each([false, true])(
+    "prefers the supplied one-shot credential only for a fresh ephemeral bootstrap (%s)",
+    async (fresh) => {
+      const target = `https://gateway.example/j/${"a".repeat(22)}`;
+      const release = joinResponse("application/json", target);
+      await runConnect([target, "--ephemeral", ...(fresh ? ["--fresh-bootstrap"] : [])]);
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ephemeral: true,
+          gatewayBootstrapToken: "bootstrap-token",
+          preferGatewayBootstrapToken: fresh,
+        }),
+      );
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("maps an HTTPS join URL into the existing node foreground runtime", async () => {
     const target = `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`;
     const release = joinResponse("Application/JSON; charset=utf-8", target);

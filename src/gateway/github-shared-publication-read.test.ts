@@ -17,7 +17,7 @@ import {
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -60,14 +60,32 @@ import {
   sharedPublicationSession as session,
   sharedRepositoryWorkspace,
 } from "./github-shared-publication.test-support.js";
+import * as repositoryIdentity from "./repository-integration-identity.js";
 
 installGitHubPublicationTestHarness();
+const mocks = githubPublicationTestMocks();
+beforeEach(() => {
+  // The receipt suite can load the repository identity owner before the harness's
+  // lower-level mock attaches. Use the same synthetic identity at the owner boundary.
+  vi.spyOn(repositoryIdentity, "preparePublicationGitHubIdentity").mockImplementation(
+    async (snapshot, agentId, actor, credential) => {
+      const assertActor = typeof actor === "function" ? actor : actor?.assertCurrent;
+      const assertCurrent = () => {
+        assertActor?.();
+        credential?.assertCurrent();
+      };
+      assertCurrent();
+      const identity = await mocks.prepareIdentity({ ...snapshot, agentId, assertCurrent });
+      assertCurrent();
+      return identity;
+    },
+  );
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await closeStateDatabaseForTest();
 });
-const mocks = githubPublicationTestMocks();
 const url = "https://github.com/owner/repository/pull/12";
 
 function observeSql() {
