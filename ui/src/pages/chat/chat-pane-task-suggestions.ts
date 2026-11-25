@@ -17,7 +17,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { ChatPaneSharing } from "./chat-pane-sharing.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type {
   TaskSuggestionAcceptance,
   TaskSuggestionStartMode,
@@ -274,7 +274,18 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           ? operation.outcome
           : undefined;
       },
-      sessionSuggestions: multiIdentity ? this.collaboration.suggestions : [],
+      sessionSuggestions:
+        multiIdentity ||
+        (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
+          ? this.collaboration.suggestions
+          : [],
+      onCloseSessionSuggestion: (id: string) => {
+        this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+          id,
+          false,
+        );
+      },
+      sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
       sessionSuggestionRole: this.collaboration.role,
       sessionSuggestionBusyIds: this.collaboration.busyIds,
       sessionSuggestionsArchived: archived,

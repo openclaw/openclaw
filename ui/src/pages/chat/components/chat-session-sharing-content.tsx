@@ -29,15 +29,17 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatSessionSharingError } from "./chat-session-sharing-error.tsx";
+import { CHAT_SESSION_SHARING_DESCRIPTION_KEYS } from "./chat-session-sharing-modes.tsx";
+import {
+  createChatSessionSharingPresentation,
+  projectChatSessionSharingRoster,
+  chatSessionPermissionLabel,
+} from "./chat-session-sharing-presentation.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
-  CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  createChatSessionSharingPresentation,
   ChatSessionSharingModeIcon,
-  ChatSessionSharingError,
-  projectChatSessionSharingRoster,
-  chatSessionPermissionLabel,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 
@@ -267,7 +269,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               };
             },
             get trigger() {
-              return row().controlLabel;
+              return (
+                <>
+                  {row().controlLabel}
+                  <span class="picker-select__chevron" aria-hidden="true">
+                    <Icon name="chevronDown" />
+                  </span>
+                </>
+              );
             },
             onBeforeShow(event) {
               if (busy()) {
@@ -275,13 +284,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${person().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              return options;
             },
           };
           return {
@@ -318,8 +328,8 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     { lazy: true },
   );
   const showPermissions = () =>
-    visibility() !== "shared" &&
-    visibility() !== "draft" &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess)) &&
     props.membersAvailable !== false &&
     (!props.state?.error || Boolean(result())) &&
     (!result() ||
@@ -424,9 +434,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                           : "chat.sessionSharing.noPeopleFound",
                       )}
                     </span>
-                    <Show when={people().length > 0 && query().trim()}>
-                      <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                    </Show>
                   </div>
                 }
               >
@@ -518,11 +525,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
             >
               <div class="chat-pane__sharing-disclosure-body">
                 <p class="chat-pane__sharing-link-description">
-                  {t(
-                    visibility() === "draft"
-                      ? "chat.sessionSharing.publicDraftDescription"
-                      : "chat.sessionSharing.publicLinkDescription",
-                  )}
+                  {t("chat.sessionSharing.publicLinkDescription")}
                 </p>
                 <button
                   ref={controls.ref()}

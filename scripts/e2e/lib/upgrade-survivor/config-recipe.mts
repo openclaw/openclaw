@@ -491,6 +491,7 @@ function applyRecipe() {
     baselineVersion: string | null;
     scenario: string;
     acceptedIntents: string[];
+    baselineSkillLibraryToolSplit?: boolean;
     steps: ReturnType<typeof runUpgradeSurvivorOpenClawStep>[];
   } = {
     source: "baseline-cli-command-recipe",
@@ -516,6 +517,16 @@ function applyRecipe() {
       const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";
       throw new Error(`baseline config recipe failed at ${step.id}: ${detail}`);
     }
+  }
+  if (summary.acceptedIntents.includes("skill-library-split")) {
+    // The published CLI may already stamp post-split policy on a config write.
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is required to record baseline Skill Library policy");
+    }
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    summary.baselineSkillLibraryToolSplit = config.meta?.migrations?.skillLibraryToolSplit === true;
+    writeJson(summaryPath, summary);
   }
 }
 

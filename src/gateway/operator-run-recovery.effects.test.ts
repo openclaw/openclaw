@@ -31,6 +31,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import { withRecovery } from "./operator-run-recovery.test-support.js";
@@ -220,7 +221,7 @@ it.each(
                 context: fixture.context,
                 assertCurrent() {},
               }),
-            ).rejects.toThrow(/operator|profile|could not admit/);
+            ).rejects.toThrow(OperatorRefusalError);
           } else {
             await expect(fixture.restore()).rejects.toThrow();
           }

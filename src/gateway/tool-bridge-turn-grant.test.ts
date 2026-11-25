@@ -143,7 +143,7 @@ describe("agent tools reach the Gateway with the turn grant", () => {
             ? {
                 status: "error",
                 tool: toolName,
-                error: `Your role on this Gateway does not allow this ${toolName} action. Ask a Gateway admin to do it, or to add the permission to your role. Do not retry.`,
+                error: `I did not run this ${toolName} action. Your role on this Gateway does not allow it. Ask a Gateway admin to do it, or to add the permission to your role. Do not retry.`,
               }
             : { reached: true },
         );
