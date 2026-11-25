@@ -250,7 +250,9 @@ export async function createVoiceCallRuntime(params: {
     });
     const realtimeConfig = {
       ...config.realtime,
-      tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
+      tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools, {
+        staySilent: config.realtime.staySilentTool === true,
+      }),
     };
     const resolveCallRegistration = async (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);

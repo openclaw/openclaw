@@ -40,7 +40,10 @@ import {
 import { resolveCallTranscriptionLanguage } from "../call-brief.js";
 import { resolveVoiceCallPublicPathPrefix, type VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
-import { REALTIME_VOICE_END_CALL_TOOL_NAME } from "../realtime-call-control.js";
+import {
+  REALTIME_VOICE_END_CALL_TOOL_NAME,
+  REALTIME_VOICE_STAY_SILENT_TOOL_NAME,
+} from "../realtime-call-control.js";
 import type { CallRecord, EndReason, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { createRealtimeCallPlayback } from "./realtime-call-playback.js";
@@ -51,6 +54,7 @@ import {
   speakOnRealtimeBridge,
   type RealtimeCallControlResult,
 } from "./realtime-call-session-control.js";
+import { passOverBackgroundSpeech, runEndCallTool } from "./realtime-call-tools.js";
 import {
   appendTranscriptText,
   resolveFinalTranscriptText,
@@ -1506,44 +1510,23 @@ export class RealtimeCallHandler {
       if (!binding || binding.bridge !== bridge || !this.isActiveBridgeOwner(callId, bridge)) {
         return undefined;
       }
-
-      let result: { success: boolean; error?: string };
-      try {
-        result = await this.manager.endCall(callId);
-      } catch (error) {
-        result = { success: false, error: formatErrorMessage(error) };
-      }
-
-      if (
-        this.activeTelephonyBindingsByCallId.get(callId) !== binding ||
-        !this.isActiveBridgeOwner(callId, bridge)
-      ) {
-        return undefined;
-      }
-      if (!result.success) {
-        const detail = result.error?.trim() || "the telephony provider returned no reason";
-        const toolResult = {
-          error: `Could not end the current phone call: ${detail}. Tell the caller the call could not be ended and they can hang up or ask you to try again.`,
-        };
-        await bridge.submitToolResult(bridgeCallId, toolResult);
-        harness.emit({
-          type: "tool.error",
-          turnId,
-          callId: bridgeCallId,
-          payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: toolResult },
-          final: true,
-        });
-        return undefined;
-      }
-
-      harness.emit({
-        type: "tool.result",
+      await runEndCallTool({
+        bridge,
+        bridgeCallId,
         turnId,
-        callId: bridgeCallId,
-        payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: { success: true } },
-        final: true,
+        harness,
+        ownsCall: () =>
+          this.activeTelephonyBindingsByCallId.get(callId) === binding &&
+          this.isActiveBridgeOwner(callId, bridge),
+        endCall: () => this.manager.endCall(callId),
+        closeStream: () => binding.endCall(),
       });
-      binding.endCall();
+      return undefined;
+    }
+    if (name === REALTIME_VOICE_STAY_SILENT_TOOL_NAME) {
+      if (this.isActiveBridgeOwner(callId, bridge)) {
+        await passOverBackgroundSpeech({ bridge, callId, bridgeCallId, turnId, harness });
+      }
       return undefined;
     }
     const handler = this.toolHandlers.get(name);

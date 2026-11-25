@@ -188,6 +188,11 @@
       "help": "Optional fast mode override for the regular agent run behind realtime openclaw_agent_consult calls.",
       "advanced": true
     },
+    "realtime.staySilentTool": {
+      "label": "Realtime Stay Silent Tool",
+      "help": "Offers the openclaw_stay_silent tool, which lets the realtime model pass over background voices, a TV, or noise without replying to them.",
+      "advanced": true
+    },
     "realtime.fastContext.enabled": {
       "label": "Enable Fast Realtime Context",
       "help": "Searches memory/session context before the full consult agent.",
@@ -837,6 +842,9 @@
             "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"]
           },
           "consultFastMode": {
+            "type": "boolean"
+          },
+          "staySilentTool": {
             "type": "boolean"
           },
           "tools": {
