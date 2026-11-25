@@ -178,8 +178,7 @@ export function scheduleGatewayPrewarm(
   }
   const hasIoPressure = createHostIoPressureProbe();
   const shouldDeferTemplates = () =>
-    isMemoryPressureHigh() ||
-    getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
+    isMemoryPressureHigh() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0;
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({
