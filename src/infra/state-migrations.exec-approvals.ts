@@ -2,6 +2,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
+import { getFsSafeNativeStatus } from "@openclaw/fs-safe/config";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
@@ -264,6 +266,9 @@ export async function readRetainedLegacyExecApprovals(params: {
 }) {
   const sourcePath = resolveExecApprovalsPath(params.env);
   const claimPath = `${sourcePath}${DOCTOR_CLAIM_SUFFIX}`;
+  if (!pathMayExistSync(sourcePath) && !pathMayExistSync(claimPath)) {
+    return undefined;
+  }
   const stateRoot = await root(params.stateDir, {
     hardlinks: "reject",
     maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
@@ -565,11 +570,26 @@ async function migrateWithExclusiveStateOwnership(params: {
       const archivePath = `${sourcePath}${archiveSuffix}`;
       // Keep exact bytes before retirement; a fresh no-clobber backup lets retries
       // recover even when an earlier archive write was interrupted.
-      await params.stateRoot.create(
-        `${source.sourceRelativePath}${archiveSuffix}`,
-        snapshot.buffer,
-        { mode: 0o600, private: true },
-      );
+      try {
+        await params.stateRoot.create(
+          `${source.sourceRelativePath}${archiveSuffix}`,
+          snapshot.buffer,
+          { mode: 0o600, private: true },
+        );
+      } catch (error) {
+        if (
+          process.platform === "darwin" &&
+          error instanceof FsSafeError &&
+          error.code === "helper-unavailable"
+        ) {
+          const status = await getFsSafeNativeStatus();
+          throw new Error(
+            `Private legacy approvals archives require native macOS ACL inspection. ${status.guidance ?? "Restore the matching optional fs-safe native package with ACL inspection support."} Start a fresh process and retry the same Doctor or approvals reconciliation command; preserve the retained source.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
       preservedArchivePath = archivePath;
       const archived = await readLegacyExecApprovalsSourceSnapshot(
         params.stateRoot,

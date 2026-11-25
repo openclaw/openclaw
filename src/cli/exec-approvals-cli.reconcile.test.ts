@@ -83,9 +83,10 @@ describe("local approvals reconciliation", () => {
 
   it("does not bootstrap SQLite when no legacy policy exists", async () => {
     const stateDir = tempDirs.make("approvals-reconcile-absent-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const absent = path.join(stateDir, "not-created");
+    setTestEnvValue("OPENCLAW_STATE_DIR", absent);
     await runApprovalsCommand(["approvals", "reconcile", "--json"]);
     expect(JSON.parse(loggedOutput())).toMatchObject({ pending: false });
-    expect(fs.existsSync(path.join(stateDir, "state"))).toBe(false);
+    expect(fs.existsSync(absent)).toBe(false);
   });
 });

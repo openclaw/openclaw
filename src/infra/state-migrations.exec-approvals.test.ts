@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -618,3 +619,24 @@ it("does not hide disagreement between retained legacy names", async () => {
   expect(fs.existsSync(sourcePath)).toBe(true);
   expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(true);
 });
+
+it.skipIf(process.platform !== "darwin")(
+  "explains private archive refusal and restores the source with native mode off",
+  async () => {
+    writeExecApprovalsConfigRow({ db: database(), file: denyPolicy });
+    await writeLegacy({ version: 1, defaults: { security: "full" }, agents: {} });
+    const original = await fsp.readFile(sourcePath);
+    configureFsSafeNative({ mode: "off" });
+    try {
+      const result = await migrate({ keepCanonical: true });
+      expect(result.warnings.join(" ")).toContain("native macOS ACL inspection");
+      expect(result.warnings.join(" ")).toContain("fresh process");
+      expect(await fsp.readFile(sourcePath)).toEqual(original);
+      expect(readExecApprovalsConfigRow(database())?.raw_json).toBe(
+        serializeExecApprovals(denyPolicy),
+      );
+    } finally {
+      configureFsSafeNative({ mode: "auto" });
+    }
+  },
+);
