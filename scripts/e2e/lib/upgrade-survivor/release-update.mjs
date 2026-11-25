@@ -282,6 +282,7 @@ async function reportBackwardRead(previous, previousBuild) {
     }
   }
 }
+let success;
 try {
   const tlsRoot = path.join(root, "tls");
   await prepareRegistryTls(tlsRoot);
@@ -328,7 +329,7 @@ try {
     ["install", "--global", sourceTarball, "--no-audit", "--no-fund"],
     "install.log",
   );
-  const initialInstallMs = Math.round(performance.now() - installStartedAt);
+  const initialInstall = performance.now() - installStartedAt;
   await command("npm", ["view", "openclaw", "dist-tags", "--json"], "registry-dist-tags.json");
   await command(
     "npm",
@@ -336,8 +337,10 @@ try {
     "public-dist-tags.json",
   );
   assert(!Object.hasOwn(env, "OPENCLAW_UPDATE_PACKAGE_SPEC"), "CLI target override present");
+  const bootstrapStartedAt = performance.now();
   const bootstrap = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not initialize its state");
+  const bootstrapStartup = performance.now() - bootstrapStartedAt;
   const stopped = once(bootstrap, "exit");
   assert(bootstrap.pid, "T bootstrap did not start");
   process.kill(-bootstrap.pid, "SIGTERM");
@@ -359,8 +362,11 @@ try {
   const before = sentinels();
   save("rows-before.json", before);
   assert.equal(before.length, 2, "fixture seed is empty");
+  const gatewayStartedAt = performance.now();
   const gateway = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not become ready");
+  // Measure both starts without folding the intervening stop and seed writes into startup.
+  const gatewayStartup = bootstrapStartup + (performance.now() - gatewayStartedAt);
   assert.equal(gateway.exitCode, null, "T exited before the API update");
   assert(
     !fs
@@ -379,6 +385,7 @@ try {
     "release update did not finish",
     12 * 60_000,
   );
+  const assertionsStartedAt = performance.now();
   save("update-row.json", row);
   assert.equal(row.trigger, "api");
   assert.equal(row.status, "succeeded", row.reason ?? "release update failed");
@@ -437,26 +444,39 @@ try {
     "Gateway route receipt is missing",
   );
   save("trial.json", trial);
-  save("summary.json", {
+  const assertionsFinishedAt = performance.now();
+  const summary = {
     head: fixture.previous.commit,
     runId: row.run_id,
     trigger: row.trigger,
     status: row.status,
     servingBuildId: verification.runningBuildId,
     previous,
-    wallMs: Math.round(performance.now() - startedAt),
+    // Legacy wall clock: update command through assertions, excluding the observation and teardown.
+    wallMs: Math.round(assertionsFinishedAt - startedAt),
     fixtureTimingsMs: fixture.timingsMs,
     beforeUpdateMs: Math.round(startedAt - containerStartedAt),
-    initialInstallMs,
+    initialInstallMs: Math.round(initialInstall),
     migrationProof: true,
     servingSchema: expected.schema,
     rowCount: after.length,
-  });
+  };
+  const backwardReadStartedAt = performance.now();
   try {
     await reportBackwardRead(previous, previousBuild);
   } catch (error) {
     console.error(`Backward-read observation did not complete: ${error.message}`);
   }
+  success = {
+    summary,
+    timings: {
+      initialInstall,
+      gatewayStartup,
+      update: assertionsStartedAt - startedAt,
+      assertions: assertionsFinishedAt - assertionsStartedAt,
+      backwardRead: performance.now() - backwardReadStartedAt,
+    },
+  };
 } catch (error) {
   try {
     const source = path.join(state, "git-install", "releases", ".trial");
@@ -505,10 +525,15 @@ try {
   }
   throw error;
 } finally {
-  tlsRelay?.closeAllConnections();
-  tlsRelay?.close();
+  const teardownStartedAt = performance.now();
+  const closing = [];
+  if (tlsRelay) {
+    closing.push(once(tlsRelay, "close"));
+    tlsRelay.close();
+    tlsRelay.closeAllConnections();
+  }
   for (const child of children.toReversed()) {
-    if (child.exitCode === null && child.signalCode === null) {
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
       if (
         child.spawnargs[0] === "openclaw" &&
         child.spawnargs[1] === "gateway" &&
@@ -520,11 +545,27 @@ try {
           if (error.code !== "ESRCH") {
             console.error(error);
             process.exitCode = 1;
+            continue;
           }
         }
       } else {
         child.kill("SIGTERM");
       }
+      closing.push(once(child, "exit"));
     }
+  }
+  await Promise.all(closing);
+  if (success && !process.exitCode) {
+    const finishedAt = performance.now();
+    const timings = { ...success.timings, teardown: finishedAt - teardownStartedAt };
+    const total = finishedAt - containerStartedAt;
+    // Account for setup, tag probes, and seeding between the named phases.
+    const other = total - Object.values(timings).reduce((sum, elapsed) => sum + elapsed, 0);
+    save("summary.json", {
+      ...success.summary,
+      containerTimingsMs: Object.fromEntries(
+        Object.entries({ ...timings, other, total }).map(([name, ms]) => [name, Math.round(ms)]),
+      ),
+    });
   }
 }
