@@ -197,6 +197,35 @@ const mutations = [
 ] as const;
 
 describe("public session sharing", () => {
+  it("keeps the roster and acknowledged public link when the refresh after publication fails", async () => {
+    const row = sessionRow();
+    const publicShare = { token: `v1.${"a".repeat(96)}`, createdAt: 1 };
+    const roster = { ...sharingResult(row), members: [{ identityId: "alice", addedAt: 1 }] };
+    const request = vi.fn(async (method: string) => {
+      if (method === "session.publicShare.set") {
+        return { ok: true, sessionKey: row.key, publicShare };
+      }
+      if (method === "session.members.listEvidence") {
+        if (request.mock.calls.length === 1) {
+          return roster;
+        }
+        throw new Error("Membership read failed");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const { pane } = sharingPane(request);
+    await pane.loadSessionSharing(row);
+    confirmPublicShare.mockResolvedValue(true);
+
+    await pane.setSessionPublicShare(row, true);
+
+    expect(sharingState(pane, row)).toMatchObject({
+      loading: false,
+      error: "Membership read failed",
+      result: { ...roster, publicShare },
+    });
+  });
+
   it.each([true, false])(
     "confirms publication, copies a mounted link (advertised=%s), and revokes independently of team visibility",
     async (advertised) => {
