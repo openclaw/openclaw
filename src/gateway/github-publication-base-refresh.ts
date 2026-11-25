@@ -8,6 +8,7 @@ import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attributio
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
+import { gitPathspecBatches } from "../agents/worktrees/git-path-inventory.js";
 import { resolveGitMetadataPath } from "../agents/worktrees/git.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
@@ -28,7 +29,6 @@ import {
   prepareManagedWorkspaceReviewBase,
   readManagedSandboxGitState,
 } from "./github-publication-workspace-review.js";
-import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 import {
@@ -166,8 +166,13 @@ export async function integrateManagedWorkspaceSource(
         };
       }
       // This operation prepares an existing private checkout; it never creates a new binding.
-      state.current();
       await state.settle();
+      // Only a first import needs the guest frozen for its pristine comparison.
+      // Later synchronization owns capture and re-fences any projection writes.
+      if (!initialImport || prepared!.recoveredImport) {
+        await quiescence?.resume();
+      }
+      quiescence?.markPhase("operation.gitState");
       previousBase = state.current().base_commit ?? undefined;
       const check = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
         assertSource();
@@ -199,9 +204,11 @@ export async function integrateManagedWorkspaceSource(
           );
           const { baseCommit, initialHead, continuingIntegration, recoveredImport } = prepared!;
           const pending = await probe(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
+          // A checkpoint can replace canonical bytes without changing Git HEAD or the base commit.
           if (
             (await git(["rev-parse", "HEAD"])) !== initialHead ||
             state.current().base_commit !== prepared!.previousBase ||
+            (prepared!.canonical && state.current().baseline_ref !== prepared!.previousBaseline) ||
             (continuingIntegration
               ? pending.code !== 0 || pending.stdout.trim() !== baseCommit
               : pending.code !== 1)
@@ -224,50 +231,34 @@ export async function integrateManagedWorkspaceSource(
           const stagedSnapshot = pendingStaged.length
             ? (await probe(["rev-parse", "--verify", "--quiet", "ORIG_HEAD"])).stdout.trim()
             : "";
+          const recorded = new Set<string>();
+          if (stagedSnapshot) {
+            for (const paths of gitPathspecBatches(pendingStaged.map((entry) => entry.path))) {
+              const listed = await git([
+                "--literal-pathspecs",
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                stagedSnapshot,
+                "--",
+                ...paths,
+              ]);
+              for (const line of listed.split("\0")) {
+                recorded.add(line);
+              }
+            }
+          }
           for (const entry of pendingStaged) {
-            const listed = stagedSnapshot
-              ? await probe(["ls-tree", "-z", "--full-tree", stagedSnapshot, "--", entry.path])
-              : undefined;
-            const recorded = listed?.stdout
-              .split("\0")
-              .find((line) => line.slice(line.indexOf("\t") + 1) === entry.path);
-            if (!entry.indexEntry || recorded?.split("\t")[0] !== entry.indexEntry) {
+            if (!entry.indexEntry || !recorded.has(`${entry.indexEntry}\t${entry.path}`)) {
               throw new Error(stagedError);
             }
           }
           if (initialImport && !recoveredImport) {
-            const source = params.source!;
-            const admittedPaths = await state.canonicalPaths();
-            const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
-              { cwd, assertCurrent: check },
-              policy,
-              admittedPaths,
-            );
-            const headTree = await git(["rev-parse", "HEAD^{tree}"]);
-            if (
-              initialHead !== state.current().base_commit ||
-              guestHead !== initialHead ||
-              guestDirty ||
-              snapshot.sourceIndexTree !== headTree ||
-              snapshot.workspaceTree !== headTree
-            ) {
+            quiescence?.markPhase("operation.pristine");
+            if (guestHead !== initialHead || guestDirty) {
               throw new Error(pristineError);
             }
-            // A projection may first be captured after unrelated commits already exist.
-            // Only verified published history or the immutable empty source is disposable.
-            if (source.emptySource) {
-              if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
-                throw new Error(pristineError);
-              }
-            }
             const buildCacheInputs = new Set(await state.buildCacheInputs());
-            const canonical = await captureWorkspaceManifestDocument({
-              root: cwd,
-              baseCommit: state.current().base_commit,
-              includePaths: admittedPaths,
-              buildCacheInputs,
-              signal: params.signal,
-            });
             const projection = await captureWorkspaceManifestDocument({
               root: state.current().projection_path,
               baseCommit: state.current().base_commit,
@@ -276,7 +267,7 @@ export async function integrateManagedWorkspaceSource(
             });
             check();
             const equal = await workspaceSnapshotsEqual(
-              canonical,
+              prepared!.canonical!,
               projection,
               [...buildCacheInputs],
               params.signal,
@@ -289,6 +280,7 @@ export async function integrateManagedWorkspaceSource(
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
+            quiescence?.markPhase("operation.gitState");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               await integrationSource?.accept();
@@ -305,6 +297,7 @@ export async function integrateManagedWorkspaceSource(
             if (ancestor.code !== 0 && ancestor.code !== 1) {
               throw new Error("The selected base ancestry could not be verified.");
             }
+            quiescence?.markPhase("operation.snapshot");
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
               { cwd, assertCurrent: check },
               policy,
@@ -315,6 +308,7 @@ export async function integrateManagedWorkspaceSource(
               snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))
             ) {
               // Index-only installation preserves every working byte, including accepted ignored data.
+              quiescence?.markPhase("operation.commit");
               await git(["read-tree", snapshot.workspaceTree]);
               await git([
                 "-c",
@@ -326,6 +320,7 @@ export async function integrateManagedWorkspaceSource(
               ]);
             }
           }
+          quiescence?.markPhase("operation.gitState");
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
           if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
             await integrationSource?.accept();
@@ -384,32 +379,14 @@ export async function integrateManagedWorkspaceSource(
           if (state.current().base_commit !== baseCommit) {
             const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
             try {
-              const mergedCommit = await git(
-                ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
-                "Prepare selected base integration\n",
-              );
-              for (const [name, commit] of [
-                ["before", sourceHead],
-                ["after", mergedCommit],
-              ]) {
-                const destination = path.join(temporary, name!);
-                await prepareLocalWorkspaceCheckout({
-                  source: cwd,
-                  destination,
-                  temporaryRoot: temporary,
-                  baseCommit: commit!,
-                  branch: "refresh",
-                  signal: new AbortController().signal,
-                  assertCurrent: check,
-                  workerAuthority: state.workerAuthority,
-                });
-              }
               const buildCacheInputs = await state.buildCacheInputs();
               const baseline = await state.baselineDocument();
               const current = await prepareWorkspaceBaseRefresh(
                 {
-                  beforeRoot: path.join(temporary, "before"),
-                  afterRoot: path.join(temporary, "after"),
+                  root: cwd,
+                  beforeTree: sourceHead,
+                  afterTree: tree,
+                  temporaryRoot: temporary,
                   baseCommit,
                   baseRaw: baseline.rawManifest,
                   baseRef: baseline.manifestRef,
@@ -470,11 +447,13 @@ export async function integrateManagedWorkspaceSource(
               conflictPaths,
             };
           }
+          quiescence?.markPhase("operation.snapshot");
           const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
             { cwd, assertCurrent: check },
             policy,
             await state.canonicalPaths(),
           );
+          quiescence?.markPhase("operation.commit");
           const markers = await probe(["diff", "--check", sourceHead, "--", ...conflictPaths]);
           if (conflictPaths.length && markers.stdout.includes("conflict marker")) {
             throw new Error(

@@ -39,7 +39,8 @@ export type WorktreeRemovalDeferral = {
   stage: string;
   elapsedMs: number;
   attempts: number;
-  retryAt: number;
+  /** Null records terminal preservation until an explicit operator retry. */
+  retryAt: number | null;
 };
 
 export type ManagedWorktreeRecord = Omit<
@@ -102,6 +103,7 @@ export type WorktreeWorkerAuthority = {
 };
 
 export type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
+  idleIoPriority?: boolean;
   workerAuthority?: WorktreeWorkerAuthority;
 };
 
@@ -134,6 +136,8 @@ export type CreateManagedWorktreeParams = {
   runSetupScript?: boolean;
   /** Guest projections receive committed source, never host ignored-file provisioning. */
   provisionIgnoredFiles?: boolean;
+  /** Apply caller-owned files to a newly created checkout before repository setup. */
+  prepareCheckout?: (path: string, guard: WorktreeMutationGuard) => Promise<void>;
   signal?: AbortSignal;
   onProgress?: (phase: "base" | "checkout" | "setup") => void;
   /** Committed prompt files are ready; workspace tools must still await creation. */
@@ -156,7 +160,7 @@ export type CreateManagedWorktreeParams = {
 
 export type CreateEmptyManagedWorktreeParams = Omit<
   CreateManagedWorktreeParams,
-  "repoRoot" | "baseRef" | "checkoutCommit" | "profiles"
+  "repoRoot" | "baseRef" | "checkoutCommit" | "profiles" | "prepareCheckout"
 > & {
   ownerKind: "session";
   ownerId: string;

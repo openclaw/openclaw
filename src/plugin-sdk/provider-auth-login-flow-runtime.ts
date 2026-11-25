@@ -1,12 +1,10 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { PROVIDER_LOGIN_NEEDS_APP } from "../auto-reply/provider-login-recovery.js";
 import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";
-import {
-  createProviderBrowserAuthSession,
-  ProviderBrowserSignInUnavailableError,
-} from "../gateway/provider-browser-auth.js";
+import { createProviderBrowserAuthSession } from "../gateway/provider-browser-auth.js";
 import {
   formatProviderLoginChoiceRef,
   formatProviderOAuthLoginRef,
@@ -239,24 +237,23 @@ export async function prepareProviderChannelLogin(params: {
   return { status: "ready", choice };
 }
 
+/** `assertLive` stops delivery once the login is cancelled or ended; it is not an authority check. */
 function buildProviderChannelLoginPrompter(params: {
   sendMessage: (message: string) => Promise<void>;
   sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
-  assertCurrent: () => void;
-  unsupportedPromptMessage: string;
+  assertLive: () => void;
 }): ModelsAuthLoginFlowOptions["prompter"] {
   const sendCleanMessage = async (message: string) => {
-    params.assertCurrent();
+    params.assertLive();
     const text = message.trim();
     if (text) {
       await params.sendMessage(text);
-      params.assertCurrent();
     }
   };
   const sendDeviceCode = params.sendDeviceCode;
+  // Chat cannot collect input; the failure renderer tells the user to open the app.
   const unsupportedPrompt = async () => {
-    await sendCleanMessage(params.unsupportedPromptMessage);
-    throw new Error(params.unsupportedPromptMessage);
+    throw new Error(PROVIDER_LOGIN_NEEDS_APP);
   };
   return {
     intro: async () => {},
@@ -267,9 +264,8 @@ function buildProviderChannelLoginPrompter(params: {
     ...(sendDeviceCode
       ? {
           deviceCode: async (deviceCode) => {
-            params.assertCurrent();
+            params.assertLive();
             await sendDeviceCode(deviceCode);
-            params.assertCurrent();
           },
         }
       : {}),
@@ -285,93 +281,15 @@ function buildProviderChannelLoginPrompter(params: {
   };
 }
 
-function parseModelsAuthLoginFlowResult(value: unknown): ModelsAuthLoginFlowResult {
-  if (!value || typeof value !== "object") {
-    throw new Error("Provider login returned an invalid result.");
-  }
-  const result = value as Record<string, unknown>;
-  if (!Array.isArray(result.profiles)) {
-    throw new Error("Provider login returned an invalid result.");
-  }
-  const parseRequiredString = (input: unknown, label: string): string => {
-    if (typeof input !== "string" || !input.trim()) {
-      throw new Error(`Provider login returned an invalid ${label}.`);
-    }
-    return input.trim();
-  };
-  const providerId = parseRequiredString(result.providerId, "provider id");
-  const methodId = parseRequiredString(result.methodId, "method id");
-  const authRefresh = result.authRefresh;
-  if (
-    authRefresh !== "refreshed" &&
-    authRefresh !== "gateway-rejected" &&
-    authRefresh !== "gateway-unreachable"
-  ) {
-    throw new Error("Provider login returned an invalid auth refresh outcome.");
-  }
-  const profiles = result.profiles.map((profile): ModelsAuthLoginFlowResult["profiles"][number] => {
-    if (!profile || typeof profile !== "object") {
-      throw new Error("Provider login returned an invalid profile.");
-    }
-    const record = profile as Record<string, unknown>;
-    const profileId = parseRequiredString(record.profileId, "profile id");
-    const provider = parseRequiredString(record.provider, "profile provider");
-    const mode = parseRequiredString(record.mode, "profile mode");
-    if (mode !== "api_key" && mode !== "oauth" && mode !== "token") {
-      throw new Error("Provider login returned an invalid profile.");
-    }
-    return {
-      profileId,
-      provider,
-      mode,
-    };
-  });
-  const defaultModel =
-    result.defaultModel === undefined
-      ? undefined
-      : parseRequiredString(result.defaultModel, "default model");
-  const access: unknown = result.modelAccess;
-  let modelAccess: ModelsAuthLoginFlowResult["modelAccess"];
-  if (access !== undefined) {
-    if (
-      !access ||
-      typeof access !== "object" ||
-      !("message" in access) ||
-      !("applied" in access) ||
-      typeof access.message !== "string" ||
-      typeof access.applied !== "boolean"
-    ) {
-      throw new Error("Provider login returned an invalid model access result.");
-    }
-    modelAccess = { message: access.message, applied: access.applied };
-  }
-  return {
-    providerId,
-    methodId,
-    authRefresh,
-    ...(defaultModel ? { defaultModel } : {}),
-    ...(modelAccess ? { modelAccess } : {}),
-    profiles,
-  };
-}
-
 export async function refreshProviderLoginAuthState(params: {
   agentId: string;
   readConfig: () => OpenClawConfig;
-  assertCurrent: (config: OpenClawConfig) => void;
 }): Promise<void> {
-  const readConfig = () => {
-    const config = params.readConfig();
-    params.assertCurrent(config);
-    return config;
-  };
-  readConfig();
   const { refreshModelAuthStateAfterMutation } = await import("../gateway/model-auth-refresh.js");
-  readConfig();
-  await refreshModelAuthStateAfterMutation(readConfig, params.agentId);
-  readConfig();
+  await refreshModelAuthStateAfterMutation(params.readConfig, params.agentId);
 }
 
+/** Authority was checked once when `/login` started; a started sign-in may finish. */
 export async function runProviderChannelLoginFlow(params: {
   choice: ProviderChannelLoginChoice;
   agentId: string;
@@ -382,12 +300,10 @@ export async function runProviderChannelLoginFlow(params: {
   sendDeviceCode?: NonNullable<ModelsAuthLoginFlowOptions["prompter"]["deviceCode"]>;
   signal?: AbortSignal;
   readConfig?: () => OpenClawConfig;
-  assertCurrent?: (config: OpenClawConfig) => void;
-  unsupportedPromptMessage: string;
-  runLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
+  runLoginFlow?: typeof runModelsAuthLoginFlow;
 }): Promise<ModelsAuthLoginFlowResult> {
   const openUrl = async (url: string) => {
-    assertCurrent();
+    browser.assertCurrent();
     const heading = `Sign in with ${params.choice.providerLabel}. Return here after approving access. Send /login cancel to cancel.`;
     const text = `${heading}\n${url}`;
     if (params.sendReply) {
@@ -412,60 +328,29 @@ export async function runProviderChannelLoginFlow(params: {
     } else {
       await params.sendMessage(text);
     }
-    assertCurrent();
   };
   const browser = createProviderBrowserAuthSession({ signal: params.signal, openUrl });
   const readConfig = params.readConfig ?? (() => params.config);
-  const assertCurrent = () => {
-    browser.assertCurrent();
-    const config = readConfig();
-    params.assertCurrent?.(config);
-    const resolution = resolveProviderChannelLoginChoice(
-      formatProviderLoginChoiceRef(params.choice),
-      { config },
-    );
-    if (
-      resolution.status !== "resolved" ||
-      resolution.choice.mode !== "chat" ||
-      resolution.choice.pluginId !== params.choice.pluginId ||
-      resolution.choice.providerId !== params.choice.providerId ||
-      resolution.choice.methodId !== params.choice.methodId
-    ) {
-      throw new Error("This provider login is no longer available. Send /login to choose again.");
-    }
-  };
   try {
-    assertCurrent();
     const choice = params.choice;
-    const result = await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
+    const { createProviderAuthNodes } = await import("../gateway/server-plugins.js");
+    return await (params.runLoginFlow ?? runModelsAuthLoginFlow)({
       provider: choice.providerId,
       method: choice.methodId,
       ownerPluginId: choice.pluginId,
       credentialOnly: true,
-      refreshAfterLogin: (agentId) =>
-        refreshProviderLoginAuthState({ agentId, readConfig, assertCurrent }),
-      assertCurrent,
+      refreshAfterLogin: (agentId) => refreshProviderLoginAuthState({ agentId, readConfig }),
+      assertCurrent: browser.assertCurrent,
       agent: params.agentId,
       config: readConfig(),
       runtime: params.runtime,
       signal: browser.signal,
-      browserAuthorization: async (request) => {
-        assertCurrent();
-        try {
-          return await browser.authorize(request);
-        } catch (error) {
-          if (error instanceof ProviderBrowserSignInUnavailableError) {
-            await params.sendMessage(error.message);
-          }
-          throw error;
-        }
-      },
-      beforePersistentEffect: assertCurrent,
-      prompter: buildProviderChannelLoginPrompter({ ...params, assertCurrent }),
+      browserAuthorization: browser.authorize,
+      prompter: buildProviderChannelLoginPrompter({ ...params, assertLive: browser.assertCurrent }),
       isRemote: true,
       openUrl,
+      nodes: createProviderAuthNodes(),
     });
-    return parseModelsAuthLoginFlowResult(result);
   } finally {
     browser.close();
   }

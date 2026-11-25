@@ -18,6 +18,9 @@ const enOpenClawId = {
     errorNotPrepared: "Setup is not ready. Close this dialog and start again.",
     errorAlreadyLinked:
       "Remote access is already set up. Close this dialog and check its status in the account menu.",
+    errorBindingUnpublished:
+      "OpenClaw ID doesn't have this claw's new keys yet. Publish them from the account menu, then unlink.",
+    errorClawChanged: "This claw changed since this warning. Close it and check again.",
     errorNotLinked:
       "Remote access is not set up. Turn it on from the computer that runs this claw.",
     errorIssuerUnavailable: "Could not reach OpenClaw ID. Try again shortly.",
@@ -79,6 +82,8 @@ const enOpenClawId = {
     memberDeviceAddedNotice: "A member added a device",
     memberDeviceAddedNoticeBody:
       "It has the member’s existing role. Review or remove member devices in Remote access.",
+    memberKitUsedNotice: "{name} used their recovery kit",
+    memberKitUsedNoticeBody: "{device} was added. Review it in Remote access.",
     kitUsedNotice: "Your recovery kit was used to add {device}",
     kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
     kitUsedNoticeBody:
@@ -122,6 +127,7 @@ const enOpenClawId = {
     roleOperator: "Operator",
     roleViewer: "Viewer",
     moveToNewKeys: "Move to new keys",
+    unlinkFromOpenClawId: "Unlink from OpenClaw ID",
     keyRecoverySignIn: "Sign in with OpenClaw ID from the account menu, then move to new keys.",
     keysMissing: "Remote access is off: a key file is missing",
     keysMismatch: "Remote access is off: a key file doesn't match",
@@ -142,6 +148,8 @@ const enOpenClawId = {
     joinRequestMore: "{count} more waiting",
     joinRequestLater: "Later",
     joinRequestReview: "Review",
+    memberUsedRecoveryKit: "{name} used a recovery kit",
+    memberRecoveryUseDetail: "{browser} was added. Review access in Access → People.",
   },
 } satisfies TranslationMap;
 

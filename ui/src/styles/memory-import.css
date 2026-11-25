@@ -279,6 +279,25 @@
   font-size: 10px;
 }
 
+/* Let compact import values share their label's line, without stealing the width
+   a long workspace path or agent name needs when it wraps to the next line. */
+@media (max-width: 640px) {
+  .memory-import
+    .settings-row:has(> .settings-row__control > :is(openclaw-agent-select, .settings-row__value)) {
+    > .settings-row__text {
+      flex-basis: auto;
+    }
+
+    > .settings-row__control {
+      width: auto;
+    }
+
+    .settings-row__value {
+      text-align: start;
+    }
+  }
+}
+
 @media (max-width: 768px) {
   .memory-import__backfill-dates,
   .memory-import__backfill-actions {

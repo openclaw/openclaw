@@ -4,22 +4,37 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
-import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import {
+  isMainPackageTarget,
+  resolveGlobalInstallSpec,
+  verifyPackageUpdateRecovery,
+} from "../../infra/update-global.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { SystemPackageOwnershipError } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  hasReleaseUpdateOwner,
+  isNodeOnlyUpdateInstallation,
+} from "../../update/installation-identity.js";
+import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { prepareResult, printResult } from "./progress.js";
 import {
+  assertGlobalUpdateOwner,
+  assertMacosGitForUnownedCheckout,
   parseUpdateTimeoutMs,
+  normalizeTag,
   UpdatePreMutationError,
   type UpdateCommandOptions,
 } from "./shared.js";
 import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import { readUpdateDatabaseEngineConfig } from "./update-command-database-engine.js";
 import {
   createPreMutationUpdateResult,
@@ -31,11 +46,115 @@ import {
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun, type prepareUpdateCommand } from "./update-command-run.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
+
+/** Keep release-client refusals read-only before delegation to the Gateway. */
+async function assertReleaseUpdateAdmission(
+  params: Parameters<typeof assertGlobalUpdateOwner>[0] &
+    Pick<UpdateAdmissionReportParams, "opts" | "controlPlaneUpdateSentinelMeta">,
+): Promise<void> {
+  try {
+    await assertGlobalUpdateOwner(params);
+    if (params.installKind === "package") {
+      await assertMacosGitForUnownedCheckout(params);
+    }
+  } catch (error) {
+    if (!(error instanceof UpdatePreMutationError)) {
+      throw error;
+    }
+    return await reportUnreportedUpdateAdmissionOutcome(
+      new UnreportedUpdateAdmissionOutcome(
+        {
+          root: params.root,
+          installKind: params.installKind,
+          reason: error.reason,
+          message: error.message,
+          opts: params.opts,
+          controlPlaneUpdateSentinelMeta: params.controlPlaneUpdateSentinelMeta,
+        },
+        error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
+      ),
+    );
+  }
+  if (params.opts.reapplyLocalOverrides) {
+    throw new Error(
+      "--reapply-local-overrides is not supported by prepared-release updates. Save your local dist edits, update without this flag, then reapply the overrides by hand. See https://docs.openclaw.ai/install/updating#local-packaged-code-overrides",
+    );
+  }
+  if (params.opts.fullIntegrityCheck) {
+    throw new Error(
+      "--full-integrity-check is not supported by prepared-release updates. Run openclaw doctor --fix --full-integrity-check separately for full checks during migrations, then update without this flag. Doctor does not scan an already-current database as a separate verification job.",
+    );
+  }
+}
+
+/** Keep installer selection ahead of the retained in-place executor. */
+export async function tryRunReleaseUpdateCommand(
+  opts: UpdateCommandOptions,
+  prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const channelConfig = opts.dryRun ? undefined : await readUpdateChannelConfig(false);
+  const switchesToGit =
+    prepared.requestedChannel === "dev" ||
+    (prepared.requestedChannel === null &&
+      channelConfig?.storedChannel === "dev" &&
+      normalizeTag(opts.tag) === null);
+  const staysGit = prepared.requestedChannel === null || prepared.requestedChannel === "dev";
+  const releaseRoute =
+    !opts.dryRun &&
+    ((prepared.installKind === "package" &&
+      !switchesToGit &&
+      !isMainPackageTarget(normalizeTag(opts.tag))) ||
+      (prepared.installKind === "git" && staysGit));
+  const owned = await hasReleaseUpdateOwner(env);
+  if (!releaseRoute) {
+    if (owned && !opts.dryRun) {
+      const route = opts.channel ? `--channel ${opts.channel}` : "--tag main";
+      throw new Error(
+        `The resident launcher owns this installation. ${route} requires the in-place installer, which cannot replace it. To update the current installation instead, run: ${formatCliCommand("openclaw update", env)}`,
+      );
+    }
+    return false;
+  }
+  if (prepared.installKind === "package" && !owned && (await isNodeOnlyUpdateInstallation(env))) {
+    return false;
+  }
+  await assertReleaseUpdateAdmission({
+    root: prepared.discoveredRoot,
+    installKind: prepared.installKind,
+    timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    pkgOwnership: prepared.pkgOwnership,
+    opts,
+    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+  });
+  await assertUpdateRecoveryAdmission();
+  const { runReleaseUpdateCli } = await import("../../update/cli.js");
+  let tag = prepared.installKind === "git" ? undefined : (normalizeTag(opts.tag) ?? undefined);
+  if (prepared.installKind !== "git") {
+    const spec = resolveGlobalInstallSpec({ packageName: "openclaw", tag: tag ?? "" });
+    if (spec !== `openclaw@${tag ?? ""}`) {
+      tag = spec;
+    }
+  }
+  await runReleaseUpdateCli({
+    json: Boolean(opts.json),
+    restart: prepared.shouldRestart,
+    runningRoot: prepared.discoveredRoot,
+    channel: prepared.requestedChannel ?? undefined,
+    storedChannel: channelConfig?.storedChannel ?? undefined,
+    sha: opts.sha,
+    tag,
+    yes: Boolean(opts.yes),
+    timeoutMs: prepared.timeoutMs,
+    acceptCapabilities: Boolean(opts.acceptCapabilities),
+  });
+  return true;
+}
 
 /** Report rejected read-only admission without creating a run or recovery diagnostics. */
 export async function withUpdateAdmissionReporting<T>(

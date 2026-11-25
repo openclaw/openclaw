@@ -1,11 +1,8 @@
 import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { once } from "node:events";
-import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import { resolvePnpmRunner } from "../../../scripts/pnpm-runner.mts";
 import { type FileLockOptions, withFileLock } from "../../../src/infra/file-lock.js";
@@ -194,44 +191,30 @@ async function packPackage(
   return { manifest, tarball };
 }
 
-async function startOpenClawRegistry(packages: PackedPackage[]) {
-  const byName = new Map(packages.map((pkg) => [pkg.manifest.name, pkg]));
-  const byTarball = new Map(packages.map((pkg) => [path.basename(pkg.tarball), pkg]));
-  const server = createServer((req, res) => {
-    const origin = `http://${req.headers.host ?? "127.0.0.1"}`;
-    const decodedPath = decodeURIComponent(new URL(req.url ?? "/", origin).pathname);
-    const isTarball = decodedPath.startsWith("/tarballs/");
-    const pkg = isTarball
-      ? byTarball.get(decodedPath.slice("/tarballs/".length))
-      : byName.get(decodedPath.slice(1));
-    if (!pkg) {
-      res.writeHead(404).end();
-      return;
-    }
-    if (isTarball) {
-      res.writeHead(200, { "content-type": "application/octet-stream" });
-      createReadStream(pkg.tarball).pipe(res);
-      return;
-    }
-    res.writeHead(200, { "content-type": "application/json" });
-    const { manifest, tarball } = pkg;
-    const dist = { tarball: `${origin}/tarballs/${encodeURIComponent(path.basename(tarball))}` };
-    res.end(
-      JSON.stringify({
-        name: manifest.name,
-        "dist-tags": { latest: manifest.version },
-        versions: { [manifest.version]: { ...manifest, dist } },
-      }),
-    );
-  });
-  const close = promisify(server.close.bind(server));
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await close();
-    throw new Error("registry server did not bind to a TCP port");
+export async function installPackedSdkConsumer(packages: PackedPackage[], root: string) {
+  const sdkTarball = packages.find((pkg) => pkg.manifest.name === "@openclaw/sdk")?.tarball;
+  if (!sdkTarball) {
+    throw new Error("packed @openclaw/sdk tarball was not created");
   }
-  return { registryUrl: `http://127.0.0.1:${address.port}/`, close };
+  await writeJson(root, "package.json", {
+    private: true,
+    type: "module",
+    // Select local sources only for declared, compatible transitive edges. A loopback
+    // HTTP registry needlessly mixes protocols in npm's proxy-agent cache.
+    overrides: Object.fromEntries(
+      packages
+        .filter(({ manifest }) => manifest.name !== "@openclaw/sdk")
+        .map(({ manifest, tarball }) => [
+          `${manifest.name}@${manifest.version}`,
+          `file:${tarball}`,
+        ]),
+    ),
+  });
+  await runPackageCommand(
+    "npm",
+    ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
+    root,
+  );
 }
 
 export async function createPackedSdkConsumer() {
@@ -256,23 +239,7 @@ export async function createPackedSdkConsumer() {
         packedPackages.push(await packPackage(pkg, root));
       }
     });
-    const sdkTarball =
-      packedPackages.find((pkg) => pkg.manifest.name === "@openclaw/sdk")?.tarball ?? "";
-    if (!sdkTarball) {
-      throw new Error("packed @openclaw/sdk tarball was not created");
-    }
-    const registry = await startOpenClawRegistry(packedPackages);
-    await writeJson(root, "package.json", { private: true, type: "module" });
-    await fs.writeFile(path.join(root, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
-    try {
-      await runPackageCommand(
-        "npm",
-        ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
-        root,
-      );
-    } finally {
-      await registry.close();
-    }
+    await installPackedSdkConsumer(packedPackages, root);
   } catch (error) {
     await fs.rm(root, { recursive: true, force: true });
     throw error;

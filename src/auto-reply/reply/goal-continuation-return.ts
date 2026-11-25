@@ -10,11 +10,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { runAfterReplyOperationClear } from "../../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
-import {
-  isFollowupOperatorAuthorityCurrent,
-  resolveFollowupAbortSignal,
-  type FollowupRun,
-} from "./queue/types.js";
+import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 
 type GoalReturnParams = {
   base: FollowupRun;
@@ -215,7 +211,6 @@ export function promoteGoalContinuationYield(params: {
   ) {
     return;
   }
-  base.operatorAuthority?.assertCurrent();
   if (!owner.cohort) {
     const source = base.queuedFollowupReplyDisposition;
     if (source?.kind === "drop") {
@@ -323,7 +318,6 @@ export function readGoalContinuationContext(params: {
   if (!context) {
     return undefined;
   }
-  settlement.owner.params.base.operatorAuthority?.assertCurrent();
   settlement.admitted = true;
   return context;
 }
@@ -356,6 +350,14 @@ export async function finishGoalContinuationSettlement(
 ): Promise<void> {
   const owner = findGoalReturn(entries);
   if (!owner) {
+    // A partition settled ahead of its siblings leaves the cohort; the last one resumes the Goal.
+    for (const key of entries.map(getSubagentRunRuntimeKey)) {
+      const member = cohortReturns.get(key);
+      if (member?.cohort) {
+        member.cohort = { ...member.cohort, keys: member.cohort.keys.filter((k) => k !== key) };
+        cohortReturns.delete(key);
+      }
+    }
     return;
   }
   try {
@@ -368,7 +370,7 @@ export async function finishGoalContinuationSettlement(
       });
     }
   } catch (error) {
-    if (owner.closed || !isFollowupOperatorAuthorityCurrent(owner.params.base)) {
+    if (owner.closed) {
       return;
     }
     throw error;

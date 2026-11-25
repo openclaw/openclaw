@@ -6,6 +6,7 @@ describe("attempt transcript cleanup", () => {
   it("keeps live messages unchanged when the durable suffix fence rejects cleanup", async () => {
     const user = { role: "user", content: "question" };
     const signal = new MidTurnPrecheckSignal({
+      pressure: "overflow",
       route: "compact_only",
       estimatedPromptTokens: 1,
       promptBudgetBeforeReserve: 1,

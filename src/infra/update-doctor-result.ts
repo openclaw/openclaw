@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -231,6 +232,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
   let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
+  let rebuiltIndexes: Record<string, string> = {};
   const openedSqlitePaths = new Set<string>();
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
   const read = async () => {
@@ -260,7 +262,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     options.assertCurrent?.();
     return observation;
   };
-  const acceptEmptyReaderTransitions = (
+  const acceptNoWriteTransitions = (
     observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
   ) => {
     // Share migration admission's no-write equivalence, from this same observation.
@@ -268,6 +270,25 @@ export function createUpdateDoctorDatabaseWriteCapture(
       const alternate = observation.emptyReaderAlternates[pathname];
       if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
         expectedGenerations[pathname] = generation;
+      }
+    }
+    // A rebuilt index carries no alternate of its own; accept the one remembered from
+    // the previous admission before this observation is compared and rebound.
+    for (const [pathname, alternate] of Object.entries(rebuiltIndexes)) {
+      if (expectedGenerations && observation.committed[pathname] === alternate) {
+        expectedGenerations[pathname] = alternate;
+      }
+    }
+  };
+  // Outside readers can rebuild a retained index after this observation; only an index
+  // over the same frames, content, and file identity stays equivalent to it.
+  const bindRebuiltIndexes = (
+    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
+  ) => {
+    rebuiltIndexes = {};
+    for (const [pathname, alternate] of Object.entries(observation.rebuiltIndexAlternates)) {
+      if (expectedGenerations?.[pathname] === observation.committed[pathname]) {
+        rebuiltIndexes[pathname] = alternate;
       }
     }
   };
@@ -280,6 +301,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
         {
           openedSqlitePaths,
           expected: (pathname) => expectedGenerations?.[pathname],
+          rebuiltIndex: (pathname) => rebuiltIndexes[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
@@ -304,7 +326,14 @@ export function createUpdateDoctorDatabaseWriteCapture(
         () => historicalScans.run(operation),
       );
     },
-    async admit() {
+    async admit(interval?: "predecessor-stop") {
+      if (interval === "predecessor-stop") {
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (!maintenance?.ownsSchemaMaintenance) {
+          throw new Error("Predecessor stop admission requires schema maintenance custody.");
+        }
+        maintenance.assertAdmission();
+      }
       receipt = undefined;
       historicalScans.observe(Object.keys(expectedGenerations ?? {}));
       const observation = await read();
@@ -324,32 +353,26 @@ export function createUpdateDoctorDatabaseWriteCapture(
         const generations = observation.committed;
         historicalScans.admit(generations);
         const incoming = physical ? observation.physical : { ...expectedGenerations };
-        acceptEmptyReaderTransitions(observation);
+        acceptNoWriteTransitions(observation);
         const matches = isDeepStrictEqual(generations, expectedGenerations);
         fromGenerations ??= matches ? incoming : generations;
-        // Earlier receipts or another process's writes must never become our baseline.
+        // A changed rollback baseline stays ineligible after forward admission.
         unchanged &&= matches;
-        if (!matches && first) {
-          // Published parents bind WAL-index iChange into their capture, so a no-write
-          // index rebuild after capture (readers exiting, then a native reopen) looks like
-          // a write and their forward recovery strands the Gateway. Adopt only that shape;
-          // the receipt stays unchanged=false, so no parent restores, and any other
-          // difference still refuses at the first attributed write. Accepted edge: a commit
-          // after capture that only read-only connections outlive is also rebuilt this way;
-          // a refusal there would still end in the parent's forward migration of those bytes.
-          const { hasRebuiltWalIndexOverFrames } = await import("./update-database-generations.js");
-          const stale = Object.entries(generations).filter(
-            ([pathname, generation]) => generation !== expectedGenerations?.[pathname],
+        if (!matches && (first || interval === "predecessor-stop")) {
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Accepted edge: foreign writes before predecessor-stop custody also
+          // continue forward, but can never make the stale backup restorable.
+          // Changes after this admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            interval === "predecessor-stop"
+              ? "Captured SQLite databases changed while stopping the predecessor Gateway before maintenance custody; continuing Doctor with current state, but automatic database restoration is unavailable for this update."
+              : "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
           );
-          if (stale.every(([pathname]) => hasRebuiltWalIndexOverFrames(pathname))) {
-            for (const [pathname, generation] of stale) {
-              expectedGenerations[pathname] = generation;
-            }
-            options.warn(
-              "SQLite rebuilt a database index after the updater captured it; automatic database restoration is unavailable for this update.",
-            );
-          }
         }
+        bindRebuiltIndexes(observation);
       }
     },
     async settle() {
@@ -370,7 +393,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
             expectedGenerations[pathname] = generation;
           }
         }
-        acceptEmptyReaderTransitions(observation!);
+        acceptNoWriteTransitions(observation!);
         unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
         receipt = {
           unchanged,

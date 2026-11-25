@@ -11,8 +11,12 @@ import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
+// The main table spreads this sibling's rows at its end.
+const appendedDescriptorPath = "src/gateway/methods/core-descriptors.appended.ts";
+const SPEC_TABLE_PREFIX = "CORE_GATEWAY_METHOD_SPECS";
 
 type MethodSpec = {
+  file: string;
   line: number;
   name: string;
   since: string | undefined;
@@ -100,8 +104,16 @@ function collectMethodSpec(
   element: ts.Expression,
   sourceFile: ts.SourceFile,
   fileName: string,
-): MethodSpec {
+): MethodSpec | undefined {
   const line = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
+  if (
+    ts.isSpreadElement(element) &&
+    ts.isIdentifier(element.expression) &&
+    element.expression.text.startsWith(SPEC_TABLE_PREFIX)
+  ) {
+    // Spread tables are collected from their own file.
+    return undefined;
+  }
   if (ts.isObjectLiteralExpression(element)) {
     const name = stringProperty(element, "name");
     if (!name) {
@@ -110,6 +122,7 @@ function collectMethodSpec(
       );
     }
     return {
+      file: fileName,
       name,
       since: stringProperty(element, "since"),
       compatibilityRestored: trueProperty(element, "compatibilityRestored"),
@@ -134,7 +147,13 @@ function collectMethodSpec(
       policy !== undefined && ts.isObjectLiteralExpression(policy)
         ? trueProperty(policy, "compatibilityRestored")
         : false;
-    return { name: name.text, since: since.text, compatibilityRestored, line };
+    return {
+      file: fileName,
+      name: name.text,
+      since: since.text,
+      compatibilityRestored,
+      line,
+    };
   }
   throw new Error(
     `${fileName}:${line} core method specs must be inline object literals or labeled rows so vintage metadata can be enforced.`,
@@ -148,13 +167,13 @@ function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): Method
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
-      node.name.text === "CORE_GATEWAY_METHOD_SPECS" &&
+      node.name.text.startsWith(SPEC_TABLE_PREFIX) &&
       node.initializer
     ) {
       const initializer = unwrapExpression(node.initializer);
       if (ts.isArrayLiteralExpression(initializer)) {
-        specs = initializer.elements.map((element) =>
-          collectMethodSpec(element, sourceFile, fileName),
+        specs = initializer.elements.flatMap(
+          (element) => collectMethodSpec(element, sourceFile, fileName) ?? [],
         );
       }
     }
@@ -163,7 +182,7 @@ function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): Method
 
   visit(sourceFile);
   if (!specs) {
-    throw new Error(`Could not find CORE_GATEWAY_METHOD_SPECS in ${fileName}.`);
+    throw new Error(`Could not find ${SPEC_TABLE_PREFIX} in ${fileName}.`);
   }
   return specs;
 }
@@ -187,17 +206,30 @@ try {
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const train = currentTrain();
   const mergeBase = resolveBaseCommit();
-  const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
-  const currentSpecs = collectMethodSpecs(
-    parser.parseSourceFile(descriptorPath, currentSource),
-    descriptorPath,
+  // The appended table is optional so older bases and fixtures still compare.
+  const readSpecs = (file: string, source: string | undefined, label: string) =>
+    source === undefined ? [] : collectMethodSpecs(parser.parseSourceFile(file, source), label);
+  const currentSpecs = [descriptorPath, appendedDescriptorPath].flatMap((file) =>
+    readSpecs(
+      file,
+      file === descriptorPath || fs.existsSync(path.join(repoRoot, file))
+        ? fs.readFileSync(path.join(repoRoot, file), "utf8")
+        : undefined,
+      file,
+    ),
   );
-  const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
   const baseNames = new Set(
-    collectMethodSpecs(
-      parser.parseSourceFile(descriptorPath, baseSource),
-      `${descriptorPath}@${mergeBase}`,
-    ).map((s) => s.name),
+    [descriptorPath, appendedDescriptorPath]
+      .flatMap((file) =>
+        readSpecs(
+          file,
+          file === descriptorPath
+            ? runGit(["show", `${mergeBase}:${file}`])
+            : tryRunGit(["show", `${mergeBase}:${file}`]),
+          `${file}@${mergeBase}`,
+        ),
+      )
+      .map((spec) => spec.name),
   );
   const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
   const restored = added.filter((spec) => spec.compatibilityRestored);
@@ -218,8 +250,8 @@ try {
           : "is missing since metadata";
       console.error(
         spec.compatibilityRestored
-          ? `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
-          : `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
+          ? `- ${spec.file}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
+          : `- ${spec.file}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
       );
     }
     process.exitCode = 1;

@@ -1085,6 +1085,7 @@ class ChatControllerTranscriptCacheTest {
                 "worktree": {"id": "worktree-1"},
                 "spawnDepth": 1,
                 "forkedFromParent": true,
+                "sidebarRoot": true,
                 "pinned": true,
                 "archived": false,
                 "unread": true,
@@ -1106,6 +1107,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals("worktree-1", session.worktreeId)
       assertEquals(1, session.spawnDepth)
       assertEquals(true, session.forkedFromParent)
+      assertEquals(true, session.sidebarRoot)
       assertEquals(true, session.pinned)
       assertEquals(false, session.archived)
       assertEquals(true, session.unread)
@@ -1119,7 +1121,7 @@ class ChatControllerTranscriptCacheTest {
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","worktree":{"id":"worktree-1"},"spawnDepth":1,"forkedFromParent":true,"pinned":true,"unread":true}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Daily","category":"Work","color":"green","worktree":{"id":"worktree-1"},"spawnDepth":1,"forkedFromParent":true,"sidebarRoot":true,"pinned":true,"unread":true}]}""")
         }
       controller.refreshSessions()
       advanceUntilIdle()
@@ -1138,6 +1140,7 @@ class ChatControllerTranscriptCacheTest {
       assertEquals("worktree-1", session.worktreeId)
       assertEquals(1, session.spawnDepth)
       assertEquals(true, session.forkedFromParent)
+      assertEquals(true, session.sidebarRoot)
       assertEquals(30L, session.lastActivityAt)
 
       controller.handleGatewayEvent(

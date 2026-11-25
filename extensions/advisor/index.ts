@@ -106,6 +106,26 @@ export default definePluginEntry({
             `advisor: review cancelled for session ${sessionKey}: reason=${String(cancel.reason)} runningMs=${Date.now() - startedAt}`,
           );
         } else {
+          // Codex exposes plain Errors here; match only its pinned /btw refusal sentences.
+          const skipped =
+            error instanceof Error
+              ? [
+                  [
+                    "the effective tool policy restricts Codex native tools for this session",
+                    "tool_policy",
+                  ],
+                  ["OpenClaw sandboxing is active for this session", "sandbox"],
+                  ["OpenClaw exec host=node is active for this session", "exec_host_node"],
+                ].find(([message]) =>
+                  error.message.startsWith(
+                    `Codex-native /btw side-question mode is unavailable because ${message}.`,
+                  ),
+                )?.[1]
+              : undefined;
+          if (skipped) {
+            api.logger.warn(`advisor: review skipped for session ${sessionKey}: ${skipped}`);
+            return;
+          }
           const reason =
             error instanceof Error && error.name === "TimeoutError" ? "timeout" : "fork_failed";
           api.logger.warn(`advisor: review failed for session ${sessionKey}: ${reason}`);

@@ -23,6 +23,7 @@ import {
   pruneLocalWorkspaceLegacyBatchInDatabase,
   type LocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
+import { warnOversizedMutation } from "./local-workspace-mutation-diagnostics.js";
 import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
@@ -70,6 +71,12 @@ export const localWorkspaceOperations = {
     input: Pick<WorktreeWorkerAuthority, "workspaceEvidence" | "stateOwnerPath"> & {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
+      journalPack?: Uint8Array;
+      diagnostic?: {
+        serializedBytes: number;
+        wireBytes: number;
+        correlation: Record<string, string>;
+      };
       preparationEpoch: number | undefined;
       leases: readonly OpenClawStateLeaseIdentity[];
       predicates?: readonly WorktreeRegistryPredicate[];
@@ -89,6 +96,17 @@ export const localWorkspaceOperations = {
       input.mutation instanceof Uint8Array
         ? (deserialize(resolveZstdCodec().decompress(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
+    if (input.journalPack && mutation.kind === "update") {
+      mutation.patch.journal_pack = input.journalPack;
+    }
+    if (input.diagnostic) {
+      warnOversizedMutation(
+        mutation,
+        input.diagnostic.serializedBytes,
+        input.diagnostic.wireBytes,
+        input.diagnostic.correlation,
+      );
+    }
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const committed =

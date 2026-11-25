@@ -78,6 +78,8 @@ export type MailboxPayload =
   | { kind: "invite_redemption"; redemption: SignedStatement<"InviteRedemption"> }
   /** R-signed statements: kit enrollment (add_owner_device) and other root changes. */
   | { kind: "root_statement"; statements: SignedStatement[] }
+  /** Only a current recovery-only member key may authorize its own browser addition. */
+  | { kind: "member_recovery"; statement: SignedStatement<"MembershipChange"> }
   | { kind: "revocation"; revocation: SignedStatement<"Revocation"> }
   /** SAS enrollment messages; `data` per step is defined in docs/discovery.md. */
   | { kind: "enrollment"; request_id: string; step: EnrollmentStep; data: Record<string, unknown> }
@@ -129,6 +131,7 @@ export const GATEWAY_MAILBOX_KINDS = [
   "invite_redemption",
   "node_redemption",
   "root_statement",
+  "member_recovery",
   "revocation",
 ] as const;
 

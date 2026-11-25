@@ -21,6 +21,7 @@ export {
   collectAgentHarnessMessagingMediaUrls,
   mapAgentHarnessMessagingMediaValues,
 } from "../agents/harness/messaging-media.js";
+export { readAutomationToolCreation } from "../chat/automation-job-result.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../agents/tool-effect-receipt.js";
 export {

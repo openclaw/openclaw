@@ -1,4 +1,6 @@
-import { AGENT_GIT_SANDBOX_BIN } from "../../infra/agent-git-shim.js";
+import path from "node:path";
+import { buildAgentGitShimInstallCommand } from "../../infra/agent-git-shim-install.js";
+import { AGENT_GIT_SANDBOX_BIN, AGENT_GIT_SANDBOX_SCRIPT } from "../../infra/agent-git-shim.js";
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
@@ -16,7 +18,7 @@ import type {
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { buildSandboxContainerEngineArgv } from "./container-engine.js";
-import { containerHasTerminated } from "./container-inspect.js";
+import { containerHasTerminated, dockerSandboxIsStopped } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
   removeSandboxContainerRuntime,
@@ -52,6 +54,15 @@ import type { SandboxRegistryEntry } from "./registry.js";
 
 type ContainerExecFinalizeToken = () => Promise<void>;
 
+const dockerSandboxReadiness = new WeakMap<
+  SandboxBackendHandle,
+  (signal: AbortSignal) => Promise<boolean>
+>();
+
+export function getDockerSandboxProvisioningCheck(backend: SandboxBackendHandle) {
+  return dockerSandboxReadiness.get(backend);
+}
+
 async function createContainerSandboxBackend(
   engine: SandboxContainerEngine,
   params: CreateSandboxBackendParams,
@@ -60,10 +71,7 @@ async function createContainerSandboxBackend(
   stateGuard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
-  const assertCurrent = () => {
-    operatorAuthority?.assertCurrent();
-    params.assertRuntimeCurrent?.();
-  };
+  const assertCurrent = () => params.assertRuntimeCurrent?.();
   assertCurrent();
   if (engine.id === "podman" && params.cfg.browser.enabled) {
     throw new Error(
@@ -94,7 +102,15 @@ async function createContainerSandboxBackend(
         ? { requireCurrentConfig: params.requireCurrentConfig }
         : {}),
     },
-    async ({ containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget }) => {
+    async ({
+      containerName,
+      containerId,
+      configHash,
+      mountPlan,
+      mounts,
+      currentConfig,
+      podmanTarget,
+    }) => {
       assertCurrent();
       const boundEngine = podmanTarget
         ? { ...bindPodmanSandboxEngine(podmanTarget), stateGuard }
@@ -106,6 +122,7 @@ async function createContainerSandboxBackend(
         engine: boundEngine,
         containerName: containerId,
         assertCurrent,
+        mounts,
       });
       assertCurrent();
       phases.mark("attempt.setup.sandbox.backend.bridge_import");
@@ -113,10 +130,16 @@ async function createContainerSandboxBackend(
       assertCurrent();
       phases.mark("attempt.setup.sandbox.backend.handle");
       const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
+      // Read-only workspaces retain writable temp owned by the container lifecycle.
+      const tempDir =
+        params.cfg.workspaceAccess === "ro"
+          ? "/tmp"
+          : path.posix.join(defaultWorkdir, ".openclaw", "tmp");
+      const scratchEnv = { TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir, ...configuredEnv };
       const gitBinDir = params.readOnlyResourceMounts?.some(
         (mount) => mount.containerPath === AGENT_GIT_SANDBOX_BIN,
       )
-        ? AGENT_GIT_SANDBOX_BIN
+        ? `${AGENT_GIT_SANDBOX_BIN}/container`
         : undefined;
       const engineTarget =
         podmanTarget ??
@@ -149,12 +172,21 @@ async function createContainerSandboxBackend(
           },
         );
       };
+      const prepareGit = gitBinDir
+        ? buildAgentGitShimInstallCommand(
+            path.posix.dirname(AGENT_GIT_SANDBOX_SCRIPT),
+            `${AGENT_GIT_SANDBOX_BIN}/git`,
+          )
+        : undefined;
+      if (prepareGit) {
+        await run({ script: prepareGit }, assertCurrent);
+      }
       const handle: SandboxBackendHandle = {
         id: boundEngine.id,
         runtimeId: containerName,
         runtimeLabel: containerName,
         workdir: defaultWorkdir,
-        env: configuredEnv,
+        env: scratchEnv,
         configLabel: image,
         configLabelKind: "Image",
         capabilities: {
@@ -172,14 +204,15 @@ async function createContainerSandboxBackend(
               ? await (await import("../shell-utils.js")).getShellConfig()
               : undefined;
           assertCurrent();
-          const env = identity
+          const env: Record<string, string> = identity
             ? {
+                ...scratchEnv,
                 ...requestedEnv,
                 ...identity.credentialScrubEnv,
                 ...identity.localIdentityEnv,
                 GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR,
               }
-            : requestedEnv;
+            : { ...scratchEnv, ...requestedEnv };
           const { PATH: requestedPath, ...containerEnv } = env;
           const prependPath = [gitBinDir, requestedPath].filter(Boolean).join(":");
           if (prependPath) {
@@ -210,7 +243,12 @@ async function createContainerSandboxBackend(
               ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
               : "";
             // Use absolute path for sh to avoid dependency on PATH resolution during exec.
-            argv.push(containerId, "/bin/sh", "-lc", `${pathExport}${command}`);
+            argv.push(
+              containerId,
+              "/bin/sh",
+              "-lc",
+              `${pathExport}mkdir -p -- "$TMPDIR" || exit; ${command}`,
+            );
             const hostEnv = { ...(boundEngine.baseEnv ?? process.env) };
             stripGatewayAllocatorEnv(hostEnv);
             return {
@@ -298,6 +336,11 @@ async function createContainerSandboxBackend(
         );
         return bridge;
       };
+      if (boundEngine.id === "docker") {
+        dockerSandboxReadiness.set(handle, (signal) =>
+          dockerSandboxIsStopped(boundEngine, containerId, signal, dockerTarget?.endpoint),
+        );
+      }
       if (dockerTarget && configHash && currentConfig) {
         phases.mark("attempt.setup.sandbox.backend.persistent_generation");
         const container = await readDockerPersistentContainer(
@@ -368,7 +411,18 @@ async function createContainerSandboxBackend(
               cfg: { ...allocation.cfg, image: resolvedImageId },
               engine: boundEngine,
               name: input.name,
-              command: input.command,
+              command: prepareGit
+                ? {
+                    ...input.command,
+                    argv: [
+                      "/bin/sh",
+                      "-c",
+                      `${prepareGit}\nexport PATH="${gitBinDir}:$PATH"\nexec "$@"`,
+                      "openclaw-agent-git",
+                      ...input.command.argv,
+                    ],
+                  }
+                : input.command,
               labels: input.labels,
               assertCurrent: assertAllocationCurrent,
             });

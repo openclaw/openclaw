@@ -293,7 +293,10 @@ describe("SQLite-backed plugin model catalogs", () => {
         await finish.promise;
         await scope.execute({
           type: "catalog.replace",
-          input: { planned: [["zai", catalogContents("zai", removedKey)]], env: process.env },
+          input: {
+            planned: [["zai", catalogContents("zai", removedKey)]],
+            env: { ...process.env },
+          },
         });
       },
     );

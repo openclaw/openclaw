@@ -4,6 +4,10 @@
   gap: 18px;
 }
 
+openclaw-model-setup-page > .content-header {
+  padding-inline: 0;
+}
+
 .model-setup__intro {
   display: flex;
   align-items: flex-start;
@@ -230,6 +234,10 @@
   max-height: min(420px, 58dvh);
 }
 
+.model-setup-discovery .model-setup-provider-select__menu {
+  --oc-overlay-max-width: anchor-size(width);
+}
+
 .model-setup-provider-select__trigger {
   display: flex;
   align-items: center;
@@ -272,11 +280,6 @@
   flex: 1;
   min-width: 0;
   gap: 2px;
-}
-
-.model-setup-provider-select__copy strong,
-.model-setup-provider-select__copy span,
-.model-setup-provider-select__copy small {
   overflow-wrap: anywhere;
 }
 

@@ -16,6 +16,7 @@ import type {
 type SessionFilesOperation =
   | "list"
   | "get"
+  | "stat"
   | "download"
   | "assets"
   | "preview"

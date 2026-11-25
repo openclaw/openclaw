@@ -4,6 +4,10 @@
  * uses real HTTP /readyz, 5 warmups +60 requests; run five rotated A1/B/A2 triplets
  * separately per measurement. Source setup/import and failure probes are excluded.
  * Timing has no inspector/fs spy; allocation is sampled main-isolate V8 traffic.
+ * --source-dir may replace the three runtime owners with saved baseline source.
+ * --stall-ms 30000 holds executable stat completion during 20 concurrent probes
+ * and measures /healthz and /startupz independently. This injects filesystem
+ * latency, not a SQLite lock or a kernel/filesystem-specific flush failure.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/channel-readiness-measure.ts
  *   --mode refresh --iterations 100000 [--source-dir /path/to/saved/gateway]
  * Save server/readiness.ts and channel-health-policy.ts under --source-dir for
@@ -16,11 +20,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
+import fs from "node:fs/promises";
 import { Agent, createServer, request } from "node:http";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
@@ -34,6 +40,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "refresh" },
     iterations: { type: "string", default: "100000" },
     reconnecting: { type: "boolean", default: false },
+    "stall-ms": { type: "string", default: "0" },
   },
 });
 assert(globalThis.gc, "Run with --expose-gc");
@@ -181,11 +188,34 @@ function createChannelAccounts(startedAt: number) {
 /** Real HTTP owner route; no legacy clock, source substitution, or fs counters. */
 async function measureRuntimeProbe() {
   assert(values["source-root"], "runtime-probe requires a sealed --source-root");
-  assert(!values["source-dir"] && !values.reconnecting);
+  assert(!values.reconnecting);
   assert(values.measurement === "timing" || values.measurement === "allocation");
   assert(process.env.OPENCLAW_STATE_DIR && process.env.HOME, "Use private fixture state");
   const sourceRoot = realpathSync(values["source-root"]);
   const sourceUrl = (file: string) => pathToFileURL(path.join(sourceRoot, file)).href;
+  const ownerFiles = [
+    "src/gateway/server/readiness.ts",
+    "src/gateway/server-http-probes.ts",
+    "src/infra/child-runtime-viability.ts",
+  ];
+  const overrides = new Map(
+    values["source-dir"]
+      ? ownerFiles.map((file) => [
+          sourceUrl(file),
+          readFileSync(path.resolve(values["source-dir"]!, file), "utf8"),
+        ])
+      : [],
+  );
+  if (overrides.size) {
+    registerHooks({
+      load(url, context, nextLoad) {
+        const source = overrides.get(url);
+        return source === undefined
+          ? nextLoad(url, context)
+          : { format: "module-typescript", source, shortCircuit: true };
+      },
+    });
+  }
   const sourceFiles = [
     "src/gateway/server/readiness.ts",
     "src/gateway/server-http-probes.ts",
@@ -196,7 +226,12 @@ async function measureRuntimeProbe() {
   ];
   const hash = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
   const sources = Object.fromEntries(
-    sourceFiles.map((file) => [file, hash(path.join(sourceRoot, file))]),
+    sourceFiles.map((file) => [
+      file,
+      createHash("sha256")
+        .update(overrides.get(sourceUrl(file)) ?? readFileSync(path.join(sourceRoot, file)))
+        .digest("hex"),
+    ]),
   );
   const executable = realpathSync(process.execPath);
   const runtime = {
@@ -206,7 +241,9 @@ async function measureRuntimeProbe() {
     executable,
     executableSha256: hash(executable),
   };
-  const { createReadinessChecker } = await import(sourceUrl("src/gateway/server/readiness.ts"));
+  const { createReadinessChecker, createStartupChecker } = await import(
+    sourceUrl("src/gateway/server/readiness.ts")
+  );
   const { handleGatewayProbeRequest } = await import(
     sourceUrl("src/gateway/server-http-probes.ts")
   );
@@ -224,17 +261,21 @@ async function measureRuntimeProbe() {
     void handleGatewayProbeRequest(
       req,
       res,
-      "/readyz",
+      req.url ?? "/readyz",
       { mode: "none", allowTailscale: false },
       [],
       false,
       undefined,
       check,
+      createStartupChecker({ startedAt }),
     )
       .then((handled: boolean) => assert(handled))
       .catch((error: Error) => res.destroy(error));
   });
-  const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+  const stallMs = Number(values["stall-ms"]);
+  assert(Number.isFinite(stallMs) && stallMs >= 0);
+  const agent = new Agent({ keepAlive: true, maxSockets: stallMs ? 32 : 1 });
+  const originalStat = fs.stat;
   const inspector = new Session();
   let inspectorConnected = false;
   let result;
@@ -249,10 +290,12 @@ async function measureRuntimeProbe() {
     const address = server.address();
     assert(address && typeof address !== "string");
     const port = address.port;
-    const operation = () =>
+    const latencies: number[] = [];
+    const operation = (pathname = "/readyz") =>
       new Promise<void>((resolve, reject) => {
+        const started = performance.now();
         const req = request(
-          { hostname: "127.0.0.1", port, path: "/readyz", method: "GET", agent },
+          { hostname: "127.0.0.1", port, path: pathname, method: "GET", agent },
           (res) => {
             let body = "";
             res.setEncoding("utf8");
@@ -264,9 +307,14 @@ async function measureRuntimeProbe() {
               try {
                 assert.equal(res.statusCode, 200);
                 const value = JSON.parse(body);
-                assert.equal(value.ready, true);
-                assert.equal(value.coreReady, true);
-                assert.deepEqual(value.failing, []);
+                if (pathname === "/readyz") {
+                  assert.equal(value.ready, true);
+                  assert.equal(value.coreReady, true);
+                  assert.deepEqual(value.failing, []);
+                  latencies.push(performance.now() - started);
+                } else {
+                  assert.equal(value.ok, true);
+                }
                 resolve();
               } catch (error) {
                 reject(
@@ -288,13 +336,36 @@ async function measureRuntimeProbe() {
     };
     performance.now();
     await run(5);
+    latencies.length = 0;
     assert(globalThis.gc);
     globalThis.gc();
-    const operations = 60;
+    const operations = stallMs ? 20 : 60;
     const hostLoadBefore = loadavg();
     const timestamp = new Date().toISOString();
     let metrics;
-    if (values.measurement === "allocation") {
+    if (stallMs) {
+      const released = delay(stallMs);
+      let heldStats = 0;
+      fs.stat = new Proxy(originalStat, {
+        apply(target, receiver, args) {
+          if (args[0] === process.execPath) {
+            heldStats++;
+            return released.then(() => Reflect.apply(target, receiver, args));
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      });
+      const ready = Promise.all(Array.from({ length: 20 }, () => operation()));
+      const siblings: Record<string, number> = {};
+      for (const endpoint of ["/healthz", "/startupz"]) {
+        const began = performance.now();
+        await operation(endpoint);
+        siblings[endpoint] = performance.now() - began;
+      }
+      await ready;
+      metrics = { stallMs, heldStats, siblings };
+      await released;
+    } else if (values.measurement === "allocation") {
       inspector.connect();
       inspectorConnected = true;
       await inspector.post("HeapProfiler.startSampling", {
@@ -334,8 +405,10 @@ async function measureRuntimeProbe() {
       hostLoadBefore,
       hostLoadAfter: loadavg(),
       ...metrics,
+      latencyMs: latencies,
     };
   } finally {
+    fs.stat = originalStat;
     if (inspectorConnected) {
       inspector.disconnect();
     }

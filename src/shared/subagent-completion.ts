@@ -14,7 +14,7 @@ export type SubagentCompletion = {
 };
 
 const SUBAGENT_COMPLETION_OUTCOMES = ["failed", "killed", "timeout"] as const;
-export type SubagentCompletionOutcome = (typeof SUBAGENT_COMPLETION_OUTCOMES)[number];
+type SubagentCompletionOutcome = (typeof SUBAGENT_COMPLETION_OUTCOMES)[number];
 
 function readOutcome(value: unknown): SubagentCompletionOutcome | undefined {
   return SUBAGENT_COMPLETION_OUTCOMES.find((outcome) => outcome === value);

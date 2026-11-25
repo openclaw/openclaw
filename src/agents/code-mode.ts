@@ -225,14 +225,28 @@ export function buildCodeModeCatalogPrompt(
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
-    ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    ? ` Use the shell tool \`${shellTool.callableName}\` for commands and heavier computation. For multiline commands, join JavaScript strings with \`"\\n"\`, e.g. \`${shellTool.callableName}({command:["pwd","git diff --check"].join("\\n")})\`; never put literal newlines inside ordinary quoted strings.`
+    : "";
+  const editTools = bindings.filter(
+    (entry) => entry.id === "openclaw:core:edit" || entry.id === "openclaw:core:apply_patch",
+  );
+  const editGuidance = editTools.length
+    ? ` Prefer ${editTools.map((entry) => `\`${entry.callableName}\``).join(" or ")} for file changes instead of shell/Python rewriting with nested escaping.`
     : "";
   const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
   const humanActionGuidance = askUserTool
     ? describeRequiredHumanActionTool(askUserTool.callableName)
     : "";
   const prompt = [
-    [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
+    [
+      shellGuidance,
+      editGuidance,
+      apiGuidance,
+      mcpGuidance,
+      swarmGuidance,
+      nodesGuidance,
+      skillsGuidance,
+    ]
       .join("")
       .trim(),
     namespacePrompt,

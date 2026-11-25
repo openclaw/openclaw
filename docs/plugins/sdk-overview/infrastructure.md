@@ -749,6 +749,15 @@ Telegram-specific; other channels keep their own interactive result contracts.
 
 ### Doctor plugin-state repairs
 
+`runtime-doctor-migrations` also exports `PluginDoctorRecoveryCliRegistrar` and
+`PluginDoctorRecoveryCliContext` for optional explicit recovery commands that
+must stay reachable during a pending migration. Declare the owned command paths
+in [the manifest](/plugins/manifest/surfaces#explicit-recovery-cli-subtrees) and
+export `registerRecoveryCli` from the separate Doctor artifact. It receives the
+mounted command, selected config/environment/state directory, and a plugin-bound
+keyed-store adapter. It receives no Gateway runtime. This registration never
+participates in automatic state migration or implies recovery consent.
+
 `PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
 is available during the offline `after-session-repair` phase. Each replacement
 contains an exact `PluginDoctorRawStateEntry` observation from

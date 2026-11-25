@@ -26,6 +26,8 @@ export async function authorizeUserForDmWithIngress(params: {
     accountId: params.accountId,
     identity: {
       key: "sender-id",
+      // The NAS sends user_id on the token-checked outgoing webhook.
+      authentication: "verified",
       entryIdPrefix: "synology-chat-entry",
     },
     subject: { stableId: params.userId },

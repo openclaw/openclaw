@@ -24,6 +24,7 @@ it("resumes the unfinished keyed turn across accepted steering without growing i
       streamMocks.streamSimple.mockImplementation((_model, context) => {
         requests.push(structuredClone(context.messages));
         throw new MidTurnPrecheckSignal({
+          pressure: "overflow",
           route: "truncate_tool_results_only",
           estimatedPromptTokens: 932_476,
           promptBudgetBeforeReserve: 922_000,
@@ -42,7 +43,7 @@ it("resumes the unfinished keyed turn across accepted steering without growing i
             await submit();
             // The ingress has handed off this persisted steer; it no longer owns
             // a separate live pending request when recovery opens the next attempt.
-            steering.finishPendingInput!("interrupted");
+            steering.releasePendingInput!();
             await removeTrailingMidTurnPrecheckAssistantError({
               activeSession: session,
               sessionManager,
@@ -61,7 +62,7 @@ it("resumes the unfinished keyed turn across accepted steering without growing i
         expect(JSON.stringify(requests[2])).toContain("Also include the appendix");
         expect(JSON.stringify(requests[2])).toContain("Already read: use this completed result");
       } finally {
-        steering.finishPendingInput!("interrupted");
+        steering.finishPendingInput!("interrupted", "failed");
       }
     },
     { interruptedTurn: false, toolProgress: true },

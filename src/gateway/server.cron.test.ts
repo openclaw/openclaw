@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import * as sessionEventDelivery from "../auto-reply/reply/session-event-delivery.js";
+import * as routedReplies from "../auto-reply/reply/route-reply.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
@@ -1036,7 +1036,7 @@ describe("gateway server cron", () => {
       const repairTurnStarted = createDeferred();
       const finishRepairTurn = createDeferred();
       // A repair's runtime error stays out of the owner chat; the next alert escalates.
-      const chatDelivery = vi.spyOn(sessionEventDelivery, "prepareSessionEventDelivery");
+      const chatDelivery = vi.spyOn(routedReplies, "routePreparedReply");
       const repairTurn = installCronRepairTurn(async () => {
         repairTurnStarted.resolve();
         await finishRepairTurn.promise;

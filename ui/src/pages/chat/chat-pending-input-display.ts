@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { ChatItem, ChatQueueDisplayItem } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -46,9 +47,16 @@ function describePendingInputMessage(
 export function preparePendingInputQueueItems(
   inputs: ChatPendingInputsPage["items"],
   preparation: PendingInputPreparation,
+  cancelling?: ReadonlySet<string>,
 ): ChatQueueDisplayItem[] {
   return inputs
-    .filter((input) => input.queued && input.state === "queued" && input.runId)
+    .filter(
+      (input) =>
+        ((input.queued && input.state === "queued") ||
+          (input.state === "cancelled" && input.endCause === "revoked")) &&
+        input.runId &&
+        !messageSubagentCompletions(input.message).length,
+    )
     .toSorted((left, right) => left.acceptedAt - right.acceptedAt)
     .map<ChatQueueDisplayItem>((input) => ({
       id: `pending-input:${input.id}`,
@@ -56,6 +64,8 @@ export function preparePendingInputQueueItems(
       createdAt: input.acceptedAt,
       pendingRunId: input.runId,
       serverQueued: true,
+      removing: cancelling?.has(input.id),
+      cancelled: input.state === "cancelled" ? true : undefined,
       sender: normalizeMessage(input.message).sender ?? undefined,
     }));
 }
@@ -79,7 +89,7 @@ function isDismissablePendingInput(input: ChatPendingInputsPage["items"][number]
   return (
     !input.queued &&
     input.state === "cancelled" &&
-    !input.cancelledByUser &&
+    input.endCause !== "user-stop" &&
     asNullableRecord(input.message)?.display !== false
   );
 }
@@ -94,7 +104,7 @@ export function preparePendingInputItems(
   const items: ChatItem[] = [];
   for (const input of inputs) {
     // Legacy interrupted custody is retained in storage but has no presentation.
-    if (input.state !== "queued" && input.state !== "cancelled") {
+    if (input.endCause === "revoked" || (input.state !== "queued" && input.state !== "cancelled")) {
       continue;
     }
     let pendingStatus: PendingInputStatus = input.state;
@@ -121,7 +131,7 @@ export function preparePendingInputItems(
           status: pendingStatus,
           key: `pending-input:${input.id}:state`,
           timestamp: input.acceptedAt,
-          ...(input.cancelledByUser ? { cancelledByUser: true } : {}),
+          endCause: input.endCause,
           ...(retired ? { retired } : {}),
         }),
       ),

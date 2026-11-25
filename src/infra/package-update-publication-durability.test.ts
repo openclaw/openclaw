@@ -24,8 +24,10 @@ import {
   readPublicationText as read,
   readPublicationManifest as manifest,
 } from "./package-update-publication.test-support.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { interceptStagedFileSync } from "./package-update-sync.test-support.js";
+import { expectedPathExchangeRoute } from "./path-exchange.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
 async function activationParams(
@@ -94,6 +96,9 @@ it
     const candidateRoot = path.join(anchor, "candidate");
     let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    if (!expectedPathExchangeRoute) {
+      publishWithoutPathExchange(); // A tried and refused exchange rereads one manifest.
+    }
     await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await prepareFixtureActivation(f, fence);
       expect(prepared).toBeDefined();
@@ -188,9 +193,20 @@ it.skipIf(process.platform === "win32").each([
   ["displace", "installation"],
   ["publish", "anchor"],
   ["publish", "installation"],
+  // One exchange does both moves; its parents are persisted before the callback.
+  ...(expectedPathExchangeRoute
+    ? ([
+        ["exchange", "anchor"],
+        ["exchange", "installation"],
+      ] as const)
+    : []),
 ] as const)(
   "persists both package rename parents before advancing %s (%s failure)",
-  withFixture(async (f, cut: "displace" | "publish", parent: string) => {
+  withFixture(async (f, cut: "displace" | "publish" | "exchange", parent: string) => {
+    const step = cut === "exchange" ? "publish" : cut;
+    if (cut !== "exchange") {
+      publishWithoutPathExchange();
+    }
     const anchor = resolvePackageActivationAnchor(f.packageRoot);
     const previousRoot = path.join(anchor, "previous");
     const candidateRoot = path.join(anchor, "candidate");
@@ -209,7 +225,7 @@ it.skipIf(process.platform === "win32").each([
         : fs.existsSync(f.packageRoot)
           ? "publish"
           : "displace";
-      if (faultEnabled && phase === cut && directoryPath === failedParent) {
+      if (faultEnabled && phase === step && directoryPath === failedParent) {
         refused++;
         throw failure;
       }
@@ -229,7 +245,7 @@ it.skipIf(process.platform === "win32").each([
       ).rejects.toBe(failure);
     });
     expect(refused).toBe(1);
-    expect(callbackDurable).toBe(cut === "displace" ? undefined : true);
+    expect(callbackDurable).toBe(cut === "publish" ? true : undefined);
     const version = (directory: string) => manifest(directory).version;
     expect(version(previousRoot)).toBe("1.0.0");
     expect(version(cut === "displace" ? candidateRoot : f.packageRoot)).toBe("2.0.0");
@@ -241,7 +257,7 @@ it.skipIf(process.platform === "win32").each([
       runPackageActivationRecovery(anchor, action, pending.descriptor.operationId);
     expect(pending).toMatchObject({
       phase: "publishing",
-      intent: { kind: cut },
+      intent: { kind: step },
       publications: [],
     });
     // Reopening observes the completed rename, but its missing durability
@@ -253,7 +269,7 @@ it.skipIf(process.platform === "win32").each([
     expect(read(f.launcher)).toBe("old launcher\n");
     faultEnabled = false;
     await expect(recover("repair")).resolves.toMatchObject({ phase: "publication-complete" });
-    expect(parents.every((directory) => synced[cut].has(directory))).toBe(true);
+    expect(parents.every((directory) => synced[step].has(directory))).toBe(true);
     expect(version(f.packageRoot)).toBe("2.0.0");
     expect(read(f.launcher)).toBe("candidate launcher\n");
     await expect(recover("retire")).resolves.toMatchObject({ phase: "complete" });

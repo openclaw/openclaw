@@ -114,11 +114,16 @@ it.each(["capture failure", "frozen receipt mismatch"] as const)(
     await withSnapshot(async ({ stateDir, rootDir, entry, descriptor }) => {
       const readDirectory = fs.readdirSync;
       const captureError = new Error("Host reconstruction cannot read source");
+      const captures = new Set<string>();
       // Workers keep the real filesystem view. Only host reconstruction fails or
       // misses a file, exercising both cleanup owners after custody transfers.
-      const read = vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
+      vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
         const entries = readDirectory(...args);
-        if (entries.some((name) => typeof name === "string" && name === "index.js")) {
+        if (
+          String(args[0]) !== rootDir &&
+          entries.some((name) => typeof name === "string" && name === "index.js")
+        ) {
+          captures.add(String(args[0]));
           if (failure === "capture failure") {
             throw captureError;
           }
@@ -126,38 +131,22 @@ it.each(["capture failure", "frozen receipt mismatch"] as const)(
         }
         return entries;
       });
-      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
-      const wait = vi.spyOn(Atomics, "wait");
-      try {
-        await expect(
-          preparePluginGenerationArtifact({
-            rootDir,
-            source: entry,
-            ...(failure === "frozen receipt mismatch"
-              ? { sourceSnapshot: { stateDir, descriptor } }
-              : {}),
-          }),
-        ).rejects.toThrow(
-          failure === "capture failure"
-            ? captureError
-            : "Plugin snapshot runtime receipt differs from its immutable source receipt",
-        );
-        const captures = posts.mock.calls.flatMap(([message]) =>
-          isRecord(message) &&
-          isRecord(message.input) &&
-          message.input.operation === "capture" &&
-          typeof message.input.scratch === "string"
-            ? [message.input.scratch]
-            : [],
-        );
-        expect(captures).toHaveLength(1);
-        expect.soft(wait).not.toHaveBeenCalled();
-        expect(captures.every((directory) => !fs.existsSync(directory))).toBe(true);
-      } finally {
-        read.mockRestore();
-        wait.mockRestore();
-        posts.mockRestore();
-      }
+      using wait = vi.spyOn(Atomics, "wait");
+      await expect(
+        preparePluginGenerationArtifact({
+          rootDir,
+          source: entry,
+          sourceSnapshot: { stateDir, descriptor },
+        }),
+      ).rejects.toThrow(
+        failure === "capture failure"
+          ? captureError
+          : "Plugin snapshot runtime receipt differs from its immutable source receipt",
+      );
+      expect(captures.size).toBe(1);
+      expect(captures.has(rootDir)).toBe(false);
+      expect.soft(wait).not.toHaveBeenCalled();
+      expect([...captures].every((directory) => !fs.existsSync(directory))).toBe(true);
     });
   },
 );

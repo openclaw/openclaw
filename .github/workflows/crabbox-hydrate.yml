@@ -269,6 +269,8 @@ jobs:
           done
           mkdir -p .artifacts
           chmod go-w .artifacts
+          # Cached images can retain old repository labels; keep all other release checks.
+          sudo apt-get update --allow-releaseinfo-change-label
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
           pnpm --dir ui exec playwright install --with-deps webkit
 

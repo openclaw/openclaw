@@ -240,6 +240,7 @@ describe("private subagent completion processing receipts", () => {
         return { payloads: [{ text: "Synthetic successor answer" }], meta: { durationMs: 0 } };
       });
       gatewayReplyMock.mockImplementation(getReplyFromConfig);
+      await prepareGatewayReplyRuntimeForTest();
       const { ws } = await harness.openClient({
         browserOrigin: "http://private-completion.test",
         client: {
@@ -340,9 +341,14 @@ describe("private subagent completion processing receipts", () => {
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () =>
-            source(currentRunId)?.adapter.operationalRunInstance === operationalRunInstance &&
-            !command.abortSignal?.aborted,
+          receiptAuthority: () => {
+            if (
+              source(currentRunId)?.adapter.operationalRunInstance !== operationalRunInstance ||
+              command.abortSignal?.aborted
+            ) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () => captureSessionEventTargetForHost("main", sessionKey),
       );

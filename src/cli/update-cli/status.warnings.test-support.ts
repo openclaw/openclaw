@@ -25,7 +25,7 @@ export function registerUpdateStatusWarningTests(readConsoleOutput: () => string
         {
           step: "warning:database snapshot",
           detail:
-            "Database changed during capture; its snapshot requires manual recovery: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
+            "Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: /fixture/agents/analyst/agent/openclaw-agent.sqlite",
         },
         {
           step: "warning:database snapshot:3",

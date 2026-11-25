@@ -1,8 +1,6 @@
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { listExecSessionsForCancellation } from "../agents/bash-process-registry.js";
 import { assertLocalSandboxWorkspaceBackend } from "../agents/sandbox/local-workspace.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
-import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   captureWorkspaceFilesystemEvidence,
   createWorkspaceFilesystemSource,
@@ -10,7 +8,6 @@ import {
 } from "../agents/workspace-state-guard.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
 import {
   captureSessionTarget,
   runSessionMutation,
@@ -24,6 +21,7 @@ import {
   resolvePullRequestProjectSource,
   resolveSessionProjectRootForRecord,
 } from "./session-project-source.js";
+import { describeSessionWorkspaceBlocker } from "./session-work-blocker.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -65,60 +63,14 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   ) {
     throw new Error("This conversation already has another source. Its files were preserved.");
   }
-  const identities = [target.sessionKey, entry.sessionId];
   const assertIdle = createWorkspaceFilesystemSource(filesystem, () => {
     params.signal?.throwIfAborted();
     params.assertCurrent();
-    // The handoff holds queued follow-ups; only competing execution blocks adoption.
-    // An exited, finalized process cannot compete, and its output stays readable
-    // through process log, so an unread result (including a requested stop) is not busy.
-    const process = listExecSessionsForCancellation().find(
-      (candidate) =>
-        candidate.agentId === target.agentId &&
-        (candidate.sessionKey === target.sessionKey || candidate.scopeKey === target.sessionKey) &&
-        (!candidate.exited ||
-          candidate.finalizing ||
-          candidate.cleanupUncertain ||
-          candidate.finalizationFailed),
-    );
-    const describeProcess = (exec: NonNullable<typeof process>) =>
-      !exec.exited
-        ? `background exec ${exec.id} is still running; poll or kill it`
-        : exec.finalizing
-          ? `background exec ${exec.id} is still cleaning up; poll it until it settles`
-          : `background exec ${exec.id} could not confirm its cleanup; inspect it with process log`;
-    const child = () =>
-      listSubagentRunsForRequester(target.sessionKey, {
-        requesterAgentId: target.agentId,
-        requesterStorePath: target.storePath,
-      }).find(
-        (run) =>
-          run.execution.endedAt === undefined ||
-          run.killReconciliation ||
-          run.requesterSettleWake ||
-          run.delivery?.status === "pending" ||
-          run.delivery?.status === "in_progress",
-      );
-    const blockingChild = process ? undefined : child();
-    const blocker = process
-      ? describeProcess(process)
-      : blockingChild
-        ? `child ${blockingChild.childSessionKey} has not finished or delivered its result`
-        : context.terminalSessions?.listAgent({
-              kind: "agent",
-              agentId: target.agentId,
-              agentSessionKey: target.sessionKey,
-              agentSessionId: entry.sessionId,
-            }).length
-          ? "a terminal is still open for this conversation"
-          : isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
-              isCompetingSessionControllerWorkActive(
-                `agent:${target.agentId}`,
-                identities,
-                target.agentId,
-              )
-            ? "another run of this conversation is still active"
-            : undefined;
+    const blocker = describeSessionWorkspaceBlocker({
+      context,
+      target,
+      sessionId: entry.sessionId,
+    });
     if (blocker) {
       throw new Error(
         `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,

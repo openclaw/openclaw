@@ -183,6 +183,7 @@ const domains = {
     "owner.assign": true,
     participant: true,
     remove: true,
+    "set-access": true,
     "suggestion.add": true,
     "suggestion.claim": true,
     "suggestion.finalize": true,
@@ -194,8 +195,6 @@ const domains = {
   >,
   "src/config/sessions/session-transcript-active-facts-backfill.worker.ts": {
     batch: true,
-    discover: true,
-    probe: true,
   } satisfies DomainCommands<
     ReturnType<
       typeof import("../src/config/sessions/session-transcript-active-facts-backfill.worker.js").bindSqliteWorkerBackend

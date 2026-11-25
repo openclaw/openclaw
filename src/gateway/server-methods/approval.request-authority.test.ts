@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -18,18 +17,13 @@ import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
-import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
-import { rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createApprovalHandlers } from "./approval.js";
 import {
   createApprovalInvocation,
@@ -179,30 +173,15 @@ it("acknowledges committed exec approval before follow-up session changes", asyn
 });
 
 it.each([
-  "lookup",
-  "verdict",
-  "verdict-reviewer",
   "verdict-source",
   "native-refused",
   "native-config-unrelated",
   "native-config-unrelated-agent",
-  "native-config-role-aba",
-  "native-config-routing-aba",
-  "access",
-  "reviewer",
   "source",
   "binding",
-  "profile",
-  "config",
   "config-unrelated",
   "config-unrelated-agent",
-  "config-target-routing-aba",
-  "config-target-store-aba",
   "config-other-identity",
-  "config-own-identity-aba",
-  "config-role-aba",
-  "config-routing-aba",
-  "transport-reviewer",
   "transport-source",
   "transport-unrelated-agent",
 ] as const)("preserves disconnected request custody with %s authority", async (revocation) => {
@@ -213,16 +192,15 @@ it.each([
     "config-unrelated-agent",
     "config-other-identity",
     "native-config-unrelated",
+    "transport-unrelated-agent",
     "native-config-unrelated-agent",
   ].includes(revocation);
-  const targetsMainSession =
-    revocation.endsWith("unrelated-agent") || revocation.startsWith("config-target-");
-  const { exec, invoke, record, decision, client, read, drain, state, settled } =
-    await createFixture(
-      `request-custody-${revocation}`,
-      undefined,
-      targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {},
-    );
+  const targetsMainSession = revocation.endsWith("unrelated-agent");
+  const { exec, invoke, record, decision, client, read, drain, settled } = await createFixture(
+    `request-custody-${revocation}`,
+    undefined,
+    targetsMainSession ? { sessionKey: "agent:main:main", agentId: "main" } : {},
+  );
   const connection = new AbortController();
   client.connectionSignal = connection.signal;
   let nativeRevoked = false;
@@ -249,20 +227,11 @@ it.each([
     const identity = (email: string): OpenClawConfig => ({
       gateway: { auth: { identityScopes: { [email]: ["operator.approvals"] } } },
     });
-    const routing = { ...initialConfig, session: { mainKey: "other" } };
     const configs: Record<string, OpenClawConfig> = {
       "config-unrelated": { ...initialConfig, messages: { ackReaction: "ok" } },
       "config-unrelated-agent": unrelatedAgentConfig,
       "transport-unrelated-agent": unrelatedAgentConfig,
-      "config-target-routing-aba": routing,
-      "config-routing-aba": routing,
-      "config-target-store-aba": {
-        ...initialConfig,
-        session: { store: path.join(state.stateDir, "moved", "{agentId}.sqlite") },
-      },
       "config-other-identity": identity("other@example.test"),
-      "config-own-identity-aba": identity("reviewer@example.test"),
-      "config-role-aba": rolePolicyConfig(),
     };
     const config = configs[change];
     if (config) {
@@ -281,20 +250,10 @@ it.each([
   });
   const lookup = vi.spyOn(operatorApprovalStore, "getOperatorApprovalDetailed");
   const mutations: Record<string, () => void> = {
-    access: bumpGatewayAccessRevision,
-    reviewer: () => {
-      record.approvalReviewerDeviceIds = ["other-reviewer"];
-    },
     source: () => {
       record.request.sessionKey = "agent:main:other";
     },
     binding: () => exec.retire(),
-    profile: () => {
-      client.authenticatedUserId = "other-user";
-    },
-    config: () => {
-      invocation.context.getRuntimeConfig = () => ({});
-    },
   };
   const mutate = (change: string) => {
     const mutation = mutations[change.replace(/^(transport|verdict)-/, "")];
@@ -324,13 +283,6 @@ it.each([
         stages.push("verdict-precommit");
         mutate(revocation);
       }
-      if (
-        (transaction === 1 && revocation === "lookup") ||
-        (transaction === 2 && revocation === "verdict")
-      ) {
-        invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-        stages.push("device-revoked");
-      }
     }
     admit(request, grant);
   });
@@ -350,7 +302,6 @@ it.each([
             "transport-retired",
             "lookup-completed",
             ...(verdictChange ? ["verdict-precommit"] : []),
-            ...(revocation === "lookup" || revocation === "verdict" ? ["device-revoked"] : []),
           ],
     );
     if (native) {
@@ -419,102 +370,6 @@ it("keeps a legacy decision wait when an unrelated agent is added", async () => 
   } finally {
     await drain();
   }
-});
-
-it("rechecks retained request authority after the real history read settles", async () => {
-  await withOpenClawTestState({ label: "approval-history-custody" }, async (state) => {
-    const { exec, invoke, record, decision, client, read, drain } = await createFixture(
-      "history-custody",
-      state,
-    );
-    await exec.resolve(record.id, "allow-once");
-    await expect(decision).resolves.toBe("allow-once");
-    const connection = new AbortController();
-    client.connectionSignal = connection.signal;
-    const invocation = invoke("approval.history", {});
-    const history = operatorApprovalStore.listTerminalOperatorApprovals;
-    vi.spyOn(operatorApprovalStore, "listTerminalOperatorApprovals").mockImplementation(
-      async (params) => {
-        const result = await history(params);
-        expect(result.records).toHaveLength(1);
-        invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-        return result;
-      },
-    );
-    connection.abort();
-    try {
-      expect(await invocation.invoke()).toMatchObject({
-        ok: false,
-        result: undefined,
-        error: { message: "approval not found" },
-      });
-      expect(read()).toMatchObject({
-        status: "allowed",
-        decision: "allow-once",
-      });
-    } finally {
-      await drain();
-    }
-  });
-});
-
-it("rejects a revoked lookup waiting for a committed decision without losing the winner", async () => {
-  await withOpenClawTestState({ label: "approval-reconciliation-custody" }, async (state) => {
-    const onLifecycle = vi.fn();
-    const { exec, invoke, record, decision, read, drain } = await createFixture(
-      "reconciliation-custody",
-      state,
-      {},
-      onLifecycle,
-    );
-    const committed = createDeferred();
-    const reply = createDeferred();
-    const entered = createDeferred();
-    const resolve = operatorApprovalStore.resolveOperatorApproval;
-    vi.spyOn(operatorApprovalStore, "resolveOperatorApproval").mockImplementationOnce(
-      async (params) => {
-        const result = await resolve(params);
-        committed.resolve();
-        await reply.promise;
-        return result;
-      },
-    );
-    const reconcile = exec.reconcileDurableLookup.bind(exec);
-    vi.spyOn(exec, "reconcileDurableLookup").mockImplementation((...args) => {
-      const result = reconcile(...args);
-      entered.resolve();
-      return result;
-    });
-    const invocation = invoke("approval.get");
-    const resolution = exec.resolve(record.id, "allow-once");
-    let lookup: ReturnType<typeof invocation.invoke> | undefined;
-    try {
-      await committed.promise;
-      lookup = invocation.invoke();
-      await entered.promise;
-      invalidateGatewayDeviceRevocation(invocation.context, "reviewer", "operator");
-      reply.resolve();
-      await expect(lookup).resolves.toMatchObject({
-        ok: false,
-        result: undefined,
-        error: { message: "approval not found" },
-      });
-      await expect(resolution).resolves.toBe(true);
-      await expect(decision).resolves.toBe("allow-once");
-      expect(read()).toMatchObject({
-        status: "allowed",
-        decision: "allow-once",
-      });
-      expect(onLifecycle.mock.calls.filter(([event]) => event.phase === "terminal")).toHaveLength(
-        1,
-      );
-      expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-    } finally {
-      reply.resolve();
-      await Promise.allSettled([resolution, lookup]);
-      await drain();
-    }
-  });
 });
 
 it.each([

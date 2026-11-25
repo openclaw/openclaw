@@ -21,6 +21,7 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  readReleaseValidationWaivers,
   releaseQualificationExemptions,
   validateQualificationExemptions,
 } from "./lib/release-validation-waivers.mjs";
@@ -415,6 +416,59 @@ function verifyProducer(producer, runGh, completed) {
   };
 }
 
+// Recovery uses the same protected P and human-operator authority as admission.
+// It does not grant authority to the original Q run or replace its admission.
+export function verifyReleaseRecoveryProducer({
+  producer,
+  completed = true,
+  runGh = runQualificationAdmissionGh,
+}) {
+  const observed = verifyProducer(producer, runGh, completed);
+  const current = api(producer.repository, "actions/runs/" + producer.runId, runGh);
+  requireValue(current.run_attempt === producer.runAttempt, "Recovery producer attempt changed");
+  const source = readSource(
+    producer.repository,
+    producer.workflowSha,
+    QUALIFICATION_ADMISSION_WORKFLOW,
+    runGh,
+  ).toString("utf8");
+  requireValue(
+    /^ {2}RELEASE_RECOVERY_CONTRACT: "1"$/mu.test(source),
+    "Missing P recovery contract",
+  );
+  const inventory = api(
+    producer.repository,
+    "actions/runs/" + producer.runId + "/attempts/" + producer.runAttempt + "/jobs?per_page=100",
+    runGh,
+  );
+  requireValue(
+    Array.isArray(inventory.jobs) && inventory.jobs.length === inventory.total_count,
+    "Incomplete recovery producer inventory",
+  );
+  const jobs = inventory.jobs.filter((job) => job.name === "Seal retained qualification");
+  requireValue(
+    jobs.length === 1 &&
+      jobs[0].run_id === producer.runId &&
+      jobs[0].run_attempt === producer.runAttempt &&
+      jobs[0].status === (completed ? "completed" : "in_progress") &&
+      (completed ? jobs[0].conclusion === "success" : jobs[0].conclusion === null),
+    "Recovery sealer identity or outcome changed",
+  );
+  for (const name of [
+    "Checkout authenticated P recovery owner",
+    ...(completed
+      ? ["Verify and seal original qualification", "Upload immutable recovery aggregate"]
+      : []),
+  ]) {
+    const steps = jobs[0].steps.filter((step) => step.name === name);
+    requireValue(
+      steps.length === 1 && steps[0].status === "completed" && steps[0].conclusion === "success",
+      "Recovery producer step failed: " + name,
+    );
+  }
+  return observed;
+}
+
 function verifyProducerContract(producer, runGh) {
   const source = readSource(
     producer.repository,
@@ -579,17 +633,9 @@ export function produceQualificationAdmission({
     initial.run.display_title === "Qualification Admission " + request.requestId,
     "Admission request differs from its workflow dispatch title",
   );
-  // An independent Q must be reviewed repository tooling, not merely a caller SHA.
-  // The authenticated P operator request selects the frozen revision explicitly.
-  if (request.qualificationSha !== request.candidateSha) {
-    verifyReleaseToolingIdentity({
-      repository: request.repository,
-      workflowRef: "main",
-      workflowFullRef: "refs/heads/main",
-      workflowSha: request.qualificationSha,
-      runGh,
-    });
-  }
+  // P authenticates the operator-selected immutable Q, including off-main tooling.
+  // Read Q only from the canonical repository; the dispatch owner separately binds
+  // its exact release-ci transport before execution. This grants no publication authority.
   const workflow = readSource(
     request.repository,
     request.qualificationSha,
@@ -612,9 +658,13 @@ export function produceQualificationAdmission({
     readSource(request.repository, request.candidateSha, "package.json", runGh),
     readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
   );
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(request.repository, request.qualificationSha, sourcePath, runGh).toString("utf8"),
+  );
   const exemptions = releaseQualificationExemptions(
     baselinePolicy.candidateVersion,
     coverage.profile,
+    waiverPolicy,
   );
   if (exemptions.length) {
     requireValue(
@@ -678,13 +728,6 @@ function validateReceipt(receipt) {
   producerIdentity(receipt.producer);
   validateQualificationBaselinePolicy(receipt.request, receipt.baselinePolicy);
   const coverage = validateQualificationCoverage(receipt.coverage);
-  if (coverage.exemptions !== undefined) {
-    validateQualificationExemptions(
-      coverage.exemptions,
-      receipt.baselinePolicy.candidateVersion,
-      coverage.profile,
-    );
-  }
   requireValue(
     receipt.inputsDigest === digest(canonical(receipt.request.inputs)) &&
       DIGEST.test(receipt.workflowSourceDigest) &&
@@ -917,15 +960,15 @@ function readQualificationAdmission(
       (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
   );
-  if (candidateSha !== qualificationSha) {
-    verifyReleaseToolingIdentity({
-      repository,
-      workflowRef: "main",
-      workflowFullRef: "refs/heads/main",
-      workflowSha: qualificationSha,
-      runGh,
-    });
-  }
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(repository, qualificationSha, sourcePath, runGh).toString("utf8"),
+  );
+  validateQualificationExemptions(
+    receipt.coverage.exemptions ?? [],
+    receipt.baselinePolicy.candidateVersion,
+    receipt.coverage.profile,
+    waiverPolicy,
+  );
   const finalMetadata = api(repository, "actions/artifacts/" + artifactId, runGh);
   const final = verifyProducer(producer, runGh, true);
   validateArtifact(descriptor, finalMetadata, final.run, jobs);

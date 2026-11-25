@@ -7,6 +7,7 @@ import { ModelProviderIcon } from "../lib/reactive/provider-presentation.tsx";
 import { createInterval, createTimeout } from "../lib/reactive/timers.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { resolveProviderIconName } from "./provider-icon-data.ts";
+import { Icon } from "./solid/icon.tsx";
 import { InlineAlert } from "./solid/inline-alert.tsx";
 import "../styles/wizard-sign-in.css";
 import { ProviderFallbackIcon } from "./solid/provider-icon.tsx";
@@ -16,7 +17,7 @@ const SIGN_IN_SLOW_MS = 45_000;
 const EXPIRY_TICK_MS = 15_000;
 const EXPIRY_VISIBLE_MINUTES = 5;
 
-function CopyAction(props: { value: string; label: string; class: string }) {
+function CopyAction(props: { value: string; label: string; class: string; icon?: boolean }) {
   let label!: HTMLSpanElement;
   return (
     <button
@@ -24,6 +25,9 @@ function CopyAction(props: { value: string; label: string; class: string }) {
       class={props.class}
       onClick={(event) => void handleCopyButton(event, props.value, props.label, { label })}
     >
+      <Show when={props.icon}>
+        <Icon name="copy" />
+      </Show>
       <span ref={(element) => (label = element)} data-copy-label>
         {props.label}
       </span>
@@ -36,11 +40,20 @@ function ProviderBadge(props: {
   brandId?: string;
   providerLabel?: string;
   waiting: boolean;
+  compact?: boolean;
 }) {
   const iconProvider = () =>
     props.brandId && resolveProviderIconName(props.brandId) ? props.brandId : undefined;
   return (
-    <div class={["wizard-sign-in__badge", { "wizard-sign-in__badge--waiting": props.waiting }]}>
+    <div
+      class={[
+        "wizard-sign-in__badge",
+        {
+          "wizard-sign-in__badge--waiting": props.waiting,
+          "wizard-sign-in__badge--compact": props.compact,
+        },
+      ]}
+    >
       <Show when={props.waiting}>
         <span class="wizard-sign-in__ring" aria-hidden="true" />
       </Show>
@@ -57,6 +70,64 @@ function ProviderBadge(props: {
           {(provider) => <ModelProviderIcon provider={provider()} class="wizard-sign-in__icon" />}
         </Show>
       )}
+    </div>
+  );
+}
+
+/**
+ * Browser sign-in that also accepts the address the browser lands on, which often cannot load
+ * on this machine. The runner keeps polling, so a callback that arrives by itself still
+ * finishes the step without the pasted address.
+ */
+export function PasteSignIn(props: {
+  url: string;
+  brandId?: string;
+  providerLabel?: string;
+  icon?: JSX.Element;
+  titled: boolean;
+}) {
+  return (
+    <div class="wizard-sign-in--paste stack">
+      <div class="row">
+        {/* The ring shows that a callback arriving by itself still finishes sign-in. */}
+        <ProviderBadge
+          icon={props.icon}
+          brandId={props.brandId}
+          providerLabel={props.providerLabel}
+          waiting
+          compact
+        />
+        <Show when={props.titled}>
+          {/* Like other setup dialogs, the sign-in choice's own label names it. */}
+          <h2 class="wizard-sign-in__title">
+            {props.providerLabel || t("modelSetup.wizard.signInTitle")}
+          </h2>
+        </Show>
+      </div>
+      <div class="muted">{t("modelSetup.wizard.pasteDescription")}</div>
+      <span class="sr-only" role="status" aria-live="polite">
+        {props.providerLabel
+          ? t("modelSetup.wizard.waitingForProvider", { provider: props.providerLabel })
+          : t("modelSetup.wizard.waiting")}
+      </span>
+      <div class="row">
+        <a
+          class="btn btn--sm wizard-step__external-link"
+          data-link-reader-external
+          href={props.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Icon name="arrowUpRight" />
+          {t("modelSetup.wizard.openSignInPage")}
+        </a>
+        <CopyAction
+          value={props.url}
+          label={t("modelSetup.wizard.copyLink")}
+          class="btn btn--sm btn--ghost"
+          icon
+        />
+      </div>
     </div>
   );
 }
@@ -97,7 +168,12 @@ export function ModelSetupSignIn(props: {
     return deadline === undefined ? undefined : Math.ceil((deadline - now()) / 60_000);
   };
   const expired = () => (minutesLeft() ?? 1) <= 0;
-  const stillWaiting = () => props.waiting && slow() && !code();
+  // A browser refusal keeps this sign-in open; the Gateway reports why it has not finished.
+  const refusal = () =>
+    props.step.reason && props.step.progressMessage
+      ? formatUiExternalText(props.step.progressMessage)
+      : undefined;
+  const stillWaiting = () => props.waiting && slow() && !code() && !refusal();
   const lead = () => {
     // A step that waits for Continue carries the provider's own instructions.
     if (!props.waiting && props.step.message) {
@@ -143,6 +219,13 @@ export function ModelSetupSignIn(props: {
           {t("modelSetup.wizard.stillWaiting")}
         </InlineAlert>
       </Show>
+      <Show when={!expired() && refusal()}>
+        {(message) => (
+          <InlineAlert tone="danger" class="wizard-sign-in__callout" role="alert">
+            {message()}
+          </InlineAlert>
+        )}
+      </Show>
       <Show when={expired()}>
         <InlineAlert tone="warning" class="wizard-sign-in__callout" role="alert">
           {t("modelSetup.wizard.deviceCodeExpired")}
@@ -165,7 +248,11 @@ export function ModelSetupSignIn(props: {
           <div class="wizard-sign-in__actions">
             <a
               ref={(element) => props.onAutofocusRef?.(element)}
-              class={["btn", "wizard-step__external-link", { primary: stillWaiting() }]}
+              class={[
+                "btn",
+                "wizard-step__external-link",
+                { primary: stillWaiting() || Boolean(refusal()) },
+              ]}
               autofocus
               data-link-reader-external
               href={url()}

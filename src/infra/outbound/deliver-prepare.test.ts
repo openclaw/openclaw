@@ -8,7 +8,7 @@ import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
+import { normalizeEmptyPayloadForDelivery } from "./deliver-payload-normalize.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 
 const metadata = { precedingInputAnswer: true } as const;

@@ -3,29 +3,34 @@ import path from "node:path";
 import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
-import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
-  assertMemoryCallerCurrent,
-  isHostMemoryAudience,
-  prepareMemoryCallerRead,
-} from "./memory-audience.js";
-import { adaptLegacyMemoryProvider, bindMemoryProvider } from "./memory-provider-adapter.js";
-import type { MemoryProviderCapabilities } from "./memory-provider-runtime-types.js";
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
+import { assertMemoryCallerCurrent, isHostMemoryAudience } from "./memory-audience.js";
+import { resolveMemoryBackendPolicyIds } from "./memory-backend.js";
+import { adaptLegacyMemoryProvider } from "./memory-provider-adapter.js";
+import {
+  createMemoryBackendAccess,
+  settleMemoryProviderOpen,
+  waitForMemoryCallerRead,
+} from "./memory-provider-open.js";
 import type {
   ActiveMemoryProviderResult,
   MemoryCallerContext,
   MemoryProviderOpenParams,
+  MemoryProviderOpenResult,
 } from "./memory-provider-types.js";
 import {
   getMemoryRuntime,
   getMemoryProviderRuntime,
   getMemoryCapabilityRegistration,
+  listMemoryBackendRegistrations,
   resolveMemoryCapabilityRegistration,
   setStandaloneMemoryManagerActive,
   setStandaloneMemoryOwner,
@@ -36,6 +41,7 @@ import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
+  MemoryBackendRegistration,
   MemoryPluginRuntime,
   MemoryProviderRuntime,
   RegisteredMemorySearchManager,
@@ -55,6 +61,8 @@ type MemoryRuntimeOwner = {
   providerId?: string;
   standalone?: true;
   searchRuntimeRegistered?: boolean;
+  /** Passive backends loaded in the owner's registry. */
+  backends?: readonly MemoryBackendRegistration[];
   error?: string;
 };
 type AnyMemoryRuntime = MemoryPluginRuntime | MemoryProviderRuntime;
@@ -106,8 +114,14 @@ function normalizeRegisteredMemoryManager(
   return adapter;
 }
 
-/** Resolves the configured memory slot to the single runtime plugin that may load memory. */
-function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
+/**
+ * Resolves the configured memory slot to the single runtime plugin that may own memory,
+ * followed by requested backends. The loader still decides which of them become backends.
+ */
+function resolveMemoryRuntimePluginIds(
+  config: OpenClawConfig,
+  loadManifests: () => PluginManifestRegistry,
+): string[] {
   const plugins = normalizePluginsConfig(config.plugins);
   const pluginId = plugins.slots.memory;
   if (!plugins.enabled || !pluginId) {
@@ -117,7 +131,15 @@ function resolveMemoryRuntimePluginIds(config: OpenClawConfig): string[] {
   if (plugins.deny.includes(policyId) || plugins.entries[policyId]?.enabled === false) {
     return [];
   }
-  return [pluginId];
+  const backendIds = resolveMemoryBackendPolicyIds({
+    ownerId: pluginId,
+    entries: plugins.entries,
+    allow: plugins.allow,
+    deny: plugins.deny,
+    manifests: loadManifests().plugins,
+    normalizeId: normalizePluginPolicyId,
+  });
+  return [pluginId, ...backendIds];
 }
 
 function listCurrentMemoryRuntimes(): AnyMemoryRuntime[] {
@@ -141,20 +163,6 @@ function assertMemoryProviderRuntime(runtime: MemoryProviderRuntime | undefined)
   }
 }
 
-function isValidMemoryProviderCapabilities(
-  capabilities: MemoryProviderCapabilities | undefined,
-): capabilities is MemoryProviderCapabilities {
-  return (
-    Array.isArray(capabilities?.sources) &&
-    capabilities.sources.length > 0 &&
-    capabilities.sources.every((source) => source === "memory" || source === "sessions") &&
-    typeof capabilities.pagination === "boolean" &&
-    Array.isArray(capabilities.candidates) &&
-    capabilities.candidates.every((kind) => kind === "trigger" || kind === "project") &&
-    typeof capabilities.projectFilter === "boolean"
-  );
-}
-
 function ensureMemoryRuntime(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -168,17 +176,21 @@ function ensureMemoryRuntime(params: {
       providerRuntime: currentProviderRuntime,
       providerId: getMemoryCapabilityRegistration()?.pluginId,
       searchRuntimeRegistered: true,
+      backends: listMemoryBackendRegistrations(),
     };
   }
-  const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  let manifestRegistry: PluginManifestRegistry | undefined;
+  const loadManifests = () =>
+    (manifestRegistry ??= loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }));
+  const onlyPluginIds = resolveMemoryRuntimePluginIds(params.cfg, loadManifests);
   if (onlyPluginIds.length === 0) {
     return undefined;
   }
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const registry = loadPluginRegistryHandle({
     config: params.cfg,
     registrationConfigOrigin: params.cfg,
-    manifestRegistry: loadPluginManifestRegistryCore({ config: params.cfg, workspaceDir }),
+    manifestRegistry: loadManifests(),
     onlyPluginIds,
     workspaceDir,
     activate: false,
@@ -200,6 +212,7 @@ function ensureMemoryRuntime(params: {
           providerId: registration?.pluginId,
           standalone: true,
           searchRuntimeRegistered: true,
+          backends: registry.memoryBackends,
         }
       : record?.status === "error"
         ? { error: record.error ?? `Memory plugin "${record.id}" failed to load` }
@@ -325,12 +338,9 @@ export async function getActiveMemoryProviderCore(
     ...params.context,
     assertCurrent: () => assertMemoryCallerCurrent(params.context),
   };
-  const openParams: MemoryProviderOpenParams = { ...params, context };
-  const before = prepareMemoryCallerRead(context);
-  if (before) {
-    await racePromiseWithAbortSignal(before, context.signal);
-  }
-  context.assertCurrent();
+  // Backend access is host-issued; a caller-supplied value never reaches the owner.
+  const { backends: _callerBackends, ...callerParams } = params;
+  await waitForMemoryCallerRead(context);
   phases.mark("memory.provider-open.runtime");
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
@@ -344,52 +354,50 @@ export async function getActiveMemoryProviderCore(
     return { provider: null, error: "memory provider identity unavailable" };
   }
   const adapter = owner.providerRuntime ? "native" : "legacy";
+  const backendAccess =
+    owner.providerRuntime && owner.backends?.length
+      ? createMemoryBackendAccess(owner.backends, callerParams)
+      : undefined;
+  const openParams: MemoryProviderOpenParams = {
+    ...callerParams,
+    context,
+    ...(backendAccess ? { backends: backendAccess.access } : {}),
+  };
   phases.mark("memory.provider-open.open");
-  const result = owner.providerRuntime
-    ? await owner.providerRuntime.open(openParams)
-    : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
+  let result: MemoryProviderOpenResult;
   try {
-    phases.mark("memory.provider-open.revalidate");
-    const after = prepareMemoryCallerRead(context);
-    if (after) {
-      await racePromiseWithAbortSignal(after, context.signal);
-    }
-    context.assertCurrent();
-    if (
-      result.provider &&
-      (typeof result.provider.search !== "function" ||
-        typeof result.provider.get !== "function" ||
-        typeof result.provider.health !== "function" ||
-        typeof result.provider.close !== "function" ||
-        !isValidMemoryProviderCapabilities(result.provider.capabilities) ||
-        result.provider.capabilities.candidates.length > 0 !==
-          (typeof result.provider.candidates === "function"))
-    ) {
-      throw new Error(
-        "memory provider must implement search, get, health, close, and valid capabilities with matching candidates",
-      );
-    }
+    result = await settleMemoryProviderOpen(
+      owner.providerRuntime
+        ? await owner.providerRuntime.open(openParams)
+        : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams),
+      providerId,
+      context,
+      params.context,
+      (owner.providerRuntime ?? owner.runtime)!,
+      phases,
+      { readOnly: params.purpose === "status" },
+    );
   } catch (error) {
-    if (result.provider && typeof result.provider.close === "function") {
-      phases.mark("memory.provider-open.close");
-      await runPluginCleanup(result.provider, () => result.provider!.close());
-    }
+    await backendAccess?.end();
     throw error;
   }
-  phases.mark("memory.provider-open.bind");
-  return {
-    ...result,
-    providerId,
-    adapter,
-    provider: result.provider
-      ? bindMemoryProvider(
-          result.provider,
-          providerId,
-          params.context,
-          owner.providerRuntime ?? owner.runtime,
-        )
-      : null,
-  };
+  const provider = result.provider;
+  if (backendAccess) {
+    if (provider) {
+      const closeOwner = provider.close.bind(provider);
+      // Mutate in place: refresh handoff is keyed by this bound handle.
+      provider.close = async () => {
+        try {
+          await closeOwner();
+        } finally {
+          await backendAccess.end();
+        }
+      };
+    } else {
+      await backendAccess.end();
+    }
+  }
+  return { ...result, providerId, adapter };
 }
 
 /** Classifies workspace memory paths through the selected memory plugin's provenance owner. */
@@ -502,7 +510,10 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-type MemoryRuntimeRegistry = Pick<PluginRegistry, "memoryCapabilities" | "embeddingProviders">;
+type MemoryRuntimeRegistry = Pick<
+  PluginRegistry,
+  "memoryCapabilities" | "memoryBackends" | "embeddingProviders"
+>;
 
 /**
  * Prepare memory consumers before any changed plugin loses ordinary call admission.
@@ -517,14 +528,16 @@ export function prepareMemoryRuntimeReload(
   const retiringCacheRegistries = retiringMetadata
     ? listPluginCacheRetiringRegistries(getPluginMetadataSnapshotCache(retiringMetadata))
     : [];
+  // Backends drain with the slot owner; their leases hold the same embedding adapters.
   const runtimes = (registry: MemoryRuntimeRegistry) =>
-    new Set(
-      registry.memoryCapabilities.flatMap(({ capability }) =>
+    new Set([
+      ...registry.memoryCapabilities.flatMap(({ capability }) =>
         [capability.runtime, capability.providerRuntime].filter(
           (runtime): runtime is AnyMemoryRuntime => runtime !== undefined,
         ),
       ),
-    );
+      ...registry.memoryBackends.map(({ providerRuntime }) => providerRuntime),
+    ]);
   const nextRuntimes = runtimes(nextRegistry);
   const nextAdapters = new Set(nextRegistry.embeddingProviders.map(({ provider }) => provider));
   const retiringEmbeddingProviders = [

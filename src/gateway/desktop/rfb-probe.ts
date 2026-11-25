@@ -20,8 +20,6 @@ export type RfbProbeResult =
 const MAX_RFB_DESKTOP_NAME_BYTES = 4096;
 const RFB_SERVER_INIT_BYTES = 24;
 
-export { parseRfbVersionBanner };
-
 class SocketEndedError extends Error {
   constructor(readonly buffered: Buffer) {
     super("RFB server closed the handshake early");
@@ -79,6 +77,8 @@ function createSocketReader(socket: net.Socket) {
 /** Replays the inspected prefix while keeping authentication on the same TCP connection. */
 class ConnectedRfbStream extends Duplex {
   private version = Buffer.alloc(0);
+  private writing = false;
+  private finishDestroy: (() => void) | undefined;
 
   constructor(
     private readonly socket: net.Socket,
@@ -128,7 +128,12 @@ class ConnectedRfbStream extends Duplex {
       }
     }
     if (remaining.length) {
-      this.socket.write(remaining, callback);
+      this.writing = true;
+      this.socket.write(remaining, (error) => {
+        this.writing = false;
+        callback(this.errored ?? error);
+        this.finishDestroy?.();
+      });
     } else {
       callback();
     }
@@ -139,8 +144,15 @@ class ConnectedRfbStream extends Duplex {
   }
 
   override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
+    // Retain the wrapper's cause and settle its active write before emitting close.
+    this.finishDestroy = () => {
+      this.finishDestroy = undefined;
+      callback(error);
+    };
     this.socket.destroy();
-    callback(error);
+    if (!this.writing) {
+      this.finishDestroy?.();
+    }
   }
 }
 
@@ -172,8 +184,9 @@ export async function connectRfbServer(params: {
   deadline.unref();
   const reader = createSocketReader(socket);
   let retained = false;
+  let stream: ConnectedRfbStream | undefined;
   const onAbort = () =>
-    socket.destroy(
+    (stream ?? socket).destroy(
       params.signal?.reason instanceof Error
         ? params.signal.reason
         : new Error("RFB connection aborted"),
@@ -216,7 +229,7 @@ export async function connectRfbServer(params: {
     }
     params.signal?.throwIfAborted();
     reader.detach();
-    const stream = new ConnectedRfbStream(socket, version.reply);
+    stream = new ConnectedRfbStream(socket, version.reply);
     // The Gateway still receives the original RFB wire contract. Only its version
     // reply is consumed locally, since inspection already sent it to this peer.
     const inspectedPrefix = Buffer.concat([bannerBytes, securityBuffer]);

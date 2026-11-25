@@ -2,7 +2,7 @@ import { Show } from "solid-js";
 import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { renderGuestWelcomeStatus } from "../pages/chat/components/chat-guest-welcome-status.tsx";
+import { renderGuestWelcomeStatus } from "../pages/chat/components/chat-guest-welcome.tsx";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import { PanelErrorState } from "./solid/lazy-view-error.tsx";
 

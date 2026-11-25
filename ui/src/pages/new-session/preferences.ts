@@ -38,7 +38,6 @@ export function decodePalettePreference(value: unknown): PaletteSessionPreferenc
   delete selection.thinkingLevel;
   delete selection.fastMode;
   delete selection.cyberAccessProgram;
-  delete selection.daybreakAccessProgram;
   delete selection.worktreeName;
   return { agentId: normalizeAgentId(value.agentId), selection };
 }
@@ -79,7 +78,6 @@ export type NewSessionPreference = {
   thinkingLevel?: string;
   fastMode?: FastMode;
   cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export function hasNewSessionModelPreference(
@@ -157,12 +155,6 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
   ) {
     preference.cyberAccessProgram = value.cyberAccessProgram;
   }
-  if (
-    value.daybreakAccessProgram === "daybreak_blue" ||
-    value.daybreakAccessProgram === "daybreak_red"
-  ) {
-    preference.daybreakAccessProgram = value.daybreakAccessProgram;
-  }
   if (typeof value.worktree === "boolean") {
     preference.worktree = value.worktree;
   }
@@ -204,7 +196,6 @@ function normalizeBrowserPreference(value: unknown): NewSessionPreference | null
   }
   // Access choices belong to the authenticated user, never a shared browser origin.
   delete preference.cyberAccessProgram;
-  delete preference.daybreakAccessProgram;
   delete preference.remoteProject;
   delete preference.defaultRepositoryOptOut;
   return Object.keys(preference).length ? preference : null;

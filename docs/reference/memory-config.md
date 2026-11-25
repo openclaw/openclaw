@@ -128,10 +128,13 @@ explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
-chunking, or tokenizer can make the existing SQLite vector index incompatible.
-OpenClaw pauses vector search and reports an index identity warning instead of
-automatically re-embedding everything. Rebuild when you are ready with
-`openclaw memory status --index --agent <id>` or
+chunking, or tokenizer can make the existing memory index incompatible.
+For a scope-only mismatch, the next normal memory search requests a shadow
+rebuild of the configured corpus before serving results. This can re-embed
+content and incur provider costs.
+Other identity mismatches pause vector search and report a warning instead of
+automatically re-embedding everything. Inspect the index with
+`openclaw memory status --index --agent <id>` or rebuild when ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 

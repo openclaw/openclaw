@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  resolveSessionProfileId,
+  projectSessionRelatedProfileIds,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -21,9 +21,51 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
+type SelectionScope = Omit<
+  ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>,
+  "targets"
+>;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
+type SessionRowSelectionSource = {
+  onSelectionChange(listener: (change: SelectionChange) => void): void;
+  onMembershipChange(listener: (sessionKey?: string) => void): void;
+};
+
+// Topology retires scopes; accepted facts advance only their affected partitions.
+const sessionRowSelections = new WeakMap<
+  SessionRowSelectionSource,
+  Map<SelectionScope, Map<boolean, ReturnType<typeof createSessionRowSelection>>>
+>();
+
+export function sessionRowSelectionScopes(projection: SessionRowSelectionSource) {
+  const previous = sessionRowSelections.get(projection);
+  if (previous) {
+    return previous;
+  }
+  const scopes = new Map<
+    SelectionScope,
+    Map<boolean, ReturnType<typeof createSessionRowSelection>>
+  >();
+  sessionRowSelections.set(projection, scopes);
+  projection.onMembershipChange((key) => {
+    for (const variants of scopes.values()) {
+      variants.get(false)?.membershipChanged(key);
+    }
+  });
+  projection.onSelectionChange((change) => {
+    if (change.kind === "reset") {
+      scopes.clear();
+    } else {
+      for (const variants of scopes.values()) {
+        for (const selection of variants.values()) {
+          selection.change(change);
+        }
+      }
+    }
+  });
+  return scopes;
+}
 
 export function createSessionRowSelection(
   cfg: OpenClawConfig,
@@ -46,7 +88,13 @@ export function createSessionRowSelection(
   >();
   // Archive populations own separate revisions; each winner belongs to only one partition.
   let partitions:
-    | Array<{ archived: boolean; revision: object; entries: Map<string, SessionEntryPair> }>
+    | Array<{
+        archived: boolean;
+        revision: object;
+        // Membership publications rotate only invited views of this partition.
+        invitedRevision?: object;
+        entries: Map<string, SessionEntryPair>;
+      }>
     | undefined;
   const partitionFor = (key: string, target: IndexedTarget) => {
     if (!partitions) {
@@ -137,31 +185,17 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      let related: Set<string> | undefined;
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
         cfg,
         configuredAgentIds,
       )?.actor;
-      if (owner?.identity?.type === "profile") {
-        (related ??= new Set()).add(owner.identity.id);
-      }
-      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
-      for (const { identity } of entry.participants ?? []) {
-        if (identity.type === "profile") {
-          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
-        }
-      }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
         entry,
         identities,
       );
-      for (const [profileId, state] of states) {
-        if (state.lastMention) {
-          (related ??= new Set()).add(profileId);
-        }
-      }
+      const related = projectSessionRelatedProfileIds(entry, identities, owner, states);
       // Most rows have identical facets; copy only when a personal override changes membership.
       let personal = related;
       for (const [profileId, state] of states) {
@@ -270,10 +304,12 @@ export function createSessionRowSelection(
     if (previousPartition && previousPartition !== partition) {
       previousPartition.entries.delete(key);
       previousPartition.revision = {};
+      previousPartition.invitedRevision = undefined;
       recordSessionRowPartitionRevision(changeScope);
     }
     if (partition) {
       partition.revision = {};
+      partition.invitedRevision = undefined;
       recordSessionRowPartitionRevision(changeScope);
       partition.entries.set(key, winner!.pair);
     }
@@ -314,6 +350,19 @@ export function createSessionRowSelection(
     },
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row, change.scope);
+    },
+    membershipChanged(key?: string) {
+      if (key === undefined) {
+        partitions?.forEach((part) => {
+          part.invitedRevision = {};
+        });
+      } else {
+        const target = winners.get(key);
+        const part = target && partitionFor(key, target);
+        if (part) {
+          part.invitedRevision = {};
+        }
+      }
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
       assertCanonical();

@@ -125,17 +125,23 @@ export async function resolveGatewayProbeSnapshot(params: {
     ok: false,
     url: gatewayConnection.url,
     connectLatencyMs: null,
+    ...(readiness?.operatorScopeWarning ? { gatewayReached: true as const } : {}),
     error:
       readiness?.waitOutcome === "still-starting"
         ? null
-        : (readiness?.probeError ??
+        : (readiness?.operatorScopeWarning ??
+          readiness?.probeError ??
           (remainingTimeoutMs() === 0
             ? "Gateway check budget exhausted."
             : "Gateway is unreachable")),
     ...(readiness?.waitOutcome === "still-starting"
       ? { startupPhase: readiness.startupPhase ?? "startup" }
       : {}),
-    auth: { role: null, scopes: [], capability: "unknown" },
+    auth: {
+      role: null,
+      scopes: [],
+      capability: readiness?.operatorScopeWarning ? "connected_no_operator_scope" : "unknown",
+    },
     close: null,
     health: null,
     status: null,

@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerOpenClawIdEnglish } from "../i18n/locales/en-openclaw-id.ts";
 import { formatDurationHuman } from "../lib/format-duration.ts";
+import { formatDateTimeMs } from "../lib/format.ts";
 import type {
   OpenClawIdPeopleLink,
   OpenClawIdPublication,
@@ -106,6 +107,43 @@ function joinRequestAttention(
   };
 }
 
+function recoveryUseAttention(
+  clawId: string | undefined,
+  use: NonNullable<OpenClawIdPeopleLink["recoveryUses"]>[number],
+): SidebarAttentionItem {
+  const signature = JSON.stringify([clawId, use.seq]);
+  return {
+    type: "attention",
+    category: "system",
+    kind: "openClawIdRecoveryUse",
+    severity: "warning",
+    icon: "key",
+    requiresAction: true,
+    dismissal: { kind: "openClawIdRecoveryUse", signature },
+    signature,
+    label: t("openclawId.memberUsedRecoveryKit", { name: use.memberName }),
+    detail: t("openclawId.memberRecoveryUseDetail", { browser: use.deviceLabel }),
+    meta: {
+      context: use.deviceLabel,
+      status: formatDateTimeMs(use.usedAt * 1000, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      }),
+    },
+    arrivedAtMs: use.usedAt * 1000,
+    action: {
+      kind: "navigate",
+      routeId: "plugin",
+      search: `${PEOPLE_PAGE_SEARCH}&${new URLSearchParams({ "p.member": use.accountId, "p.device": use.peerKey })}`,
+    },
+  };
+}
+
 // How often a request's time left is shown again: hourly while days remain, then each minute,
 // then every few seconds in its last hour.
 function timeLeftRefreshMs(remainingMs: number): number {
@@ -183,6 +221,7 @@ export async function readOpenClawIdAttention(
           label: t("openclawId.approveNewDevice"),
         },
       })),
+      ...(link?.recoveryUses ?? []).map((use) => recoveryUseAttention(status.link.clawId, use)),
     ],
     nextChangeAt: (nowMs) => {
       const pending = [

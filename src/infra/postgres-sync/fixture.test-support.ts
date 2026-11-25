@@ -26,6 +26,7 @@ export function usePostgresFixture() {
         [Symbol.for("openclaw.postgres-sync-connection")]: { value: true },
         anchor: { value: nativeDatabase() },
         advisoryLockKey: { value: -42n },
+        bridgeParameters: { value: {} },
       });
       return Object.assign(db, { isOpen: true, isTransaction: false, mutationRevision: 0 });
     },

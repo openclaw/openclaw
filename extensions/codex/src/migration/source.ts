@@ -343,6 +343,7 @@ async function readSourceCodexAccount(
       return "chatgpt";
     case "apiKey":
     case "amazonBedrock":
+    case "gcp":
       return "non_chatgpt";
     default:
       return "missing";

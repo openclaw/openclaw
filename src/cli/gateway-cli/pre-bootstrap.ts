@@ -636,6 +636,10 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
       ),
     );
   }
+  // State preparation can take minutes. Only its completion shortens the launcher's trial.
+  if (process.env.OPENCLAW_LAUNCHER_IPC === "1" && process.connected && process.send) {
+    process.send({ type: "openclaw.trial", phase: "trial" }, () => {});
+  }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
   if (!environmentSelection) {

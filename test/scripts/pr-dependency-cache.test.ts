@@ -1082,8 +1082,23 @@ describePosix("PR cache anchor lifetime", () => {
       let waiter: ReturnType<typeof metadataWorker> | undefined;
       try {
         await holder.ready("held", signal);
-        waiter = metadataWorker(f, 'withDependencyCacheLock(cache, () => report("acquired"));');
-        await waiter.ready("contended", signal);
+        waiter = metadataWorker(
+          f,
+          `
+const readdir = fs.readdirSync;
+fs.readdirSync = function(path, ...args) {
+  const entries = readdir(path, ...args);
+  if (path === cache + "/.metadata-lock") {
+    report("observed-owner");
+    gate();
+  }
+  return entries;
+};
+syncBuiltinESMExports();
+withDependencyCacheLock(cache, () => report("acquired"));
+`,
+        );
+        await waiter.ready("observed-owner", signal);
         if (fault !== "normal release") {
           renameSync(f.cache, `${f.cache}.retained`);
           if (fault === "replaced cache") {
@@ -1091,11 +1106,12 @@ describePosix("PR cache anchor lifetime", () => {
           }
         }
         holder.release();
+        const [holderStatus] = await withinTest(holder.completed, signal);
+        waiter.release();
         if (fault === "normal release") {
           await waiter.ready("acquired", signal);
         }
         const [status] = await withinTest(waiter.completed, signal);
-        const [holderStatus] = await withinTest(holder.completed, signal);
         if (fault === "normal release") {
           expect(status, waiter.errors()).toBe(0);
           expect(holderStatus, holder.errors()).toBe(0);
