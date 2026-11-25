@@ -63,7 +63,8 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
     callId?: string;
     gaSessionPolicy?: RealtimeGaSessionPolicy;
     voice?: OpenAIRealtimeVoice;
-    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
+    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn"> &
+      Partial<Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "debug">>;
   };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";

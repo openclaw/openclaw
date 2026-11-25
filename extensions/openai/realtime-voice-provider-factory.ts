@@ -124,6 +124,12 @@ async function resolveOpenAIRealtimeVoiceConfigAsync(
   return { ...config, model };
 }
 
+// Direct GA sockets to api.openai.com accept ChatGPT OAuth; custom endpoints and
+// GPT-Live bridges keep their own auth contracts.
+function allowsSubscriptionSocket(config: OpenAIRealtimeVoiceProviderConfig): boolean {
+  return !config.baseUrl && !isOpenAIGptLiveModel(config.model ?? OPENAI_REALTIME_DEFAULT_MODEL);
+}
+
 export function buildOpenAIRealtimeVoiceProvider(
   context: OpenAIRealtimeHost,
   options?: {
@@ -165,13 +171,17 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      return hasOpenAIRealtimePlatformAuthInput(
-        {
-          configuredApiKey: config.apiKey,
-          cfg,
-          agentId,
-        },
-        context,
+      return (
+        hasOpenAIRealtimePlatformAuthInput(
+          {
+            configuredApiKey: config.apiKey,
+            cfg,
+            agentId,
+          },
+          context,
+        ) ||
+        (allowsSubscriptionSocket(config) &&
+          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
       );
     },
     isConfiguredAsync: async ({ cfg, providerConfig, agentId }) => {
@@ -179,13 +189,17 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (config.azureEndpoint || config.azureDeployment) {
         return hasOpenAIRealtimeApiKeyInput(config.apiKey);
       }
-      return hasOpenAIRealtimePlatformAuthInputAsync(
-        {
-          configuredApiKey: config.apiKey,
-          cfg,
-          agentId,
-        },
-        context,
+      return (
+        (await hasOpenAIRealtimePlatformAuthInputAsync(
+          {
+            configuredApiKey: config.apiKey,
+            cfg,
+            agentId,
+          },
+          context,
+        )) ||
+        (allowsSubscriptionSocket(config) &&
+          (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
       );
     },
     createBridge: (req) => {
