@@ -750,14 +750,14 @@ struct RootTabs: View {
                 isPresented: self.$showOnboarding,
                 onDismiss: { self.openClawIDSetup = nil },
                 content: {
-                if let openClawIDSetup {
-                    OpenClawIDOnboardingView(
-                        model: openClawIDSetup,
-                        onOtherWays: { self.openClawIDSetup = nil })
-                } else {
-                    self.onboardingWizard(offersNewUserGuide: offersNewUserGuide)
-                }
-            })
+                    if let openClawIDSetup {
+                        OpenClawIDOnboardingView(
+                            model: openClawIDSetup,
+                            onOtherWays: { self.openClawIDSetup = nil })
+                    } else {
+                        self.onboardingWizard(offersNewUserGuide: offersNewUserGuide)
+                    }
+                })
             .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
             .execApprovalPromptDialog(
