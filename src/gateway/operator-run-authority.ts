@@ -295,6 +295,17 @@ export async function prepareGatewayOperatorRunAuthority(
         (client.authPolicy?.authMethod === "token" ||
           client.authPolicy?.authMethod === "password")));
   const authenticatedOwner = isAuthenticatedOwner(actor);
+  if (
+    client &&
+    !actor &&
+    client.connect.role === "operator" &&
+    client.authPolicy?.authMethod === "none" &&
+    client.internal?.isLocalClient === true &&
+    !client.internal.agentRuntimeIdentity
+  ) {
+    // An authless local socket is the local-host principal: the owner, with its own scopes.
+    return admitOwnerCredential(client, params.context);
+  }
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;
   }
@@ -541,12 +552,16 @@ export async function prepareGatewayHttpOperatorRunAuthority(
   const { client } = input;
   // The owner's own credential (shared token or password, private no-auth) names the owner
   // principal with the request's scopes, as on a Control UI socket; admission decides the grant.
-  if (
-    client.authenticatedUserProfile?.profileId !== GATEWAY_OWNER_PROFILE_ID ||
+  return client.authenticatedUserProfile?.profileId !== GATEWAY_OWNER_PROFILE_ID ||
     client.internal?.openclawIdPrincipal
-  ) {
-    return prepareGatewayOperatorRunAuthority(input);
-  }
+    ? prepareGatewayOperatorRunAuthority(input)
+    : admitOwnerCredential(client, input.context);
+}
+
+async function admitOwnerCredential(
+  client: GatewayClient,
+  context: GatewayOperatorRunAdmissionInput["context"],
+) {
   const facts = {
     kind: "recorded",
     snapshot: {
@@ -556,5 +571,5 @@ export async function prepareGatewayHttpOperatorRunAuthority(
       assignedRole: null,
     },
   } as const;
-  return decideOperatorAdmission(facts, await prepareOperatorAdmission(facts, input.context));
+  return decideOperatorAdmission(facts, await prepareOperatorAdmission(facts, context));
 }

@@ -1,3 +1,4 @@
+import type { TurnGrant } from "../../agents/admitted-run-operator-authority.types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -9,6 +10,7 @@ type ChatSendExternalAdmissionParams = {
   isUncontrolledDashboardChild?: boolean;
   client: GatewayRequestHandlerOptions["client"];
   inputProvenance?: InputProvenance;
+  grant?: TurnGrant;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognitoEntry: boolean;

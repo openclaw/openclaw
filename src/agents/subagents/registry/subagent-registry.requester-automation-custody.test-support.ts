@@ -89,7 +89,7 @@ export function registerRequesterAutomationCustodyTests({
         createCronCreatorAuthorityCapability(
           requesterTurnRunId,
           { kind: "unknown" },
-          { source: "control-ui-admin" },
+          { source: "operator" },
         ),
         "original automation management capability",
       );
@@ -162,7 +162,7 @@ export function registerRequesterAutomationCustodyTests({
             turnKind: "main",
             isDirectExternalUser: true,
           }),
-        ).toMatchObject({ managementEntitlement: { source: "control-ui-admin" } });
+        ).toMatchObject({ managementEntitlement: { source: "operator" } });
         const resultText = "Original child result";
         await updateRun(runId, (draft) => {
           draft.execution = {
