@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -21,8 +21,6 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
-// Gateway consults enter the typed-turn command owner; the stand-in keeps the
-// gated backend in control of mailbox ordering.
 // mock-isolation: command-owner stand-in keeps the gated backend in control of mailbox ordering.
 vi.mock("../../agents/agent-command.js", async () => {
   const { createTalkCommandOwnerStandIn } =
@@ -146,13 +144,8 @@ let runSequence = 0;
 const startedRunIds: string[] = [];
 
 beforeEach(() => {
-  resetConsultFixture();
   mocks.runEmbeddedAgentCore.mockReset();
-  // The command owner settles with run meta, as the real one does.
-  mocks.runEmbeddedAgentCore.mockResolvedValue({
-    payloads: [],
-    meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "done" } },
-  });
+  resetConsultFixture();
   order.length = 0;
   startedRunIds.length = 0;
   mocks.consultRealtimeVoiceAgent.mockImplementation(async (params: ConsultParams) => {
@@ -180,11 +173,18 @@ beforeEach(() => {
 
 afterEach(resetSessionControllerStateForTest);
 
-it("runs a Gateway-bound voice consult outside the request scope", async () => {
-  const { enqueue, owner, expectResults } = createOwner(undefined, true);
+it("runs a Gateway-bound voice consult outside the request scope", async ({ signal }) => {
+  const { bridge, enqueue, owner, expectResults } = createOwner(undefined, true);
+  const earlyReply = createDeferred<never>();
+  bridge.submitToolResult.mockImplementationOnce(async (...args: unknown[]) => {
+    earlyReply.reject(
+      new Error(`Talk settled before its backend started: ${JSON.stringify(args[1])}`),
+    );
+  });
   const task = enqueue("consult", "configure the Dial");
   try {
-    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    await withinTest(Promise.race([task.started.promise, earlyReply.promise]), signal);
+    expect(order).toEqual(["configure the Dial"]);
     task.release();
     await expectResults("configure the Dial");
   } finally {

@@ -13,6 +13,7 @@ vi.mock("../../agents/prepared-model-runtime.js", () => ({
 }));
 
 import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTalkConsultPublishedRuntime } from "./client-agent-runtime-dispatch.js";
 
 afterEach(() => {
@@ -30,7 +31,7 @@ function lease(name: string) {
   };
 }
 
-const config = {
+const config: OpenClawConfig = {
   agents: {
     defaults: {
       model: { primary: "anthropic/claude-sonnet-5-5" },
@@ -39,19 +40,26 @@ const config = {
   },
 };
 
-it("runs the consult in the published runtime leased for the session's own model", async () => {
-  const dispatchLease = lease("dispatch");
-  const modelLease = lease("model");
+const target = { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined };
+
+function publishRuntime(runtimeConfig: OpenClawConfig = config) {
+  const dispatch = lease("dispatch");
   prepared.load.mockImplementation(async (params: { onRuntimeLease: (l: unknown) => void }) => {
-    params.onRuntimeLease(dispatchLease);
+    params.onRuntimeLease(dispatch);
     return {
       agentId: "main",
-      agentDir: "/agent",
-      workspaceDir: "/workspace",
-      config,
-      pluginGeneration: dispatchLease.pluginGeneration,
+      agentDir: "/a",
+      workspaceDir: "/w",
+      config: runtimeConfig,
+      pluginGeneration: dispatch.pluginGeneration,
     };
   });
+  return dispatch;
+}
+
+it("runs the consult in the published runtime leased for the session's own model", async () => {
+  const dispatchLease = publishRuntime();
+  const modelLease = lease("model");
   prepared.acquire.mockResolvedValue(modelLease);
   const run = vi.fn(async (context: unknown) => {
     expect(getPreparedModelRuntimePluginGeneration()).toBe(modelLease.pluginGeneration);
@@ -83,24 +91,11 @@ it("runs the consult in the published runtime leased for the session's own model
 });
 
 it("releases the dispatch lease without starting a consult when no model is configured", async () => {
-  const dispatchLease = lease("dispatch");
-  prepared.load.mockImplementation(async (params: { onRuntimeLease: (l: unknown) => void }) => {
-    params.onRuntimeLease(dispatchLease);
-    return {
-      agentId: "main",
-      agentDir: "/a",
-      workspaceDir: "/w",
-      config: {},
-      pluginGeneration: {},
-    };
-  });
+  const dispatchLease = publishRuntime({});
   const run = vi.fn();
-  await expect(
-    withTalkConsultPublishedRuntime(
-      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
-      run,
-    ),
-  ).rejects.toThrow("No model is configured");
+  await expect(withTalkConsultPublishedRuntime(target, run)).rejects.toThrow(
+    "No model is configured",
+  );
   expect(dispatchLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
   expect(prepared.acquire).not.toHaveBeenCalled();
   expect(run).not.toHaveBeenCalled();
@@ -109,30 +104,18 @@ it("releases the dispatch lease without starting a consult when no model is conf
 it("keeps the command owner's own loading when no runtime is published", async () => {
   prepared.load.mockResolvedValue(undefined);
   const run = vi.fn(async (context: unknown) => context);
-  await expect(
-    withTalkConsultPublishedRuntime(
-      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
-      run,
-    ),
-  ).resolves.toBeUndefined();
+  await expect(withTalkConsultPublishedRuntime(target, run)).resolves.toBeUndefined();
   expect(prepared.acquire).not.toHaveBeenCalled();
 });
 
 it("releases the model lease when the consult fails", async () => {
-  const dispatchLease = lease("dispatch");
+  const dispatchLease = publishRuntime();
   const modelLease = lease("model");
-  prepared.load.mockImplementation(async (params: { onRuntimeLease: (l: unknown) => void }) => {
-    params.onRuntimeLease(dispatchLease);
-    return { agentId: "main", agentDir: "/a", workspaceDir: "/w", config, pluginGeneration: {} };
-  });
   prepared.acquire.mockResolvedValue(modelLease);
   await expect(
-    withTalkConsultPublishedRuntime(
-      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
-      async () => {
-        throw new Error("synthetic consult failure");
-      },
-    ),
+    withTalkConsultPublishedRuntime(target, async () => {
+      throw new Error("synthetic consult failure");
+    }),
   ).rejects.toThrow("synthetic consult failure");
   expect(dispatchLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
   expect(modelLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
@@ -145,12 +128,9 @@ it("releases a lease handed over before publication fails", async () => {
     throw new Error("synthetic publication failure");
   });
   const run = vi.fn();
-  await expect(
-    withTalkConsultPublishedRuntime(
-      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
-      run,
-    ),
-  ).rejects.toThrow("synthetic publication failure");
+  await expect(withTalkConsultPublishedRuntime(target, run)).rejects.toThrow(
+    "synthetic publication failure",
+  );
   expect(dispatchLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
   expect(run).not.toHaveBeenCalled();
 });
@@ -160,11 +140,6 @@ it("falls back to the command owner's loading when the agent has no published ow
     await import("../../agents/prepared-model-runtime-admission-errors.js");
   prepared.load.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError("unpublished"));
   const run = vi.fn(async (context: unknown) => context);
-  await expect(
-    withTalkConsultPublishedRuntime(
-      { agentId: "main", sessionKey: "agent:main:main", sessionEntry: undefined },
-      run,
-    ),
-  ).resolves.toBeUndefined();
+  await expect(withTalkConsultPublishedRuntime(target, run)).resolves.toBeUndefined();
   expect(run).toHaveBeenCalledOnce();
 });
