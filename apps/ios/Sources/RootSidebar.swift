@@ -398,7 +398,8 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.chat)
             } label: {
                 HStack(spacing: 10) {
-                    RootSidebarIcon(systemName: "bubble.left.and.bubble.right", pointSize: 16)
+                    // One bubble for the one main chat; Sessions, the plural, has two.
+                    RootSidebarIcon(systemName: "bubble.left", pointSize: 16)
                         .foregroundStyle(OpenClawSidebarPalette.text.opacity(0.82))
                     Text(String(localized: "Main chat"))
                         .font(OpenClawType.subheadMedium)

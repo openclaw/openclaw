@@ -73,7 +73,7 @@ extension RootTabs {
             case .workboard: "folder"
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
-            case .sessions: "doc.text"
+            case .sessions: "bubble.left.and.bubble.right"
             case .files: "folder.fill"
             case .dreaming: "moon.stars"
             case .usage: "gauge.with.dots.needle.33percent"
