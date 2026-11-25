@@ -22,6 +22,33 @@ normalized outcome codes. It never stores prompts, message bodies, tool
 arguments, tool results, attachments, filenames, URLs, command output, or raw
 error text.
 
+## Choose the right audit view
+
+- **Run, tool, or message activity:** use [`openclaw audit`](/cli/audit) to
+  find recorded events across runs. Without `--explain`, `--run <id>` filters
+  activity by run correlation; it does not select an exact execution.
+- **Identity and decisions for one execution:** use
+  `openclaw audit --run <id> --explain` to find retained executions, then
+  `openclaw audit --execution <id> --explain` to inspect one. You can also use the Control UI's
+  [Run inspector](/web/control-ui/settings#activity-tab). Identity collection
+  is opt-in and applies only to newly admitted runs. The inspector does not
+  infer a receipt from an activity row.
+- **Administrative changes:** open **Recent changes** on Ask OpenClaw
+  ([Change history](/cli/openclaw#change-history)) for recent applied system
+  operations, config changes, and role assignments. The `openclaw.changes.list`
+  RPC requires `operator.admin` and reads a separate journal, not run receipts.
+  To look up a terminal operator approval without an exact execution link, use
+  [approval history](/gateway/protocol/rpc-devices-nodes-and-approvals#approval-families).
+
+An empty result means that view returned no matching retained evidence. Check
+that you are querying the Gateway that handled the action, using the right
+selector and time range, and that collection was enabled for that event at
+the time. Queue delays, uncovered paths, failed writes, and retention limits
+can all leave gaps. A recorded approval decision does not, on its own, prove
+the approved action ran.
+
+## Evidence sources
+
 The Gateway also keeps an adjacent execution identity context for newly
 admitted agent runs. This context is authoritative for the identity facts it
 contains; it does not make the activity ledger lossless and does not turn audit
@@ -511,13 +538,24 @@ compliance archive; if you need one, use an external system fed by
 
 ## Storage, retention, and migration
 
-Records live in the shared state database (`state/openclaw.sqlite`). The existing
-shared-state worker executes audit writes and maintenance off the Gateway thread,
-including schema/key first use and write-triggered pruning. Queries never return records older than 30
-days, and the ledger is capped at 100,000 rows; expired rows are pruned during
-startup, hourly maintenance, and later writes. Each ledger or progress cleanup
+The Gateway's shared-state backend owns activity, execution evidence, and
+administrative change history. By default this is SQLite at
+`state/openclaw.sqlite` under the state directory. Check the Gateway's
+effective `state` engine (`database.families.state.engine`, or
+`database.engine` if unset). On PostgreSQL, that path is a
+[local anchor](/reference/database-engines#anchors-and-backups), not a SQLite
+copy of the audit rows; the matched PostgreSQL schema stores them.
+
+The shared-state worker executes audit writes and maintenance off the Gateway
+thread. Activity queries do not return rows older than 30 days, even before
+physical pruning. The activity ledger can prune rows sooner when it reaches its
+100,000-row cap. Expired rows are pruned during startup, hourly maintenance,
+and later writes. Each ledger or progress cleanup
 transaction deletes at most 1,024 expired rows and schedules more work until
 settled. Retention maintenance keeps running even when collection is disabled.
+
+Administrative change history keeps the latest 50,000 entries per journal
+scope, rather than using the activity ledger's 30-day cutoff.
 
 Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created if needed on
@@ -544,8 +582,8 @@ additive table is created lazily on first use without a schema-version bump.
 Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
-SQLite persistence happen in the process-owned audit queue drain, never in
-agent admission. Audit writes use the shared worker's SQLite busy timeout. A
+persistence happen in the process-owned audit queue drain, never in
+agent admission. On SQLite, audit writes use the shared worker's busy timeout. A
 competing writer can delay that worker until the timeout, while the Gateway
 thread remains nonblocking. Failed lock attempts retain FIFO retries with
 bounded asynchronous backoff.
