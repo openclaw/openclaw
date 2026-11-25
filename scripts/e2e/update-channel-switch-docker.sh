@@ -11,6 +11,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
+# The seed job packages its own checkout; pinned acceptance passes its own SHA.
+if [ -z "${OPENCLAW_SELECTED_SHA:-}" ] && [ -n "${OPENCLAW_DOCKER_E2E_CHANNEL_SWITCH_SOURCE_SHA:-}" ]; then
+  export OPENCLAW_SELECTED_SHA="$OPENCLAW_DOCKER_E2E_CHANNEL_SWITCH_SOURCE_SHA"
+fi
 openclaw_resolve_frozen_update_channel_switch_contract "$SOURCE_ROOT"
 fixture_pnpm_pin=""
 if [ "$OPENCLAW_FROZEN_TARGET_PACKAGE_TO_GIT_MODE" = detached ]; then
@@ -73,16 +77,17 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 # Validate the package-derived fixture and prepare its generated build metadata.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture \
   "$git_root" "$OPENCLAW_UPDATE_CHANNEL_SWITCH_FIXTURE_PNPM_PIN"
+# Native pnpm does not read npm_config_registry. Use the same candidate registry
+# for both lockfile generation and frozen install. npm still uses
+# the separate channel-switch registry below.
+if [ "$git_mode" = detached ] && [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-}" ]; then
+  export PNPM_CONFIG_REGISTRY="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL"
+fi
 (
   cd "$git_root"
   if [ "$git_mode" = detached ]; then
     # The release builder requires a frozen lockfile for the rewritten fixture manifest.
     fixture_install=(pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts)
-    if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-}" ]; then
-      # Native pnpm does not read npm_config_registry. The lockfile must retain
-      # the candidate-only tarball URLs for the later frozen release build.
-      fixture_install+=(--registry="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL")
-    fi
   else
     # The in-place updater needs the fixture runtime and its optional native prebuilds.
     fixture_install=(npm install --omit=dev --no-fund --no-audit)

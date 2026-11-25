@@ -6932,6 +6932,7 @@ jobs:
 
       - name: Run Docker seed tier
         env:
+          OPENCLAW_DOCKER_E2E_CHANNEL_SWITCH_SOURCE_SHA: *checkout_sha
           npm_config_logs_dir: ${{ runner.temp }}/docker-seed-npm-logs
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
