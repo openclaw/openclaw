@@ -4,30 +4,30 @@
 // builder, with the real plugin registered so owner entries use its allowlist normalizer.
 import { describe, expect, it } from "vitest";
 import { linePlugin } from "../extensions/line/api.js";
-import { lineIngressIdentity } from "../extensions/line/src/bot-access.js";
+import { lineIngressIdentity } from "../extensions/line/test-api.js";
 import { matrixPlugin } from "../extensions/matrix/api.js";
-import { resolveMatrixMonitorAccessState } from "../extensions/matrix/src/matrix/monitor/access-state.js";
-import { setMatrixRuntime } from "../extensions/matrix/src/runtime.js";
+import {
+  resolveMatrixMonitorAccessState,
+  setMatrixRuntime,
+} from "../extensions/matrix/test-api.js";
 import { msteamsPlugin } from "../extensions/msteams/api.js";
-import { resolveMSTeamsSenderAccess } from "../extensions/msteams/src/monitor-handler/access.js";
-import { setMSTeamsRuntime } from "../extensions/msteams/src/runtime.js";
+import { resolveMSTeamsSenderAccess, setMSTeamsRuntime } from "../extensions/msteams/test-api.js";
 import { nextcloudTalkPlugin } from "../extensions/nextcloud-talk/api.js";
-import { nextcloudTalkIngressIdentity } from "../extensions/nextcloud-talk/src/policy.js";
+import { nextcloudTalkIngressIdentity } from "../extensions/nextcloud-talk/test-api.js";
 import { signalPlugin } from "../extensions/signal/api.js";
-import { resolveSignalAccessState } from "../extensions/signal/src/monitor/access-policy.js";
-import { setSignalRuntime } from "../extensions/signal/src/runtime.js";
+import { resolveSignalAccessState, setSignalRuntime } from "../extensions/signal/test-api.js";
 import { setSynologyRuntime, synologyChatPlugin } from "../extensions/synology-chat/api.js";
-import { authorizeUserForDmWithIngress } from "../extensions/synology-chat/src/security.js";
+import { authorizeUserForDmWithIngress } from "../extensions/synology-chat/test-api.js";
 import { whatsappPlugin } from "../extensions/whatsapp/api.js";
 import {
   resolveWhatsAppIngressAccess,
   resolveWhatsAppInboundPolicy,
-} from "../extensions/whatsapp/src/inbound-policy.js";
-import { setWhatsAppRuntime } from "../extensions/whatsapp/src/runtime.js";
+  setWhatsAppRuntime,
+} from "../extensions/whatsapp/test-api.js";
 import { zaloPlugin } from "../extensions/zalo/api.js";
-import { zaloIngressIdentity } from "../extensions/zalo/src/group-access.js";
+import { zaloIngressIdentity } from "../extensions/zalo/test-api.js";
 import { zalouserPlugin } from "../extensions/zalouser/api.js";
-import { zalouserIngressIdentity } from "../extensions/zalouser/src/ingress.js";
+import { zalouserIngressIdentity } from "../extensions/zalouser/test-api.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../packages/gateway-protocol/src/schema/users.js";
 import { getCommandOwnerAuthority } from "../src/auto-reply/command-owner-authority.js";
 import {
@@ -130,7 +130,7 @@ async function admitOwner(cell: Cell) {
           inboundEventKind: "user_request",
         },
       });
-      const ctx = await host.buildContext({ ...message, channelIngress });
+      const ctx = host.buildContext({ ...message, channelIngress });
       return getCommandOwnerAuthority(ctx)?.operatorAuthority;
     });
   } finally {
