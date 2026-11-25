@@ -7,6 +7,9 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["groq"],
+  "providerNames": {
+    "groq": "Groq"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "groq-native",

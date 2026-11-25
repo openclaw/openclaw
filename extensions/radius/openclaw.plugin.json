@@ -6,6 +6,9 @@
   "activation": { "onStartup": false },
   "enabledByDefault": true,
   "providers": ["radius"],
+  "providerNames": {
+    "radius": "Radius"
+  },
   "modelCatalog": { "discovery": { "radius": "refreshable" } },
   "setup": { "providers": [{ "id": "radius", "envVars": ["RADIUS_API_KEY"] }] },
   "providerAuthChoices": [

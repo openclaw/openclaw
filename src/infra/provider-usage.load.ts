@@ -1,4 +1,5 @@
 import { ensureAuthProfileStoreAsync, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
   listProviderUsagePluginDescriptors,
@@ -14,7 +15,6 @@ import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.j
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
   ignoredErrors,
-  providerUsageLabel,
   raceUsageTimeout,
 } from "./provider-usage.shared.js";
 import type {
@@ -44,19 +44,16 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
     ? requestedProviders.map((provider) => ({
         provider,
-        displayName: providerUsageLabel(provider) ?? provider,
+        displayName: resolveProviderDisplayName(provider, { config }),
       }))
     : listProviderUsagePluginDescriptors({
         config,
         workspaceDir: opts.workspaceDir,
         env,
       });
-  const displayNames = new Map(
-    descriptors.map((descriptor) => [descriptor.provider, descriptor.displayName]),
-  );
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
-    displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
+    displayName: resolveProviderDisplayName(provider, { config }),
     windows: [],
     error,
   });
@@ -136,10 +133,17 @@ export async function loadProviderUsageSummary(
             },
           });
           return snapshot
-            ? { ...snapshot, authProfileId: auth.authProfileId }
+            ? {
+                ...snapshot,
+                displayName: resolveProviderDisplayName(snapshot.provider, {
+                  config,
+                  fallbackName: snapshot.displayName,
+                }),
+                authProfileId: auth.authProfileId,
+              }
             : {
                 provider: auth.provider,
-                displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+                displayName: resolveProviderDisplayName(auth.provider, { config }),
                 windows: [],
                 error: "Unsupported provider",
               };

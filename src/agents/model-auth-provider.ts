@@ -45,6 +45,7 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { resolveProviderDisplayName } from "./provider-display-name.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -706,7 +707,7 @@ export async function resolveApiKeyForProviderCore(input: {
     throw new ProviderAuthError(
       "missing-provider-auth",
       provider,
-      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected.`,
+      `The ${resolveProviderDisplayName(provider, { config: cfg })} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected.`,
       { providerGuidance: true, cause: failure },
     );
   }

@@ -10,6 +10,9 @@
   "enabledByDefault": true,
   "autoEnableWhenConfiguredProviders": ["llama-cpp"],
   "providers": ["llama-cpp"],
+  "providerNames": {
+    "llama-cpp": "llama.cpp"
+  },
   "modelCatalog": {
     "discovery": {
       "llama-cpp": "refreshable"

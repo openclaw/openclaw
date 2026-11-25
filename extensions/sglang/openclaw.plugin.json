@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["sglang"],
+  "providerNames": {
+    "sglang": "SGLang"
+  },
   "modelCatalog": {
     "discovery": {
       "sglang": "refreshable"

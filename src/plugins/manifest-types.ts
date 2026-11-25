@@ -476,6 +476,12 @@ export type PluginManifest = {
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
+  /**
+   * Display name per provider id this manifest declares (`providers`, `cliBackends`,
+   * `modelCatalog.providers`, `contracts.decisionProviders`), as a person would
+   * recognise it ("OpenRouter"). Read before provider runtime loads.
+   */
+  providerNames?: Record<string, string>;
   /** The declared providers own transient rate-limit/overload recovery, never auth or billing. */
   managesOwnAvailability?: boolean;
   /**

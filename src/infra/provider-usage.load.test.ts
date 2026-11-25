@@ -16,10 +16,14 @@ import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types
 const usageNow = Date.UTC(2026, 0, 7, 0, 0, 0);
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
-const claude: ProviderUsageSnapshot = { provider: "anthropic", displayName: "Claude", windows: [] };
+const claude: ProviderUsageSnapshot = {
+  provider: "anthropic",
+  displayName: "Anthropic",
+  windows: [],
+};
 const codex: ProviderUsageSnapshot = {
   provider: "openai",
-  displayName: "Codex",
+  displayName: "OpenAI",
   windows: [{ label: "3h", usedPercent: 12 }],
 };
 const load = (options: Parameters<typeof loadProviderUsageSummary>[0]) =>
@@ -35,6 +39,29 @@ describe("provider-usage.load", () => {
     resetProviderUsageSnapshotWithPluginMock();
   });
   afterEach(() => vi.useRealTimers());
+
+  it.each([0, 1000])(
+    "uses the operator name for timeout and successful results (budget %i)",
+    async (timeoutMs) => {
+      resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue({
+        ...claude,
+        displayName: "Stale hook label",
+      });
+      const result = await load({
+        config: {
+          models: {
+            providers: {
+              anthropic: { models: [], baseUrl: "https://example.test", name: "Team account" },
+            },
+          },
+        },
+        auth: [{ provider: "anthropic", token: "fixture-token" }],
+        timeoutMs,
+      });
+      expect(result.providers[0]?.displayName).toBe("Team account");
+      expect(result.providers[0]?.error).toBe(timeoutMs ? undefined : "Timeout");
+    },
+  );
 
   it("does not dispatch auth or fetch for an exhausted budget", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
@@ -257,14 +284,14 @@ describe("provider-usage.load", () => {
       { ...claude, error: "auth failed" },
       {
         provider: "openai",
-        displayName: "openai",
+        displayName: "OpenAI",
         windows: [{ label: "5h", usedPercent: 12 }],
       },
     ]);
   });
 
   it.each([
-    ["xiaomi", "Xiaomi"],
+    ["xiaomi", "Xiaomi MiMo"],
     ["unsupported-provider", "unsupported-provider"],
   ])("returns unsupported %s without ambient fetch", async (provider, displayName) => {
     const previousFetch = globalThis.fetch;

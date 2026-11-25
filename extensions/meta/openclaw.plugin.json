@@ -8,6 +8,9 @@
   "providers": [
     "meta"
   ],
+  "providerNames": {
+    "meta": "Meta"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "meta-native",

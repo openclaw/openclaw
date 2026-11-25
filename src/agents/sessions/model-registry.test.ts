@@ -18,6 +18,7 @@ import {
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../plugin-model-catalog.js";
+import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import { AuthStorage } from "./auth-storage.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { readModelRegistryPluginCatalogs } from "./model-registry-sources.js";
@@ -130,6 +131,23 @@ describe("ModelRegistry", () => {
       },
     };
   }
+
+  it("preserves the released display-name method and instance-specific precedence", () => {
+    const auth = AuthStorage.inMemory();
+    const registry = capturedRegistry({}, auth);
+    const other = capturedRegistry({});
+    const oauth = oauthProviderConfig("OAuth account", "fixture").oauth!;
+    getAuthStorageOAuthProviderRegistry(auth).register({ id: "standalone", ...oauth });
+    registry.registerProvider("openai", { oauth, name: "Registered account" });
+    registry.registerProvider("oauth-only", { oauth });
+
+    expect(registry.getProviderDisplayName("openai")).toBe("Registered account");
+    expect(registry.getProviderDisplayName("oauth-only")).toBe("OAuth account");
+    expect(registry.getProviderDisplayName("standalone")).toBe("OAuth account");
+    expect(other.getProviderDisplayName("oauth-only")).toBe("oauth-only");
+    expect(other.getProviderDisplayName("comfy")).toBe("ComfyUI");
+    expect(other.getProviderDisplayName("unknown-provider")).toBe("unknown-provider");
+  });
 
   it("names the async unregister replacement once and keeps async unregister silent", async () => {
     const modelsPath = writeRoot();

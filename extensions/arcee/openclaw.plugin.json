@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["arcee"],
+  "providerNames": {
+    "arcee": "Arcee AI"
+  },
   "providerAuthAliases": {
     "arcee": {
       "provider": "openrouter",

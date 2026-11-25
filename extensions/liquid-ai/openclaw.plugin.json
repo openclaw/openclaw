@@ -4,6 +4,9 @@
   "activation": { "onStartup": false },
   "enabledByDefault": true,
   "providers": ["liquid-ai"],
+  "providerNames": {
+    "liquid-ai": "Liquid AI"
+  },
   "providerEndpoints": [
     { "endpointClass": "liquid-ai-native", "hosts": ["api.liquid.ai"] }
   ],

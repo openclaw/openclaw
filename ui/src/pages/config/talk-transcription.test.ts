@@ -205,7 +205,7 @@ it.each([
     );
     expect(
       modelRow?.textContent?.includes(
-        t("talkPage.transcription.providerNotReadyDescription", { provider: "Deepgram" }),
+        t("talkPage.transcription.providerNotReadyDescription", { provider: "deepgram" }),
       ),
     ).toBe(warns);
     expect(
@@ -399,7 +399,7 @@ it("sends the Talk row to AI Agents settings when the voice model chose its prov
 });
 
 it.each([
-  { provider: "deepgram", model: "nova-3", label: "Deepgram", inModels: false },
+  { provider: "deepgram", model: "nova-3", label: "deepgram", inModels: false },
   {
     provider: "openrouter",
     model: "openai/whisper-large-v3-turbo",

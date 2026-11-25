@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["github-copilot"],
+  "providerNames": {
+    "github-copilot": "GitHub Copilot"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "github-copilot-native",

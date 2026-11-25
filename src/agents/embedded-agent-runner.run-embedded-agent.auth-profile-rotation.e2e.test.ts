@@ -667,7 +667,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       }),
       { reason: "billing", provider: "openai", model: "mock-rotated" },
     );
-    expect(errorRecord.message).toContain("openai (mock-rotated) returned a billing error");
+    expect(errorRecord.message).toContain("OpenAI (mock-rotated) returned a billing error");
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
   });
 

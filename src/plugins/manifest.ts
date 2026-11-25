@@ -462,6 +462,7 @@ export function loadPluginManifest(
       channels,
     ),
     providers,
+    providerNames: capabilityNormalizers.normalizeManifestStringRecord(raw.providerNames),
     ...(raw.managesOwnAvailability === true ? { managesOwnAvailability: true } : {}),
     providerCatalogEntry: normalizeOptionalString(raw.providerCatalogEntry),
     capabilityCatalogEntry:

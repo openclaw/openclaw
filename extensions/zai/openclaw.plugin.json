@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["zai"],
+  "providerNames": {
+    "zai": "Z.AI"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "zai-native",

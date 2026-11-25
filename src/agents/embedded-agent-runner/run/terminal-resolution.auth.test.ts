@@ -37,8 +37,8 @@ describe("terminal auth resolution", () => {
   });
 
   it.each([
-    ["auth", "Couldn't sign in to openai. Your saved login looks expired or no longer works."],
-    ["auth_permanent", "openai isn't accepting your saved login."],
+    ["auth", "Couldn't sign in to OpenAI. Your saved login looks expired or no longer works."],
+    ["auth_permanent", "OpenAI isn't accepting your saved login."],
   ] as const)("surfaces provider recovery guidance for %s", async (reason, expected) => {
     const text = await resolveTerminalText({
       assistantProfileFailureReason: reason,

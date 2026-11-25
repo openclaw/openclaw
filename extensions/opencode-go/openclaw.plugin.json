@@ -7,6 +7,9 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "providers": ["opencode-go"],
+  "providerNames": {
+    "opencode-go": "OpenCode Go"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "opencode-go-native",

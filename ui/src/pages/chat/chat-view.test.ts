@@ -2911,7 +2911,7 @@ describe("chat model controls", () => {
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider-toggle]"),
     );
     expect(providerButtons.map((button) => button.getAttribute("aria-label"))).toEqual(
-      expect.arrayContaining(["Google", "OpenRouter"]),
+      expect.arrayContaining(["Google AI Studio", "OpenRouter"]),
     );
     selectModelProvider(container, "google");
     expect(

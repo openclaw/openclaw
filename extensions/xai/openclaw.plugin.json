@@ -12,6 +12,9 @@
   },
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerNames": {
+    "xai": "xAI"
+  },
   "providerAuthAliases": {
     "x-ai": "xai"
   },

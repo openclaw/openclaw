@@ -27,6 +27,7 @@ import {
   type PersistedPluginModelCatalog,
   type PluginModelCatalogMetadataSnapshot,
 } from "../plugin-model-catalog.js";
+import { resolveProviderDisplayName } from "../provider-display-name.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.core.js";
 import {
@@ -65,7 +66,6 @@ import {
   type ResolvedRequestAuth,
 } from "./model-registry-sources.js";
 import type { ProviderConfigInput } from "./provider-config.js";
-import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 
 export type { ProviderConfigInput } from "./provider-config.js";
 export type { ResolvedRequestAuth } from "./model-registry-sources.js";
@@ -686,16 +686,15 @@ export class ModelRegistry {
     return { configured: true, source: "models_json_key" };
   }
 
+  /** Released through plugin-sdk/agent-sessions; instance registrations keep their precedence. */
   getProviderDisplayName(provider: string): string {
     const registeredProvider = this.registeredProviders.get(provider);
     const oauthProvider = this.authStorage.getOAuthProviders().find((p) => p.id === provider);
-
     return (
       registeredProvider?.name ??
       registeredProvider?.oauth?.name ??
       oauthProvider?.name ??
-      BUILT_IN_PROVIDER_DISPLAY_NAMES[provider] ??
-      provider
+      resolveProviderDisplayName(provider, { config: this.config ?? {}, owners: {} })
     );
   }
 

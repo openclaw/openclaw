@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["microsoft-foundry"],
+  "providerNames": {
+    "microsoft-foundry": "Microsoft Foundry"
+  },
   "setup": {
     "providers": [
       {

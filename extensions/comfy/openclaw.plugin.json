@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["comfy"],
+  "providerNames": {
+    "comfy": "ComfyUI"
+  },
   "configContracts": {
     "secretInputs": {
       "paths": [{ "path": "headers.*", "expected": "string" }]

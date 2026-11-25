@@ -69,20 +69,20 @@ describe("decision model provider groups", () => {
   it("excludes collapsed rows from keyboard and stale pointer selection but searches inside them", async () => {
     const p = await mount({ value: "" });
     const stale = p.rows().find((r) => r.dataset.value === "alpha/first")!;
-    await p.toggle("Alpha");
+    await p.toggle("alpha");
     stale.click();
     await p.picker.updateComplete;
     expect(p.params.onChange).not.toHaveBeenCalled();
-    expect(p.group("Alpha").querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(p.group("alpha").querySelectorAll('[role="option"]')).toHaveLength(0);
     await p.key("ArrowDown");
     expect(p.rows().find((row) => row.hasAttribute("data-active"))?.dataset.value).toBe(
       "beta/middle",
     );
     await p.search("ALPHA");
     expect(p.rows().map((row) => row.dataset.value)).toEqual(["alpha/first", "alpha/last"]);
-    expect(p.group("Alpha").querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
+    expect(p.group("alpha").querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
     await p.search("");
-    expect(p.group("Alpha").querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(p.group("alpha").querySelectorAll('[role="option"]')).toHaveLength(0);
     await p.search("missing");
     expect(p.rows()).toHaveLength(0);
     expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
@@ -91,7 +91,7 @@ describe("decision model provider groups", () => {
 
   it("keeps native group-button activation and Tab from selecting the active model", async () => {
     const p = await mount();
-    const button = p.group("Alpha").querySelector<HTMLButtonElement>("button")!;
+    const button = p.group("alpha").querySelector<HTMLButtonElement>("button")!;
     expect(button.closest('[role="listbox"]')).toBeNull();
     const controls = p.picker.querySelector("input")!.getAttribute("aria-controls")!.split(" ");
     const roles = controls.map((id) => document.getElementById(id)?.getAttribute("role"));
@@ -117,12 +117,12 @@ describe("decision model provider groups", () => {
       if (!inherit) {
         expect(
           [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
-        ).toEqual(["Alpha", "Beta"]);
+        ).toEqual(["alpha", "beta"]);
         const values = p.rows().map((row) => row.dataset.value);
         expect(values).toEqual(["", "alpha/first", "alpha/last", "beta/middle"]);
         expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
-        expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
-        expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
+        expect(p.group("alpha").querySelector("button")!.textContent).toContain("2");
+        expect(p.group("alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
         expect(p.picker.querySelector("input")!.getAttribute("placeholder")).toBe("Search models");
         await p.key("ArrowDown");
         const input = p.picker.querySelector("input")!;

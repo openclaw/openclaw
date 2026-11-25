@@ -15,6 +15,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { warnModelAccountConnectDeprecation } from "../plugins/compat/model-account-connect-deprecation.js";
@@ -437,9 +438,13 @@ export function createModelAccountConnectService(options: {
       for (const choice of listPersonalAccountAuthChoices(options.getConfig())) {
         let provider = providers.get(choice.providerId);
         if (!provider) {
+          const name = resolveProviderDisplayName(choice.providerId, {
+            config: options.getConfig(),
+            fallbackName: choice.groupLabel,
+          });
           provider = {
             id: choice.providerId,
-            label: choice.groupLabel ?? choice.providerId,
+            label: name,
             methods: [],
           };
           providers.set(choice.providerId, provider);

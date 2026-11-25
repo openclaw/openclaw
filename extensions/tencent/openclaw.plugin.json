@@ -7,6 +7,10 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub", "tencent-tokenplan"],
+  "providerNames": {
+    "tencent-tokenhub": "Tencent TokenHub",
+    "tencent-tokenplan": "Tencent TokenPlan"
+  },
   "modelCatalog": {
     "modelsDev": {
       "tencent-tokenhub": "tencent-tokenhub",

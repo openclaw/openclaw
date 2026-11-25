@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["requesty"],
+  "providerNames": {
+    "requesty": "Requesty"
+  },
   "setup": {
     "providers": [
       {
@@ -44,7 +47,7 @@
         "models": [
           {
             "id": "claude-sonnet-5-5",
-            "name": "claude-sonnet-5-5",
+            "name": "Claude Sonnet 5.5",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
@@ -59,7 +62,7 @@
           },
           {
             "id": "gpt-6-luna",
-            "name": "gpt-6-luna",
+            "name": "GPT-6 Luna",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
@@ -74,7 +77,7 @@
           },
           {
             "id": "gemini-3.8-flash",
-            "name": "gemini-3.8-flash",
+            "name": "Gemini 3.8 Flash",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {

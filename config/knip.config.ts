@@ -126,6 +126,8 @@ const repositoryScriptEntries = [
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
   "scripts/generate-control-ui-validators.mts!",
+  // providers:names:gen/check project manifest provider names for server and clients.
+  "scripts/generate-provider-display-names.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",

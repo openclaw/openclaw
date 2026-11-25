@@ -7,6 +7,9 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
+  "providerNames": {
+    "deepseek": "DeepSeek"
+  },
   "contracts": {
     "usageProviders": ["deepseek"],
     "webSearchProviders": ["deepseek"]

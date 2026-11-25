@@ -11,6 +11,9 @@
   "providers": [
     "nace"
   ],
+  "providerNames": {
+    "nace": "Nace"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "nace-native",

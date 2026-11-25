@@ -10,6 +10,9 @@
   },
   "enabledByDefault": true,
   "providers": ["deepinfra"],
+  "providerNames": {
+    "deepinfra": "DeepInfra"
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "providerEndpoints": [
     {

@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["nvidia"],
+  "providerNames": {
+    "nvidia": "NVIDIA"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "nvidia-native",

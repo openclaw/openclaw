@@ -12,6 +12,9 @@
   "providers": [
     "rerank"
   ],
+  "providerNames": {
+    "rerank": "Rerank"
+  },
   "modelCatalog": {
     "runtimeAugment": true
   },

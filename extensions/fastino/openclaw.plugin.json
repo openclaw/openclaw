@@ -12,6 +12,9 @@
   "providers": [
     "fastino"
   ],
+  "providerNames": {
+    "fastino": "Fastino"
+  },
   "contracts": {
     "decisionProviders": [
       "fastino"

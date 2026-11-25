@@ -8,6 +8,9 @@
   "enabledByDefault": true,
   "managesOwnAvailability": true,
   "providers": ["openrouter"],
+  "providerNames": {
+    "openrouter": "OpenRouter"
+  },
   "modelCatalog": {
     "discovery": {
       "openrouter": "runtime"

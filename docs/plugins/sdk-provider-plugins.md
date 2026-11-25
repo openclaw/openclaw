@@ -290,6 +290,9 @@ not retain or close the shared pool; the Gateway owns its shutdown.
       "name": "Acme AI",
       "description": "Acme AI model provider",
       "providers": ["acme-ai"],
+      "providerNames": {
+        "acme-ai": "Acme AI"
+      },
       "modelSupport": {
         "modelPrefixes": ["acme-"]
       },
@@ -325,6 +328,8 @@ not retain or close the shared pool; the Gateway owns its shutdown.
     ```
     </CodeGroup>
 
+    `providerNames` is the name people see for each provider id, in error
+    messages and model pickers, instead of the id.
     `setup.providers[].envVars` lets OpenClaw detect credentials without
     loading your plugin runtime. Add `providerAuthAliases` when a provider
     variant should reuse another provider id's auth. `modelSupport` is

@@ -204,7 +204,7 @@ function buildProviderSelectRow(params: {
 }): DiscordModelPickerRow {
   const { page, currentProvider, showModelCounts, ...state } = params;
   const options: APISelectMenuOption[] = page.items.map((provider) => ({
-    label: provider.id,
+    label: provider.name ?? provider.id,
     value: provider.id,
     default: provider.id === currentProvider,
     ...(showModelCounts
@@ -494,7 +494,7 @@ export function renderDiscordModelPickerModelsView(
         action: "pick",
       },
       modelOptions,
-      `Select ${modelPage.provider} model`,
+      `Select ${params.data.providerNames?.get(modelPage.provider) ?? modelPage.provider} model`,
     ),
   );
 
@@ -609,7 +609,7 @@ export function renderDiscordModelPickerModelsView(
   const detailLines = [formatCurrentModelLine(params.currentModel), `Default: ${defaultModel}`];
   if (modelPage.totalPages > 1) {
     detailLines.push(
-      `${modelPage.provider}: page ${modelPage.page}/${modelPage.totalPages} · ${modelPage.totalItems} models`,
+      `${params.data.providerNames?.get(modelPage.provider) ?? modelPage.provider}: page ${modelPage.page}/${modelPage.totalPages} · ${modelPage.totalItems} models`,
     );
   }
 

@@ -11,6 +11,9 @@
   "providers": [
     "celeris"
   ],
+  "providerNames": {
+    "celeris": "Celeris"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "celeris-native",

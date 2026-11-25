@@ -7,6 +7,9 @@
   "enabledByDefaultOnPlatforms": ["darwin"],
   "autoEnableWhenConfiguredProviders": ["apple-fm"],
   "providers": ["apple-fm"],
+  "providerNames": {
+    "apple-fm": "Apple Foundation Models"
+  },
   "syntheticAuthRefs": ["apple-fm"],
   "nonSecretAuthMarkers": ["apple-fm-local"],
   "modelPricing": { "providers": { "apple-fm": { "external": false } } },

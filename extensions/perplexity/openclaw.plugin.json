@@ -84,6 +84,9 @@
   "providers": [
     "perplexity-decisions"
   ],
+  "providerNames": {
+    "perplexity-decisions": "Perplexity"
+  },
   "providerAuthChoices": [
     {
       "provider": "perplexity-decisions",

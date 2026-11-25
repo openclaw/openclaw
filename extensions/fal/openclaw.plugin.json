@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["fal"],
+  "providerNames": {
+    "fal": "fal.ai"
+  },
   "setup": {
     "providers": [
       {

@@ -46,7 +46,7 @@ describe("fetchZaiUsage", () => {
   it("returns empty usage for missing data", async () => {
     expect(await fetchUsage({ success: true, code: 200 })).toEqual({
       provider: "zai",
-      displayName: "z.ai",
+      displayName: "Z.AI",
       windows: [],
       plan: undefined,
     });

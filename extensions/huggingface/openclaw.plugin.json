@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["huggingface"],
+  "providerNames": {
+    "huggingface": "Hugging Face"
+  },
   "modelCatalog": {
     "providers": {
       "huggingface": {

@@ -90,6 +90,8 @@ export type DiscordModelPickerBucket = {
 
 export type DiscordModelPickerProviderItem = {
   id: string;
+  /** Display name; the select value keeps the id. */
+  name?: string;
   count: number;
 };
 
@@ -412,6 +414,7 @@ export function getDiscordModelPickerProviderPage(params: {
     itemLabels: providers,
     items: providers.map((provider) => ({
       id: provider,
+      name: params.data.providerNames?.get(provider),
       count: params.data.byProvider.get(provider)?.size ?? 0,
     })),
   });

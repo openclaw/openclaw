@@ -10,6 +10,9 @@
   "providers": [
     "bifrost"
   ],
+  "providerNames": {
+    "bifrost": "Bifrost"
+  },
   "modelCatalog": {
     "discovery": {
       "bifrost": "refreshable"

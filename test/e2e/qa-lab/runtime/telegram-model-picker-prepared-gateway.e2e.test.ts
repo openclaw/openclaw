@@ -853,8 +853,8 @@ test("lists native CLI-bound models through Telegram polling and provider callba
             .map((line) => JSON.parse(line));
           console.info("MODEL_INVENTORY_AUTH_PROOF", JSON.stringify(cliCalls));
           expect(cliCalls.length).toBeGreaterThan(0);
-          expect(providerButton?.text).toBe("anthropic (2)");
-          expect(modelList?.body.text).toContain("Models (anthropic");
+          expect(providerButton?.text).toBe("Anthropic (2)");
+          expect(modelList?.body.text).toContain("Models (Anthropic");
           expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${boundRef}`);
           expect(keyboardCallbackData(modelList!)).toContain(`mdl_sel_${primaryRef}`);
           expect(gatewayModels).toMatchObject({

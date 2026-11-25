@@ -2,6 +2,9 @@
   "id": "subq",
   "name": "SubQ",
   "description": "SubQ Snap typed decisions (not a conversational model).",
+  "providerNames": {
+    "subq": "SubQ"
+  },
   "categories": [
     "developer-tools"
   ],

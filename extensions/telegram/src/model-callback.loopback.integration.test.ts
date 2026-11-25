@@ -349,10 +349,10 @@ describe("Telegram model callback loopback", () => {
 
         await tap("mdl_prov");
         expect(renderedButtons().map((button) => button.text)).toEqual([
-          "anthropic (1)",
-          "ollama (1)",
+          "Anthropic (1)",
+          "Ollama (1)",
         ]);
-        await selectButton((button) => button.text === "anthropic (1)");
+        await selectButton((button) => button.text === "Anthropic (1)");
         await selectButton((button) => button.text.includes("Claude Opus"));
         expect(requests.at(-1)?.payload.text).toContain(
           "Runtime set to <b>claude-cli</b> from configured policy.",
@@ -367,7 +367,7 @@ describe("Telegram model callback loopback", () => {
         expect(defaultEntry?.agentRuntimeOverride).toBeUndefined();
 
         await tap("mdl_prov");
-        await selectButton((button) => button.text === "ollama (1)");
+        await selectButton((button) => button.text === "Ollama (1)");
         const modelButton = renderedButtons().find((button) =>
           button.callback_data.startsWith("mdl1~m:"),
         );

@@ -275,7 +275,7 @@ it("keeps the picker open when clicking its provider title and blank space", asy
 it("does not highlight an unselected model until keyboard navigation", async () => {
   const { picker, open, params, toggle, trigger } = mountPicker();
   await open();
-  await page.getByRole("tab", { name: "Other", exact: true }).click();
+  await page.getByRole("tab", { name: "other", exact: true }).click();
   const gamma = option("other/gamma");
   expect(gamma.getAttribute("aria-selected")).toBe("false");
   expect(gamma.hasAttribute("data-chat-model-highlighted")).toBe(false);
@@ -660,7 +660,7 @@ it("keeps the desktop panel fixed above its model chip across provider and searc
     await page.getByText("Beta", { exact: true }).hover();
     await vi.waitFor(() => expect(getComputedStyle(beta).backgroundColor).not.toBe(background));
     expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
-    await page.getByRole("tab", { name: "Other", exact: true }).click();
+    await page.getByRole("tab", { name: "other", exact: true }).click();
     await vi.waitFor(() => expect(option("other/gamma")?.checkVisibility()).toBe(true));
     const search = getSearch();
     search.value = "no matching model";
@@ -727,7 +727,7 @@ it.each(["cancel", "drop"])(
       }
     });
     expect([...picker.querySelectorAll('[role="tab"]')].map((tab) => tab.ariaLabel)).toEqual(
-      end === "drop" ? ["Example", "Third", "Other"] : ["Example", "Other", "Third"],
+      end === "drop" ? ["example", "third", "other"] : ["example", "other", "third"],
     );
   },
 );

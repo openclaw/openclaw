@@ -6,6 +6,9 @@
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "providerNames": {
+    "vercel-ai-gateway": "Vercel AI Gateway"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "vercel-ai-gateway",

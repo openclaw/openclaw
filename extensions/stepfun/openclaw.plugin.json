@@ -7,6 +7,10 @@
   },
   "enabledByDefault": true,
   "providers": ["stepfun", "stepfun-plan"],
+  "providerNames": {
+    "stepfun": "StepFun",
+    "stepfun-plan": "StepFun Step Plan"
+  },
   "autoEnableWhenConfiguredProviders": ["stepfun", "stepfun-plan"],
   "setup": {
     "providers": [
