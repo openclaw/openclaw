@@ -505,8 +505,10 @@ Output and scratch must be new physical directories outside both checkouts.
 The control uses the paired runner's arguments and compares the full prepared
 inventory before and after the settled child; this is not continuous monitoring.
 Logs, oracle results, disabled-cache diagnostics and complete input deltas remain
-in the output, including explicit unavailable results after failures. Uncertain
-child settlement retains scratch and prevents inspecting the workload.
+in the output, including explicit unavailable results after failures. Explicit
+Node flush-call announcements are allowed while caching is disabled; cache files,
+cache reads/writes and unknown native diagnostic events still fail the control.
+Uncertain child settlement retains scratch and prevents inspecting the workload.
 
 The receipt is `disabled-only`, with `timingAdmission: false`. It does not install
 or prepare dependencies, run empty/seeded controls, or admit paired measurements.

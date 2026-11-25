@@ -95,7 +95,16 @@ describe("disabled control admission", () => {
   });
 });
 
-function fixture(mode: "success" | "mutation" | "wrong-oracle" | "cache-activity" | "exit") {
+function fixture(
+  mode:
+    | "success"
+    | "flush"
+    | "mutation"
+    | "wrong-oracle"
+    | "cache-activity"
+    | "unknown-diagnostic"
+    | "exit",
+) {
   const corepack = process.env.COREPACK_HOME;
   if (!corepack || !path.isAbsolute(corepack))
     throw new Error(
@@ -121,6 +130,12 @@ function fixture(mode: "success" | "mutation" | "wrong-oracle" | "cache-activity
     'assert.ok(process.argv.includes("--no-cache")); assert.ok(process.argv.includes("--no-fsModuleCache"));',
     'for(const [k,v] of Object.entries({OPENCLAW_VITEST_RUNTIME:"node",OPENCLAW_VITEST_FS_MODULE_CACHE:"0",OPENCLAW_VITEST_WORKER_CACHE:"0",NODE_DISABLE_COMPILE_CACHE:"1",COREPACK_ENABLE_NETWORK:"0",npm_config_offline:"true",pnpm_config_manage_package_manager_versions:"false",pnpm_config_pm_on_fail:"error"})) assert.equal(process.env[k],v);',
     'assert.equal(process.env.NODE_OPTIONS,undefined); console.log("control reached");',
+    ...(mode === "flush"
+      ? ['const {flushCompileCache}=await import("node:module");flushCompileCache();']
+      : []),
+    ...(mode === "unknown-diagnostic"
+      ? ['console.error("[compile cache] unexpected activity.");']
+      : []),
     ...(mode === "exit" ? ["process.exit(7);"] : []),
     `const expected=${JSON.stringify(raw.expected)};`,
     ...(mode === "wrong-oracle" || mode === "mutation" ? ["expected[1]={...expected[0]};"] : []),
@@ -201,9 +216,11 @@ it
   )
   .each([
     ["success", null],
+    ["flush", null],
     ["mutation", "expected passed inventory"],
     ["wrong-oracle", "expected passed inventory"],
     ["cache-activity", "generated cache activity"],
+    ["unknown-diagnostic", "generated cache activity"],
     ["exit", "exited with status 7"],
   ] as const)(
   "retains %s disabled-control evidence",
@@ -262,7 +279,9 @@ it
       }
       if (mode === "wrong-oracle" || mode === "mutation")
         expect(record.checks.oracle.status).toBe("failed");
-      if (mode === "cache-activity") expect(record.checks.diagnostic.status).toBe("failed");
+      if (mode === "cache-activity" || mode === "unknown-diagnostic") {
+        expect(record.checks.diagnostic.status).toBe("failed");
+      }
       if (mode === "exit")
         expect(record.checks.oracle).toEqual({
           status: "unavailable",
@@ -272,6 +291,11 @@ it
       expect(result.exitCode, readFileSync(path.join(f.root, "cli.log"), "utf8")).toBe(0);
       expect(record.status).toBe("success");
       expect(record.execution.assertionCount).toBe(20);
+      if (mode === "flush") {
+        const trace = readFileSync(path.join(output, "disabled.log"), "utf8");
+        expect(trace).toContain("[compile cache] module.flushCompileCache() requested.");
+        expect(trace).toContain("[compile cache] module.flushCompileCache() finished.");
+      }
       expect(record.checks).toEqual({
         oracle: { status: "passed" },
         diagnostic: { status: "passed" },

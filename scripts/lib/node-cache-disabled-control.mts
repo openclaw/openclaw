@@ -291,13 +291,18 @@ export async function qualifyNodeCacheDisabledControl(input: Context) {
               nodeCache,
             );
             const events = text.split("\n").filter((line) => line.includes("[compile cache]"));
+            const disabledEvent = "[compile cache] Disabled by NODE_DISABLE_COMPILE_CACHE.";
+            // Node logs explicit flush requests even when its disabled handler has no cache.
+            const allowedEvents = new Set([
+              disabledEvent,
+              "[compile cache] module.flushCompileCache() requested.",
+              "[compile cache] module.flushCompileCache() finished.",
+            ]);
             if (
               record.diagnostic ||
               readNodeCacheSeed(nodeCache).length ||
-              events.length === 0 ||
-              events.some(
-                (line) => line !== "[compile cache] Disabled by NODE_DISABLE_COMPILE_CACHE.",
-              )
+              !events.includes(disabledEvent) ||
+              events.some((line) => !allowedEvents.has(line))
             ) {
               throw new Error("Disabled control generated cache activity");
             }
