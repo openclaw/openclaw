@@ -197,30 +197,18 @@ describe("Gateway GitHub publication boundaries", () => {
     expectNoCommands("commit-tree", "push");
   });
 
-  it.each([true, false])(
-    "requires a checkout for feature publication with HEAD metadata: %s",
-    async (checkoutExists) => {
-      mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) =>
-        worktree({ baseRef: "HEAD", ownerId }),
-      );
-      const coordinator = createLocalCoordinator();
+  it("publishes a feature worktree whose base metadata is HEAD", async () => {
+    mocks.findWorktree.mockImplementation((_ownerKind, ownerId: string) =>
+      worktree({ baseRef: "HEAD", ownerId }),
+    );
+    const coordinator = createLocalCoordinator();
 
-      if (!checkoutExists) {
-        await fs.rmdir(path.join(root, "synthetic-worktree"));
-        await expect(publish(coordinator, "missing-head-workspace")).rejects.toThrow(
-          "managed worktree checkout is missing",
-        );
-        expectNoCommands("commit-tree", "push");
-        return;
-      }
-
-      await expect(publish(coordinator, "head-base-metadata")).resolves.toMatchObject({
-        status: "published",
-        branch: BRANCH,
-      });
-      expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
-    },
-  );
+    await expect(publish(coordinator, "head-base-metadata")).resolves.toMatchObject({
+      status: "published",
+      branch: BRANCH,
+    });
+    expect(commands.some((argv) => argv.join(" ").includes("git/ref/heads/main"))).toBe(true);
+  });
 
   it("rejects a local turn that starts and finishes during snapshot capture", async () => {
     const database = localDatabase();
@@ -408,9 +396,13 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
-  it.each(["requested", "publishing"] as const)(
-    "settles a stale %s receipt after reopening despite blocked Git recovery",
-    async (status) => {
+  it.each(
+    (["requested", "publishing"] as const).flatMap((status) =>
+      [true, false].map((checkoutExists) => ({ status, checkoutExists })),
+    ),
+  )(
+    "settles a stale $status receipt despite blocked Git recovery (checkout=$checkoutExists)",
+    async ({ status, checkoutExists }) => {
       const database = localDatabase();
       seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
       seedLocalPublication(database, { requestId: "following", status: "requested" });
@@ -431,6 +423,9 @@ describe("Gateway GitHub publication boundaries", () => {
         id: "worktree-2",
         path: "/repo/other-worktree",
       };
+      if (!checkoutExists) {
+        await fs.rmdir(path.join(root, "synthetic-other-worktree"));
+      }
       await insertRegistryWorktree(process.env, {
         ...otherWorktree,
         name: "other",

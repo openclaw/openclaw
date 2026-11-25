@@ -283,7 +283,7 @@ export async function acquireWorktreeRunLease(
   opts: {
     env?: NodeJS.ProcessEnv;
     exclusive?: true;
-    /** Creation can reconcile a missing checkout while retaining exclusive registry custody. */
+    /** Creation and receipt settlement can retain exclusive registry custody without a checkout. */
     allowMissingCheckout?: true;
     source?: WorktreeRunSource;
   } = {},
