@@ -81,7 +81,9 @@ sockets.on("connection", (front) => {
     }
   });
   back.on("message", (raw) => {
-    const response = JSON.parse(raw.toString());
+    const response = JSON.parse(
+      Array.isArray(raw) ? Buffer.concat(raw).toString("utf8") : Buffer.from(raw).toString("utf8"),
+    );
     if (response.type === "res" && preflightIds.delete(response.id) && response.ok === true) {
       preflightSucceeded = true;
       console.log("QA_ONBOARD_HEALTH_PREFLIGHT_OK");

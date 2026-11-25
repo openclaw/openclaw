@@ -12,7 +12,11 @@ it("preserves startup diagnostics and fails only the Classic health command", as
   sockets.on("connection", (socket) => {
     let mode: string;
     socket.on("message", (raw) => {
-      const request = JSON.parse(raw.toString());
+      const request = JSON.parse(
+        Array.isArray(raw)
+          ? Buffer.concat(raw).toString("utf8")
+          : Buffer.from(raw).toString("utf8"),
+      );
       if (request.method === "connect") {
         mode = request.params.client.mode;
       } else {
