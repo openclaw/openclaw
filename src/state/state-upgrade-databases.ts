@@ -344,7 +344,7 @@ export async function discoverDatabases(
       ...(standaloneAgent ? [standaloneAgent] : []),
     ])) {
       if (
-        migrationTarget &&
+        migrationTarget?.dir &&
         resolvePathViaExistingAncestorSync(source) ===
           resolvePathViaExistingAncestorSync(migrationTarget.dir)
       ) {
