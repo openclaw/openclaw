@@ -15,6 +15,7 @@ import {
   captureSessionQueuedInputsForRestart,
   readSessionQueuedInputPage,
 } from "../config/sessions/session-pending-input-history.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -125,6 +126,77 @@ async function retireOriginalInputs(fixture: Fixture) {
     assertCurrent() {},
   };
 }
+
+it("restores participation and literal commands from durable restart custody", async () => {
+  const created = await createFixture("agent:main:dashboard:participation-queue");
+  await using fixture = created.fixture;
+  const cfg = structuredClone(getRuntimeConfig());
+  cfg.gateway!.roles!.definitions.participant = {
+    agents: "*",
+    scopes: ["operator.sessions.read"],
+    sessions: {
+      others: "invited",
+      maxInvitedAccess: "send",
+      invitedTools: ["read", "sessions_list"],
+      invitedPermission: "guarded",
+    },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  fixture.context.getRuntimeConfig = () => cfg;
+  const participant = ensureProfileForEmail("queued-participant@example.test");
+  setUserProfileRole(participant.id, "participant");
+  const principal = await createOperatorRecoveryFixture({
+    stateDir: resolveStateDir(),
+    context: fixture.context,
+    profileId: participant.id,
+    config: cfg,
+    sessionKey: "agent:main:unrelated-principal",
+    scopes: ["operator.sessions.read"],
+    device: pairedOperator(),
+  });
+  Object.assign(fixture.client, principal.client);
+  fixture.client.internal!.operatorAccessAuthority = null;
+  await addSessionMember(fixture.scope, {
+    identityId: participant.id,
+    addedBy: created.profile.id,
+    access: "send",
+  });
+  fixture.params.message = "/stop";
+  expectStarted(await fixture.send(undefined, {}));
+  const retained = await retireOriginalInputs(fixture);
+  const rows = (await readSessionQueuedInputPage(retained.target)).rows;
+  expect(rows).toHaveLength(1);
+  expect(JSON.parse(rows[0]!.message_json)["__openclaw"]?.participationCeiling).toBeUndefined();
+  const source = decodeQueuedOperatorRecoverySource(JSON.parse(rows[0]!.origin_source_json!));
+  expect(source).toMatchObject({
+    kind: "gateway",
+    snapshot: {
+      version: 2,
+      participationCeiling: { profileId: participant.id, tools: ["read", "sessions_list"] },
+    },
+  });
+  if (source.kind !== "gateway") {
+    throw new Error("expected retained gateway source");
+  }
+  const ceiling = source.snapshot.participationCeiling;
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    expect(input.replyOptions).toMatchObject({
+      operatorAuthority: { participationCeiling: ceiling },
+      queueModeOverride: "followup",
+    });
+    expect(input.ctx).toMatchObject({
+      CommandInterpretationSuppressed: true,
+      CommandAuthorized: false,
+    });
+    expect(input.ctx.ApprovalReviewerDeviceId).toBeUndefined();
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  expect(JSON.stringify(fixture.readTranscript())).not.toContain("participationCeiling");
+});
 
 it("retains each accepted input's scope ceiling when the same person sends through another source", async () => {
   const created = await createFixture();

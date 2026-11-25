@@ -471,12 +471,41 @@ export async function prepareAgentRunDispatch(
   };
   try {
     assertInputAdmissionCurrent?.();
-    if (params.privateCompletion) {
-      // Admit before input persistence yields; retain this same decision below.
-      capturedOperator = await retainAgentTurnOperatorRun(operatorRun);
-    }
+    const context = params.context.resolveGatewayContext?.();
+    // Only host System input may resolve a session owner; public provenance never grants it.
+    const systemTurn =
+      context &&
+      params.canUseInternalRuntimeHandoff &&
+      params.client?.internal?.syntheticClient === true &&
+      params.client.internal.operatorRoleActor?.kind === "system" &&
+      !params.client.internal.operatorRunAuthority &&
+      !params.client.authenticatedUserProfile &&
+      params.resolvedSessionKey &&
+      !isCronSessionKey(params.resolvedSessionKey) &&
+      params.inputProvenance?.kind === "internal_system" &&
+      !isCronExecutionInputProvenance(params.inputProvenance)
+        ? {
+            context,
+            agentId: params.activeSessionAgentId,
+            sessionKey: params.resolvedSessionKey,
+            sessionId: params.getAdmittedSessionId(),
+            storePath: lifecycleStorePath,
+            assertCurrent: () => {
+              assertInputOwnerCurrent();
+              activeRunAbort.controller.signal.throwIfAborted();
+            },
+          }
+        : undefined;
+    // Admit before input persistence yields: the recorded turn carries the grant's owner bit.
+    capturedOperator = await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
+  } catch (error) {
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, error));
+  }
+  try {
+    assertInputAdmissionCurrent?.();
     userTurn = await prepareAgentRunUserTurn({
       ...params,
+      senderIsOwner: capturedOperator.authority?.grant.owner === true,
       assertCurrent: () => {
         assertInputOwnerCurrent();
         activeRunAbort.controller.signal.throwIfAborted();
@@ -536,46 +565,6 @@ export async function prepareAgentRunDispatch(
   if (completedInput) {
     await completedInput;
     return undefined;
-  }
-  try {
-    const context = params.context.resolveGatewayContext?.();
-    // Only host System input may resolve a session owner; public provenance never grants it.
-    const systemTurn =
-      context &&
-      params.canUseInternalRuntimeHandoff &&
-      params.client?.internal?.syntheticClient === true &&
-      params.client.internal.operatorRoleActor?.kind === "system" &&
-      !params.client.internal.operatorRunAuthority &&
-      !params.client.authenticatedUserProfile &&
-      params.resolvedSessionKey &&
-      !isCronSessionKey(params.resolvedSessionKey) &&
-      userTurn.inputProvenance?.kind === "internal_system" &&
-      !isCronExecutionInputProvenance(userTurn.inputProvenance)
-        ? {
-            context,
-            agentId: params.activeSessionAgentId,
-            sessionKey: params.resolvedSessionKey,
-            sessionId: params.getAdmittedSessionId(),
-            storePath: lifecycleStorePath,
-            assertCurrent: () => {
-              assertInputOwnerCurrent();
-              activeRunAbort.controller.signal.throwIfAborted();
-            },
-          }
-        : undefined;
-    capturedOperator ??= await retainAgentTurnOperatorRun({ ...operatorRun, systemTurn });
-    const operatorAdmission = revalidateAdmission(userTurn);
-    if (operatorAdmission !== true) {
-      return await operatorAdmission;
-    }
-    assertInputOwnerCurrent();
-  } catch (error) {
-    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
-      userTurn,
-      error,
-      activeRunAbort.controller.signal,
-    );
-    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, failure));
   }
   try {
     if (subagentAdmission.registerPluginSubagent) {

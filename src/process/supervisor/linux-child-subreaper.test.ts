@@ -11,7 +11,15 @@ const native = vi.hoisted(() => ({
 vi.mock("@openclaw/proc-safe/reaper", () => native);
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
-  readdirSync: () => [],
+  // A live process always has its main thread; a childless owner reads an
+  // empty children file rather than no thread at all.
+  readdirSync: (path: string) => (path === "/proc/self/task" ? ["1"] : [String(process.pid)]),
+  readFileSync: (path: string) => {
+    if (path === "/proc/self/task/1/children") {
+      return "";
+    }
+    return `${process.pid} (node) S 1 1 1 0 -1 0 0 0 0 0`;
+  },
 }));
 
 const execArgv = process.execArgv;

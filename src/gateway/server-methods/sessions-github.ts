@@ -22,6 +22,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { githubAccountAvatarUrl } from "../../shared/github-account-avatar.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
 import { createControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { performSessionGitHubPreparation } from "../github-pr-workspace-preparation.js";
 import { performSessionGitHubAction } from "../github-publication-actions.js";
 import {
@@ -35,6 +36,7 @@ import { refreshManagedWorkspaceBase } from "../github-publication-base-refresh.
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { performSessionGitHubInspection } from "../github-publication-inspect.js";
 import { createSessionGitHubIssue } from "../github-publication-issue.js";
+import { readParticipantPublicationAuthority } from "../github-publication-participation.js";
 import { readGitHubPublicationReadiness } from "../github-publication-readiness.js";
 import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import {
@@ -45,6 +47,7 @@ import type { PublicationSessionIdentity } from "../github-publication-session.t
 import { readSharedGitHubPublication } from "../github-publication-shared-read.js";
 import { prepareGitHubPublicationTaskWorkspace } from "../github-publication-task-workspace.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { isParticipantPublicationMethod } from "../session-method-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -91,6 +94,20 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
   ...[method, validate, handler]: Parameters<typeof defineValidatedGatewayMethod<Method>>
 ) {
   return defineValidatedGatewayMethod(method, validate, async (options) => {
+    const participant =
+      options.sessionMutationAuthorization?.participationCeiling ??
+      readParticipantPublicationAuthority(method, options.params)?.participationCeiling;
+    if (
+      participant &&
+      !isParticipantPublicationMethod(method, options.params) &&
+      !["sessions.github.readiness", "sessions.github.options", "sessions.github.status"].includes(
+        method,
+      )
+    ) {
+      throw new Error(
+        "Participation does not authorize this GitHub action or publisher selection.",
+      );
+    }
     const { agentId, sessionKey } = options.params;
     const key = sessionKey ?? getGatewayToolCallerIdentity()?.sessionKey;
     // Explicit public owners follow request admission, not private deleted-session remapping.
@@ -122,10 +139,10 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       options.respond(
         false,
         undefined,
-        errorShape(
-          forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE,
-          error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          acquisition
+        // In-process tool callers keep the typed failure, so a refusal reaches the model as one.
+        errorShapeFromError(forbidden ? ErrorCodes.FORBIDDEN : ErrorCodes.UNAVAILABLE, error, {
+          message: error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
+          ...(acquisition
             ? {
                 retryable: acquisition.kind === "store-unavailable",
                 details: { leaseAcquisition: acquisition },
@@ -137,8 +154,8 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
                   "idempotencyKey" in options.params &&
                   error.rejection?.idempotencyKey === options.params.idempotencyKey
                 ? { details: error.rejection }
-                : undefined,
-        ),
+                : {}),
+        }),
       );
     }
   });
@@ -305,7 +322,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         return;
       }
       const agentId = caller?.agentId ?? params.agentId;
-      if (params.selection?.source === "personal") {
+      const participant =
+        sessionMutationAuthorization?.participationCeiling ??
+        readParticipantPublicationAuthority("sessions.github.publish", params)
+          ?.participationCeiling;
+      if (participant && params.selection !== undefined) {
+        throw new Error(
+          "Participant publication uses the shared publisher; account selection is unavailable.",
+        );
+      }
+      if (!participant && params.selection?.source === "personal") {
         if (params.workspacePath !== undefined) {
           throw new Error("workspacePath requires the local agent publication handoff.");
         }
@@ -364,6 +390,16 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
       using _ = { [Symbol.dispose]: () => admitted.release() };
 
+      if (params.workspacePath !== undefined && admitted.requester.snapshot.participation) {
+        const root = admitted.requester.snapshot.participation.ceiling.source.root;
+        const sourcePath = await fs.realpath(path.resolve(root, params.workspacePath));
+        if (sourcePath !== (await fs.realpath(root))) {
+          throw new Error(
+            "Participant publication must use this conversation's exact workspace root.",
+          );
+        }
+        admitted.requester.assertCurrent();
+      }
       let task: { agentId: string; sessionKey: string } | undefined;
       if (params.workspacePath !== undefined) {
         if (!caller || caller.workspacePrAdoptionSessionId !== loaded.entry.sessionId) {

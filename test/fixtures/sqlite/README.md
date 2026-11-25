@@ -1,13 +1,13 @@
 # SQLite Release Fixtures
 
-`openclaw-agent-schema-v14.sql` is the exact agent DDL from tag
-`v2026.7.2-beta.4`. Its media-migration test retains the original SHA-256
-contract. `openclaw-agent-schema-v21.sql` freezes commit
+Agent schemas 14 and 16 preserve the DDL from tags `v2026.7.2-beta.4` and
+`v2026.7.2-beta.6`. The historical media-migration test checks both digests.
+`openclaw-agent-schema-v21.sql` freezes commit
 `f69617aa3818d805889692918ee7f51bef666597` as an independent schema-21 migration input.
-`openclaw-agent-schema-v19.sql` freezes commit
+Agent schema 19 preserves commit
 `fb380bd4879be34aa160675d653560bb79690db9`, the last schema-19 commit before the
 schema-20 cold-storage migration, for container image replacement startup tests.
-`openclaw-agent-schema-v22.sql` freezes the deployed FTS ownership DDL from
+Agent schema 22 preserves the deployed FTS ownership DDL from
 commit `00caa84ce72c0b4edd584cfa225bd262cd10ba49` ([#153834](https://github.com/openclaw/openclaw/pull/153834)).
 It contains `(session_id, fts_rowid)` ownership and nullable `fts_row_count`,
 not the unpublished compressed schema-22 draft.
@@ -21,7 +21,9 @@ Golden source contracts:
 - Schema 22: 35,110 bytes; Git blob `9c6c775549e92a021ea7f5b43d749718ba1189c7`;
   SHA-256 `23f2a1e85494a512bce3f32623aed2beaf4e82bbeeb4362f6cc33d5dd3b8a6ea`.
 
-Historical fixtures read these sources without deriving old tables from current DDL.
+Test support reconstructs agent v14, v16, v19, v22, v24, v25, v27, and shared
+state v24 from frozen agent v21/v26 and shared state v35 SQL. SHA-256 checks
+pin each output. The published-driver Docker proof reads the raw v26 fixture.
 
 `openclaw-state-v2026.7.1-2.sqlite.gz` is a deterministic fixture for the
 shared state database created by OpenClaw tag `v2026.7.1-2` at commit

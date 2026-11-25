@@ -1230,6 +1230,7 @@ describe("frozen admission workflow barriers", () => {
       const files = Object.fromEntries(
         [
           "scripts/runtime-postbuild.mts",
+          "src/cli/update-cli/update-command-admission-report.ts",
           "src/cli/update-cli/update-command-git.ts",
           "src/cli/update-cli/update-command-plugin-preflight.ts",
           "src/cli/update-cli/update-command-target.ts",
@@ -9584,6 +9585,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const terminalNeeds = [
       "resolve_target",
       "prepare_npm_package",
+      "npm_preflight_first",
       "qualify_npm_package",
       "prepare_plugin_npm",
       "prepare_docker_release",
@@ -10265,19 +10267,72 @@ describe("package artifact reuse", () => {
     const docker = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "prepare_docker_release");
     const qualify = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "qualify_npm_package");
     const candidate = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_acquisition");
-    for (const job of [prepare, docker]) {
-      expect(jobNeeds(job)).toEqual([
-        "resolve_target",
-        "plugin_compatibility_readiness",
-        "evidence_reuse",
-      ]);
-    }
-    expect(jobNeeds(qualify)).toEqual(["resolve_target", "evidence_reuse", "prepare_npm_package"]);
-    expect(qualify.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('[\"all\",\"build-only\"]'), inputs.rerun_group) && needs.prepare_npm_package.result == 'success' }}",
+    const admission = ["resolve_target", "plugin_compatibility_readiness", "evidence_reuse"];
+    expect(jobNeeds(prepare)).toEqual(admission);
+    const firstPreparation = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "npm_preflight_first");
+    expect(jobNeeds(firstPreparation)).toEqual(admission);
+    expect(firstPreparation.steps).toEqual(prepare.steps);
+    expect(firstPreparation.outputs).toEqual(prepare.outputs);
+    expect(firstPreparation.if).toContain("!cancelled()");
+    expect(prepare.if).toContain("needs.resolve_target.outputs.preflight_first != 'true'");
+    // Released recovery readers discover the one literal job-level kind and
+    // use its literal name to find the original attempt's dispatch log.
+    const frozen = Object.values(readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).jobs ?? {});
+    expect(
+      frozen
+        .filter((job) => job.env?.CHILD_WORKFLOW_KIND === "artifact-npm")
+        .map((job) => job.name),
+    ).toEqual(["Prepare release npm artifacts"]);
+    expect(firstPreparation.env?.PREFLIGHT_FIRST_CHILD_WORKFLOW_KIND).toBe("artifact-npm");
+    expect(workflowStepById(firstPreparation, "dispatch").env?.CHILD_WORKFLOW_KIND).toBe(
+      "artifact-npm",
     );
-    expect(qualify.env?.ARTIFACT_RUN_ID).toBe("${{ needs.prepare_npm_package.outputs.run_id }}");
-    expect(workflowStepById(prepare, "bundle").env?.ARTIFACT_OUTPUT).toBe("raw");
+    expect(firstPreparation.name).toBe("Prepare initial release npm artifacts");
+    expect(prepare.name).toBe("Prepare release npm artifacts");
+    expect(workflowStepById(firstPreparation, "dispatch").if).toContain("github.run_attempt == 1");
+    expect(firstPreparation.if).toContain("needs.resolve_target.outputs.preflight_first == 'true'");
+    expect(jobNeeds(docker)).toEqual([...admission, "npm_preflight_first"]);
+    for (const name of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "stable_client_compatibility",
+      "performance",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "candidate_acquisition",
+    ]) {
+      const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, name);
+      expect(jobNeeds(job), name).toContain("npm_preflight_first");
+      expect(job.if, name).toContain(
+        "(needs.resolve_target.outputs.preflight_first != 'true' || (!cancelled() && needs.npm_preflight_first.result == 'success'))",
+      );
+    }
+    const pluginCandidate = workflowJob(
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      "plugin_prerelease_candidate",
+    );
+    expect(pluginCandidate.if).toContain("needs.candidate_acquisition.result == 'success'");
+    expect(pluginCandidate.if).toContain(
+      "(needs.resolve_target.outputs.preflight_first != 'true' || !cancelled())",
+    );
+    expect(jobNeeds(qualify)).toEqual([
+      "resolve_target",
+      "evidence_reuse",
+      "prepare_npm_package",
+      "npm_preflight_first",
+    ]);
+    expect(qualify.if).toBe(
+      "${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('[\"all\",\"build-only\"]'), inputs.rerun_group) && (needs.prepare_npm_package.result == 'success' || needs.npm_preflight_first.result == 'success') }}",
+    );
+    expect(qualify.env?.ARTIFACT_RUN_ID).toBe(
+      "${{ needs.prepare_npm_package.outputs.run_id || needs.npm_preflight_first.outputs.run_id }}",
+    );
+    expect(workflowStepById(prepare, "bundle").env?.ARTIFACT_OUTPUT).toBe(
+      "${{ github.run_attempt == 1 && needs.resolve_target.outputs.preflight_first == 'true' && 'source-and-package' || 'raw' }}",
+    );
     expect(qualify.env?.ARTIFACT_OUTPUT).toBe("receipt");
     for (const job of [prepare, docker, candidate]) {
       expect(job.if).not.toContain("github.run_attempt == 1");
@@ -10432,7 +10487,8 @@ describe("package artifact reuse", () => {
     expect(acquisition.env).toMatchObject({
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
       CANDIDATE_REQUEST_JSON: "${{ needs.resolve_target.outputs.candidate_request_json }}",
-      PREPARED_NPM_BUNDLE_JSON: "${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}",
+      PREPARED_NPM_BUNDLE_JSON:
+        "${{ needs.prepare_npm_package.outputs.prepared_bundle_json || needs.npm_preflight_first.outputs.prepared_bundle_json }}",
     });
     expect(
       workflowStep(
@@ -14376,6 +14432,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "resolve_target",
       "plugin_compatibility_readiness",
       "evidence_reuse",
+      "npm_preflight_first",
     ]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(15);
     expect(performanceJob["timeout-minutes"]).toBe(15);
@@ -16251,7 +16308,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@11f935929080ad9ff2fc539154b6521c1b85c123",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -16519,12 +16576,18 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       },
       [FULL_RELEASE_VALIDATION_WORKFLOW]: {
         evidence_reuse: ["resolve_target"],
-        candidate_acquisition: ["resolve_target", "evidence_reuse", "prepare_npm_package"],
+        candidate_acquisition: [
+          "resolve_target",
+          "evidence_reuse",
+          "prepare_npm_package",
+          "npm_preflight_first",
+        ],
         release_checks_candidate: [
           "resolve_target",
           "plugin_compatibility_readiness",
           "evidence_reuse",
           "candidate_acquisition",
+          "npm_preflight_first",
         ],
       },
       [FULL_RELEASE_CANDIDATE_WORKFLOW]: {

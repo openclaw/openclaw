@@ -462,6 +462,7 @@ it("consumes an incognito repository description without SQLite or resident priv
         const sql = observeHostDataSql();
         try {
           const result = consume(read);
+          expect(read.hasMembership("", query.key, "uninvited", query.agentId)).toBe(false);
           expect(sql.queries).toEqual([]);
           return result;
         } finally {
@@ -486,6 +487,9 @@ it("consumes an incognito repository description without SQLite or resident priv
     );
     expect(projection.selectEntries()).toEqual([]);
     expect(() => retained?.describe(query)).toThrow("no longer active");
+    expect(() => retained?.hasMembership("", query.key, "uninvited", query.agentId)).toThrow(
+      "no longer active",
+    );
     expect(() => retained?.selectEntries({ key: query.key })).toThrow("no longer active");
   });
 });

@@ -790,7 +790,6 @@ src/gateway/github-publication-coordinator-methods.ts	5
 src/gateway/github-publication-defer.worker.ts	3
 src/gateway/github-publication-discovery.ts	4
 src/gateway/github-publication-git-index.ts	2
-src/gateway/github-publication-requester.ts	3
 src/gateway/github-publication-shared-read.kernel.ts	10
 src/gateway/github-publication-shared-read.ts	10
 src/gateway/github-publication-store.worker.ts	6
@@ -1070,7 +1069,6 @@ src/gateway/session-transcript-title-reader.worker.ts	4
 src/gateway/session-utils-read-lifetime.ts	4
 src/gateway/sessions-history-http.ts	8
 src/gateway/sessions-patch-admission.ts	2
-src/gateway/sessions-patch-display-metadata.ts	2
 src/gateway/sessions-resolve.ts	3
 src/gateway/subagent-completion-tool-handoff.ts	4
 src/gateway/talk/client-agent-consult.ts	8

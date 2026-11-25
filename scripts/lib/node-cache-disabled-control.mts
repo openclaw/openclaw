@@ -66,6 +66,7 @@ export const NODE_CACHE_DISABLED_INPUTS = [
   "scripts/lib/prepared-workload-inventory.mts",
   "scripts/lib/node-cache-workload-inputs.mts",
   "scripts/lib/node-cache-disabled-control.mts",
+  "scripts/lib/node-cache-qualification.mts",
   "src/shared/deferred.ts",
 ] as const;
 
@@ -116,7 +117,7 @@ function sealSeed(root: string) {
   chmodSync(root, 0o500);
 }
 
-function assertSealedSeed(root: string, expected: ReturnType<typeof readNodeCacheSeed>) {
+export function assertSealedSeed(root: string, expected: ReturnType<typeof readNodeCacheSeed>) {
   if (JSON.stringify(readNodeCacheSeed(root)) !== JSON.stringify(expected)) {
     throw new Error("Sealed seed bytes changed");
   }
@@ -182,6 +183,7 @@ async function qualifyControls(input: Context, full: boolean) {
     kind: full ? "node-cache-workload-qualification" : "node-cache-disabled-control",
     scope: full ? "disabled-empty-seeded" : "disabled-only",
     timingAdmission: false,
+    controlScratchDir: scratch,
     ...(!full ? { controlAttempted: false, checks } : {}),
   };
   const controls: Array<{ kind: string; status: string }> = [];
@@ -248,25 +250,17 @@ async function qualifyControls(input: Context, full: boolean) {
           });
           const pnpm = input.pnpmBin;
           const pnpmSha256 = hashPreparedPnpmExecutable(pnpm);
-          const environment = (scope: string, enabled = false) => ({
-            ...buildBenchmarkCommandEnv(
+          const environment = (scope: string, enabled = false) =>
+            buildBenchmarkCommandEnv(
               path.join(scratch, scope, "home"),
               path.join(scratch, scope, "state"),
               { executable: pnpm, resolvedExecutable: pnpm, version: definition.pnpmVersion },
-              {
-                PATH: [path.dirname(pnpm), path.dirname(process.execPath), process.env.PATH]
-                  .filter(Boolean)
-                  .join(path.delimiter),
-              },
+              process.env,
               {
                 kind: enabled ? "seeded" : "disabled",
                 nodeCache: path.join(scratch, scope, "node-cache"),
               },
-            ),
-            COREPACK_ENABLE_NETWORK: "0",
-            npm_config_offline: "true",
-            pnpm_config_manage_package_manager_versions: "false",
-          });
+            );
           Object.assign(record, {
             definition,
             definitionSha256: sha256(JSON.stringify(definition)),

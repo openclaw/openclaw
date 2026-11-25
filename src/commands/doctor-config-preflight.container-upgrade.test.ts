@@ -24,6 +24,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { agentV19Schema } from "../state/openclaw-historical-imports.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
@@ -77,10 +78,7 @@ async function withContainerState(run: (stateDir: string, workspace: string) => 
 function seedSchema19Agent(stateDir: string, unsafe = false): string {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-  const schema = fs.readFileSync(
-    new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
-    "utf8",
-  );
+  const schema = agentV19Schema();
   expect(createHash("sha256").update(schema).digest("hex")).toBe(
     "fe93217454642e911608f81afc53c9fb3bb7c20cc32bc73f8f6eeaaf232b91b8",
   );
