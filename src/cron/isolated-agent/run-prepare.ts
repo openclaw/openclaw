@@ -530,7 +530,9 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
           });
 
         const skillsSnapshot = await resolveCronSkillsSnapshot({
-          workspaceDir,
+          workspaceDir: modelOwner.workspaceDir,
+          executionWorkspaceDir: selectedWorkspace.executionWorkspaceDir,
+          executionWorkspaceFileHost: selectedWorkspace.executionWorkspaceFileHost,
           config: admittedConfig,
           agentId,
           existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
@@ -552,7 +554,12 @@ export async function resolveCronRunPreparation(params: CronRunPreparationParams
         cronSession.sessionEntry.systemSent = true;
         let preRunSessionPersisted = false;
         try {
-          await persistSessionEntry();
+          // An exact-run key has its own continuation row. The base write witnesses only its own key.
+          await persistSessionEntry(
+            undefined,
+            cronSession.sessionEntry,
+            usesExactRunSession ? undefined : cronSession,
+          );
           preRunSessionPersisted = true;
         } catch (err) {
           if (err instanceof CronSessionLifecycleClaimError) {

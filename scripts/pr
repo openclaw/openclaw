@@ -1630,8 +1630,9 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin [--current-workflow]]
+  scripts/pr merge-run <PR> [--retain-resources] [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin [--current-workflow]]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
+    --retain-resources requires ordinary immediate squash and verified head-branch retention protection.
     --auto-merge selects pinned immediate squash for CLEAN, auto for BEHIND/BLOCKED (MERGEABLE only).
     OPENCLAW_PR_GATES_REMOTE=github prepare-run defers required CI to this auto-merge handoff.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
@@ -1643,8 +1644,9 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--retain-resources] [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
+    Version-2 resource-retention outcomes reconcile only; recovery never dispatches a successor.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
     a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
@@ -1811,6 +1813,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
+      local retain_resources=false
       local merge_pr="${1-}" auto_merge=false recovery_oid="" merged_head="" observed_head="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
@@ -1822,6 +1825,11 @@ main() {
       fi
       while [ "$#" -gt 0 ]; do
         case "$1" in
+          --retain-resources)
+            [ "$retain_resources" = false ] || { usage; exit 2; }
+            retain_resources=true
+            shift
+            ;;
           --current-workflow)
             { [ "$cmd" = merge-recover ] && [ -n "$PR_WORKFLOW_RECOVERY_OUTCOME" ]; } ||
               { [ "$cmd" = merge-run ] && [ "${PR_WORKFLOW_ADMISSION:-0}" = 1 ]; } || { usage; exit 2; }
@@ -2105,7 +2113,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin" "$merged_head" "$observed_head" "$retain_resources"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

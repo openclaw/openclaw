@@ -97,6 +97,7 @@ const enModelControls = {
       loadingModels: "Loading models…",
       refreshingModels: "Refreshing models…",
       refreshingSettings: "Refreshing session settings…",
+      thinkingPermissionDenied: "You don’t have permission to change the thinking level.",
       refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",
       modelsUnavailable: "Models unavailable",
@@ -144,6 +145,7 @@ const enModelControls = {
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Only admins can turn on Full access.",
       requiresAdmin: "Requires admin access.",
+      changePermissionDenied: "You don’t have permission to change this session’s permissions.",
       updateFailed: "Couldn’t change permissions. Try again.",
       refreshFailed: "Couldn’t refresh this session. Reload to see the saved permissions.",
       modes: {

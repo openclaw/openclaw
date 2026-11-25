@@ -15,8 +15,10 @@ import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as deliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
-import { testing as outputTesting } from "../announce/subagent-announce-output.test-support.js";
-import { announceTesting } from "../announce/subagent-announce-overrides.test-support.js";
+import {
+  announceTesting,
+  outputTesting,
+} from "../announce/subagent-announce-overrides.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";

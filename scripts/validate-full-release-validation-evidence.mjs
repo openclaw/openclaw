@@ -203,7 +203,7 @@ function validatePublicationEvidence(options, evidence) {
   ) {
     throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  if (current.conclusion !== "success") {
+  if (current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (manifest.version !== 4) {
@@ -308,6 +308,8 @@ function validatePublicationEvidence(options, evidence) {
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
+ *   fastTrackRequest?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
@@ -320,6 +322,8 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
+      fastTrackRequest: options.fastTrackRequest ?? process.env.FAST_TRACK_REQUEST_JSON,
+      fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
       trustedWorkflowFullRef: options.expectedTrustedWorkflowFullRef,
@@ -331,7 +335,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     evidenceClient,
   );
-  if (evidence.current.conclusion !== "success") {
+  if (evidence.current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -466,7 +470,7 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
       retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
     String(evidence.current.runId) !== String(producer.runId) ||
     evidence.current.runAttempt !== Number(producer.runAttempt) ||
-    evidence.current.conclusion !== "success" ||
+    (evidence.current.conclusion !== "success" && !evidence.fastTrack) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
@@ -489,6 +493,7 @@ export async function authenticateCandidateOwnedArtifact({
   publisherSha,
   publisherFullRef = "refs/heads/main",
   client,
+  fastTrackRequest = process.env.FAST_TRACK_REQUEST_JSON,
 }) {
   const recovery = manifest?.receiptRecovery;
   if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
@@ -501,6 +506,7 @@ export async function authenticateCandidateOwnedArtifact({
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
+      fastTrackRequest,
       runId: String(producer.runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),

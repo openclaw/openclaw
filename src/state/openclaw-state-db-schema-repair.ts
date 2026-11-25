@@ -38,6 +38,7 @@ import {
   resolveOpenClawAgentDatabaseStoredPath,
   resolveOpenClawStateDirForDatabasePath,
 } from "./openclaw-state-db.paths.js";
+import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 type StateMigrationKind = OpenClawStateDatabaseSchemaMigration["kind"];
@@ -141,7 +142,7 @@ export function migrateWorkerPlacementExecutionModeSchema(
     ensureColumn(db, "worker_session_placements", definition);
   }
   const placementSchema = extractSqliteTableSchema(
-    OPENCLAW_STATE_SCHEMA_SQL,
+    getOpenClawStatePredecessorSchema(8),
     "worker_session_placements",
     { errorMessage: "Canonical worker placement schema block is missing" },
   );

@@ -91,7 +91,7 @@ describe("sessions page archived deletion", () => {
     const page = await createRenderedPage(writeContext(sessions), sessionsResult([target], 1));
     await page.deleteSessionFromMenu(target);
     expect(sessions.deleteMany).not.toHaveBeenCalled();
-    expect(page.error).toBe("This action requires operator.admin access.");
+    expect(page.error).toBe("You don’t have permission to do this.");
   });
 
   it("enumerates beyond a deep link and recovers moved rows without double deletion", async () => {

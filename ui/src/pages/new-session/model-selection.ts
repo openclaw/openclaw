@@ -328,7 +328,7 @@ export abstract class NewSessionModelSelection {
         options.catalog,
         selection.agentRuntime,
       ) ?? resolveDraftDefaultModelTarget(options);
-    if (catalogReady && target?.entry?.availableAccessPrograms?.cyber !== undefined) {
+    if (catalogReady && target?.entry) {
       // Remap from the normalized program this draft displays and would submit.
       const current = resolveDraftAccessProgram({
         ...options,
@@ -336,12 +336,14 @@ export abstract class NewSessionModelSelection {
         agentRuntime: this.agentRuntime,
         requested: this.cyberAccessProgram,
       });
-      this.cyberAccessProgram =
-        resolveDaybreakModelSwitch(
-          target.entry.availableAccessPrograms.cyber,
-          current,
-          this.cyberAccessProgram,
-        ) ?? this.cyberAccessProgram;
+      const update = resolveDaybreakModelSwitch(
+        target.entry.availableAccessPrograms?.cyber,
+        current,
+        this.cyberAccessProgram,
+      );
+      if (update !== undefined) {
+        this.cyberAccessProgram = update ?? undefined;
+      }
     }
     this.applyModelSelection(selection);
     this.markExplicitSelection();

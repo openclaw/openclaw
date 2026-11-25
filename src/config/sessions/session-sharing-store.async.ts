@@ -44,7 +44,12 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import type { SessionEntryMetadataFact } from "./session-entry-metadata-receipt.js";
-import type { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
+import { publishSessionParticipationMemberChange } from "./session-participation-source.js";
+import type {
+  addSessionMember,
+  removeSessionMember,
+  setSessionMemberAccess,
+} from "./session-sharing-store.native.js";
 import { readSessionCollaborationCandidate } from "./session-sharing-store.receipt.js";
 import type {
   MembershipPublication,
@@ -187,6 +192,7 @@ export async function runSessionCollaborationWrite<
           const authorityCommand: SqliteWorkerCommand<SessionSharingWorkerOperations> = command;
           const sharingAuthorityChanged =
             authorityCommand.type === "add" ||
+            authorityCommand.type === "set-access" ||
             authorityCommand.type === "remove" ||
             authorityCommand.type === "owner.assign" ||
             (authorityCommand.type === "involvement" &&
@@ -300,6 +306,20 @@ export async function runSessionCollaborationWrite<
                       );
                     }
                     const receipt = candidate;
+                    // Revocation is a committed effect even if a newer row supersedes its projection.
+                    for (const [sessionKey, fact] of receipt.publication.facts) {
+                      if (fact.kind === "postimage") {
+                        for (const change of fact.value) {
+                          if (change.kind === "member") {
+                            publishSessionParticipationMemberChange(
+                              location.agentId,
+                              sessionKey,
+                              change,
+                            );
+                          }
+                        }
+                      }
+                    }
                     const changes = [...receipt.publication.facts].flatMap<SessionRowChange>(
                       ([sessionKey, fact]) =>
                         fact.kind === "postimage"
@@ -481,6 +501,9 @@ function publishSessionMembership(
   location: { agentId: string; storePath: string; sessionKey: string },
   databaseIdentity: string | undefined,
 ) {
+  if (!databaseIdentity && facts) {
+    publishSessionParticipationMemberChange(location.agentId, location.sessionKey, facts);
+  }
   publishSessionCollaborationChanges(
     [facts ? { ...location, facts } : { ...location, factsInvalidated: true }],
     databaseIdentity,
@@ -498,6 +521,28 @@ export function addSessionMemberInWorker(
     { type: "add", input: { scope, params: capturedParams } },
     (result, location, database, currentKeys) => {
       if (result.value.inserted && (!currentKeys || currentKeys.has(location.sessionKey))) {
+        publishSessionMembership(result, location, database);
+      }
+      return result.value;
+    },
+    assertCurrent,
+  );
+}
+
+export function setSessionMemberAccessInWorker(
+  scope: SessionCollaborationScope,
+  params: Parameters<typeof setSessionMemberAccess>[1],
+  assertCurrent?: () => void,
+): Promise<ReturnType<typeof setSessionMemberAccess>> {
+  if (!params.identityId.trim()) {
+    return Promise.resolve(undefined);
+  }
+  const capturedParams = structuredClone(params);
+  return runSessionCollaborationWrite(
+    scope,
+    { type: "set-access", input: { scope, params: capturedParams } },
+    (result, location, database, currentKeys) => {
+      if (result.value?.changed && (!currentKeys || currentKeys.has(location.sessionKey))) {
         publishSessionMembership(result, location, database);
       }
       return result.value;

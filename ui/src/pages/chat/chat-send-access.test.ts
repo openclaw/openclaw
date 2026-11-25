@@ -80,6 +80,28 @@ it.each(["access", "recovery", "session"])("retains the composer behind %s", asy
   }
 });
 
+it("keeps the draft until a cold Gateway connection establishes outbox ownership", async () => {
+  const message = "Send after the first connection";
+  const host = makeChatHost({
+    connected: false,
+    chatMessage: message,
+    requestHandlers: sendStarted,
+  });
+  const readiness = vi.spyOn(host.client!, "recoveryScopeReady", "get").mockReturnValue(false);
+  const scope = vi.spyOn(host.client!, "recoveryScope", "get").mockReturnValue("");
+
+  await handleSendChat(host);
+  expect(host).toMatchObject({ chatMessage: message, chatQueue: [], lastError: null });
+  expect(host.request).not.toHaveBeenCalled();
+
+  host.connected = true;
+  readiness.mockReturnValue(true);
+  scope.mockReturnValue("test-recovery-scope");
+  await handleSendChat(host);
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+  expect(findChatSendPayload(host)).toMatchObject({ message });
+});
+
 it.each([true, false])(
   "queues later text and attachments behind an initial turn (connected: %s)",
   async (connected) => {
@@ -286,7 +308,7 @@ it.each(["scope missing", "scope revoked", "equivalent alias", "run started"])(
         sendState: outcome === "run started" ? "waiting-idle" : "failed",
       });
       if (outcome !== "run started") {
-        expect(host.lastError).toContain("operator.admin");
+        expect(host.lastError).toBe("You don’t have permission to do this.");
       }
     }
   },

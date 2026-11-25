@@ -376,7 +376,7 @@ describe("shared publication to a prepared original PR", () => {
           requester: f.guest,
           assertCurrent: () => f.guest.assertCurrent(),
         }),
-      ).rejects.toThrow("Link a verified");
+      ).rejects.toThrow("Link your GitHub account once");
       f.expectPublished(await f.publish("maintainer-assistance"));
       expect(
         await f.coordinator.latestPublishedShared(f.publicationSession, undefined),

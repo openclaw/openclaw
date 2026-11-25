@@ -3,13 +3,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { intersectExecPolicyCeilings } from "../infra/exec-policy.js";
 import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,7 +45,11 @@ describe("coding-tool exec working directory", () => {
     vi.unstubAllEnvs();
   });
 
-  function createExecTool(sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"]) {
+  function createExecTool(
+    sandbox?: Parameters<typeof createCoreCodingTools>[0]["sandbox"],
+    participation = false,
+    defaults: Partial<ExecToolDefaults> = {},
+  ) {
     return createCoreCodingTools({
       codingRoot,
       containmentRoot: codingRoot,
@@ -55,10 +62,12 @@ describe("coding-tool exec working directory", () => {
       applyPatchWorkspaceOnly: true,
       execDefaults: {
         host: sandbox ? "sandbox" : "gateway",
+        participation,
         mode: "full",
         allowBackground: false,
         notifyOnExit: false,
         config: { plugins: { enabled: false } },
+        ...defaults,
       },
       processDefaults: {},
     }).find((tool) => tool.name === "exec")!;
@@ -84,6 +93,71 @@ describe("coding-tool exec working directory", () => {
     const output = result.content.find((content) => content.type === "text")?.text;
     expect(output?.trim()).toBe(expectedCwd);
   });
+
+  it("confines participant process starts before auto-review, including symlink escapes", async () => {
+    const reviewer = vi.fn(
+      () => ({ decision: "allow-once", risk: "low", rationale: "fixture" }) as const,
+    );
+    const tool = createExecTool(undefined, true, { mode: "auto", autoReviewer: reviewer });
+    fs.symlinkSync(path.join(root, "sibling"), path.join(codingRoot, "escape"), "dir");
+    for (const workdir of [path.join(root, "sibling"), "../sibling", "escape"]) {
+      await expect(tool.execute("outside", { command: "pwd -P", workdir })).rejects.toThrow(
+        /participation root/,
+      );
+    }
+    expect(reviewer).not.toHaveBeenCalled();
+    await expect(
+      tool.prepareBeforeToolCallParams?.({ command: "pwd -P", workdir: "escape" }, {}),
+    ).rejects.toThrow(/participation root/);
+    for (const workdir of [undefined, "nested", path.join(codingRoot, "nested")]) {
+      const result = await tool.execute("inside", { command: "pwd -P", workdir });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        cwd: fs.realpathSync(workdir ? path.join(codingRoot, "nested") : codingRoot),
+      });
+    }
+  });
+
+  it.each(["on-miss", "always"] as const)(
+    "does not reopen retained allowlist misses through host %s",
+    async (ask) => {
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "full", ask, askFallback: "full" },
+        agents: {},
+      });
+      const reviewer = vi.fn(
+        () => ({ decision: "allow-once", risk: "low", rationale: "fixture" }) as const,
+      );
+      const tool = createExecTool(undefined, true, {
+        ...projectEffectiveExecPolicy({
+          base: {},
+          participationCeiling: {
+            kind: "send",
+            sessionKey: "agent:main:original",
+            profileId: "guest",
+            permission: "workspace",
+            execPolicy: intersectExecPolicyCeilings(
+              { security: "allowlist", ask: "off" },
+              { security: "full", ask },
+            ),
+          },
+        }),
+        autoReviewer: reviewer,
+      });
+      const result = await tool.execute("denied-miss", {
+        command: nodeCommand('console.log("forbidden")'),
+      });
+      expect(result.details).toMatchObject({ status: "failed", exitCode: null, durationMs: 0 });
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining("participant-allowlist-miss") }),
+        ]),
+      );
+      expect(reviewer).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps temporary files in the checkout scratch root when exec changes directory", async () => {
     const result = await createExecTool().execute("coding-scratch", {

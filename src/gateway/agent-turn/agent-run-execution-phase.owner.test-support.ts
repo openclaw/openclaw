@@ -225,6 +225,7 @@ export function bindFollowupCompletion(execution: ReturnType<typeof createExecut
       signal: custody.signal,
       assertCurrent: () => custody.signal.throwIfAborted(),
       run: (work) => work(),
+      runWithRequester: (work) => work(),
       release: () => custody.abort(),
     },
   });

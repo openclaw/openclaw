@@ -34,13 +34,13 @@ import {
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
-  createUiTestShardGroups,
   resolveCanonicalTargetInventory,
   type CompactNodeTestShard,
   type NodeTestShard,
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
+import { createUiTestShardGroups } from "./ci-ui-test-plan.mts";
 import { createWindowsTestShards } from "./ci-windows-test-plan.mts";
 import {
   createExtensionTestShards,
@@ -141,19 +141,21 @@ const SCHEDULED_COVERAGE_CONFIG_OWNERS = new Map<
 const scheduledCoverageConfigCache = new Map<string, string[]>();
 
 function listScheduledCoverageConfigFiles(config: string): string[] | undefined {
+  let files = scheduledCoverageConfigCache.get(config);
+  if (files) {
+    return files;
+  }
   const declared = listNodeTestVolumeConfigFiles(config);
   if (declared) {
+    scheduledCoverageConfigCache.set(config, declared);
     return declared;
   }
   const owner = SCHEDULED_COVERAGE_CONFIG_OWNERS.get(config);
   if (!owner) {
     return undefined;
   }
-  let files = scheduledCoverageConfigCache.get(config);
-  if (!files) {
-    files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
-    scheduledCoverageConfigCache.set(config, files);
-  }
+  files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
+  scheduledCoverageConfigCache.set(config, files);
   return files;
 }
 function scheduledE2eExcludes(): string[] {

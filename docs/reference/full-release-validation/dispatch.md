@@ -36,6 +36,14 @@ Invoking attests review of exact C/Q/coverage. `--trusted-workflow-ref main` and
 protected-tooling routes supply diagnostic/main-qualification/postpublish-confidence
 evidence only, never fresh publication evidence.
 
+Before creating a fresh validation request, the helper scans mock factories and
+the baseline from the committed candidate SHA using the installed tooling. It
+does not check out the candidate or execute its code. A failure stops dispatch.
+Use `--skip-local-mock-preflight` only to defer the local check to the hosted
+workflow (for example, when diagnosing older tooling). The override logs the
+candidate SHA and does not change the hosted guard or admission. Build-only
+preparation and retained requests do not run this local scan.
+
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
@@ -87,7 +95,7 @@ compare actual operands: changing the command cannot turn normal admission into 
 
 Use executable tooling recovery only for diagnosed qualification/orchestration
 defects—not product failures or unexplained red jobs. Local controller updates
-cannot retrofit frozen workflows. For an explicitly authorized failed-job grant,
+cannot retrofit frozen workflows. For an explicitly authorized waiver,
 use the [Q-only ledger procedure](/reference/full-release-validation/evidence#release-tooling-waivers):
 commit directly to Q without a grant PR to `main` or a C change, then use a fresh
 request/admission with that exact Q. Its ledger-only delta permits eligible raw

@@ -18,6 +18,12 @@ import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types
 export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySuccess: boolean };
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
+  /** Host-stamped participation context, never a tool argument. */
+  participation?: boolean;
+  /** Host-owned starting-directory boundary; this does not sandbox command arguments. */
+  participationRoot?: string;
+  /** Retained participant allowlist misses cannot be reopened by a host approval. */
+  participationDenyMisses?: boolean;
   /** Stable checkout owner, independent of a command's selected working directory. */
   scratchRoot?: string;
   hasCronTool?: boolean;
@@ -112,6 +118,7 @@ export type ExecHostCommandParams = {
   requestedEnv?: Record<string, string>;
   timeoutSec?: number;
   defaultTimeoutSec: number;
+  participationDenyMisses?: boolean;
   security: ExecSecurity;
   ask: ExecAsk;
   bypassHostApprovalFloors?: boolean;

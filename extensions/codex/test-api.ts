@@ -174,3 +174,6 @@ export const loadCodexSubscriptionRoutingTestFixture = () =>
 
 export const loadNativeCommandGatewayTestFixture = () =>
   import("./src/app-server/native-command-auth.test-support.js");
+
+export const loadCodexSharedClientShutdownTestFixture = () =>
+  import("./src/app-server/shared-client-shutdown.test-support.js");

@@ -16,7 +16,7 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import type { PluginStateReadDependency } from "../plugin-state/plugin-state-publication.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
@@ -28,6 +28,7 @@ import { sameSelectionFacts, type SelectionRow } from "./session-row-selection-f
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionChildActivity, SessionListRowContext } from "./session-utils-contracts.js";
+import { sameSessionRowChildLinkEntry } from "./session-utils-projection.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -226,36 +227,10 @@ export function dependents(
   const local = read(physical(row.storeTarget.storePath, row.key));
   return logical && local ? new Set([...logical, ...local]) : (logical ?? local ?? []);
 }
-export function markRelated(
-  row: Row,
-  indexes: {
-    byParent: ReadonlyMap<string, Set<string>>;
-    byKey: ReadonlyMap<string, Set<string>>;
-  },
-  dirty: Set<string>,
-  includeChildren = true,
-  cfg?: Inputs["cfg"],
-) {
-  if (includeChildren) {
-    for (const id of dependents(row, indexes.byParent)) {
-      dirty.add(id);
-    }
-    if (cfg && parseAgentSessionKey(row.key)) {
-      // A new literal parent must wake children still indexed under its absent-row alias.
-      for (const id of indexes.byParent.get(parentReference(cfg, row.key, row.agentId)) ?? []) {
-        dirty.add(id);
-      }
-    }
-  }
-  for (const parent of row.parents) {
-    for (const id of indexes.byKey.get(parent) ?? []) {
-      dirty.add(id);
-    }
-  }
-}
+export type RelatedRows = "parents" | "children" | "all";
 
 /** Children consume parent model overrides, not its changing progress or display metadata. */
-export function changesSessionRowDependents(before: Row["storedEntry"], after: Row["storedEntry"]) {
+function changesSessionRowDependents(before: Row["storedEntry"], after: Row["storedEntry"]) {
   return (
     !before ||
     !after ||
@@ -512,12 +487,11 @@ export function present(
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
   // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending =
-    sessionTitleRequests.get({
-      storePath: record.storeTarget.storePath,
-      sessionKey: record.key,
-      sessionId: record.entry.sessionId,
-    }) !== undefined;
+  row.titlePending = sessionTitleRequests.isPending({
+    storePath: record.storeTarget.storePath,
+    sessionKey: record.key,
+    sessionId: record.entry.sessionId,
+  });
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -665,12 +639,19 @@ export function readSessionRowLineage(
       ? row.entry
       : projected;
   const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
-  const selection = entry === row.entry ? undefined : readSessionListSelectionFacts(row.key, entry);
+  const previous = row.selection;
+  const selection = entry === row.entry ? previous : readSessionListSelectionFacts(row.key, entry);
   return {
     entry,
     parents,
+    // Agent and cron classification depend only on the unchanged row key.
     selection:
-      selection && !isDeepStrictEqual(row.selection, selection) ? selection : row.selection,
+      selection.isDock === previous.isDock &&
+      selection.isSystem === previous.isSystem &&
+      selection.isSubagent === previous.isSubagent &&
+      selection.isPhantom === previous.isPhantom
+        ? previous
+        : selection,
   };
 }
 
@@ -683,7 +664,7 @@ export function acquireSessionRowEntry(params: {
   referenced?: (reference: string) => Row | undefined;
   remove: (id: string) => void;
   put: (row: Row) => void;
-  markRelated: (row: Row, includeChildren: boolean) => void;
+  markRelated: (row: Row, relations: RelatedRows) => void;
   archive: { demote: (row: Row) => Row; forget: (id: string) => void };
 }) {
   const { row, storedEntry, cfg, context, remove, put, archive } = params;
@@ -692,12 +673,12 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
-  const entryChanged = lineage.entry !== row.entry;
   const { entry, parents } = lineage;
+  const reparented = row.parents !== parents;
   // Lineage projection preserves all other stored fields; compare only the keys it rewrites.
   const changed =
-    entryChanged ||
-    row.parents !== parents ||
+    entry !== row.entry ||
+    reparented ||
     storedEntry.parentSessionKey !== row.storedEntry?.parentSessionKey ||
     storedEntry.spawnedBy !== row.storedEntry?.spawnedBy;
   if (!changed && row.sharingEntry === row.storedEntry && !row.entryAcquisitionPending) {
@@ -707,11 +688,12 @@ export function acquireSessionRowEntry(params: {
     return row;
   }
   // Archive custody can retain new stored metadata before its lineage is acquired.
-  const includeChildren =
-    changesSessionRowDependents(row.storedEntry, storedEntry) ||
-    changesSessionRowDependents(row.entry, entry);
-  if (changed) {
-    params.markRelated(row, includeChildren);
+  const refreshChildren = changesSessionRowDependents(row.entry, entry);
+  const refreshParents =
+    reparented ||
+    (parents.size > 0 && (!row.entry || !sameSessionRowChildLinkEntry(row.entry, entry)));
+  if (reparented) {
+    params.markRelated(row, "parents");
   }
   const generation =
     !row.entry ||
@@ -754,8 +736,8 @@ export function acquireSessionRowEntry(params: {
   } else if (entry.archivedAt === undefined) {
     archive.forget(identity(next));
   }
-  if (changed) {
-    params.markRelated(next, includeChildren);
+  if (refreshChildren || refreshParents) {
+    params.markRelated(next, refreshChildren ? (refreshParents ? "all" : "children") : "parents");
   }
   return next;
 }

@@ -1,7 +1,9 @@
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { createConfigIO } from "../../config/io.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "../../daemon/service-types.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
@@ -10,12 +12,40 @@ import {
   type UpdateRequester,
 } from "../../infra/update-requester-authority.js";
 import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
+import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
+
+export type GatewayLifecycleFacts = {
+  command: GatewayServiceCommandConfig | null | undefined;
+  env: GatewayServiceEnv;
+  config: OpenClawConfig | undefined;
+};
+
+export type GatewayLifecycleContext = GatewayLifecycleFacts & {
+  port: number;
+  probeService: Readonly<Pick<GatewayService, "readCommand" | "readRuntime">>;
+};
+
+export function createGatewayLifecycleContext(
+  service: Pick<GatewayService, "readRuntime">,
+  { command, env, config }: GatewayLifecycleFacts,
+): GatewayLifecycleContext {
+  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
+  // Observation must not reacquire database custody after the native handoff.
+  const commandInspection = command
+    ? ({ kind: "present", command } as const)
+    : ({ kind: "absent" } as const);
+  const probeService: GatewayLifecycleContext["probeService"] = {
+    readCommand: async () => command ?? null,
+    readRuntime: (readEnv, opts) => service.readRuntime(readEnv, { ...opts, commandInspection }),
+  };
+  return { port, env, config, command, probeService };
+}
 
 export async function resolveGatewayLifecycleContext(
   service = resolveGatewayService(),
   requireEffective = false,
-) {
+): Promise<GatewayLifecycleContext> {
   const command = requireEffective
     ? await service.readCommand(process.env, { requireEffective: true })
     : await service.readCommand(process.env).catch(ignoreNonCleanupCommandError);
@@ -33,8 +63,7 @@ export async function resolveGatewayLifecycleContext(
   })
     .readBestEffortConfig()
     .catch(() => undefined);
-  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, config, command };
+  return createGatewayLifecycleContext(service, { command, env, config });
 }
 
 export async function resolveGatewayConfigPorts() {
@@ -57,11 +86,14 @@ export async function waitForGatewayUpdateRecovery(
     throw new Error("Recovery Gateway version is unavailable.");
   }
   const service = resolveGatewayService();
-  const { port, env } = await resolveGatewayLifecycleContext(service, true);
+  const { port, env, config, probeService } = await releasingHelperStateReaders(() =>
+    resolveGatewayLifecycleContext(service, true),
+  );
   return await waitForGatewayHealthyRestart({
-    service,
+    service: probeService,
     port,
     env,
+    config: config ?? {},
     expectedVersion,
     expectedBuildId,
     timeoutMs,
@@ -78,13 +110,8 @@ async function releasingHelperStateReaders<T>(check: () => Promise<T>): Promise<
   } catch (error) {
     outcome = { error };
   }
-  const [{ closeOpenClawStateDatabaseWorkersByPathAsync }, { resolveOpenClawStateSqlitePath }] =
-    await Promise.all([
-      import("../../state/openclaw-state-db-cache.js"),
-      import("../../state/openclaw-state-db.paths.js"),
-    ]);
   try {
-    await closeOpenClawStateDatabaseWorkersByPathAsync(resolveOpenClawStateSqlitePath());
+    await releaseOpenClawStateDatabaseCustody();
   } catch (cleanupError) {
     throw "error" in outcome
       ? createSqliteLifecycleAggregateError(

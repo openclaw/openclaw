@@ -73,22 +73,40 @@ describe("catalog share route resolution", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(request).not.toHaveBeenCalled();
   });
-  it("resolves a Visitor owned Beam link without requesting the operator catalog", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method !== "beam.owned.list") {
-        throw new Error("missing scope: operator.read");
+  it("opens a restricted cold link whose route and catalog IDs differ", async () => {
+    const catalog = beamCatalog([{ threadId: fullId, name: "Shared notebook" }]).catalogs[0];
+    const route = {
+      catalogId: "notebook",
+      routeSegment: "notes",
+      methods: { list: "notebook.mine.list", read: "notebook.mine.read" },
+    };
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "sessions.catalog.route") {
+        expect(params).toEqual({ routeSegment: "notes" });
+        return route;
       }
-      return beamCatalog([{ threadId: fullId, name: "Owned synthetic Beam" }]);
+      expect(method).toBe(route.methods.list);
+      expect(params.catalogId).toBe(route.catalogId);
+      return {
+        catalogs: [
+          {
+            ...catalog,
+            id: route.catalogId,
+            shareRoute: { ...SHARE_ROUTE, routeSegment: route.routeSegment },
+          },
+        ],
+      };
     });
     const context = catalogContext(request);
     context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["beam.owned.list", "beam.owned.read"],
+      ["sessions.catalog.route", "notebook.mine.list", "notebook.mine.read"],
       ["operator.sessions.write"],
     );
-    await expect(loadRoute(context, "/beam/0123456789ab")).resolves.toMatchObject({
+    await expect(loadRoute(context, "/notes/0123456789ab")).resolves.toMatchObject({
       kind: "session",
-      sessionKey: `agent:research:catalog:beam:gateway:${fullId}`,
+      sessionKey: `agent:research:catalog:notebook:gateway:${fullId}`,
     });
+    expect(request).toHaveBeenCalledTimes(2);
   });
   it("resolves an external-style provider descriptor without catalog-specific UI policy", async () => {
     const result = beamCatalog([{ threadId: fullId, name: "External session" }]);
