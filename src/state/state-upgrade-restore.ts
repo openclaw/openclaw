@@ -1,5 +1,4 @@
-// Write-ahead restore intent for rename-based state upgrades. Hard-linked images
-// are immutable only because the swap replaces, rather than writes, the live inode.
+// Write-ahead restore intent for rename-based state upgrades.
 import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,7 +15,7 @@ type RestoreManifest = {
   readonly runId: string;
   readonly files: readonly RestoreFile[];
 };
-type RestoreImageReport = { linked: number; copied: string[]; symlinks: number };
+type RestoreImageReport = { files: number; symlinks: number };
 export type StateUpgradeRestore = {
   file: string;
   runId: string;
@@ -24,7 +23,6 @@ export type StateUpgradeRestore = {
   existing: RestoreManifest | undefined;
 };
 const COMPANIONS = ["-wal", "-shm", "-journal", ".seal"] as const;
-const LINK_UNAVAILABLE = new Set(["EXDEV", "EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EMLINK"]);
 const restoreCapture = resolveGlobalSingleton<{
   value: { file: string; manifest: RestoreManifest } | undefined;
 }>(Symbol.for("openclaw.stateUpgradeRestoreCapture"), () => ({ value: undefined }));
@@ -141,7 +139,7 @@ export function publishStateUpgradeRestore(
   plan: Pick<UpgradePlan, "ops">,
   resuming = false,
 ): RestoreImageReport {
-  const report: RestoreImageReport = { linked: 0, copied: [], symlinks: 0 };
+  const report: RestoreImageReport = { files: 0, symlinks: 0 };
   if (!restore) {
     return report;
   }
@@ -223,35 +221,28 @@ export function publishStateUpgradeRestore(
           report.symlinks++;
         } else {
           if (sqlite) {
-            // Logical contents do not change. This must precede the immutable link.
+            // Fold committed WAL frames into the single-file recovery image.
             checkpointOriginal(op.live);
           }
           fsyncPath(op.live);
+          // The frozen launcher restores the original inode via its legacy name.
+          // A second hard link would make the restored store fail startup admission.
+          const temporary = `${preimage}.tmp`;
+          fs.rmSync(temporary, { force: true });
           try {
-            fs.linkSync(op.live, preimage);
-            report.linked++;
+            fs.copyFileSync(
+              op.live,
+              temporary,
+              fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+            );
+            fsyncPath(temporary);
+            fs.renameSync(temporary, preimage);
           } catch (error) {
-            // Same-directory images normally share a filesystem; file mounts and
-            // filesystems without hard links need the byte-copy fallback.
-            // SAFETY: node:fs reports link failures as NodeJS.ErrnoException.
-            const code = (error as NodeJS.ErrnoException).code;
-            if (!code || !LINK_UNAVAILABLE.has(code)) {
-              throw error;
-            }
-            const temporary = `${preimage}.tmp`;
-            try {
-              fs.copyFileSync(op.live, temporary);
-              fsyncPath(temporary);
-              fs.renameSync(temporary, preimage);
-            } finally {
-              fs.rmSync(temporary, { force: true });
-            }
-            report.copied.push(`${op.live} (${code})`);
+            fs.rmSync(temporary, { force: true });
+            throw error;
           }
+          report.files++;
         }
-      }
-      if (stat.isFile()) {
-        fsyncPath(preimage);
       }
       fsyncPath(path.dirname(preimage), true);
       files.push({ live: op.live, preimage });

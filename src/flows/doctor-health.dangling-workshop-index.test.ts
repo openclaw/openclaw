@@ -140,8 +140,8 @@ it("refuses a newer custom agent schema before changing the malformed source", a
       customPath,
       `
           PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
-          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
-          INSERT INTO schema_meta VALUES ('primary', 'main');
+          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT, role TEXT, schema_version INTEGER);
+          INSERT INTO schema_meta VALUES ('primary', 'main', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION + 1});
         `,
     );
     await writeConfig(state, { store: customPath });

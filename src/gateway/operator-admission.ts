@@ -233,6 +233,11 @@ export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
   const sessionsWrite = operatorScopeSatisfied("operator.sessions.write", scopes);
   return Object.freeze({
     owner,
+    automations: owner
+      ? "manage"
+      : operatorScopeSatisfied("operator.cron", scopes)
+        ? "self"
+        : "none",
     skillAuthoring: sessionsWrite,
     questionReplace: sessionsWrite,
     commands: owner ? "all" : "none",
@@ -300,7 +305,6 @@ type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
   automationAdmin: boolean;
-  controlUiAdmin: boolean;
   release: () => void;
 };
 
@@ -634,9 +638,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         gateway &&
         hasAutomationAdminDelegation(gateway) &&
         operatorScopeSatisfied("operator.admin", scopes),
-      ),
-      controlUiAdmin: Boolean(
-        gateway?.controlUiAdmin && operatorScopeSatisfied("operator.admin", scopes),
       ),
       release: () => identity?.release(),
     };

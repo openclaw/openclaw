@@ -14,6 +14,12 @@ fi
 # Read-only gh calls retry transient API failures; mutations never retry here.
 gh_read() {
   local attempt output status stderr_file
+  local retryable='HTTP[^0-9]*(5[0-9]{2}|429)|rate limit|timeout|timed out|connection|EOF|TLS'
+  if [[ "$1" == --accepted-run ]]; then
+    # GitHub can return 404 just after returning the exact run ID from dispatch.
+    retryable+='|HTTP[^0-9]*404'
+    shift
+  fi
   # Child watchers run concurrently; each read owns its diagnostic file.
   stderr_file="$(mktemp "${RUNNER_TEMP:-/tmp}/gh-read-stderr.XXXXXX")" || return 1
   for attempt in 1 2 3 4; do
@@ -24,7 +30,7 @@ gh_read() {
     else
       status=$?
     fi
-    if [[ "$attempt" == 4 ]] || ! grep -Eiq 'HTTP[^0-9]*(5[0-9]{2}|429)|rate limit|timeout|timed out|connection|EOF|TLS' "$stderr_file"; then
+    if [[ "$attempt" == 4 ]] || ! grep -Eiq "$retryable" "$stderr_file"; then
       cat "$stderr_file" >&2
       rm -f "$stderr_file"
       return "$status"
@@ -1282,7 +1288,7 @@ upload_release_evidence_assets() {
 
 wait_for_core_npm_visibility() {
   local version="${RELEASE_TAG#v}" selector="${RELEASE_NPM_DIST_TAG}" started=$SECONDS
-  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-1800})) document state last_state=""
+  local deadline=$((SECONDS + ${RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS:-3600})) document state last_state=""
   while true; do
     state="registry unavailable"
     if document="$(curl -fsSL --connect-timeout 10 --max-time 60 \
@@ -1318,12 +1324,14 @@ sync_npm_beta_floor() {
     if response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh api --method POST \
       -H 'X-GitHub-Api-Version: 2026-03-10' "repos/${repo}/actions/workflows/openclaw-npm-dist-tags.yml/dispatches" \
       --input - <<< '{"ref":"main","inputs":{"mode":"sync_beta_to_stable"}}')" &&
-      run_id="$(jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$response")" &&
-      run_url="$(jq -er '.html_url | strings | select(length > 0)' <<< "$response")"; then
+      run_id="$(jq -er '.workflow_run_id | tostring | select(test("^[1-9][0-9]*$"))' <<< "$response")"; then
+      run_url="https://github.com/${repo}/actions/runs/${run_id}"
       while true; do
-        if ! response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh_read api "repos/${repo}/actions/runs/${run_id}")"; then
-          reason="sync read failed (${run_url})"
-          break
+        if ! response="$(GH_TOKEN="$RELEASE_LEDGER_TOKEN" gh_read --accepted-run api "repos/${repo}/actions/runs/${run_id}")"; then
+          reason="could not confirm the accepted sync run's status (${run_url}); inspect that run before resuming publication"
+          echo "::error::npm beta floor: ${reason}" >&2
+          echo "- npm beta floor: ${reason}" >> "$GITHUB_STEP_SUMMARY"
+          return 1
         fi
         status="$(jq -r '.status' <<< "$response")"
         if [[ "$status" != "$last_status" ]] || (( SECONDS - last_progress >= 300 )); then

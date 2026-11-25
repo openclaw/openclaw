@@ -86,6 +86,7 @@ import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-rout
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
+import { registerSessionMenuPermissionsEnglish } from "../../ui/src/i18n/locales/en-session-menu-permissions.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationEnglish } from "../../ui/src/i18n/locales/en-session-organization.ts";
@@ -207,6 +208,7 @@ const sourceFiles = [
   "en-provider-usage.ts",
   "en-session-machine.ts",
   "en-session-menu.ts",
+  "en-session-menu-permissions.ts",
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
@@ -320,6 +322,17 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       }
     }
     appendSessionCopy(key, value);
+    if (key === "actionRequiresConnection") {
+      const { assignPermissionDenied, ...permissionCopy } =
+        registerSessionMenuPermissionsEnglish.catalog.sessionsView;
+      Object.assign(sessionsView, {
+        actionPermissionDenied: en.sessionsView.actionPermissionDenied,
+        ...permissionCopy,
+        movePermissionDenied: en.sessionsView.movePermissionDenied,
+        assignPermissionDenied,
+        createPermissionDenied: en.sessionsView.createPermissionDenied,
+      });
+    }
   }
   const sessionDetails: TranslationMap = {};
   for (const [key, value] of Object.entries(

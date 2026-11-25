@@ -1,7 +1,6 @@
 import { expect, it, vi } from "vitest";
 import * as harnessPolicy from "../agents/harness/policy.js";
 import { registerAgentHarness } from "../agents/harness/registry.js";
-import * as thinkingRuntime from "../agents/thinking-runtime.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,7 +25,6 @@ it("shares runtime decisions while projecting a cold page in one materialization
       }
       const projection = await create({ cfg, modelCatalog: [] });
       await projection.prepareSelection();
-      using effective = vi.spyOn(thinkingRuntime, "resolveEffectiveAgentRuntime");
       using policy = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
       // Keep this work-count proof in one slice regardless of host speed.
       using clock = vi.spyOn(performance, "now");
@@ -37,8 +35,7 @@ it("shares runtime decisions while projecting a cold page in one materialization
       );
       expect(rows).toHaveLength(12);
       expect(rows.every((row) => row?.agentRuntime?.id === "openclaw")).toBe(true);
-      expect(effective).toHaveBeenCalledTimes(1);
-      expect(policy).toHaveBeenCalledTimes(2);
+      expect(policy).toHaveBeenCalledOnce();
     }, true),
   );
 });
@@ -100,20 +97,18 @@ it("resolves cold search runtimes per agent and selection, observing later runti
         ).entries.map(([key]) => key);
       };
       await projection.prepareSelection();
-      using effective = vi.spyOn(thinkingRuntime, "resolveEffectiveAgentRuntime");
       using policy = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
       const first = await read();
       expect(first).toHaveLength(36);
       expect(first.every((key) => /^agent:(alpha:(default|plugin)|beta:model)-/u.test(key))).toBe(
         true,
       );
-      expect(effective).toHaveBeenCalledTimes(8);
-      expect(policy).toHaveBeenCalledTimes(16);
+      expect(policy).toHaveBeenCalledTimes(8);
       expect(
         Object.fromEntries(
           ["alpha", "beta"].map((agentId) => [
             agentId,
-            effective.mock.calls.filter(
+            policy.mock.calls.filter(
               ([params]) =>
                 params.agentScope?.kind === "prepared" && params.agentScope.agentId === agentId,
             ).length,
