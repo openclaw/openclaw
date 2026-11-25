@@ -32,7 +32,7 @@ export function enqueueStoppedSubagentsNotice(params: {
     `${STOP_NOTICE_SOURCES[params.source]} cancelled ${params.killed} running ` +
       `${params.killed === 1 ? "sub-agent" : "sub-agents"}${names}. ` +
       "They won't report back. Check their sessions before you rely on their work, " +
-      "and spawn them again if it's still needed.",
+      "and spawn them again if the work is still needed.",
     withSystemEventOwner({ sessionKey: params.requesterSessionKey }, params.requesterAgentId),
   );
 }
