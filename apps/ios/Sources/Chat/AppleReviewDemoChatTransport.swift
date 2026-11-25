@@ -187,12 +187,14 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 OpenClawChatComposerSkill(
                     key: "autoreview",
                     name: "Auto Review",
+                    description: "Review a change before it lands.",
                     baseEnabled: true,
                     missingDependencies: false,
                     blocked: false),
                 OpenClawChatComposerSkill(
                     key: "release",
                     name: "Release OpenClaw",
+                    description: "Cut, check and publish a release.",
                     baseEnabled: true,
                     missingDependencies: false,
                     blocked: false),
@@ -208,8 +210,14 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                     name: "GitHub",
                     baseEnabled: true,
                     tools: [
-                        OpenClawChatComposerTool(name: "search_code", label: "Search code"),
-                        OpenClawChatComposerTool(name: "create_issue", label: "Create issue"),
+                        OpenClawChatComposerTool(
+                            name: "search_code",
+                            label: "Search code",
+                            description: "Find code across the repositories you can read."),
+                        OpenClawChatComposerTool(
+                            name: "create_issue",
+                            label: "Create issue",
+                            description: "Open an issue with a title and a body."),
                     ]),
                 OpenClawChatComposerConnector(
                     name: "Linear",

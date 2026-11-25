@@ -162,6 +162,7 @@ extension IOSGatewayChatTransport {
         return OpenClawChatComposerSkill(
             key: skill.skillKey,
             name: skill.name,
+            description: skill.description,
             baseEnabled: !skill.disabled,
             missingDependencies: missingDependencies,
             blocked: skill.blockedByAllowlist == true || skill.platformIncompatible == true,
@@ -184,6 +185,7 @@ extension IOSGatewayChatTransport {
                 label: entry.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? name
                     : entry.label,
+                description: entry.description,
                 baseEnabled: true,
                 sessionDenied: entry.deniedbysession == true))
         }

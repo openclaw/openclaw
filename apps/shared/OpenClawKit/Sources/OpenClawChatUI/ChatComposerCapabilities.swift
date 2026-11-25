@@ -82,6 +82,7 @@ public struct OpenClawChatSessionToolOverrides: Codable, Hashable, Sendable {
 public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     public let key: String
     public let name: String
+    public let description: String
     public let baseEnabled: Bool
     public let missingDependencies: Bool
     public let blocked: Bool
@@ -94,6 +95,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     public init(
         key: String,
         name: String,
+        description: String = "",
         baseEnabled: Bool,
         missingDependencies: Bool,
         blocked: Bool,
@@ -101,6 +103,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
     {
         self.key = key
         self.name = name
+        self.description = description
         self.baseEnabled = baseEnabled
         self.missingDependencies = missingDependencies
         self.blocked = blocked
@@ -111,6 +114,7 @@ public struct OpenClawChatComposerSkill: Identifiable, Equatable, Sendable {
 public struct OpenClawChatComposerTool: Identifiable, Equatable, Sendable {
     public let name: String
     public let label: String
+    public let description: String
     public let baseEnabled: Bool
     public let sessionDenied: Bool
 
@@ -121,11 +125,13 @@ public struct OpenClawChatComposerTool: Identifiable, Equatable, Sendable {
     public init(
         name: String,
         label: String,
+        description: String = "",
         baseEnabled: Bool = true,
         sessionDenied: Bool = false)
     {
         self.name = name
         self.label = label
+        self.description = description
         self.baseEnabled = baseEnabled
         self.sessionDenied = sessionDenied
     }
