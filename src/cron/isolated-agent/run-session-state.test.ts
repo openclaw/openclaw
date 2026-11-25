@@ -1,7 +1,7 @@
 // Run session state tests cover persisted session state for isolated cron agents.
 import crypto from "node:crypto";
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -157,13 +157,11 @@ describe("createPersistCronSessionEntry", () => {
         storage === "memory"
           ? memorySessionActorOwners.get({ agentId: target.agentId, path: storePath })
           : undefined;
-      using cleanup = {
-        [Symbol.dispose]: () => {
-          if (memory) {
-            memorySessionActorOwners.closeDatabase({ agentId: target.agentId, path: storePath });
-          }
-        },
-      };
+      if (memory) {
+        onTestFinished(() => {
+          memorySessionActorOwners.closeDatabase({ agentId: target.agentId, path: storePath });
+        });
+      }
       const cronSession = makeCronSession(
         makeSessionEntry({ sessionId: target.sessionId }),
         storePath,
