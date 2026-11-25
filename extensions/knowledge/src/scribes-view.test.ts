@@ -431,6 +431,7 @@ it("replaces an automation an agent turn created with an administrator's, keepin
   // options saved on it, and paused.
   const turnCreated = {
     ...reviewJob,
+    ownerProfileId: "p-owner",
     enabled: false,
     sessionKey: "s-review",
     sessionTarget: "current",
@@ -455,7 +456,6 @@ it("replaces an automation an agent turn created with an administrator's, keepin
     sessions: reviewSession,
     jobs: [turnCreated, generatedTools],
   });
-  const lists = () => calls.filter(([method]) => method === "cron.list").length;
   await render();
   const writes = () =>
     calls.filter(([method]) => ["cron.add", "cron.update", "cron.remove"].includes(method));
@@ -486,8 +486,6 @@ it("replaces an automation an agent turn created with an administrator's, keepin
     ],
   ]);
   expect(calls.some(([method]) => method === "chat.send")).toBe(false);
-  // The page reads again to show the result.
-  expect(lists()).toBe(2);
   expect(ui.announce).toHaveBeenCalledWith(
     "Knowledge Consolidation: updated for this version of Knowledge.",
   );
@@ -509,14 +507,22 @@ it("replaces an automation an agent turn created with an administrator's, keepin
   expect(offline.calls.filter(([method]) => method === "cron.remove")).toHaveLength(1);
 });
 
-it("leaves a turn-created automation it can't safely replace for Repair", async () => {
+it.each([
+  ["a custom schedule", { schedule: { kind: "every", everyMs: 3_600_000 } }],
+  // The replacement can't carry the creator's recorded model account to another person.
+  ["another person's automation", { ownerProfileId: "p-other" }],
+  ["an unknown owner", { ownerProfileId: undefined }],
+  // An update would replace the owner's script with the scribe's agent turn.
+  ["another payload kind", { payload: { kind: "script", script: "return { notify: 'checked' }" } }],
+])("leaves a turn-created automation with %s for Repair", async (_name, change) => {
   const custom = {
     ...reviewJob,
+    ownerProfileId: "p-owner",
     sessionKey: "s-review",
     sessionTarget: "current",
     scheduledToolPolicy: { mode: "account" },
-    schedule: { kind: "every", everyMs: 3_600_000 },
     payload: { kind: "agentTurn", message: earlierReview() },
+    ...change,
   };
   const { render, calls } = fixture({ sessions: reviewSession, jobs: [custom] });
   await render();

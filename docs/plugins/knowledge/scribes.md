@@ -209,10 +209,13 @@ tab, the page brings each ongoing scribe that is behind up to date:
 - An automation an agent turn created is removed and created again as the
   administrator's, in the same conversation. The new automation has a new ID,
   so **Recent runs** starts over; the earlier runs stay on the Automations
-  page until they age out. Only an automation with a plain cron schedule and
-  no trigger, as setup created it, is replaced on its own; any other keeps
-  running until you choose **Repair**, which shows an error if the
-  replacement is rejected.
+  page until they age out. Only an agent-turn automation with a plain cron
+  schedule and no trigger, as setup created it, is replaced on its own, and
+  only when the administrator viewing the tab is the person it was created
+  for, since its runs then keep using that person's model account. Any other
+  keeps running until an administrator chooses **Repair**, which shows an
+  error if the replacement is rejected; after Repair, runs use that
+  administrator's model account.
 - More than one automation of this agent with the scribe's declaration key is
   reduced to one.
 - An automation that runs in its conversation's own session moves to the

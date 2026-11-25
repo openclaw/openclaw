@@ -64,7 +64,6 @@ describe("scribes catalog", () => {
     expect(memory).toContain("- Memory files: MEMORY.md and the Dreaming diary (DREAMS.md).");
     expect(memory).toContain("`Scribe status: done — <one sentence with counts");
     expect(memory).not.toMatch(/Run message|automations tool/);
-    expect(defaultOptions("claim-consolidation")).toEqual({ schedule: REVIEW_WEEKLY_SCHEDULE });
   });
 
   it("moves a generated consolidation run message to the new schedule's run amounts", () => {

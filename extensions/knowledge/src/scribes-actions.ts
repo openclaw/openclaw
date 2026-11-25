@@ -56,13 +56,19 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
  */
 const isTurnCreated = (job: ScribeJob) => job.scheduledToolPolicy?.mode === "account";
 
+/** An automation in the shape setup creates: an agent turn on a plain cron schedule, no trigger. */
+const isSetupShape = (job: ScribeJob) =>
+  job.payload?.kind === "agentTurn" && job.schedule.kind === "cron" && job.trigger === undefined;
+
 /**
- * Whether the page replaces a turn-created automation on its own: only the shape setup created,
- * a plain cron schedule without a trigger, so the replacement passes the same validation. Any
- * other is left running until the owner chooses Repair, which reports a failed replacement.
+ * Whether the page replaces a turn-created automation on its own: only in the shape setup
+ * created, so the replacement passes the same validation and keeps its behavior, and only for
+ * the person it was created for, `viewer`, so the replacement's model account is still theirs
+ * (the page can't read or pass on the recorded one). Any other is left running until an
+ * administrator chooses Repair, which reports a failed replacement.
  */
-const replacesOnItsOwn = (job: ScribeJob) =>
-  job.schedule.kind === "cron" && job.trigger === undefined;
+const replacesOnItsOwn = (job: ScribeJob, viewer: string | undefined) =>
+  isSetupShape(job) && viewer !== undefined && job.ownerProfileId === viewer;
 
 /** What an ongoing scribe's automation is declared with. */
 type Declaration = {
@@ -277,7 +283,7 @@ export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolea
 /**
  * Whether this scribe's automation is behind this version of Knowledge:
  * - an agent turn created it, so scheduled runs can't read channel plugins with its authority
- *   (replaced only in the shape setup created; see `replacesOnItsOwn`),
+ *   (replaced only in the shape setup created, for its own creator; see `replacesOnItsOwn`),
  * - more than one automation of this agent has its declaration key,
  * - it runs in its conversation's own session instead of a fresh child session per run (only the
  *   shape earlier setups generated, its own creating conversation, counts), or
@@ -285,13 +291,18 @@ export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolea
  *   the page offers it as an update instead.
  * Missing or running scribes wait: an update must not race a repair or a run in progress.
  */
-export function needsUpdate(snapshot: ScribeSnapshot) {
+export function needsUpdate(snapshot: ScribeSnapshot, viewer: string | undefined) {
   const { job, runMessage } = snapshot;
   if (!job || !snapshot.session || snapshot.status === "missing" || job.state.runningAtMs) {
     return false;
   }
+  // An automation changed to another payload kind is the owner's own; an update would replace
+  // its behavior with the scribe's agent turn.
+  if (!snapshot.jobs.every((entry) => entry.payload?.kind === "agentTurn")) {
+    return false;
+  }
   const turnCreated = snapshot.jobs.filter(isTurnCreated);
-  if (!turnCreated.every(replacesOnItsOwn)) {
+  if (!turnCreated.every((entry) => replacesOnItsOwn(entry, viewer))) {
     return false;
   }
   return (

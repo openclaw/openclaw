@@ -18,13 +18,19 @@ const tried = new Map<string, Set<string>>();
  * an earlier version replaced. The Scribes page owns this because it is where an administrator
  * manages scribe automations. Answers whether it wrote anything.
  */
-export async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
+export async function update(
+  ui: Page,
+  snapshot: ScribeSnapshot,
+  agentId: string,
+  /** The viewing administrator's profile id, when the Gateway reports it. */
+  viewer: string | undefined,
+) {
   const { job } = snapshot;
   const gateway = ui.s.context.host.basePath;
   const revisions = tried.get(gateway) ?? new Set<string>();
   tried.set(gateway, revisions);
   const revision = job && `${job.id}:${job.configRevision ?? ""}`;
-  if (!job || !revision || revisions.has(revision) || !needsUpdate(snapshot)) {
+  if (!job || !revision || revisions.has(revision) || !needsUpdate(snapshot, viewer)) {
     return false;
   }
   revisions.add(revision);

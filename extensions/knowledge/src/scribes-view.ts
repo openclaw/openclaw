@@ -211,7 +211,13 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
   let snapshots = loaded;
   // An administrator's load brings earlier automations up to date, then reads the result.
   if (host.connection.canAdmin) {
-    const wrote = await Promise.all(snapshots.map((snapshot) => update(ui, snapshot, agentId)));
+    const viewer = await host
+      .request<{ profile?: { id?: string } }>("users.self", {})
+      .then((self) => self?.profile?.id)
+      .catch(() => undefined);
+    const wrote = await Promise.all(
+      snapshots.map((snapshot) => update(ui, snapshot, agentId, viewer)),
+    );
     if (wrote.some(Boolean)) {
       snapshots = await loadScribes(host, agentId);
     }
