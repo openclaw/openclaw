@@ -372,6 +372,11 @@ private fun CronJobDetailSettingsScreen(
   }
   BackHandler(onBack = ::leaveDetail)
 
+  val sessions by viewModel.chatSessions.collectAsState()
+  val sessionsLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
+  val sessionsHasMore by viewModel.sessionRosterHasMore.collectAsState()
+  val sessionsLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val sessionScope = rememberCoroutineScope()
   val detailState by viewModel.cronJobDetailState.collectAsState()
   val historyState by viewModel.cronRunHistoryState.collectAsState()
   val actionState by viewModel.cronActionState.collectAsState()
@@ -485,6 +490,11 @@ private fun CronJobDetailSettingsScreen(
       else -> {
         CronJobManagementPanel(
           job = current,
+          sessions = sessions,
+          sessionsLoadingMore = sessionsLoadingMore,
+          sessionsHasMore = sessionsHasMore,
+          sessionsLoadFailed = sessionsLoadFailed,
+          onLoadMoreSessions = { sessionScope.launch { viewModel.loadMoreChatSessions() } },
           editorDraft = editorDraft ?: CronEditorDraftState.from(current),
           onEditorDraftChange = ::updateEditorDraft,
           historyState = historyState,
