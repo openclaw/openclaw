@@ -2699,20 +2699,33 @@ jobs:
               echo "Current job workflow identity does not match the trusted release harness." >&2
               exit 1
             }
-          producer_job_name="$(
-            gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}" |
+          # The runner can start before the Actions Jobs API reports the current job as running.
+          # Reconcile read-only; never accept a different job, run, attempt, or lifecycle state.
+          for lookup in {1..7}; do
+            job_metadata="$(gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/${producer_job_id}")"
+            producer_job_name="$(
               jq -er \
                 --arg id "$producer_job_id" \
                 --arg run_id "$GITHUB_RUN_ID" \
                 --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
-                'select(
+                '(select(
                   (.id | tostring) == $id and
                   (.run_id | tostring) == $run_id and
                   (.run_attempt | tostring) == $run_attempt and
                   .status == "in_progress" and
                   .conclusion == null
-                ) | .name | select(type == "string" and length > 0)'
-          )"
+                ) | .name | select(type == "string" and length > 0)) // ""' \
+                <<< "$job_metadata"
+            )"
+            if [[ -n "$producer_job_name" ]]; then
+              break
+            fi
+            if [[ "$lookup" == 7 ]]; then
+              echo "Unable to confirm running producer job $producer_job_id in run $GITHUB_RUN_ID attempt $GITHUB_RUN_ATTEMPT." >&2
+              exit 1
+            fi
+            sleep 5
+          done
           {
             printf 'job_id=%s\n' "$producer_job_id"
             printf 'job_name=%s\n' "$producer_job_name"

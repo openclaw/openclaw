@@ -62,6 +62,10 @@ export type SessionMutationAuthorizationParams = {
   assertPrincipalTargetCurrent?: (target: SessionSharingTarget | null) => void;
   /** The router's actual alternative admission, not other grants on the same client. */
   sessionScope?: SessionOperatorScope;
+  /** Resolve this pending requirement against the exact existing session. */
+  participationRequired?: true;
+  /** Prepared against the child's original invitation, never request data. */
+  participantRunAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Database access classified by the host-owned method registry. */
   databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;

@@ -97,7 +97,7 @@ suite.define(() => {
 
         const reads = await gateway.getRequests("cron.list");
         await gateway.deferNext("cron.list");
-        await gateway.emitGatewayEvent("cron", { action: "finished" });
+        await gateway.emitGatewayEvent("cron.inventory.changed", {});
         await gateway.waitForRequest("cron.list", { after: reads.length });
         await expectInboxOnNextFrame(page, populated);
         await gateway.resolveDeferred("cron.list");

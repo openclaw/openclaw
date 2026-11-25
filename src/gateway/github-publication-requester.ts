@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
@@ -115,33 +114,31 @@ export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolic
 export type GitHubPublicationRequesterV2 = GitHubPublicationRequesterPolicyV2 &
   Pick<GitHubPublicationRequester, "assertInvocationCurrent">;
 
-/** A System-backed tool bridge cannot widen the selected person's action capability. */
+/** PR rights are the tool caller's turn grant, or the direct request's admitted scopes. */
 export function captureGitHubPublicationActionAuthority(
   requester: GitHubPublicationRequesterPolicyV2,
 ) {
-  const caller = getGatewayToolCallerIdentity();
-  const selection = caller ? resolveGatewayToolOperatorSelection() : undefined;
-  const scopes = caller
-    ? intersectOperatorScopes(requester.snapshot.scopes, selection?.operatorAuthority?.scopes ?? [])
-    : requester.snapshot.scopes;
+  // A tool turn without an operator principal reaches here as System and holds no PR rights.
+  const scopes =
+    getGatewayToolCallerIdentity() && requester.snapshot.actor.kind === "system"
+      ? []
+      : requester.snapshot.scopes;
   const operatorWrite = roleScopesAllow({
     role: "operator",
     requestedScopes: ["operator.write"],
     allowedScopes: scopes,
   });
-  const assertCurrent = () => {
-    requester.assertCurrent();
-    selection?.assertCurrent();
-  };
-  assertCurrent();
+  requester.assertCurrent();
   return {
     scopes,
     operatorWrite,
-    assertCurrent,
+    assertCurrent: requester.assertCurrent,
     assertOperatorWrite: () => {
-      assertCurrent();
+      requester.assertCurrent();
       if (!operatorWrite) {
-        throw new Error("GitHub pull request assistance requires full operator write permission.");
+        throw new Error(
+          "Working on another person's PR needs operator write permission. Ask a Gateway admin to do it, or to give your role operator.write.",
+        );
       }
     },
   };
@@ -294,8 +291,6 @@ function prepareRequesterPolicy(
         lifecycleRevision: target.origin
           ? target.origin.lifecycleRevision
           : (facts.target.entry.lifecycleRevision ?? null),
-        createdActor: facts.target.entry.createdActor,
-        owner: facts.target.entry.owner,
       },
     ];
   });
@@ -310,11 +305,10 @@ function prepareRequesterPolicy(
           { cause },
         );
       }
+      // Data fence on the session incarnation only; ownership is not re-checked after admission.
       if (
         entry.sessionId !== target.sessionId ||
-        (entry.lifecycleRevision ?? null) !== target.lifecycleRevision ||
-        !isDeepStrictEqual(entry.createdActor, target.createdActor) ||
-        !isDeepStrictEqual(entry.owner, target.owner)
+        (entry.lifecycleRevision ?? null) !== target.lifecycleRevision
       ) {
         throw new GitHubPublicationRequesterUnavailableError();
       }
@@ -351,10 +345,10 @@ function prepareRequesterSource(
   });
 }
 
-/** Capture from the admitted caller, never request arguments, publisher, or session attribution. */
+/** A tool call acts with its turn's admitted grant; a direct request is admitted here, once. */
 export async function prepareGitHubPublicationRequesterV2(
   options: Parameters<typeof prepareGatewayOperatorRunAuthority>[0] &
-    Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationAuthorization">,
+    Pick<GatewayRequestHandlerOptions, "signal">,
   session: PublicationSession,
 ): Promise<{
   requester: GitHubPublicationRequesterV2;
@@ -362,11 +356,13 @@ export async function prepareGitHubPublicationRequesterV2(
   authority: AdmittedRunOperatorAuthority | undefined;
 }> {
   options.signal?.throwIfAborted();
-  options.sessionMutationAuthorization?.assertCurrent();
-  if (options.hasCurrentClientAuthority?.() === false) {
-    throw new GitHubPublicationRequesterUnavailableError();
-  }
-  const source = await prepareGatewayOperatorRunAuthority(options);
+  // A tool call acts with its turn's grant; a direct request is admitted here, once. (An
+  // in-process tool call without a turn grant reaches here as the System client: no authority.)
+  const caller = getGatewayToolCallerIdentity();
+  const turn = caller ? resolveGatewayToolOperatorSelection().operatorAuthority : undefined;
+  const source = turn
+    ? { authority: turn, release: () => {} }
+    : await prepareGatewayOperatorRunAuthority(options);
   let identity: PreparedProfileIdentity | undefined;
   let sessionFacts: PreparedPublicationSession | undefined;
   const lifetime = new AbortController();
@@ -573,14 +569,7 @@ export async function prepareGitHubPublicationTaskRequester(
       assertCurrent() {
         signal.throwIfAborted();
         original.assertCurrent();
-        identity?.readCurrentFacts(snapshot.grant?.aliasBindingIds);
-        const target = preparedSession.readCurrent(getCommittedRuntimeConfig()).target.entry;
-        if (
-          !isDeepStrictEqual(target.createdActor, entry.createdActor) ||
-          !isDeepStrictEqual(target.owner, entry.owner)
-        ) {
-          throw new GitHubPublicationRequesterUnavailableError();
-        }
+        preparedSession.readCurrent(getCommittedRuntimeConfig());
       },
       async prepareSource(selector: GitHubPublicationSourceSelector) {
         requester.assertCurrent();

@@ -2,8 +2,10 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { intersectParticipationCeilings } from "../agents/participation-ceiling.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
+import { isSessionParticipationSourceTarget } from "../config/sessions/session-participation-source.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -14,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { readSessionDelegatedParticipation } from "./session-delegated-operator-source.js";
 import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 
 /** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
@@ -64,11 +67,28 @@ export function prepareGatewayOperatorSessionRun(params: {
     assertCurrent,
     assertAuthorized: (entry: SessionEntry | undefined) => {
       assertCurrent();
+      const child = readSessionDelegatedParticipation(entry);
+      if (child) {
+        const admitted = params.authority.participationCeiling;
+        if (!admitted?.source || admitted.source.agentId !== params.agentId) {
+          throw new ToolAuthorizationError("Participant child has no original-source authority.");
+        }
+        intersectParticipationCeilings(child, admitted);
+        return;
+      }
       const error = entry
         ? authorizeSessionAgentRun({
             cfg: params.cfg,
             client,
             target: { agentId: params.agentId, canonicalKey: params.sessionKey, entry },
+            invitedSession: Boolean(
+              params.authority.participationCeiling &&
+              isSessionParticipationSourceTarget(params.authority.participationCeiling, {
+                agentId: params.agentId,
+                canonicalKey: params.sessionKey,
+                entry,
+              }),
+            ),
           })
         : authorizeGatewaySessionCreation({ cfg: params.cfg, client, agentId: params.agentId });
       if (error) {

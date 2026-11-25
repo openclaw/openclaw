@@ -99,6 +99,88 @@ function read(repo, endpoint, paginate = false) {
   );
 }
 
+function readRetentionEvidence(repo, pr, head) {
+  const current = read(repo, `/pulls/${pr}`);
+  requireEvidence(current.head?.sha === head, "retention PR head changed");
+  const source = current.head.repo;
+  const headRepo = parseMergeRepository(
+    JSON.stringify({
+      id: source?.id,
+      nameWithOwner: source?.full_name,
+      url: source?.html_url,
+    }),
+  );
+  requireEvidence(headRepo.host === repo.host, "retention head repository host changed");
+  const branchName = current.head.ref;
+  requireEvidence(nonemptyString(branchName), "retention branch identity unavailable");
+  const branchPath = `/branches/${encodeURIComponent(branchName)}`;
+  const metadata = read(headRepo, "");
+  const branch = read(headRepo, branchPath);
+  requireEvidence(
+    metadata.id === headRepo.id &&
+      metadata.full_name === headRepo.nameWithOwner &&
+      branch.name === branchName &&
+      branch.commit?.sha === head &&
+      typeof metadata.delete_branch_on_merge === "boolean",
+    "retention repository or branch changed",
+  );
+  let protection = { kind: "auto-delete-disabled" };
+  if (metadata.delete_branch_on_merge) {
+    requireEvidence(
+      branch.protected === true,
+      "retention requires effective head-branch deletion protection",
+    );
+    const pages = read(
+      headRepo,
+      `/rules/branches/${encodeURIComponent(branchName)}?per_page=100`,
+      true,
+    );
+    requireEvidence(
+      Array.isArray(pages) && pages.every(Array.isArray),
+      "retention rules unavailable",
+    );
+    const deletionRules = pages.flat().filter((rule) => rule?.type === "deletion");
+    if (deletionRules.length) {
+      // Bound scope: repository rulesets only. Unknown inherited/bypass authority refuses.
+      const rule = deletionRules.find(
+        (entry) =>
+          entry.ruleset_source_type === "Repository" &&
+          entry.ruleset_source === headRepo.nameWithOwner &&
+          positiveInteger(entry.ruleset_id),
+      );
+      requireEvidence(rule, "retention deletion ruleset authority unsupported");
+      const policy = read(headRepo, `/rulesets/${rule.ruleset_id}`);
+      requireEvidence(
+        policy.id === rule.ruleset_id &&
+          policy.source === headRepo.nameWithOwner &&
+          policy.source_type === "Repository" &&
+          policy.target === "branch" &&
+          policy.enforcement === "active" &&
+          policy.current_user_can_bypass === "never" &&
+          Array.isArray(policy.bypass_actors) &&
+          policy.bypass_actors.length === 0 &&
+          Array.isArray(policy.rules) &&
+          policy.rules.some((entry) => entry.type === "deletion"),
+        "retention deletion ruleset enforcement or bypass authority uncertain",
+      );
+      protection = { kind: "ruleset", ruleset: rule.ruleset_id };
+    } else {
+      const policy = read(headRepo, `${branchPath}/protection`);
+      requireEvidence(
+        policy.allow_deletions?.enabled === false && policy.enforce_admins?.enabled === true,
+        "retention requires enforced no-deletion branch protection",
+      );
+      protection = { kind: "classic" };
+    }
+  }
+  return {
+    repository: { id: headRepo.id, nameWithOwner: headRepo.nameWithOwner, url: headRepo.url },
+    ref: `refs/heads/${branchName}`,
+    head,
+    protection,
+  };
+}
+
 function request(repo, endpoint, paginate = false, raw = false) {
   return {
     args: apiArgs(repo, endpoint, raw ? ["--include"] : paginate ? ["--paginate", "--slurp"] : []),
@@ -886,6 +968,20 @@ async function main([
   expectedObservation,
   ...extra
 ]) {
+  if (mode === "retention") {
+    requireEvidence(
+      /^[1-9][0-9]*$/.test(prValue ?? "") &&
+        OID.test(head ?? "") &&
+        bodySnapshot === undefined &&
+        expectedObservation === undefined &&
+        extra.length === 0,
+      "invalid retention arguments",
+    );
+    process.stdout.write(
+      `${JSON.stringify(readRetentionEvidence(parseMergeRepository(repository), Number(prValue), head))}\n`,
+    );
+    return;
+  }
   if (mode === "merge-result") {
     requireEvidence(
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
