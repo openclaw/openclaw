@@ -21,7 +21,7 @@ import {
   type ChatProjection,
 } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, readProjectedContinuation } from "./chat-turn-boundary.ts";
 
 /** Read the result before call/result coalescing moves it to the invocation's start. */
 export function projectSubagentCompletions(
@@ -185,7 +185,10 @@ export function projectSubagentCompletions(
       previous?.kind === "message" &&
       earlier.length &&
       hidden?.has(previous.key) === hidden?.has(item.key) &&
-      transcriptRunId(previous.message) === transcriptRunId(item.message)
+      // A settle that steers into the run the previous one woke joins its row;
+      // a receipt that resumes the chat keeps its own row.
+      (transcriptRunId(previous.message) === transcriptRunId(item.message) ||
+        readProjectedContinuation(item.message) === undefined)
     ) {
       const owner = asOptionalRecord(previous.message)!;
       const derivations = getMessageDerivations(owner);
@@ -199,7 +202,15 @@ export function projectSubagentCompletions(
         cached.completionsKey === completionsKey &&
         cached.sources.every((candidate, index) => candidate === sources[index])
           ? cached.message
-          : subagentCompletionMessage(previous.message, [...earlier, ...fresh]);
+          : subagentCompletionMessage(previous.message, [
+              // An agent that settles again is named once, with its latest outcome.
+              ...earlier.map(
+                (entry) => fresh.find((next) => next.sessionKey === entry.sessionKey) ?? entry,
+              ),
+              ...fresh.filter(
+                (next) => !earlier.some((entry) => entry.sessionKey === next.sessionKey),
+              ),
+            ]);
       derivations.completedSubagentGroup = { sources, completionsKey, message };
       projected[projected.length - 1] = { ...previous, message };
     } else {
