@@ -260,7 +260,10 @@ async function withMirrorWrite<T>(
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
   mode: "lock" | "sequence",
 ): Promise<T> {
-  const { assertCurrent, ...scope } = params;
+  const { assertCurrent, ...locator } = params;
+  const scope = locator.storePath?.trim()
+    ? captureSessionTranscriptTargetBinding({ ...locator, storePath: locator.storePath })
+    : locator;
   const { withProjectedSessionTranscriptWriteLock } =
     await import("./session-transcript-lock-runtime.js");
   return await withProjectedSessionTranscriptWriteLock(

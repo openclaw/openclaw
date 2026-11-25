@@ -63,6 +63,24 @@ describe("Codex mirror write assertion", () => {
     expect(await readTexts(target)).toEqual([]);
   });
 
+  it("pins a relative store before awaited resolution can observe a different working directory", async () => {
+    const target = await createUnresolvedTarget();
+    const foreign = await createUnresolvedTarget();
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(path.dirname(target.storePath));
+    try {
+      const write = withCodexSessionTranscriptMirrorWrite(
+        { ...target, storePath: "sessions.json", assertCurrent: () => {} },
+        (transcript) => transcript.appendMessageWithMessageSequence(appendAssistant("settled")),
+      );
+      cwd.mockReturnValue(path.dirname(foreign.storePath));
+      await write;
+    } finally {
+      cwd.mockRestore();
+    }
+    expect(await readTexts(target)).toEqual(['"text":"settled"']);
+    expect(await readTexts(foreign)).toEqual([]);
+  });
+
   it("rejects resolution to a different session key before entering the writer", async () => {
     const target = await createUnresolvedTarget();
     const write = vi.fn(() => {});
