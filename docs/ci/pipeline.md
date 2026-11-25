@@ -594,13 +594,15 @@ scheduler summaries and sanitized survivor reports. Failed reports include
 bounded, redacted baseline and candidate agent-turn output; private scenario
 state and raw logs remain outside the upload.
 
-On PRs selecting `release-update-survivor`, the Docker seed tier packs a private
-runtime-only baseline rather than rebuilding public declarations. The synthetic
-successor is compiled from the same source with the schema change and uses the
-same package profile. Both pass the normal tarball checker. The trial still
-requires the normal npm update, the committed trial, a distinct serving build,
-schema advancement, and migrated sentinel rows. Its success summary records
-successor preparation, initial npm install, and update timings separately.
+For PRs selecting `release-update-survivor`, the fixture matrix builds the
+current and synthetic successor tarballs in parallel, with a third row that
+builds the pinned previous reader only for selected schema/migration changes.
+The build rows restore the standard dependency and build caches and use the
+normal typed packer and tarball checker. The Docker seed job verifies and
+consumes artifacts from the same run. The trial still requires the normal npm
+update, a committed trial, a distinct serving build, schema advancement, and
+migrated sentinel rows. Fixture preparation is timed in the matrix job steps.
+The container proof records install, readiness, update, assertions, and teardown.
 
 Full upstream `main` pushes run the operator config and prior-release state
 startup corpora once through the Node `runtime-config` owner. Upstream pull

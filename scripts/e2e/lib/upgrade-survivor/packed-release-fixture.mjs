@@ -62,7 +62,12 @@ export async function buildTypedFixture({
   generateSchema,
   timingsMs = {},
 }) {
-  const env = { ...process.env, GIT_COMMIT: commit, OPENCLAW_CONTROL_UI_BUILD_ID: buildId };
+  const env = {
+    ...process.env,
+    GIT_COMMIT: commit,
+    OPENCLAW_CONTROL_UI_BUILD_ID: buildId,
+    OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
+  };
   const run = (phase, program, args) => {
     const start = performance.now();
     execFileSync(program, args, { cwd: tree, env, stdio: "inherit" });
@@ -89,6 +94,7 @@ export async function buildTypedFixture({
     "--output-name",
     path.basename(tarball),
   ]);
+  console.log(`Fixture ${path.basename(tarball)} phase timings (ms): ${JSON.stringify(timingsMs)}`);
   const packed = readPackedFixture(tarball);
   assert.equal(packed.build.buildId, buildId, "fixture package has the wrong build ID");
   return { packed, sha256: await tarballDigest(tarball) };

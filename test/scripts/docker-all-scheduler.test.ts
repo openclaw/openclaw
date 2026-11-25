@@ -729,6 +729,8 @@ describe("scripts/test-docker-all scheduler", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@2026.5.3",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: "openclaw@2026.5.3 openclaw@2026.5.2",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-dependency-cleanup",
+      OPENCLAW_UPGRADE_SURVIVOR_PREBUILT_DIR: path.join(fixture.root, "survivor fixtures"),
+      OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA: "b".repeat(40),
     };
     const command = buildLaneRerunCommand("gateway-network", env);
     for (const key of [
@@ -742,6 +744,8 @@ describe("scripts/test-docker-all scheduler", () => {
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC",
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",
       "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",
+      "OPENCLAW_UPGRADE_SURVIVOR_PREBUILT_DIR",
+      "OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA",
     ] as const) {
       expect(command).toContain(`${key}='${env[key]}'`);
     }

@@ -1942,8 +1942,7 @@ AFTER_CD
       docker_seed_lanes: "${{ steps.manifest.outputs.docker_seed_lanes }}",
       run_docker_seed_e2e: "${{ steps.manifest.outputs.run_docker_seed_e2e }}",
     });
-    expect(job.if).toBe("needs.preflight.outputs.run_docker_seed_e2e == 'true'");
-    expect(job.needs).toEqual(["preflight"]);
+    expect(job.needs).toEqual(["preflight", "docker-survivor-fixtures"]);
     expect(job["timeout-minutes"]).toBe(115);
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.strategy).toBeUndefined();
@@ -1968,16 +1967,20 @@ AFTER_CD
     expect(parallelism).toContain("&& 3 || 1");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC");
     expect(run.env).not.toHaveProperty("OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS");
+    const inlinePackage = { jobResults: { "docker-survivor-fixtures": "skipped" } };
     const prepare = job.steps.find((step: WorkflowStep) =>
       step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
     ) as WorkflowStep;
     for (const eventName of ["push", "pull_request"] as const) {
-      expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", { eventName })).toBe(true);
+      expect(
+        evaluateWorkflowExpression("${{ " + prepare.if + " }}", { ...inlinePackage, eventName }),
+      ).toBe(true);
     }
     for (const releaseGate of [false, true]) {
       for (const qualification of [false, true]) {
         expect(
           evaluateWorkflowExpression("${{ " + prepare.if + " }}", {
+            ...inlinePackage,
             eventName: "workflow_dispatch",
             releaseGate,
             preflightOutputs: { ci_qualification: String(qualification) },
@@ -1986,6 +1989,7 @@ AFTER_CD
       }
     }
     const releaseChild = {
+      ...inlinePackage,
       eventName: "workflow_dispatch",
       repository: "openclaw/openclaw",
       runAttempt: 1,
@@ -2113,46 +2117,47 @@ AFTER_CD
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "uses checked runtime packages only for the Docker seed tier on survivor PRs",
-    () => {
-      const prepare = requiredWorkflowStep(
-        readCiWorkflow().jobs["docker-seed-e2e"].steps,
-        "Prepare Docker smoke package",
+  it("builds independent survivor fixtures only for selected PRs and requires every row", () => {
+    const { jobs } = readCiWorkflow();
+    const builders = jobs["docker-survivor-fixtures"];
+    const docker = jobs["docker-seed-e2e"];
+    expect(builders["runs-on"]).toBe(docker["runs-on"]);
+    expect(builders.strategy).toMatchObject({
+      "fail-fast": false,
+      matrix: { fixture: ["current", "successor", "previous"] },
+    });
+    expect(jobs["ci-gate"].needs).toContain("docker-survivor-fixtures");
+    const prepare = requiredWorkflowStep(docker.steps, "Prepare Docker smoke package");
+    expect(requiredWorkflowStep(builders.steps, "Prepare current survivor package").run).toBe(
+      prepare.run,
+    );
+    const download = requiredWorkflowStep(docker.steps, "Download release survivor fixtures");
+    for (const [eventName, lanes, result, selected, shouldRun] of [
+      ["pull_request", "release-update-survivor", "success", true, true],
+      ["pull_request", "mcp-channels release-update-survivor", "success", true, true],
+      ["pull_request", "release-update-survivor", "failure", true, false],
+      ["pull_request", "release-update-survivor", "skipped", true, false],
+      ["pull_request", "mcp-channels", "skipped", false, true],
+      ["workflow_dispatch", "release-update-survivor", "skipped", false, true],
+      ["push", "published-upgrade-survivor", "skipped", false, true],
+    ] as const) {
+      const context = {
+        eventName,
+        preflightOutputs: { run_docker_seed_e2e: "true", docker_seed_lanes: lanes },
+        jobResults: { "docker-survivor-fixtures": result },
+      };
+      expect(evaluateWorkflowExpression("${{ " + builders.if + " }}", context)).toBe(selected);
+      expect(evaluateWorkflowExpression(docker.if, context)).toBe(shouldRun);
+      expect(evaluateWorkflowExpression("${{ " + download.if + " }}", context)).toBe(
+        result === "success",
       );
-      const runtimeOnly = String(prepare.env?.DOCKER_SEED_RUNTIME_ONLY);
-      const run = expectDefined(prepare.run, "Docker smoke package preparation");
-      const root = tempDirs.make("openclaw-docker-seed-package-");
-      for (const [eventName, lanes, expectedRuntimeOnly] of [
-        ["pull_request", "release-update-survivor", true],
-        ["pull_request", "mcp-channels release-update-survivor", true],
-        ["pull_request", "mcp-channels", false],
-        ["workflow_dispatch", "release-update-survivor", false],
-        ["push", "published-upgrade-survivor", false],
-      ] as const) {
-        const selected = evaluateWorkflowExpression(runtimeOnly, {
-          eventName,
-          preflightOutputs: { docker_seed_lanes: lanes },
-        });
-        const { stdout } = runWorkflowShellScript(
-          'pnpm() { echo pnpm "$*"; }\nnode() { echo node "$*"; }\n' + run,
-          {
-            env: {
-              ...process.env,
-              DOCKER_SEED_RUNTIME_ONLY: String(selected),
-              GITHUB_ENV: path.join(root, "github-env"),
-              RUNNER_TEMP: root,
-            },
-          },
+      if (selected) {
+        expect(evaluateWorkflowExpression("${{ " + prepare.if + " }}", context)).toBe(
+          result === "skipped",
         );
-        expect(stdout).toContain(
-          `node scripts/package-openclaw-for-docker.mjs ${expectedRuntimeOnly ? "--runtime-only" : "--skip-build"} --allow-unreleased-changelog`,
-        );
-        expect(stdout.includes("pnpm build:ci-artifacts")).toBe(!expectedRuntimeOnly);
-        expect(stdout.includes("scripts/write-unified-entry-dts.ts")).toBe(!expectedRuntimeOnly);
       }
-    },
-  );
+    }
+  });
 
   it.each<{
     candidate: string;
