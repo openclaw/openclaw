@@ -11,7 +11,7 @@ import * as shared from "./shared.js";
 import { tryRunImmutableUpdateCommand } from "./update-command-immutable.js";
 
 const { prepare, inspection } = vi.hoisted(() => {
-  const inspection = (
+  const inspectFixture = (
     root: string,
   ): ImmutableInstallModule.ImmutableUpdateResult["installation"] => ({
     root,
@@ -20,13 +20,13 @@ const { prepare, inspection } = vi.hoisted(() => {
     activationEnabled: true,
   });
   return {
-    inspection,
+    inspection: inspectFixture,
     prepare: vi.fn<typeof ImmutableInstallModule.prepareImmutableUpdate>(
       async ({ root, dryRun }) => {
         if (!dryRun) {
           throw new Error("The immutable executor was reached");
         }
-        return { status: "dry-run", installation: inspection(root), steps: [], warnings: [] };
+        return { status: "dry-run", installation: inspectFixture(root), steps: [], warnings: [] };
       },
     ),
   };
