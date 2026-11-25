@@ -672,7 +672,10 @@ private struct ChatComposerSkillSwitchesButton: ViewModifier {
 
     private var button: some View {
         Button(action: self.action) {
+            // A 44 pt target; the bar draws the same glass circle around it.
             Image(systemName: "switch.2")
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .accessibilityLabel(Text("Turn skills on or off"))
         .accessibilityIdentifier("chat-composer-skill-switches")
