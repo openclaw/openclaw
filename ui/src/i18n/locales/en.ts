@@ -1694,6 +1694,9 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
+      running: "Compacting",
+      completed: "Compacted context",
+      duration: "Duration: {duration}",
       savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
@@ -1940,6 +1943,8 @@ const startupEnglish = {
     },
     workRun: {
       workedFor: "Worked for {duration}",
+      workedAndCompacted: "Worked, compacted context",
+      workedForAndCompacted: "Worked for {duration}, compacted context",
       worked: "Worked",
     },
     sessionDiff: {

@@ -96,6 +96,8 @@ const nodeRequiredFiles = new Set([
   "src/infra/exec-host.socket.test.ts",
   // The macOS directory watch helper serves Node's libuv watchers only.
   "src/infra/directory-watch-host.test.ts",
+  // Git release launchers and service units are Node contracts; the suite skips on Bun.
+  "src/infra/git-release.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",

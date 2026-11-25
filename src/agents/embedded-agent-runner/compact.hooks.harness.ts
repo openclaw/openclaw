@@ -124,7 +124,7 @@ export const resolveSessionAgentIdsMock = vi.fn<
 const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
 let fixture: { workspaceDir: string; sessionId: string };
 export const resolveDefaultAgentDirMock = vi.fn<() => string>();
-export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
   agentHarnessId?: string;

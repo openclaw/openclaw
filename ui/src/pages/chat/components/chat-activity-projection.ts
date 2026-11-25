@@ -7,7 +7,11 @@ import {
 } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { readCollectionErrorCount } from "../../../../../src/shared/subagent-completion.js";
-import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatCompaction,
+  MessageGroup as MessageGroupData,
+  ToolCard,
+} from "../../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
@@ -47,15 +51,22 @@ function activityEntryGroupKey(
   return entry === group.messages[0] ? group.key : `${group.key}:${entry.key}`;
 }
 
+export type ProjectedActivity = ReturnType<typeof readPreparedActivity>[number] & {
+  compaction?: ChatCompaction;
+  sourceOrder?: number;
+};
+
 export function collectActivityGroup(
   groups: readonly MessageGroupData[],
   opts: NativeMessageGroupOptions,
 ) {
+  const shownGroups =
+    opts.showToolCalls === false ? groups.filter((group) => group.compaction) : groups;
   const firstGroup = groups[0];
-  if (!firstGroup || opts.showToolCalls === false) {
+  if (!firstGroup || !shownGroups.length) {
     return undefined;
   }
-  const entries = groups.flatMap((group) => group.messages);
+  const entries = shownGroups.flatMap((group) => group.messages);
   const cards: ToolCard[] = [];
   const toolContexts = new Map<ToolCard, ActivityOperationContext>();
   const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
@@ -63,8 +74,25 @@ export function collectActivityGroup(
   const preparedByCall = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
   const suppressedCards = new Set<ToolCard>();
   const activityKeys = new Map<ReturnType<typeof readPreparedActivity>[number], string>();
-  const activity = groups.flatMap((group) =>
-    group.messages.flatMap((entry) => {
+  const activity = shownGroups.flatMap<ProjectedActivity>((group, sourceOrder) => {
+    if (group.compaction) {
+      const compaction = group.compaction;
+      const item: ProjectedActivity = {
+        compaction,
+        sourceOrder,
+        itemId: group.key,
+        kind: "compaction",
+        phase: compaction.phase === "active" ? "start" : "end",
+        status: compaction.phase === "active" ? "running" : "completed",
+        title: compaction.label,
+      };
+      activityKeys.set(item, group.key);
+      if (compaction.phase === "active" || (opts.runActive && group.runId === opts.activityRunId)) {
+        currentRunActivity.add(item);
+      }
+      return [item];
+    }
+    return group.messages.flatMap((entry) => {
       const prepared = readPreparedActivity(entry.message);
       const fileOptions = resolveFileLinkOwnerOptions(
         group,
@@ -95,6 +123,7 @@ export function collectActivityGroup(
         cards.push(card);
         toolContexts.set(card, {
           messageKey: entry.key,
+          sourceOrder,
           runId: card.runId ?? runId,
           disclosureId: `${entry.key}:toolcard:${index}`,
           onOpenWorkspaceFile: fileOptions.onOpenWorkspaceFile,
@@ -107,8 +136,8 @@ export function collectActivityGroup(
         }
       }
       return prepared;
-    }),
-  );
+    });
+  });
   for (const card of cards) {
     const item = card.callId
       ? preparedByCall.get(JSON.stringify([toolContexts.get(card)!.runId, card.callId]))
@@ -215,7 +244,7 @@ export type ActivityGroupData = NonNullable<ReturnType<typeof collectActivityGro
 type ActivityEntry = { key: string } & (
   | { operation: ActivityOperationProps; activity?: never; message?: never }
   | {
-      activity: ReturnType<typeof readPreparedActivity>[number];
+      activity: ProjectedActivity;
       operation?: never;
       message?: never;
     }
@@ -324,6 +353,16 @@ export function segmentActivityGroup<State extends ActivityStructure>(
   }
   const unmatched = new Set(context.state.unmatchedActivity);
   for (const group of context.groups) {
+    if (group.compaction) {
+      const activity = context.state.unmatchedActivity.find(
+        (item) => item.itemId === group.key && item.compaction,
+      )!;
+      append({ key: group.key, activity }, false, false, group.key);
+      continue;
+    }
+    if (context.options.showToolCalls === false) {
+      continue;
+    }
     for (const entry of group.messages) {
       const operations = byMessage.get(entry.key) ?? [];
       if (

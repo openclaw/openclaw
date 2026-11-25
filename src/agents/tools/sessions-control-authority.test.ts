@@ -59,6 +59,7 @@ describe("session control source capability", () => {
       canonicalIdentity: null,
       profileId: authority.profileId,
       scopes: authority.scopes,
+      grant: authority.grant,
     };
     for (const unissued of [forged, { ...authority }]) {
       expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);

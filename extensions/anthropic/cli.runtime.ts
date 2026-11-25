@@ -70,6 +70,7 @@ type ClaudeCliSession = {
   currentTurn?: ClaudeCliTurn;
   idleTimer?: ReturnType<typeof setTimeout>;
   hasInputLifecycle: boolean;
+  nativeSessionId?: string;
   closed: boolean;
   // Tasks outlive inputs; false marks subagent work with no parent-stream query.
   taskOwners: Map<string, string | false>;
@@ -270,7 +271,7 @@ async function injectInput(
   options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
     images?: readonly CliBackendInputImage[];
   },
-): Promise<void> {
+) {
   const uuid = randomUUID();
   const started = createDeferred<void>();
   // Closing can reject the receipt while the write is still pending.
@@ -299,6 +300,8 @@ async function injectInput(
     throw error;
   }
   await started.promise;
+  const { nativeSessionId: cliSessionId } = session;
+  return cliSessionId ? { cliSessionId, externalId: uuid } : undefined;
 }
 
 function closeSession(session: ClaudeCliSession, error?: unknown) {
@@ -371,6 +374,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       );
       return;
     }
+    // Input may name a fork's parent; only native output identifies the transcript.
+    session.nativeSessionId =
+      typeof message.session_id === "string" ? message.session_id : undefined;
     session.hasInputLifecycle =
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }

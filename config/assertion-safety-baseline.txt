@@ -249,7 +249,7 @@ extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
-extensions/feishu/src/channel.ts	4
+extensions/feishu/src/channel.ts	3
 extensions/feishu/src/client.ts	1
 extensions/feishu/src/comment-handler.ts	2
 extensions/feishu/src/comment-target.ts	2
@@ -2333,7 +2333,6 @@ ui/src/pages/chat/input-history.ts	1
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	1
 ui/src/pages/chat/talk/gateway-relay.ts	1
 ui/src/pages/chat/talk/google-live.ts	1
 ui/src/pages/chat/talk/shared.ts	1

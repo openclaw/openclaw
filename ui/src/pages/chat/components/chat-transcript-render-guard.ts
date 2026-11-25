@@ -47,6 +47,7 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
     group.timestamp,
     group.isStreaming,
     group.runId,
+    group.compaction,
     ...group.messages.flatMap((source) => [
       source.key,
       source.message,

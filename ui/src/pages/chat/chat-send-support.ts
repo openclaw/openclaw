@@ -1,5 +1,6 @@
 import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
 import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
@@ -120,7 +121,11 @@ export function chatSendHoldReason(
 }
 
 function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
-  return host.connected && host.client && !host.client.recoveryScopeReady
+  // A cold connection has no account to own an offline send yet. An established
+  // account can still queue locally while its Gateway is disconnected.
+  return host.client &&
+    !host.client.recoveryScopeReady &&
+    (host.connected || !readOfflineStorageScope(host))
     ? t("chat.queue.connectionPending")
     : null;
 }
