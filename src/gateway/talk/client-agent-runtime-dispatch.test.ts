@@ -4,14 +4,13 @@ const prepared = vi.hoisted(() => ({
   load: vi.fn(),
   acquire: vi.fn(),
 }));
-// Model-runtime publication is Gateway-owned; this suite checks only how a Talk
-// consult borrows it for the session's own model and releases both leases.
 // mock-isolation: Gateway owns model-runtime publication; this suite checks only Talk's lease borrowing.
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   loadPublishedGatewayReplyDispatchRuntime: prepared.load,
   acquireAgentRunPreparedModelRuntime: prepared.acquire,
 }));
 
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withTalkConsultPublishedRuntime } from "./client-agent-runtime-dispatch.js";
@@ -69,8 +68,7 @@ it("runs the consult in the published runtime leased for the session's own model
   });
   const context = await withTalkConsultPublishedRuntime(
     {
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...target,
       sessionEntry: { sessionId: "s", updatedAt: 1 },
       workspaceDir: "/session-worktree",
     },
@@ -101,22 +99,14 @@ it("releases the dispatch lease without starting a consult when no model is conf
   expect(run).not.toHaveBeenCalled();
 });
 
-it("keeps the command owner's own loading when no runtime is published", async () => {
-  prepared.load.mockResolvedValue(undefined);
-  const run = vi.fn(async (context: unknown) => context);
-  await expect(withTalkConsultPublishedRuntime(target, run)).resolves.toBeUndefined();
-  expect(prepared.acquire).not.toHaveBeenCalled();
-});
-
 it("releases the model lease when the consult fails", async () => {
   const dispatchLease = publishRuntime();
   const modelLease = lease("model");
   prepared.acquire.mockResolvedValue(modelLease);
-  await expect(
-    withTalkConsultPublishedRuntime(target, async () => {
-      throw new Error("synthetic consult failure");
-    }),
-  ).rejects.toThrow("synthetic consult failure");
+  const failedRun = vi.fn().mockRejectedValue(new Error("synthetic consult failure"));
+  await expect(withTalkConsultPublishedRuntime(target, failedRun)).rejects.toThrow(
+    "synthetic consult failure",
+  );
   expect(dispatchLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
   expect(modelLease[Symbol.asyncDispose]).toHaveBeenCalledOnce();
 });
@@ -135,11 +125,19 @@ it("releases a lease handed over before publication fails", async () => {
   expect(run).not.toHaveBeenCalled();
 });
 
-it("falls back to the command owner's loading when the agent has no published owner", async () => {
-  const { PreparedModelRuntimeOwnerNotPublishedError } =
-    await import("../../agents/prepared-model-runtime-admission-errors.js");
-  prepared.load.mockRejectedValue(new PreparedModelRuntimeOwnerNotPublishedError("unpublished"));
-  const run = vi.fn(async (context: unknown) => context);
-  await expect(withTalkConsultPublishedRuntime(target, run)).resolves.toBeUndefined();
-  expect(run).toHaveBeenCalledOnce();
-});
+it.each(["absent", "unpublished"])(
+  "uses command-owned loading when the runtime is %s",
+  async (state) => {
+    if (state === "absent") {
+      prepared.load.mockResolvedValue(undefined);
+    } else {
+      prepared.load.mockRejectedValue(
+        new PreparedModelRuntimeOwnerNotPublishedError("unpublished"),
+      );
+    }
+    const run = vi.fn();
+    await withTalkConsultPublishedRuntime(target, run);
+    expect(run).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(prepared.acquire).not.toHaveBeenCalled();
+  },
+);

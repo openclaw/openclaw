@@ -11,7 +11,7 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { resolveSessionModelRef } from "../session-utils.js";
+import { resolveGatewaySessionModelForRun } from "../session-model-for-run.js";
 
 /**
  * Runs a Talk consult in the Gateway's published reply runtime, leased for the session's own
@@ -56,7 +56,14 @@ export async function withTalkConsultPublishedRuntime<T>(
   let modelLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>;
   try {
     const sessionEntry = params.sessionEntry;
-    const sessionModel = resolveSessionModelRef(published.config, sessionEntry, params.agentId);
+    const sessionModel = await resolveGatewaySessionModelForRun({
+      cfg: published.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      entry: sessionEntry,
+      abortSignal: params.abortSignal,
+      manifestPlugins: published.pluginGeneration.pluginMetadataSnapshot,
+    });
     if (!sessionModel) {
       throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
     }

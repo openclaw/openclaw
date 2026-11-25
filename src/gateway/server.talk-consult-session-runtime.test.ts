@@ -110,7 +110,16 @@ async function prepare(entry: Partial<SessionEntry>, runtime = "claude-cli") {
   storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   testState.sessionStorePath = storePath;
   await writeSessionStore({
-    entries: { main: { sessionId, updatedAt: Date.now(), status: "done", ...entry } },
+    entries: {
+      main: { sessionId, updatedAt: Date.now(), status: "done", ...entry },
+      ...(entry.parentSessionKey && {
+        [entry.parentSessionKey]: {
+          sessionId: randomUUID(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-5-5",
+        },
+      }),
+    },
   });
   const previous = getRuntimeConfig();
   await prepareGatewayReplyRuntimeForTest({
@@ -121,7 +130,7 @@ async function prepare(entry: Partial<SessionEntry>, runtime = "claude-cli") {
         ...previous.agents,
         defaults: {
           ...previous.agents?.defaults,
-          model: { primary: MODEL_REF },
+          model: entry.parentSessionKey ? undefined : { primary: MODEL_REF },
           models: { [MODEL_REF]: { agentRuntime: { id: runtime } } },
         },
       },
@@ -184,6 +193,23 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 
+async function createRunner(
+  getVoiceSessionId: () => string | undefined,
+  runAuthority?: Awaited<ReturnType<typeof retainTalkClientRunAuthority>>,
+) {
+  return createTalkClientAgentConsultRunner({
+    runAuthority,
+    config: getRuntimeConfig(),
+    context,
+    sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
+    ownerConnId: connectionId,
+    authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
+    getVoiceSessionId,
+    initialItems: [],
+    runIdPrefix: "talk-realtime-relay-consult",
+  });
+}
+
 // The server realtime relay (runId prefix talk-realtime-relay-consult) and browser direct
 // consults share this runner; the browser tool-call RPC already goes through chat.send.
 async function consult(
@@ -195,16 +221,7 @@ async function consult(
 ) {
   const callId = expectDefined(voiceSessionId, "voice session");
   let currentCallId: string | undefined = callId;
-  const runner = createTalkClientAgentConsultRunner({
-    config: getRuntimeConfig(),
-    context,
-    sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
-    ownerConnId: connectionId,
-    authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
-    getVoiceSessionId: () => currentCallId,
-    initialItems: [],
-    runIdPrefix: "talk-realtime-relay-consult",
-  });
+  const runner = await createRunner(() => currentCallId);
   try {
     if (adoptCompletionClaims) {
       runner.runPrompt.adoptCompletionClaims();
@@ -236,8 +253,8 @@ async function consult(
   }
 }
 
-it("runs a Claude CLI chat's voice consult through the typed-turn CLI dispatch as its owner", async () => {
-  await prepare({});
+it("routes a child chat's voice consult through its parent's Claude CLI model without a default", async () => {
+  await prepare({ parentSessionKey: "agent:main:parent" });
   runCliAgent.mockImplementation(async () => answer("CLI_ANSWER", "claude-cli"));
   runEmbeddedAgent.mockImplementation(async () => {
     throw new Error("No API key found for provider anthropic");
@@ -251,6 +268,7 @@ it("runs a Claude CLI chat's voice consult through the typed-turn CLI dispatch a
   expect(run).toMatchObject({
     provider: "claude-cli",
     modelProvider: "anthropic",
+    model: "claude-sonnet-5-5",
     agentId: "main",
     sessionKey,
     sessionId,
@@ -294,31 +312,22 @@ it.each([false, true])(
     await prepare({});
     runCliAgent.mockImplementation(async ({ runId }) => {
       const result = answer("CLI_SPOKEN_ANSWER", "claude-cli");
+      if (!withReceipt) {
+        return result;
+      }
+      const requested = { provider: "anthropic", model: "claude-sonnet-5-5" };
+      const terminalReceipt = {
+        runId,
+        sessionId,
+        turnId: runId,
+        requested,
+        effective: { ...requested, responseModel: requested.model },
+        successfulToolNames: [],
+        rerouted: false,
+      };
       return {
         ...result,
-        meta: {
-          ...result.meta,
-          agentMeta: {
-            ...result.meta.agentMeta,
-            ...(withReceipt
-              ? {
-                  terminalReceipt: {
-                    runId,
-                    sessionId,
-                    turnId: runId,
-                    requested: { provider: "anthropic", model: "claude-sonnet-5-5" },
-                    effective: {
-                      provider: "anthropic",
-                      model: "claude-sonnet-5-5",
-                      responseModel: "claude-sonnet-5-5",
-                    },
-                    successfulToolNames: [],
-                    rerouted: false,
-                  },
-                }
-              : {}),
-          },
-        },
+        meta: { ...result.meta, agentMeta: { ...result.meta.agentMeta, terminalReceipt } },
       };
     });
     await expect(consult("CLI_SPOKEN_QUESTION", true)).resolves.toEqual({
@@ -535,17 +544,7 @@ it.each([
       }),
     );
     const runAuthority = await retainTalkClientRunAuthority({ client, context });
-    const runner = createTalkClientAgentConsultRunner({
-      runAuthority,
-      config: getRuntimeConfig(),
-      context,
-      sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
-      ownerConnId: connectionId,
-      authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
-      getVoiceSessionId: () => voiceSessionId,
-      initialItems: [],
-      runIdPrefix: "talk-realtime-relay-consult",
-    });
+    const runner = await createRunner(() => voiceSessionId, runAuthority);
     runner.runPrompt.adoptCompletionClaims();
     const first = runner.runPrompt({ prompt: "First spoken request" });
     await started.promise;
