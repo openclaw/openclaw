@@ -1,7 +1,8 @@
 import type { GatewayOperatorRoleDefinition as Role } from "../../config/types.gateway.js";
 
 // Independent expected values, verified through real activation in service.role-presets.test.ts.
-export const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", Role> = {
+export const MEMBER_ROLE_PRESETS: Record<"admin" | "operator" | "viewer" | "guest", Role> = {
+  admin: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
   operator: {
     sessions: { others: "write" },
     agents: "*",

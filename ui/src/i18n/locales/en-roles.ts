@@ -131,6 +131,8 @@ const enRoles = {
       "Invited sessions up to Send, with default tools. Own sessions sandboxed.",
     presetOperator: "Operator",
     presetOperatorDescription: "Works in any session. No Gateway settings.",
+    presetAdmin: "Administrator",
+    presetAdminDescription: "Everything, including Gateway settings and roles.",
     presetBlank: "Minimal",
     presetBlankDescription: "Reads only their own sessions. Add what they need.",
     duplicateTitle: "Duplicate {role}",

@@ -54,6 +54,7 @@ const viewer: GatewayOperatorRoleDefinition = {
   scopes: ["operator.sessions.read"],
 };
 const definitions = {
+  admin: viewer,
   operator: viewer,
   viewer,
   guest: { ...viewer, sandbox: "required" as const },
@@ -384,7 +385,7 @@ for (const accepted of [false, true]) {
       findings
         .filter(({ requirement }) => requirement === "missing-preset")
         .map(({ target }) => target),
-    ).toEqual(["guest", "viewer"]);
+    ).toEqual(["admin", "guest", "viewer"]);
     await check.run(ctx);
     expect(ctx.prompter.confirmAutoFix).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -403,6 +404,7 @@ for (const accepted of [false, true]) {
       definitions: {
         operator: viewer,
         custom: viewer,
+        admin: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
         viewer,
         guest: {
           sessions: { others: "view" },

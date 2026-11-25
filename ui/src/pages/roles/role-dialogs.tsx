@@ -23,11 +23,12 @@ export type RoleDialog =
   | { kind: "assign"; role: string }
   | { kind: "delete"; role: string };
 
-const PRESETS: readonly RolePreset[] = ["guest", "collaborator", "operator", "blank"];
+const PRESETS: readonly RolePreset[] = ["guest", "collaborator", "operator", "admin", "blank"];
 const PRESET_KEYS: Record<RolePreset, string> = {
   guest: "presetGuest",
   collaborator: "presetCollaborator",
   operator: "presetOperator",
+  admin: "presetAdmin",
   blank: "presetBlank",
 };
 

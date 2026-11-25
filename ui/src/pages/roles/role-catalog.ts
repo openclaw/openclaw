@@ -259,7 +259,7 @@ export function buildDefaultRole(
     : { error: "missing" };
 }
 
-export type RolePreset = "guest" | "collaborator" | "operator" | "blank";
+export type RolePreset = "guest" | "collaborator" | "operator" | "admin" | "blank";
 
 const PRESETS: Record<RolePreset, RoleDefinition> = {
   guest: {
@@ -279,6 +279,7 @@ const PRESETS: Record<RolePreset, RoleDefinition> = {
     agents: "*",
     scopes: ["operator.read", "operator.write", "operator.approvals", "operator.questions"],
   },
+  admin: { sessions: { others: "write" }, agents: "*", scopes: [ADMIN_SCOPE] },
   blank: { sessions: { others: "none" }, agents: "*", scopes: ["operator.sessions.read"] },
 };
 
