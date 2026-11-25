@@ -1,7 +1,6 @@
 import { sql, type InsertObject, type OperandExpression } from "kysely";
 import {
   createSqliteQueryCache,
-  executeSqliteQuerySync,
   prepareSqliteQuerySync,
   prepareSqliteTerminalWrite,
 } from "../../infra/kysely-sync.js";
@@ -15,19 +14,16 @@ import {
 } from "./session-entry-snapshots.js";
 
 type QueryParameter<P> = Parameters<Parameters<typeof prepareSqliteQuerySync<P>>[1]>[0];
-export type SessionNodeWriteRow = ReturnType<typeof bindSessionNode> & {
+type SessionNodeWriteRow = ReturnType<typeof bindSessionNode> & {
   legacy_acp_migration_json?: string | null;
 };
 
-export type SessionWindowWriteRow = Omit<
-  ReturnType<typeof bindSessionRoot>,
-  "primary_conversation_id"
-> & {
+type SessionWindowWriteRow = Omit<ReturnType<typeof bindSessionRoot>, "primary_conversation_id"> & {
   primary_conversation_id: string | null;
   transcript_observed_at: number;
 };
 
-function buildSessionEntryWindowUpsert(
+export function buildSessionEntryWindowUpsert(
   database: EngineConnection,
   rows: readonly InsertObject<DB, "session_windows">[],
   retainOwner: boolean,
@@ -66,7 +62,7 @@ function buildSessionEntryWindowUpsert(
     );
 }
 
-function buildSessionEntryNodeUpsert(
+export function buildSessionEntryNodeUpsert(
   database: EngineConnection,
   rows: readonly InsertObject<DB, "session_nodes">[],
   withLegacySources = false,
@@ -107,31 +103,6 @@ function buildSessionEntryNodeUpsert(
           : {}),
       })),
     );
-}
-
-export function writeSessionEntryBatchRows(
-  database: EngineConnection,
-  nodes: readonly SessionNodeWriteRow[],
-  windows: readonly SessionWindowWriteRow[],
-): void {
-  if (nodes.length > 0) {
-    executeSqliteQuerySync(
-      database,
-      buildSessionEntryNodeUpsert(
-        database,
-        nodes.map((node) =>
-          Object.assign({}, node, {
-            session_started_at: /* kysely-allow-raw: exact int64 bind matches the single-entry writer. */ sql<
-              number | null
-            >`${node.session_started_at}`,
-          }),
-        ),
-      ),
-    );
-  }
-  if (windows.length > 0) {
-    executeSqliteQuerySync(database, buildSessionEntryWindowUpsert(database, windows, true));
-  }
 }
 
 // Cache fixed SQL shapes only; every write binds fresh rows through the normal executor.
@@ -286,7 +257,68 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database: Eng
         },
       }
     : undefined;
+  type ArchiveUndoRow = { key: string; sessionId: string; marker: string };
+  const markerTarget = (parameter: QueryParameter<ArchiveUndoRow>) =>
+    db
+      .updateTable("session_nodes")
+      .where(
+        "session_key",
+        "=",
+        parameter((row) => row.key),
+      )
+      .where(
+        "current_session_id",
+        "=",
+        parameter((row) => row.sessionId),
+      );
   return {
+    // The private Archive Undo marker shares the entry write transaction; it is never session metadata.
+    archiveUndo: {
+      clear: prepareSqliteQuerySync<{ key: string }>(database, (parameter) =>
+        db
+          .updateTable("session_nodes")
+          .set({ archive_undo_marker: null })
+          .where(
+            "session_key",
+            "=",
+            parameter((row) => row.key),
+          )
+          .where("archive_undo_marker", "is not", null),
+      ),
+      read: prepareSqliteQuerySync<{ key: string }, { archive_undo_marker: string | null }>(
+        database,
+        (parameter) =>
+          db
+            .selectFrom("session_nodes")
+            .select("archive_undo_marker")
+            .where(
+              "session_key",
+              "=",
+              parameter((row) => row.key),
+            ),
+      ),
+      issue: prepareSqliteQuerySync<ArchiveUndoRow, { session_key: string }>(
+        database,
+        (parameter) =>
+          markerTarget(parameter)
+            .set({ archive_undo_marker: parameter((row) => row.marker) })
+            .where("archived_at", "is", null)
+            .returning("session_key"),
+      ),
+      consume: prepareSqliteQuerySync<ArchiveUndoRow, { session_key: string }>(
+        database,
+        (parameter) =>
+          markerTarget(parameter)
+            .set({ archive_undo_marker: null })
+            .where(
+              "archive_undo_marker",
+              "=",
+              parameter((row) => row.marker),
+            )
+            .where("archived_at", "is not", null)
+            .returning("session_key"),
+      ),
+    },
     node: prepareSqliteQuerySync<SessionNodeWriteRow>(database, (parameter) =>
       node(parameter, false),
     ),

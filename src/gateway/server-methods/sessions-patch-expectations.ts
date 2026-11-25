@@ -8,6 +8,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { prepareSessionEntryMutationDatabases } from "../../config/sessions/session-accessor.entry-mutation.js";
+import { isArchivedOccurrenceRestore } from "../../config/sessions/session-archive-undo.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
@@ -30,10 +31,7 @@ import type { SessionMutationAuthorization } from "./types.js";
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
 ): string | undefined {
-  if (
-    patch.expectedArchivedAt !== undefined &&
-    (!patch.expectedSessionId || patch.archived !== false)
-  ) {
+  if (patch.expectedArchivedAt !== undefined && !isArchivedOccurrenceRestore(patch)) {
     return "expectedArchivedAt requires Restore of an exact session identity.";
   }
   if (patch.expectedSandboxMode !== undefined && patch.sandboxMode === undefined) {

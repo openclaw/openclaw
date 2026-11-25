@@ -7,6 +7,7 @@ import {
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import {
   ARCHIVE_UNDO_CHANGED,
+  isArchiveUndoRequestShape,
   type SessionArchiveUndoIntent,
 } from "../../config/sessions/session-archive-undo.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -27,15 +28,6 @@ import type {
 } from "./sessions-patch-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const ALLOWED_FIELDS = new Set([
-  "archived",
-  "requestArchiveUndo",
-  "archiveUndoToken",
-  "key",
-  "agentId",
-  "expectedSessionId",
-  "expectedLifecycleRevision",
-]);
 // Mac shows Undo for six seconds of unpaused time; abandoned capabilities have a separate hard bound.
 const UNDO_MAX_AGE_MS = 60 * 60_000;
 export function admitArchiveUndo(
@@ -52,11 +44,7 @@ export function admitArchiveUndo(
   if (
     issue === (token !== undefined) ||
     patch.archived !== issue ||
-    Object.keys(patch).some((key) => !ALLOWED_FIELDS.has(key)) ||
-    targets.some(
-      (target) =>
-        !target.expectedSessionId || Object.keys(target).some((key) => !ALLOWED_FIELDS.has(key)),
-    )
+    !isArchiveUndoRequestShape(patch, targets)
   ) {
     return invalidSessionRequest(
       "Send Archive Undo only with its Archive or Restore and exact session identity.",

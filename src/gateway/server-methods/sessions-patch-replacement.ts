@@ -8,6 +8,7 @@ import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
 } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { isSameSessionOccurrence } from "../../config/sessions/session-archive-undo.js";
 import type { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
 import { adoptPersistedSessionSnapshot } from "../../config/sessions/session-snapshot-merge.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -188,8 +189,7 @@ export function createSessionPatchGroupWriter(params: {
         if (
           receipt &&
           entry &&
-          entry.sessionId === replacement.entry.sessionId &&
-          entry.lifecycleRevision === replacement.entry.lifecycleRevision &&
+          isSameSessionOccurrence(entry, replacement.entry) &&
           entry.archivedAt !== undefined
         ) {
           receipt.outcome.archiveUndoToken = receipt.token;

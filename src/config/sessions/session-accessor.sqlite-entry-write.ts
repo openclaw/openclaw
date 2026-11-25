@@ -1,3 +1,5 @@
+import { sql } from "kysely";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -27,8 +29,9 @@ import {
 } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
+  buildSessionEntryNodeUpsert,
+  buildSessionEntryWindowUpsert,
   getSessionEntryWriteQueries,
-  writeSessionEntryBatchRows,
 } from "./session-accessor.sqlite-entry-write-queries.js";
 import type {
   SessionEntryWriteOptions,
@@ -633,9 +636,29 @@ export function writeArchivedSessionEntries(
         // Each conflict key occurs once, including shared physical transcript windows.
         const generation =
           nodes.size > 0 || windows.size > 0
-            ? trackSessionEntryCacheWrite(database, () =>
-                writeSessionEntryBatchRows(database.db, [...nodes.values()], [...windows.values()]),
-              )
+            ? trackSessionEntryCacheWrite(database, () => {
+                if (nodes.size > 0) {
+                  executeSqliteQuerySync(
+                    database.db,
+                    buildSessionEntryNodeUpsert(
+                      database.db,
+                      [...nodes.values()].map((node) =>
+                        Object.assign({}, node, {
+                          session_started_at: /* kysely-allow-raw: exact int64 bind matches the single-entry writer. */ sql<
+                            number | null
+                          >`${node.session_started_at}`,
+                        }),
+                      ),
+                    ),
+                  );
+                }
+                if (windows.size > 0) {
+                  executeSqliteQuerySync(
+                    database.db,
+                    buildSessionEntryWindowUpsert(database.db, [...windows.values()], true),
+                  );
+                }
+              })
             : undefined;
         for (const prepared of batch) {
           const window = windowPostimages.get(prepared.windowPostimage.session_id);

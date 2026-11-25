@@ -1,10 +1,6 @@
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
+import { getSessionEntryWriteQueries } from "./session-accessor.sqlite-entry-write-queries.js";
 import { ARCHIVE_UNDO_CHANGED, type SessionArchiveUndoIntent } from "./session-archive-undo.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import type { SessionEntry } from "./types.js";
@@ -56,13 +52,9 @@ function applySessionArchiveUndo(
   if (isPostgresSqlConnection(database.db) && intent.kind !== "invalidate") {
     throw new Error("Archive Undo is unavailable for this session store.");
   }
-  const db = getSessionKysely(database.db);
-  const update = db.updateTable("session_nodes").where("session_key", "=", key);
+  const queries = getSessionEntryWriteQueries(database.db).archiveUndo;
   if (intent.kind === "invalidate") {
-    executeSqliteQuerySync(
-      database.db,
-      update.set({ archive_undo_marker: null }).where("archive_undo_marker", "is not", null),
-    );
+    queries.clear({ key });
     return;
   }
   const now = Date.now();
@@ -74,21 +66,16 @@ function applySessionArchiveUndo(
   ) {
     throw new Error(ARCHIVE_UNDO_CHANGED);
   }
-  const target = update.where("current_session_id", "=", next.sessionId);
+  const target = { key, sessionId: next.sessionId };
   if (intent.kind === "archive") {
     if (
       previous.archivedAt !== undefined ||
       next.archivedAt === undefined ||
       next.pinnedAt !== undefined ||
-      !executeSqliteQueryTakeFirstSync(
-        database.db,
-        target
-          .set({
-            archive_undo_marker: `${previous.pinnedAt === undefined ? 0 : 1}:${intent.digest}`,
-          })
-          .where("archived_at", "is", null)
-          .returning("session_key"),
-      )
+      !queries.issue({
+        ...target,
+        marker: `${previous.pinnedAt === undefined ? 0 : 1}:${intent.digest}`,
+      }).rows[0]
     ) {
       throw new Error(ARCHIVE_UNDO_CHANGED);
     }
@@ -98,21 +85,10 @@ function applySessionArchiveUndo(
     throw new Error(ARCHIVE_UNDO_CHANGED);
   }
   // The writer reads the recorded preimage in its own transaction, never the requester's personal flag.
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectFrom("session_nodes").select("archive_undo_marker").where("session_key", "=", key),
-  );
-  const marker = row?.archive_undo_marker;
+  const marker = queries.read({ key }).rows[0]?.archive_undo_marker;
   if (
     (marker !== `0:${intent.digest}` && marker !== `1:${intent.digest}`) ||
-    !executeSqliteQueryTakeFirstSync(
-      database.db,
-      target
-        .set({ archive_undo_marker: null })
-        .where("archive_undo_marker", "=", marker)
-        .where("archived_at", "is not", null)
-        .returning("session_key"),
-    )
+    !queries.consume({ ...target, marker }).rows[0]
   ) {
     throw new Error(ARCHIVE_UNDO_CHANGED);
   }
