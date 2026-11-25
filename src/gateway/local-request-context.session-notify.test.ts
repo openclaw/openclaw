@@ -165,7 +165,9 @@ describe("session notification authority", () => {
       await withSlowProjectionStartup(() =>
         withNotification(scope, async ({ notify, revoke }) => {
           if (!allowed) {
-            await expect(notify(sessionKey)).rejects.toThrow(/own session|not allowed/);
+            await expect(notify(sessionKey)).rejects.toThrow(
+              "session is shared for this connection",
+            );
             expect(drainSystemEvents(sessionKey)).toEqual([]);
             return;
           }

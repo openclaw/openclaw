@@ -772,6 +772,11 @@ export function isChatToolTitlesParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ChatToolTitlesParamsSchema
 >;
+export function isChatPendingInputsOwnParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ChatPendingInputsOwnParamsSchema
+>;
 export function isChatPendingInputsDismissParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1967,6 +1972,11 @@ export function isSessionMemberAddParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionMemberAddParamsSchema
+>;
+export function isSessionMemberSetAccessParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionMemberSetAccessParamsSchema
 >;
 export function isSessionMemberRemoveParams(
   value: unknown,

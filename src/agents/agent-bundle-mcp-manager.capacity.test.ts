@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { bindSessionMcpStoreOwner } from "../config/sessions/session-mcp-store-admission.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
@@ -108,6 +109,72 @@ afterEach(async () => {
   }
   await Promise.all(managers.splice(0).map((manager) => manager.disposeAll()));
   vi.useRealTimers();
+});
+
+describe("durable store retention", () => {
+  const sourceA = { agentId: params.agentId, databaseIdentity: "db-a", databaseBirthtime: "1" };
+  const sourceB = { ...sourceA, databaseBirthtime: "2" };
+  function admission(source: typeof sourceA, sessionKey = params.sessionKey) {
+    const receipt = {};
+    bindSessionMcpStoreOwner(receipt, { ...source, sessionKey, sessionId: params.sessionId });
+    return receipt;
+  }
+
+  it("keeps a shared transport until the last database releases it and its view closes", async () => {
+    const { manager } = setup();
+    const first = await manager.acquire({ ...params, storeAdmission: admission(sourceA) });
+    first.releaseLease();
+    const second = await manager.acquire({ ...params, storeAdmission: admission(sourceB) });
+    expect(second.runtime).toBe(first.runtime);
+    const release = manager.captureStoreRetirement(params.sessionId)!;
+    await release(sourceA);
+    expect(first.runtime.dispose).not.toHaveBeenCalled();
+    await release(sourceB);
+    expect(first.runtime.dispose).not.toHaveBeenCalled();
+    second.releaseLease();
+    await manager.completeDeferredRetirement(params.sessionId, second.runtime);
+    expect(first.runtime.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("reports a failed physical close to the store that removed its last owner", async () => {
+    const { manager } = setup();
+    const first = await manager.acquire({ ...params, storeAdmission: admission(sourceA) });
+    const failure = new Error("transport failed to exit");
+    first.runtime.joinCleanup = async () => {
+      throw failure;
+    };
+    first.releaseLease();
+    const captured = manager.captureStoreRetirement(params.sessionId)!;
+    await expect(captured(sourceA)).rejects.toBe(failure);
+  });
+
+  it("preserves a successor which reused and released the same physical transport after capture", async () => {
+    const { manager } = setup();
+    const input = { ...params, storeAdmission: admission(sourceA) };
+    const first = await manager.acquire(input);
+    first.releaseLease();
+    const stale = manager.captureStoreRetirement(params.sessionId)!;
+    (await manager.acquire(input)).releaseLease();
+    await stale(sourceA);
+    expect(first.runtime.dispose).not.toHaveBeenCalled();
+    await manager.captureStoreRetirement(params.sessionId)!(sourceA);
+    expect(first.runtime.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a shared transport after an unqualified caller has released it", async () => {
+    const { manager } = setup();
+    const first = await manager.acquire({ ...params, storeAdmission: admission(sourceA) });
+    first.releaseLease();
+    const stale = manager.captureStoreRetirement(params.sessionId)!;
+    (
+      await manager.acquire({ ...params, storeAdmission: admission(sourceB, "another-key") })
+    ).releaseLease();
+    await stale(sourceA);
+    expect(manager.captureStoreRetirement(params.sessionId)).toBeUndefined();
+    expect(first.runtime.dispose).not.toHaveBeenCalled();
+    await manager.disposeSession(params.sessionId);
+    expect(first.runtime.dispose).toHaveBeenCalledOnce();
+  });
 });
 
 describe("MCP capacity catalog continuity", () => {

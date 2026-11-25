@@ -148,6 +148,8 @@ function applyConfiguredMcpApproval(
 }
 
 type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
+  /** Private host-issued carrier for a committed session store. */
+  storeAdmission?: object;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
@@ -267,6 +269,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 ): Promise<StaticHarnessMcpTools> {
   const conversationCapabilityProfile = await resolveHarnessCapabilityProfile(params);
   const acquisition = await acquireSessionMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? conversationCapabilityProfile?.agentId,
@@ -395,6 +398,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
+    storeAdmission: params.storeAdmission,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? policyParams.conversationCapabilityProfile?.agentId,

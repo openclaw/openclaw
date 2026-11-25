@@ -17,8 +17,7 @@ import { usesSharedSecretGatewayMethod } from "./http-auth-user-profile.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayHttpOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -116,7 +115,6 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
@@ -143,16 +141,15 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     openclawIdPrincipal: params.requestAuth.openclawIdPrincipal,
     scopes: [...params.operatorScopes],
   });
-  // Tunnel owners also retain their authenticated device, not just owner-profile attribution.
-  const requiresOperatorContext =
-    params.requestAuth.openclawIdPrincipal !== undefined ||
-    resolveGatewayOperatorRoleActor(client)?.kind === "operator";
+  const requiresOperatorContext = Boolean(
+    params.requestAuth.authenticatedUserProfile || params.requestAuth.openclawIdPrincipal,
+  );
   const gatewayContext = requiresOperatorContext ? params.resolveGatewayContext?.() : undefined;
   if (requiresOperatorContext && !gatewayContext) {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? await prepareGatewayOperatorRunAuthority({
+    ? await prepareGatewayHttpOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,
@@ -190,7 +187,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         deliver: false,
         messageChannel: params.messageChannel,
         runContext: mcpRequesterProfileId ? { mcpRequesterProfileId } : undefined,
-        senderIsOwner: params.senderIsOwner,
+        senderIsOwner: captured?.authority.grant.owner,
         bestEffortDeliver: false,
         allowModelOverride: params.modelOverride !== undefined,
         abortSignal,

@@ -118,3 +118,30 @@ describe("session typing broadcast throttle", () => {
     expect(updates).toEqual([true, true, false]);
   });
 });
+
+it("releases delayed typing custody on replacement, emission, and reset", () => {
+  const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+  const emit = vi.fn(() => true);
+  const send = (index: number) =>
+    broadcastTypingThrottled({
+      key: "retained",
+      typing: true,
+      signature: String(index),
+      intervalMs: 1_000,
+      now: Date.now(),
+      emit,
+      release: releases[index],
+    });
+  send(0);
+  send(1);
+  send(2);
+  expect(releases.map((release) => release.mock.calls.length)).toEqual([1, 1, 0, 0, 0]);
+  vi.advanceTimersByTime(1_000);
+  expect(releases[2]).toHaveBeenCalledTimes(1);
+  send(3);
+  clearSessionTypingState();
+  expect(releases[3]).toHaveBeenCalledTimes(1);
+  send(4);
+  expect(emit).toHaveBeenCalledTimes(3);
+  expect(releases[4]).toHaveBeenCalledTimes(1);
+});

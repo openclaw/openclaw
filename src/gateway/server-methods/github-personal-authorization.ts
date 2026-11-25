@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
+import { prepareParticipantPublicationRead } from "../github-participant-publication-read.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
 import type { PersonalGitHubSessionActionV2 } from "../github-personal-publication.js";
 import {
@@ -105,6 +106,15 @@ export async function prepareGitHubPublicationOptionsRead(
   signal?: AbortSignal,
   purpose: "options" | "shared-observation" = "options",
 ) {
+  const participant = await prepareParticipantPublicationRead(
+    options,
+    { sessionKey, agentId: requestedAgentId },
+    signal,
+  );
+  if (participant) {
+    const personal: PersonalEligibility = { kind: "ineligible" };
+    return { ...participant, personal };
+  }
   const authority = readGatewayRequestMutationAuthority(options);
   const requestSignal = options.signal;
   const runSignal = options.client?.internal?.operatorRunAuthority?.signal;

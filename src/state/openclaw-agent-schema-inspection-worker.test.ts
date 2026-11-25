@@ -9,6 +9,7 @@ import * as sqlite from "../infra/node-sqlite.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
@@ -33,6 +34,21 @@ function observeChild() {
   child.once("close", closed);
   return { child, closed };
 }
+
+it("reads the agent floor without projecting ownership for a newer store", async () => {
+  const supportedVersion = OPENCLAW_AGENT_SCHEMA_VERSION;
+  const pathname = createSource(`CREATE TABLE schema_meta (
+    meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
+    agent_id TEXT, app_version TEXT, min_reader INTEGER);
+    INSERT INTO schema_meta VALUES ('primary', 'agent', ${supportedVersion + 1}, 'main', 'future', ${supportedVersion});
+    PRAGMA user_version = ${supportedVersion + 1};`);
+  await using reader = createAgentSchemaInspectionWorker();
+  expect(await reader.inspect({ pathname, supportedVersion, inspectOwnership: false })).toEqual({
+    version: supportedVersion + 1,
+    minReader: supportedVersion,
+    writerAppVersion: "future",
+  });
+});
 
 it("hands its prestarted child to the first scheduler slot without spending inspection time", async () => {
   const pathname = createSource("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");

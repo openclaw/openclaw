@@ -1,6 +1,10 @@
 // Gateway restart probe and health-detail tests.
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
 import { withLoopbackTestServer } from "../../commands/loopback-server.test-support.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -24,12 +28,88 @@ import {
   sleep,
 } from "./restart-health.test-helpers.js";
 
+// Intentional module-loading boundary: install the helper mocks before loading
+// restart-health so its sleep uses the fixture's advancing monotonic clock.
+const { formatGatewayRestartFailure, renderRestartDiagnostics } =
+  await import("./restart-health.js");
+
 const ownedPortUsage = portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]);
 const running = { status: "running", pid: 8000 } as const;
 
 describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
+
+  it.each([
+    { ready: true, version: "2026.11.25", build: "candidate", outcome: "healthy" },
+    {
+      ready: false,
+      version: "2026.11.25",
+      build: "candidate",
+      outcome: "connected-no-operator-scope",
+    },
+    { ready: true, version: "2026.11.24", build: "candidate", outcome: "version-mismatch" },
+    { ready: true, version: "2026.11.25", build: "previous", outcome: "build-id-mismatch" },
+  ])(
+    "settles connected scope denial without polling ($ready, $version, $build)",
+    async (scenario) => {
+      const rejection = new GatewayProtocolRequestError({
+        code: "FORBIDDEN",
+        message: "Health access is not granted",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.read",
+          requiredScopes: ["operator.read"],
+        },
+      });
+      retainGatewayResponsePayload(rejection, undefined);
+      callGateway.mockImplementation(async (options) => {
+        await gatewayHealthResponse({
+          server: { version: scenario.version, buildId: scenario.build, bootId: "scope-boot" },
+        })({
+          ...options,
+          onHelloOk: (hello) =>
+            options.onHelloOk?.({ ...hello, auth: { role: "operator", scopes: [] } }),
+        });
+        throw rejection;
+      });
+      inspectPortUsage.mockResolvedValue(ownedPortUsage);
+      requestReadinessProbe.mockResolvedValue({
+        statusCode: scenario.ready ? 200 : 503,
+        body: JSON.stringify({ ready: scenario.ready }),
+      });
+      const result = await waitForRunningGateway({
+        expectedVersion: "2026.11.25",
+        expectedBuildId: "candidate",
+        requireRunningService: true,
+        requireOwnedListener: true,
+        timeoutMs: 30_000,
+        delayMs: 500,
+      });
+      expect(result).toMatchObject({
+        waitOutcome: scenario.outcome,
+        outcome: scenario.outcome === "healthy" ? "ready" : "failed",
+        healthy: scenario.outcome === "healthy",
+        gatewayBootId: "scope-boot",
+        operatorScopeWarning: expect.stringContaining("operator.read"),
+      });
+      expect(result.authenticationError).toBeUndefined();
+      expect(renderRestartDiagnostics(result).join("\n")).toContain(
+        "Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.",
+      );
+      if (!scenario.ready) {
+        expect(
+          formatGatewayRestartFailure({
+            health: result,
+            port: 18789,
+            defaultTimeoutSeconds: 30,
+          }).failMessage,
+        ).toContain("connected");
+      }
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(sleep).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps native inspection and health RPC within one supplied allowance", async () => {
     const service = makeGatewayService(running);
@@ -430,7 +510,6 @@ describe("restart health", () => {
     expect(sleep).not.toHaveBeenCalled();
     if (options.expectedBuildId) {
       expect(snapshot.buildIdMismatch).toEqual(expected.buildIdMismatch);
-      const { renderRestartDiagnostics } = await import("./restart-health.js");
       expect(renderRestartDiagnostics(snapshot)).toContain(
         "Gateway build mismatch: expected new-build, running gateway reported old-build.",
       );
@@ -487,7 +566,6 @@ describe("restart health", () => {
       });
       expect(sleep).not.toHaveBeenCalled();
 
-      const { renderRestartDiagnostics } = await import("./restart-health.js");
       if (activated) {
         expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
           "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",

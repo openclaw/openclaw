@@ -42,21 +42,34 @@ it("matches the full catalog before capping suggestions and preserves raw spelli
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
 });
 
-it("quotes newly selected multiword values so they parse as one term", () => {
-  const query = setQueryTokensForKey("provider:local ", "model", ["Local Model"]);
-  expect(query).toBe('provider:local model:"Local Model" ');
+it("suggests values whose Greek sigma form differs from the query", () => {
+  const options = buildUsageFilterOptions([
+    { key: "session-greek", agentId: "ΕΛΕΓΧΟΣ", usage: null },
+  ]);
+  for (const query of ["agent:Σ", "agent:σ", "agent:ς"]) {
+    expect(
+      buildQuerySuggestions(query, extractQueryTerms(query), options).map((entry) => entry.value),
+    ).toEqual(["agent:ΕΛΕΓΧΟΣ"]);
+  }
+});
+
+it.each([
+  ["Local Model", 'model:"Local Model"'],
+  ['Atlas "Mini Pro"', 'model:"Atlas ""Mini Pro"""'],
+  ['A"B', 'model:"A""B"'],
+])("keeps the selected model %s as one query term", (model, token) => {
+  const query = setQueryTokensForKey("provider:local ", "model", [model]);
+  expect(query).toBe(`provider:local ${token} `);
   expect(extractQueryTerms(query).map(({ key, value }) => ({ key, value }))).toEqual([
     { key: "provider", value: "local" },
-    { key: "model", value: "Local Model" },
+    { key: "model", value: model },
   ]);
   // Reselecting keeps the existing quoted term instead of appending a duplicate.
-  expect(setQueryTokensForKey(query, "model", ["Local Model"])).toBe(query);
+  expect(setQueryTokensForKey(query, "model", [model])).toBe(query);
 
-  const options = buildUsageFilterOptions([
-    { key: "session-1", model: "Local Model", usage: null },
-  ]);
-  expect(buildQuerySuggestions("model:Loc", extractQueryTerms("model:Loc"), options)).toEqual([
-    { label: "model:Local Model", value: 'model:"Local Model"' },
+  const options = buildUsageFilterOptions([{ key: "session-1", model, usage: null }]);
+  expect(buildQuerySuggestions("model:", extractQueryTerms("model:"), options)).toEqual([
+    { label: `model:${model}`, value: token },
   ]);
 });
 

@@ -23,5 +23,5 @@ Use only `facetime_call`. Do not use shell commands or another call tool.
   status result contains no active or pending call.
 - If a call or dial is already present, do not start another.
 - Never install/update/uninstall the driver, change SIP or developer-tools
-  policy, grant permissions, edit `ownerHandles`, or operate System Settings.
+  policy, grant permissions, edit `allowedCallers`, or operate System Settings.
   Those are explicit operator-admin actions.

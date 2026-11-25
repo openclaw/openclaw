@@ -1,5 +1,6 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as execNotify from "../agents/bash-tools.exec-notify.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveGatewayToolOperatorSelection } from "../agents/tools/gateway-caller-context.js";
@@ -7,6 +8,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
+import { readSessionEventTargetOperatorAuthority } from "../auto-reply/reply/session-event-target.js";
 import {
   configureEventState,
   openEventToolHost,
@@ -20,6 +22,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { owe } from "../sessions/owed.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -51,7 +55,9 @@ import {
   resolveOperatorRolePolicyForAssignment,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
-import { recoveryFixture } from "./operator-run-recovery.test-support.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
+import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
+import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -281,7 +287,7 @@ it("admits the recorded Gateway owner without roles and never substitutes it for
     const other = ensureProfileForEmail("roleless@example.test");
     await expect(
       prepareSessionPrincipalRunAuthority({ ...params, profileId: other.id }),
-    ).rejects.toThrow("no current run authority");
+    ).rejects.toThrow("Your role on this Gateway does not allow it");
   }));
 
 it.for([
@@ -557,3 +563,48 @@ describe("canonical membership role admission", () => {
     });
   });
 });
+
+// Durable exec wake after a restart: the requester's recorded source, admitted again. A requester
+// without session write (guest) is refused at start; the owed row then ends with a visible cause.
+it.each([
+  { requester: "admin", scopes: ["operator.admin"], owner: true },
+  { requester: "writer", scopes: ["operator.read", "operator.write"], owner: false },
+  { requester: "member", scopes: ["operator.sessions.write"], owner: false },
+  { requester: "guest", scopes: ["operator.read"], owner: undefined },
+])("wakes a durable exec result after a restart as its $requester requester", (cell) =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({});
+    const owner = ensureProfileForEmail("session-owner@example.test");
+    const requester = ensureProfileForEmail("exec-requester@example.test");
+    const exec = await recoveryFixture(stateDir, requester.id, {
+      device: pairedOperator(),
+      scopes: cell.scopes,
+    });
+    // Another person's session: the session principal is not the command's requester.
+    await patchSessionEntryCore(
+      exec.target,
+      () => ({ createdActor: { type: "human", source: "profile", id: owner.id } }),
+      { skipMaintenance: true },
+    );
+    await owe({
+      id: "exec:durable-requester",
+      to: chatRef(exec.target),
+      kind: "exec",
+      text: "Exec completed (durable, code 0)",
+      originFacts: {
+        operatorSource: captureQueuedOperatorRecoverySource(exec.sourceAuthority),
+      },
+    });
+    using wake = vi.spyOn(execNotify, "wakeOwedExec").mockResolvedValue();
+    await continueSessionQueuedInputs(exec.context, exec.target, {
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    const target = wake.mock.calls[0]?.[1]?.expectedTarget;
+    const authority = target && readSessionEventTargetOperatorAuthority(target);
+    expect(authority && { profileId: authority.profileId, owner: authority.grant.owner }).toEqual(
+      cell.owner === undefined ? undefined : { profileId: requester.id, owner: cell.owner },
+    );
+    expect(wake).toHaveBeenCalledTimes(cell.owner === undefined ? 0 : 1);
+  }),
+);

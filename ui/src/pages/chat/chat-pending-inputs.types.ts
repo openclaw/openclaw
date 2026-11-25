@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export type ChatPendingInputAction =
   | { kind: "steer"; runId: string }
-  | { kind: "dismiss"; inputId: string };
+  | { kind: "dismiss" | "copy"; inputId: string };
 
 export type PendingInputRequest = {
   before?: number;
@@ -17,6 +17,7 @@ export type ChatPendingInputView = {
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
+  ownOnly?: true;
   /** Live custody receipts keep the queue independent of retained-input pagination. */
   queuedInputs: ChatPendingInputsPage["items"];
   receiptRunIds: string[];
@@ -26,6 +27,8 @@ export type ChatPendingInputView = {
   readonly loading: boolean;
   error?: string;
   request?: PendingInputRequest;
+  /** Queued inputs with an outstanding cancellation (distinct from dismissing retired inputs). */
+  cancelling?: Set<string>;
   /** Optimistic dismissals keyed to the request that owns each; failure restores only its own. */
   dismissing?: Map<string, object>;
   /** Gateway-confirmed dismissals hide late pages read before the tombstone committed. */

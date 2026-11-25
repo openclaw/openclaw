@@ -4,6 +4,7 @@ import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
+import { decideTurnGrant } from "../../gateway/operator-admission.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
@@ -479,6 +480,7 @@ describe("createFollowupRunner", () => {
           canonicalIdentity: null,
           profileId: "guest",
           scopes: ["operator.write"],
+          grant: decideTurnGrant(["operator.write"]),
         };
         turn.queued.operatorAuthority = { ...authority, signal: new AbortController().signal };
       }

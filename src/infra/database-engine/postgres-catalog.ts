@@ -88,11 +88,81 @@ function canonical(value: unknown): string {
   );
 }
 
+/** Preserve known constraints while allowing unknown tables and bare nullable columns. */
+export function projectCompatiblePostgresCatalog(
+  actual: readonly PostgresCatalogFact[],
+  expected: readonly PostgresCatalogFact[],
+): readonly PostgresCatalogFact[] {
+  const tables = new Set(
+    expected.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+  );
+  const installedTables = new Set(
+    actual.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+  );
+  const columns = new Set<string>();
+  for (const fact of expected) {
+    const column = fact.value;
+    if (
+      fact.kind === "column" &&
+      column !== null &&
+      typeof column === "object" &&
+      "name" in column &&
+      typeof column.name === "string"
+    ) {
+      columns.add(`${fact.table}.${column.name}`);
+    }
+  }
+  return actual.filter((fact) => {
+    if (installedTables.has(fact.table) && !tables.has(fact.table)) {
+      return false;
+    }
+    if (fact.kind !== "column" && fact.kind !== "columnDefinition") {
+      return true;
+    }
+    const column = fact.value;
+    if (
+      column === null ||
+      typeof column !== "object" ||
+      !("name" in column) ||
+      typeof column.name !== "string" ||
+      columns.has(`${fact.table}.${column.name}`)
+    ) {
+      return true;
+    }
+    // Extra constraints, indexes, and triggers stay in the comparison.
+    if (fact.kind === "column") {
+      return (
+        !("nullable" in column) ||
+        column.nullable !== true ||
+        !("identity" in column) ||
+        column.identity !== false ||
+        !("default" in column) ||
+        column.default !== null
+      );
+    }
+    return (
+      ("domain" in column && column.domain === true) ||
+      !("generated" in column) ||
+      column.generated !== "" ||
+      !("identity" in column) ||
+      column.identity !== "" ||
+      !("default" in column) ||
+      column.default !== null
+    );
+  });
+}
+
 export function assertPostgresCatalog(
   actual: readonly PostgresCatalogFact[],
   expected: readonly PostgresCatalogFact[],
+  options?: { allowAdditive?: boolean },
 ): void {
-  if (!isDeepStrictEqual(actual.map(canonical).toSorted(), expected.map(canonical).toSorted())) {
+  const comparable = options?.allowAdditive
+    ? projectCompatiblePostgresCatalog(actual, expected)
+    : actual;
+  if (
+    !isDeepStrictEqual(comparable.map(canonical).toSorted(), expected.map(canonical).toSorted())
+  ) {
     throw new Error(
       "PostgreSQL catalog differs from its generated contract; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
     );
@@ -129,6 +199,7 @@ export function postgresCatalogQuery(namespace: string, includeDefinitions = fal
   ), attributes AS (
     SELECT r.relname, a.attname, a.atttypid, a.atttypmod, a.attnotnull,
       a.attidentity, a.attnum, a.attgenerated, a.attcollation,
+      EXISTS (SELECT 1 FROM pg_catalog.pg_type t WHERE t.oid = a.atttypid AND t.typtype = 'd') AS domain_type,
       pg_catalog.pg_get_expr(d.adbin, d.adrelid) AS default_expression
     FROM relations r JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = r.oid AND d.adnum = a.attnum
@@ -155,7 +226,7 @@ export function postgresCatalogQuery(namespace: string, includeDefinitions = fal
       includeDefinitions
         ? `UNION ALL SELECT r.relname, 'constraintDefinition', jsonb_build_object('name', c.conname, 'definition', pg_catalog.pg_get_constraintdef(c.oid)) FROM relations r JOIN pg_catalog.pg_constraint c ON c.conrelid = r.oid
     UNION ALL SELECT r.relname, 'indexDefinition', jsonb_build_object('name', c.relname, 'definition', pg_catalog.pg_get_indexdef(i.indexrelid), 'valid', i.indisvalid) FROM relations r JOIN pg_catalog.pg_index i ON i.indrelid = r.oid JOIN pg_catalog.pg_class c ON c.oid = i.indexrelid
-    UNION ALL SELECT a.relname, 'columnDefinition', jsonb_build_object('name', a.attname, 'default', a.default_expression, 'generated', a.attgenerated, 'identity', a.attidentity, 'collation', a.attcollation::regcollation::text) FROM attributes a
+    UNION ALL SELECT a.relname, 'columnDefinition', jsonb_build_object('name', a.attname, 'default', a.default_expression, 'generated', a.attgenerated, 'identity', a.attidentity, 'collation', a.attcollation::regcollation::text) || CASE WHEN a.domain_type THEN jsonb_build_object('domain', true) ELSE '{}'::jsonb END FROM attributes a
     UNION ALL SELECT r.relname, 'triggerDefinition', jsonb_build_object('name', t.tgname, 'definition', pg_catalog.pg_get_triggerdef(t.oid), 'enabled', t.tgenabled, 'function', pg_catalog.pg_get_functiondef(t.tgfoid)) FROM relations r JOIN pg_catalog.pg_trigger t ON t.tgrelid = r.oid WHERE NOT t.tgisinternal
     UNION ALL SELECT c.relname, 'viewDefinition', to_jsonb(pg_catalog.pg_get_viewdef(c.oid)) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = ${literal} AND c.relkind IN ('v', 'm')
     UNION ALL SELECT c.cfgname, 'textSearchDefinition', jsonb_build_object('token', m.maptokentype, 'order', m.mapseqno, 'dictionary', d.dictname, 'namespace', dn.nspname)

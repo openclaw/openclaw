@@ -229,6 +229,7 @@ describe("requester settle dispatch deadline", () => {
           }
         },
         run: (run) => run(),
+        runWithRequester: (run) => run(),
       },
     });
     onTestFinished(() => owner.close());

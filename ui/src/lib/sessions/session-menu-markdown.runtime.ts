@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import { buildChatMarkdown } from "../../pages/chat/export.ts";
+import { buildChatMarkdown, isChatMarkdownTurn } from "../../pages/chat/export.ts";
 import { loadCompleteChatHistory } from "../chat/complete-history.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
@@ -33,13 +33,16 @@ export async function copySessionMarkdown<TRouteId extends string>(
     gateway.snapshot.client === client &&
     gateway.snapshot.phase === "connected" &&
     gateway.snapshot.hello === hello;
-  const messages = await loadCompleteChatHistory({
-    client,
-    sessionKey: session.key,
-    sessionId: session.sessionId,
-    agentId,
-    isCurrent,
-  });
+  const messages = await loadCompleteChatHistory(
+    {
+      client,
+      sessionKey: session.key,
+      sessionId: session.sessionId,
+      agentId,
+      isCurrent,
+    },
+    isChatMarkdownTurn,
+  );
   const assistantName =
     context.agents.state.agentsList?.agents.find((agent) => agent.id === agentId)?.name ??
     "OpenClaw";

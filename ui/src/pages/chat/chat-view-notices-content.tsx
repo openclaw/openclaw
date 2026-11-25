@@ -19,13 +19,16 @@ import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-sess
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { formatUiErrorDetails } from "../../lib/format-error.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ToastNotice } from "../../lib/toast-notice.tsx";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
+import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -303,7 +306,7 @@ function ChatErrorNotice(props: {
   detail?: unknown;
   action?: JSX.Element;
   displayError?: string;
-  tone?: "danger" | "warn";
+  reportIssue?: boolean;
   summary?: string;
   onDismiss?: () => void;
 }) {
@@ -314,11 +317,8 @@ function ChatErrorNotice(props: {
   // Keep an expanded diagnostic stable across unrelated session refreshes.
   const toast = createMemo(
     () => {
-      const message =
-        props.summary ??
-        (props.detail === undefined
-          ? displayError().trim().split(/\r?\n/u)[0]?.trim() || props.error
-          : props.error);
+      const summary = props.detail === undefined ? displayError() : props.error;
+      const message = props.summary ?? (summary.trim().split(/\r?\n/u)[0]?.trim() || props.error);
       // Offer details only when they add something beyond the visible message.
       const diagnostic = displayError().trim();
       return {
@@ -327,21 +327,19 @@ function ChatErrorNotice(props: {
           diagnostic && diagnostic !== message.trim()
             ? (props.detail ?? displayError())
             : undefined,
-        severity: props.tone === "warn" ? ("warning" as const) : ("error" as const),
+        severity: "error" as const,
       };
     },
     {
       equals: (previous, next) =>
-        previous.message === next.message &&
-        previous.detail === next.detail &&
-        previous.severity === next.severity,
+        previous.message === next.message && previous.detail === next.detail,
     },
   );
   // The toast reads its action for presence and rendering; retain one DOM slot.
   const actions = (
     <div class="stack chat-error__actions">
       {props.action}
-      <ReportIssueLink />
+      {props.reportIssue !== false ? <ReportIssueLink /> : undefined}
     </div>
   );
   return (
@@ -364,6 +362,69 @@ function ChatErrorNotice(props: {
   );
 }
 
+function ChatReplyErrorNotice(props: {
+  error: ChatRunError;
+  connected?: boolean;
+  onRefresh?: () => void;
+  onDismiss?: () => void;
+}) {
+  const app = useOptionalApplication();
+  const busy = () => props.error.kind === "state_contention";
+  const signIn = () => props.error.kind === "auth_refresh";
+  const message = createMemo(() =>
+    formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim(),
+  );
+  return (
+    <div
+      class={[
+        "chat-error chat-error--reply chat-composer-neighbor-card",
+        busy() ? "chat-composer-neighbor-card--warn" : "chat-composer-neighbor-card--danger",
+      ]}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && props.onDismiss) {
+          event.stopPropagation();
+          props.onDismiss();
+        }
+      }}
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
+        <Icon name={busy() ? "alertTriangle" : "circleAlert"} />
+      </span>
+      <div class="app-toast__message" role={busy() ? "status" : "alert"}>
+        {message()}
+      </div>
+      <div class="row chat-error__actions">
+        <Show when={signIn() ? app : props.onRefresh}>
+          <button
+            type="button"
+            class="btn btn--sm chat-error__refresh"
+            disabled={!signIn() && !props.connected}
+            onClick={() => (signIn() ? app?.navigate("model-providers") : props.onRefresh?.())}
+          >
+            {t(
+              signIn()
+                ? "chat.recovery.openModels"
+                : busy()
+                  ? "chat.checkStatus"
+                  : "common.refresh",
+            )}
+          </button>
+        </Show>
+        <Show when={props.onDismiss}>
+          <button
+            type="button"
+            class="chat-error__dismiss app-toast__dismiss"
+            aria-label={t("chat.actions.dismissError")}
+            onClick={() => props.onDismiss?.()}
+          >
+            <Icon name="x" />
+          </button>
+        </Show>
+      </div>
+    </div>
+  );
+}
+
 export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
   return (
     <>
@@ -373,7 +434,8 @@ export function ChatTopbarNoticesContent(props: ChatViewNoticesProps) {
         {(error) => (
           <ChatErrorNotice
             error={error()}
-            detail={props.errorDetail}
+            detail={props.errorDetail === EXPECTED_CHAT_REFUSAL ? undefined : props.errorDetail}
+            reportIssue={props.errorDetail !== EXPECTED_CHAT_REFUSAL}
             onDismiss={props.onDismissError}
           />
         )}
@@ -391,7 +453,6 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
           readRunFailureNotice(message, { audience: "desktop" })?.runId === props.runError?.runId,
       ),
     );
-  const contention = () => props.runError?.kind === "state_contention";
   const usageLimit = (): "business" | "consumer" | undefined =>
     props.runError?.kind === "chatgpt_business_usage_limit"
       ? "business"
@@ -406,7 +467,7 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
         disabled={!props.connected}
         onClick={() => props.onRefresh?.()}
       >
-        {t(contention() ? "chat.checkStatus" : "common.refresh")}
+        {t("common.refresh")}
       </button>
     </Show>
   );
@@ -424,25 +485,23 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
       </Show>
       <Show when={!hasTranscriptFailure() && !usageLimit() && props.runError}>
         {(error) => (
-          <>
-            <ChatErrorNotice
-              error={error().summary}
-              action={refresh}
+          <Show
+            when={error().kind !== "stop"}
+            fallback={
+              <ChatErrorNotice
+                error={error().summary}
+                action={refresh}
+                onDismiss={props.onDismissRunError}
+              />
+            }
+          >
+            <ChatReplyErrorNotice
+              error={error()}
+              connected={props.connected}
+              onRefresh={props.onRefresh}
               onDismiss={props.onDismissRunError}
-              tone={contention() ? "warn" : "danger"}
-              summary={
-                error().kind === "stop"
-                  ? undefined
-                  : t(
-                      contention()
-                        ? "chat.errorBusySummary"
-                        : error().kind === "auth_refresh"
-                          ? "chat.errorSignInSummary"
-                          : "chat.errorReplySummary",
-                    )
-              }
             />
-          </>
+          </Show>
         )}
       </Show>
       <Show when={props.workspaceConflict}>

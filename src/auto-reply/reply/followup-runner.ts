@@ -10,6 +10,7 @@ import type { ProgressContinuationCapability } from "../../channels/progress-con
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { CronDeliveryAuthorityError } from "../../cron/delivery-attempt-fence.js";
+import { OperatorRefusalError } from "../../gateway/operator-refusal.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -150,6 +151,14 @@ export function createFollowupRunner(
         ),
       );
     };
+    // Before the turn starts, an admission refusal is the person's sentence from the cause table.
+    const withheldNotice = (error: unknown) =>
+      (admittedTurn
+        ? undefined
+        : collectErrorGraphCandidates(error, readErrorCauses).find(
+            (cause) => cause instanceof OperatorRefusalError,
+          )?.message) ??
+      `withheld: ${truncateSessionRunError(sanitizeSessionRunError(error), 512)}`;
     let visibleReplySent = false;
     let deliveryPending = false;
     let sourceRetryPending = false;
@@ -419,11 +428,14 @@ export function createFollowupRunner(
         );
       }
     } catch (error) {
-      // A retired cron delivery is terminal like Stop: withhold, record, never replay.
+      // A retired cron delivery is terminal like Stop: withhold, record, never replay. So is an
+      // admission refusal before the turn starts; the person sees its sentence, not a log line.
       const authorityLost =
         queued.operatorAuthority?.signal?.aborted === true ||
         collectErrorGraphCandidates(error, readErrorCauses).some(
-          (cause) => cause instanceof CronDeliveryAuthorityError,
+          (cause) =>
+            cause instanceof CronDeliveryAuthorityError ||
+            (!admittedTurn && cause instanceof OperatorRefusalError),
         );
       if (
         !authorityLost &&
@@ -449,7 +461,7 @@ export function createFollowupRunner(
         completion = {
           kind: "failed",
           error: formatErrorMessage(error),
-          ...(authorityLost ? { notice: `withheld: ${formatErrorMessage(error)}` } : {}),
+          ...(authorityLost ? { notice: withheldNotice(error) } : {}),
         };
         if (!withheld) {
           defaultRuntime.error?.(
@@ -522,7 +534,7 @@ export function createFollowupRunner(
                 },
                 runId,
                 error,
-                notice: `withheld: ${truncateSessionRunError(sanitizeSessionRunError(error), 512)}`,
+                notice: withheldNotice(withheldError),
               }),
           });
         } else {

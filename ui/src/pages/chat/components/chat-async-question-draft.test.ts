@@ -276,8 +276,15 @@ it("retires disposed-pane callbacks without renewing pre-deletion draft intent",
   expect(storage.write).not.toHaveBeenCalled();
 });
 
-it("makes a failed dismissal save visible and keeps Undo available", async () => {
-  storage.write.mockResolvedValue({ status: "storage-failed" });
+it("persists a new dismissal after undoing a failed dismissal save", async () => {
+  storage.write.mockResolvedValueOnce({ status: "storage-failed" });
+  storage.write.mockImplementation(async (_scope, draft, options) => {
+    storage.read.mockResolvedValue({
+      status: "found",
+      draft: { ...draft, writeId: options.writeId },
+    });
+    return { status: "persisted" };
+  });
   const current = state();
   const presentation = present(current);
   await presentation.dismiss(question.itemId);
@@ -286,7 +293,16 @@ it("makes a failed dismissal save visible and keeps Undo available", async () =>
   expect(toast.actionLabel).toBe("Undo");
   toast.onAction();
   await settled(current);
-  expect(present(current).pending).toHaveLength(1);
+  const reopened = present(current);
+  expect(reopened.pending).toHaveLength(1);
+  expect(storage.write).toHaveBeenCalledOnce();
+
+  await reopened.dismiss(question.itemId);
+  expect(storage.write).toHaveBeenCalledTimes(2);
+  const remounted = state();
+  present(remounted);
+  await settled(remounted);
+  expect(present(remounted).pending).toHaveLength(0);
 });
 
 it("reopens from Undo against the latest completion boundary, not the dismissed render", async () => {

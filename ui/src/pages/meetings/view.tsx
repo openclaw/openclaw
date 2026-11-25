@@ -537,10 +537,12 @@ function Reader(props: TranscriptsViewProps) {
                       {(utterance) => (
                         <li>
                           <div class="transcripts-utterance__byline">
-                            <strong>
-                              {utterance().speakerLabel ??
-                                utterance().speakerId ??
-                                t("transcripts.unknownSpeaker")}
+                            <strong title={utterance().speakerLabel ?? utterance().speakerId}>
+                              <bdi>
+                                {utterance().speakerLabel ??
+                                  utterance().speakerId ??
+                                  t("transcripts.unknownSpeaker")}
+                              </bdi>
                             </strong>
                             <SourceTime value={utterance().startedAt ?? utterance().endedAt} />
                           </div>

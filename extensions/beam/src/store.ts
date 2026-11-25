@@ -12,6 +12,7 @@ import type {
   BeamUploadOperations,
   BeamUploadResult,
 } from "../upload-operation-api.js";
+import type { BeamScreenshot } from "./screenshot.js";
 import type { BeamStoredSession, BeamUpload, BeamHandoff } from "./types.js";
 import { BEAM_MAX_SESSIONS, BEAM_MAX_WRITE_RECEIPTS, BEAM_RETENTION_MS } from "./types.js";
 
@@ -24,6 +25,7 @@ type BeamSessionSummary = Readonly<
     | "completed"
     | "createdAt"
     | "receivedAt"
+    | "presentationDigest"
     | "publisherProfileId"
     | "continuation"
     | "handoffId"
@@ -40,6 +42,7 @@ export class BeamSourceOwnershipError extends Error {
 
 export type BeamStore = {
   catalogService: OpenClawPluginServiceV2;
+  getScreenshot?: (beamId: string, digest: string) => Promise<BeamScreenshot | undefined>;
   upload: (
     upload: BeamUpload,
     receipt: {
@@ -97,6 +100,12 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
     overflowPolicy: "reject-new",
     defaultTtlMs: BEAM_RETENTION_MS,
   });
+  const images = runtime.state.openKeyedStoreV2<BeamScreenshot>({
+    namespace: "publication-images",
+    maxEntries: BEAM_MAX_SESSIONS,
+    overflowPolicy: "reject-new",
+    defaultTtlMs: BEAM_RETENTION_MS,
+  });
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
   let lifetime: AbortSignal | undefined;
@@ -125,6 +134,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
           completed: value.completed,
           createdAt: value.createdAt,
           receivedAt: value.receivedAt,
+          presentationDigest: value.presentationDigest,
           publisherProfileId: value.publisherProfileId,
           continuation: value.continuation,
           handoffId: value.handoffId,
@@ -162,14 +172,14 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
       }
       // Capture the original request assertion before module preparation or writer admission awaits.
       const operation = store.createOperation<BeamUploadOperations>(
-        [store, handoffs],
+        [store, handoffs, images],
         { moduleName: "upload-operation-api.js", exportName: "executeBeamUpload" },
         { assertCurrent },
       );
       try {
         const result = await operation.execute(
           { type: "upload", input: { upload, receivedAt, publisher } },
-          { writeStores: [0, 1] },
+          { writeStores: [0, 1, 2] },
         );
         return result.value;
       } finally {
@@ -177,12 +187,16 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
         invalidate();
       }
     },
+    async getScreenshot(beamId, digest) {
+      const image = await images.lookup(beamId);
+      return image?.digest === digest ? image : undefined;
+    },
     async putSnapshot(input, assertCurrent) {
       if (!store.createOperation) {
         throw new Error("Beam requires worker-owned plugin state operations");
       }
       const operation = store.createOperation<BeamPublicationOperations>(
-        [store, handoffs, writes],
+        [store, handoffs, images, writes],
         {
           moduleName: "publication-operation-api.js",
           exportName: "executeBeamPublication",
@@ -193,7 +207,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
         return (
           await operation.execute(
             { type: "publish", input },
-            { writeStores: [0, 2], watchStores: [1] },
+            { writeStores: [0, 2, 3], watchStores: [1] },
           )
         ).value;
       } catch (error) {
@@ -368,7 +382,19 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
     },
     async delete(beamId) {
       try {
-        return await store.delete(beamId);
+        const op = store.createOperation?.<BeamPublicationOperations>(
+          [store, images],
+          {
+            moduleName: "publication-operation-api.js",
+            exportName: "executeBeamPublication",
+          },
+          { assertCurrent() {} },
+        );
+        if (!op) {
+          throw new Error("Beam requires worker-owned plugin state operations");
+        }
+        return (await op.execute({ type: "archive", input: { beamId } }, { writeStores: [0, 1] }))
+          .value;
       } finally {
         invalidate();
       }

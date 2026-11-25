@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { expect, it, vi } from "vitest";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { applyChatSendParticipation, normalizeChatSendRequest } from "./chat-send-request.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Client = GatewayRequestHandlerOptions["client"];
@@ -53,6 +53,55 @@ async function expectError(
 ) {
   expect(await normalize(overrides, client)).toEqual({ ok: false, error });
 }
+
+const participationCeiling = {
+  kind: "send" as const,
+  profileId: "guest",
+  sessionKey: "agent:main:main",
+};
+it.each(["/stop", "/btw hello", "/model other/model", "/queue steer"])(
+  "attaches host participation to literal %s without accepting a public ceiling",
+  async (message) => {
+    const request = await normalizeValue({ message, queueMode: "steer" });
+    expect(applyChatSendParticipation(request)).toMatchObject({
+      ok: true,
+      value: {
+        participating: true,
+        suppressCommandInterpretation: true,
+        stopCommand: false,
+        turnKind: "main",
+      },
+    });
+    expect(request.inboundMessage).toBe(message);
+    expect(await normalize({ message, participationCeiling })).toMatchObject({ ok: false });
+  },
+);
+it.each([
+  { deliver: true },
+  { originatingChannel: "webchat", originatingTo: "elsewhere" },
+  { thinking: "high" },
+  { fastMode: true },
+  { fastAutoOnSeconds: 30 },
+  { intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 } },
+])("rejects participating runtime/route override %j", async (overrides) => {
+  const client = humanClient();
+  client.connect.scopes = ["operator.admin"];
+  const request = await normalizeValue(overrides, client);
+  expect(applyChatSendParticipation(request)).toMatchObject({
+    ok: false,
+  });
+  expect(request.participating).toBeUndefined();
+});
+it("rejects participating tool bindings and public model overrides", async () => {
+  const request = await normalizeValue(
+    { toolBindings: { browser: {} } },
+    copilotClient(["run-tool-bindings"]),
+  );
+  expect(applyChatSendParticipation(request)).toMatchObject({
+    ok: false,
+  });
+  expect(await normalize({ model: "other/model" })).toMatchObject({ ok: false });
+});
 
 const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
 const mention = (start: number, end: number, profileId = "bob") => ({ profileId, start, end });

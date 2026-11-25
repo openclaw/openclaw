@@ -403,10 +403,7 @@ export async function executePreparedReplyRun(
     InputProvenance: inputProvenance,
   });
   const channelOwnerAuthority = getCommandOwnerAuthority(ctx);
-  const senderIsOwner =
-    providedReplyOperation && channelOwnerAuthority
-      ? channelOwnerAuthority.isCurrent()
-      : command.senderIsOwner;
+  const { senderIsOwner } = command;
   const authorityRunId =
     freshChannelCronAuthorityTurn && command.senderIsOwner
       ? (opts?.runId ?? crypto.randomUUID())
@@ -427,6 +424,7 @@ export async function executePreparedReplyRun(
     });
   }
   const followupRun = {
+    disableCollectBatching: Boolean(opts?.operatorAuthority?.participationCeiling),
     createChannelCronAuthority,
     prompt: queuedBody,
     readAdmissionConfig,
@@ -552,14 +550,18 @@ export async function executePreparedReplyRun(
       traceAuthorized: senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,
       verboseLevelOverride: params.directives.verboseLevel,
-      approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+      approvalReviewerDeviceId: opts?.operatorAuthority?.participationCeiling
+        ? undefined
+        : normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd:
         normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedCwd) ??
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
-      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      sessionRoot:
+        opts?.operatorAuthority?.participationCeiling?.source?.root ??
+        normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
@@ -697,9 +699,11 @@ export async function executePreparedReplyRun(
       transcriptCommandBody,
       followupRun,
       queueKey,
-      resolvedQueue,
-      shouldSteer,
-      shouldFollowup,
+      resolvedQueue: opts?.operatorAuthority?.participationCeiling
+        ? { ...resolvedQueue, mode: "followup" }
+        : resolvedQueue,
+      shouldSteer: opts?.operatorAuthority?.participationCeiling ? false : shouldSteer,
+      shouldFollowup: opts?.operatorAuthority?.participationCeiling ? true : shouldFollowup,
       hasQueuedFollowups,
       isActive,
       isRunActive,

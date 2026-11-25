@@ -71,6 +71,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { assertParticipationRuntime } from "./participation-ceiling.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
@@ -137,6 +138,7 @@ async function runCliAgentInternal(
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
   let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();

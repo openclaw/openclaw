@@ -335,12 +335,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -418,7 +422,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("availableAccessPrograms" in value) ||
           check_3(value.availableAccessPrograms) ||
           value.availableAccessPrograms === null) &&
-        check_5(value.defaultReasoningEffort) &&
+        check_6(value.defaultReasoningEffort) &&
         (value.defaultServiceTier === void 0 ||
           !("defaultServiceTier" in value) ||
           typeof value.defaultServiceTier == "string" ||
@@ -430,7 +434,7 @@ var isCodexDynamicToolCallParams = (() => {
         (value.inputModalities === void 0 ||
           !("inputModalities" in value) ||
           (Array.isArray(value.inputModalities) &&
-            value.inputModalities.every((unique_3, index) => check_6(unique_3)))) &&
+            value.inputModalities.every((unique_3, index) => check_7(unique_3)))) &&
         typeof value.isDefault == "boolean" &&
         typeof value.model == "string" &&
         (value.modelSpecialty === void 0 ||
@@ -439,14 +443,14 @@ var isCodexDynamicToolCallParams = (() => {
           value.modelSpecialty === null) &&
         (value.multiAgentVersion === void 0 ||
           !("multiAgentVersion" in value) ||
-          check_7(value.multiAgentVersion) ||
+          check_8(value.multiAgentVersion) ||
           value.multiAgentVersion === null) &&
         (value.serviceTiers === void 0 ||
           !("serviceTiers" in value) ||
           (Array.isArray(value.serviceTiers) &&
-            value.serviceTiers.every((unique_5, index) => check_8(unique_5)))) &&
+            value.serviceTiers.every((unique_5, index) => check_9(unique_5)))) &&
         Array.isArray(value.supportedReasoningEfforts) &&
-        value.supportedReasoningEfforts.every((unique_6, index) => check_9(unique_6)) &&
+        value.supportedReasoningEfforts.every((unique_6, index) => check_10(unique_6)) &&
         (value.supportsPersonality === void 0 ||
           !("supportsPersonality" in value) ||
           typeof value.supportsPersonality == "boolean") &&
@@ -456,7 +460,7 @@ var isCodexDynamicToolCallParams = (() => {
           value.upgrade === null) &&
         (value.upgradeInfo === void 0 ||
           !("upgradeInfo" in value) ||
-          check_10(value.upgradeInfo) ||
+          check_11(value.upgradeInfo) ||
           value.upgradeInfo === null),
       check_2 = (value) =>
         typeof value == "object" &&
@@ -470,22 +474,31 @@ var isCodexDynamicToolCallParams = (() => {
         !Array.isArray(value) &&
         "cyber" in value &&
         Array.isArray(value.cyber) &&
-        value.cyber.every((unique_2, index) => check_4(unique_2)),
+        value.cyber.every((unique_2, index) => check_4(unique_2)) &&
+        (value.daybreakAvailability === void 0 ||
+          !("daybreakAvailability" in value) ||
+          check_5(value.daybreakAvailability)),
       check_4 = (value) =>
         typeof value == "string" &&
         (value === "standard" || value === "daybreakBlue" || value === "daybreakRed"),
       check_5 = (value) =>
         typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+        (value === "available" ||
+          value === "enrollmentRequired" ||
+          value === "unavailableForModel" ||
+          value === "default"),
       check_6 = (value) =>
+        typeof value == "string" &&
+        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+      check_7 = (value) =>
         [
           typeof value == "string" && value === "text",
           typeof value == "string" && value === "image",
           typeof value == "string" && value === "audio",
         ].reduce((result, unique_4, _) => (unique_4 === !0 ? result + 1 : result), 0) === 1,
-      check_7 = (value) =>
-        typeof value == "string" && (value === "disabled" || value === "v1" || value === "v2"),
       check_8 = (value) =>
+        typeof value == "string" && (value === "disabled" || value === "v1" || value === "v2"),
+      check_9 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -495,15 +508,15 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.description == "string" &&
         typeof value.id == "string" &&
         typeof value.name == "string",
-      check_9 = (value) =>
+      check_10 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "description" in value &&
         "reasoningEffort" in value &&
         typeof value.description == "string" &&
-        check_5(value.reasoningEffort),
-      check_10 = (value) =>
+        check_6(value.reasoningEffort),
+      check_11 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -562,7 +575,7 @@ var isCodexDynamicToolCallParams = (() => {
         (value.instructionSources === void 0 ||
           !("instructionSources" in value) ||
           (Array.isArray(value.instructionSources) &&
-            value.instructionSources.every((unique_43, index) => check_32(unique_43)))) &&
+            value.instructionSources.every((unique_47, index) => check_37(unique_47)))) &&
         (value.itemsBackwardsCursor === void 0 ||
           !("itemsBackwardsCursor" in value) ||
           typeof value.itemsBackwardsCursor == "string" ||
@@ -571,7 +584,7 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.modelProvider == "string" &&
         (value.multiAgentMode === void 0 ||
           !("multiAgentMode" in value) ||
-          check_56(value.multiAgentMode)) &&
+          check_61(value.multiAgentMode)) &&
         (value.reasoningEffort === void 0 ||
           !("reasoningEffort" in value) ||
           check_7(value.reasoningEffort) ||
@@ -579,13 +592,13 @@ var isCodexDynamicToolCallParams = (() => {
         (value.runtimeWorkspaceRoots === void 0 ||
           !("runtimeWorkspaceRoots" in value) ||
           (Array.isArray(value.runtimeWorkspaceRoots) &&
-            value.runtimeWorkspaceRoots.every((unique_45, index) => check_8(unique_45)))) &&
-        check_57(value.sandbox) &&
+            value.runtimeWorkspaceRoots.every((unique_49, index) => check_8(unique_49)))) &&
+        check_62(value.sandbox) &&
         (value.serviceTier === void 0 ||
           !("serviceTier" in value) ||
           typeof value.serviceTier == "string" ||
           value.serviceTier === null) &&
-        check_59(value.thread) &&
+        check_64(value.thread) &&
         (value.turnsBackwardsCursor === void 0 ||
           !("turnsBackwardsCursor" in value) ||
           typeof value.turnsBackwardsCursor == "string" ||
@@ -692,7 +705,7 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.id == "string" &&
         Array.isArray(value.items) &&
         value.items.every((unique_3, index) => check_16(unique_3)) &&
-        (value.itemsView === void 0 || !("itemsView" in value) || check_54(value.itemsView)) &&
+        (value.itemsView === void 0 || !("itemsView" in value) || check_59(value.itemsView)) &&
         (value.rootTurnId === void 0 ||
           !("rootTurnId" in value) ||
           typeof value.rootTurnId == "string" ||
@@ -701,7 +714,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("startedAt" in value) ||
           (Number.isInteger(value.startedAt) && (typeof value.startedAt != "string" || !0)) ||
           (value.startedAt === null && (typeof value.startedAt != "string" || !0))) &&
-        check_55(value.status),
+        check_60(value.status),
       check_11 = (value) =>
         typeof value == "object" &&
         value !== null &&
@@ -967,12 +980,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -1072,15 +1089,15 @@ var isCodexDynamicToolCallParams = (() => {
               value.moderation === null) &&
             (value.phase === void 0 ||
               !("phase" in value) ||
-              check_27(value.phase) ||
+              check_32(value.phase) ||
               value.phase === null) &&
             (value.questions === void 0 ||
               !("questions" in value) ||
               (Array.isArray(value.questions) &&
-                value.questions.every((unique_12, index) => check_28(unique_12))) ||
+                value.questions.every((unique_16, index) => check_33(unique_16))) ||
               (value.questions === null &&
                 (!Array.isArray(value.questions) ||
-                  value.questions.every((unique_17, index) => check_28(unique_17))))) &&
+                  value.questions.every((unique_21, index) => check_33(unique_21))))) &&
             typeof value.text == "string" &&
             typeof value.type == "string" &&
             value.type === "agentMessage",
@@ -1097,7 +1114,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_29(value.output) &&
+            check_34(value.output) &&
             typeof value.type == "string" &&
             value.type === "functionCallOutput",
           typeof value == "object" &&
@@ -1118,12 +1135,12 @@ var isCodexDynamicToolCallParams = (() => {
             (value.content === void 0 ||
               !("content" in value) ||
               (Array.isArray(value.content) &&
-                value.content.every((unique_20, index) => typeof unique_20 == "string"))) &&
+                value.content.every((unique_24, index) => typeof unique_24 == "string"))) &&
             typeof value.id == "string" &&
             (value.summary === void 0 ||
               !("summary" in value) ||
               (Array.isArray(value.summary) &&
-                value.summary.every((unique_21, index) => typeof unique_21 == "string"))) &&
+                value.summary.every((unique_25, index) => typeof unique_25 == "string"))) &&
             typeof value.type == "string" &&
             value.type === "reasoning",
           typeof value == "object" &&
@@ -1141,8 +1158,8 @@ var isCodexDynamicToolCallParams = (() => {
               value.aggregatedOutput === null) &&
             typeof value.command == "string" &&
             Array.isArray(value.commandActions) &&
-            value.commandActions.every((unique_22, index) => check_31(unique_22)) &&
-            check_32(value.cwd) &&
+            value.commandActions.every((unique_26, index) => check_36(unique_26)) &&
+            check_37(value.cwd) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -1164,8 +1181,8 @@ var isCodexDynamicToolCallParams = (() => {
               !("scriptPath" in value) ||
               typeof value.scriptPath == "string" ||
               value.scriptPath === null) &&
-            (value.source === void 0 || !("source" in value) || check_33(value.source)) &&
-            check_34(value.status) &&
+            (value.source === void 0 || !("source" in value) || check_38(value.source)) &&
+            check_39(value.status) &&
             typeof value.type == "string" &&
             value.type === "commandExecution",
           typeof value == "object" &&
@@ -1176,9 +1193,9 @@ var isCodexDynamicToolCallParams = (() => {
             "status" in value &&
             "type" in value &&
             Array.isArray(value.changes) &&
-            value.changes.every((unique_24, index) => check_35(unique_24)) &&
+            value.changes.every((unique_28, index) => check_40(unique_28)) &&
             typeof value.id == "string" &&
-            check_37(value.status) &&
+            check_42(value.status) &&
             typeof value.type == "string" &&
             value.type === "fileChange",
           typeof value == "object" &&
@@ -1192,16 +1209,20 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.appContext === void 0 ||
               !("appContext" in value) ||
-              check_38(value.appContext) ||
+              check_43(value.appContext) ||
               value.appContext === null) &&
             !0 &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
-              check_39(value.error) ||
+              check_44(value.error) ||
               value.error === null) &&
             typeof value.id == "string" &&
             (value.mcpAppResourceUri === void 0 ||
@@ -1210,7 +1231,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.mcpAppResourceUri === null) &&
             (value.mcpAppUi === void 0 ||
               !("mcpAppUi" in value) ||
-              check_40(value.mcpAppUi) ||
+              check_45(value.mcpAppUi) ||
               value.mcpAppUi === null) &&
             (value.pluginId === void 0 ||
               !("pluginId" in value) ||
@@ -1222,10 +1243,10 @@ var isCodexDynamicToolCallParams = (() => {
               value.readOnlyHint === null) &&
             (value.result === void 0 ||
               !("result" in value) ||
-              check_42(value.result) ||
+              check_47(value.result) ||
               value.result === null) &&
             typeof value.server == "string" &&
-            check_43(value.status) &&
+            check_48(value.status) &&
             typeof value.tool == "string" &&
             typeof value.type == "string" &&
             value.type === "mcpToolCall",
@@ -1240,10 +1261,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.contentItems === void 0 ||
               !("contentItems" in value) ||
               (Array.isArray(value.contentItems) &&
-                value.contentItems.every((unique_27, index) => check_44(unique_27))) ||
+                value.contentItems.every((unique_31, index) => check_49(unique_31))) ||
               (value.contentItems === null &&
                 (!Array.isArray(value.contentItems) ||
-                  value.contentItems.every((unique_29, index) => check_44(unique_29))))) &&
+                  value.contentItems.every((unique_33, index) => check_49(unique_33))))) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -1253,7 +1274,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_45(value.status) &&
+            check_50(value.status) &&
             (value.success === void 0 ||
               !("success" in value) ||
               typeof value.success == "boolean" ||
@@ -1275,10 +1296,10 @@ var isCodexDynamicToolCallParams = (() => {
             value.agentsStates !== null &&
             !Array.isArray(value.agentsStates) &&
             Object.getOwnPropertyNames(value.agentsStates).every(
-              (unique_30, unique_31) => External[1].test(unique_30) || !1,
+              (unique_34, unique_35) => External[1].test(unique_34) || !1,
             ) &&
             Object.entries(value.agentsStates).every(
-              ([unique_32, unique_33], _) => !External[2].test(unique_32) || check_46(unique_33),
+              ([unique_36, unique_37], _) => !External[2].test(unique_36) || check_51(unique_37),
             ) &&
             typeof value.id == "string" &&
             (value.model === void 0 ||
@@ -1294,10 +1315,10 @@ var isCodexDynamicToolCallParams = (() => {
               check_7(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             Array.isArray(value.receiverThreadIds) &&
-            value.receiverThreadIds.every((unique_34, index) => typeof unique_34 == "string") &&
+            value.receiverThreadIds.every((unique_38, index) => typeof unique_38 == "string") &&
             typeof value.senderThreadId == "string" &&
-            check_48(value.status) &&
-            check_49(value.tool) &&
+            check_53(value.status) &&
+            check_54(value.tool) &&
             typeof value.type == "string" &&
             value.type === "collabAgentToolCall",
           typeof value == "object" &&
@@ -1311,7 +1332,7 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.agentPath == "string" &&
             typeof value.agentThreadId == "string" &&
             typeof value.id == "string" &&
-            check_50(value.kind) &&
+            check_55(value.kind) &&
             (value.model === void 0 ||
               !("model" in value) ||
               typeof value.model == "string" ||
@@ -1330,16 +1351,16 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.action === void 0 ||
               !("action" in value) ||
-              check_51(value.action) ||
+              check_56(value.action) ||
               value.action === null) &&
             typeof value.id == "string" &&
             typeof value.query == "string" &&
             (value.results === void 0 ||
               !("results" in value) ||
-              (Array.isArray(value.results) && value.results.every((unique_38, index) => !0)) ||
+              (Array.isArray(value.results) && value.results.every((unique_42, index) => !0)) ||
               (value.results === null &&
                 (!Array.isArray(value.results) ||
-                  value.results.every((unique_39, index) => !0)))) &&
+                  value.results.every((unique_43, index) => !0)))) &&
             typeof value.type == "string" &&
             value.type === "webSearch",
           typeof value == "object" &&
@@ -1349,7 +1370,7 @@ var isCodexDynamicToolCallParams = (() => {
             "path" in value &&
             "type" in value &&
             typeof value.id == "string" &&
-            check_32(value.path) &&
+            check_37(value.path) &&
             typeof value.type == "string" &&
             value.type === "imageView",
           typeof value == "object" &&
@@ -1373,7 +1394,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.failure === void 0 ||
               !("failure" in value) ||
-              check_52(value.failure) ||
+              check_57(value.failure) ||
               value.failure === null) &&
             (value.generationId === void 0 ||
               !("generationId" in value) ||
@@ -1383,7 +1404,7 @@ var isCodexDynamicToolCallParams = (() => {
             (value.inputImages === void 0 ||
               !("inputImages" in value) ||
               (Array.isArray(value.inputImages) &&
-                value.inputImages.every((unique_41, index) => check_53(unique_41)))) &&
+                value.inputImages.every((unique_45, index) => check_58(unique_45)))) &&
             (value.revisedPrompt === void 0 ||
               !("revisedPrompt" in value) ||
               typeof value.revisedPrompt == "string" ||
@@ -1602,49 +1623,142 @@ var isCodexDynamicToolCallParams = (() => {
           value.display === null) &&
         typeof value.moderated == "boolean",
       check_26 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "action" in value &&
-        typeof value.action == "string" &&
-        (value.blockType === void 0 ||
-          !("blockType" in value) ||
-          typeof value.blockType == "string" ||
-          value.blockType === null) &&
-        (value.checkTrustedContacts === void 0 ||
-          !("checkTrustedContacts" in value) ||
-          typeof value.checkTrustedContacts == "boolean" ||
-          value.checkTrustedContacts === null) &&
-        (value.cyberTrustedAccess === void 0 ||
-          !("cyberTrustedAccess" in value) ||
-          typeof value.cyberTrustedAccess == "boolean" ||
-          value.cyberTrustedAccess === null),
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "trustedContacts" in value &&
+            "version" in value &&
+            (value.annotation === void 0 ||
+              !("annotation" in value) ||
+              check_27(value.annotation) ||
+              value.annotation === null) &&
+            typeof value.mode == "string" &&
+            value.mode === "show" &&
+            check_29(value.trustedContacts) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "replacement" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "hide" &&
+            check_30(value.replacement) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "reason" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "block" &&
+            check_31(value.reason) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
+        ].reduce((result, unique_11, _) => (unique_11 === !0 ? result + 1 : result), 0) === 1,
       check_27 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "subject" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingHelpline" &&
+            check_28(value.subject),
+        ].reduce((result, unique_12, _) => (unique_12 === !0 ? result + 1 : result), 0) === 1,
+      check_28 = (value) => typeof value == "string" && (value === "answer" || value === "prompt"),
+      check_29 = (value) => typeof value == "string" && (value === "check" || value === "skip"),
+      check_30 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingPromptHelpline",
+        ].reduce((result, unique_13, _) => (unique_13 === !0 ? result + 1 : result), 0) === 1,
+      check_31 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "protectionType" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "protection" &&
+            typeof value.protectionType == "string",
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "cyber" &&
+            (value.trustedAccess === void 0 ||
+              !("trustedAccess" in value) ||
+              typeof value.trustedAccess == "boolean" ||
+              value.trustedAccess === null),
+        ].reduce((result, unique_14, _) => (unique_14 === !0 ? result + 1 : result), 0) === 1,
+      check_32 = (value) =>
         [
           typeof value == "string" && value === "commentary",
           typeof value == "string" && value === "partial_answer",
           typeof value == "string" && value === "final_answer",
-        ].reduce((result, unique_11, _) => (unique_11 === !0 ? result + 1 : result), 0) === 1,
-      check_28 = (value) =>
+        ].reduce((result, unique_15, _) => (unique_15 === !0 ? result + 1 : result), 0) === 1,
+      check_33 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "title" in value &&
         Object.getOwnPropertyNames(value).every(
-          (unique_13, unique_14) => External[0].test(unique_13) || !1,
+          (unique_17, unique_18) => External[0].test(unique_17) || !1,
         ) &&
         (value.options === void 0 ||
           !("options" in value) ||
           (Array.isArray(value.options) &&
-            value.options.every((unique_15, index) => typeof unique_15 == "string")) ||
+            value.options.every((unique_19, index) => typeof unique_19 == "string")) ||
           (value.options === null &&
             (!Array.isArray(value.options) ||
-              value.options.every((unique_16, index) => typeof unique_16 == "string")))) &&
+              value.options.every((unique_20, index) => typeof unique_20 == "string")))) &&
         typeof value.title == "string",
-      check_29 = (value) =>
-        (Array.isArray(value) && value.every((unique_18, index) => check_30(unique_18))) ||
+      check_34 = (value) =>
+        (Array.isArray(value) && value.every((unique_22, index) => check_35(unique_22))) ||
         typeof value == "string",
-      check_30 = (value) =>
+      check_35 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1698,8 +1812,8 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.encrypted_content == "string" &&
             typeof value.type == "string" &&
             value.type === "encrypted_content",
-        ].reduce((result, unique_19, _) => (unique_19 === !0 ? result + 1 : result), 0) === 1,
-      check_31 = (value) =>
+        ].reduce((result, unique_23, _) => (unique_23 === !0 ? result + 1 : result), 0) === 1,
+      check_36 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1710,7 +1824,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.command == "string" &&
             typeof value.name == "string" &&
-            check_32(value.path) &&
+            check_37(value.path) &&
             typeof value.type == "string" &&
             value.type === "read",
           typeof value == "object" &&
@@ -1749,21 +1863,21 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.command == "string" &&
             typeof value.type == "string" &&
             value.type === "unknown",
-        ].reduce((result, unique_23, _) => (unique_23 === !0 ? result + 1 : result), 0) === 1,
-      check_32 = (value) => typeof value == "string",
-      check_33 = (value) =>
+        ].reduce((result, unique_27, _) => (unique_27 === !0 ? result + 1 : result), 0) === 1,
+      check_37 = (value) => typeof value == "string",
+      check_38 = (value) =>
         typeof value == "string" &&
         (value === "agent" ||
           value === "userShell" ||
           value === "unifiedExecStartup" ||
           value === "unifiedExecInteraction"),
-      check_34 = (value) =>
+      check_39 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_35 = (value) =>
+      check_40 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -1771,9 +1885,9 @@ var isCodexDynamicToolCallParams = (() => {
         "kind" in value &&
         "path" in value &&
         typeof value.diff == "string" &&
-        check_36(value.kind) &&
+        check_41(value.kind) &&
         typeof value.path == "string",
-      check_36 = (value) =>
+      check_41 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1797,14 +1911,14 @@ var isCodexDynamicToolCallParams = (() => {
               value.move_path === null) &&
             typeof value.type == "string" &&
             value.type === "update",
-        ].reduce((result, unique_25, _) => (unique_25 === !0 ? result + 1 : result), 0) === 1,
-      check_37 = (value) =>
+        ].reduce((result, unique_29, _) => (unique_29 === !0 ? result + 1 : result), 0) === 1,
+      check_42 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_38 = (value) =>
+      check_43 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -1826,35 +1940,35 @@ var isCodexDynamicToolCallParams = (() => {
           !("resourceUri" in value) ||
           typeof value.resourceUri == "string" ||
           value.resourceUri === null),
-      check_39 = (value) =>
+      check_44 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "message" in value &&
         typeof value.message == "string",
-      check_40 = (value) =>
+      check_45 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "preferredModelDisplayMode" in value &&
         "resourceUri" in value &&
-        check_41(value.preferredModelDisplayMode) &&
+        check_46(value.preferredModelDisplayMode) &&
         typeof value.resourceUri == "string",
-      check_41 = (value) =>
+      check_46 = (value) =>
         typeof value == "string" && (value === "inline" || value === "fullscreen"),
-      check_42 = (value) =>
+      check_47 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "content" in value &&
         (value._meta === void 0 || !("_meta" in value) || !0) &&
         Array.isArray(value.content) &&
-        value.content.every((unique_26, index) => !0) &&
+        value.content.every((unique_30, index) => !0) &&
         (value.structuredContent === void 0 || !("structuredContent" in value) || !0),
-      check_43 = (value) =>
+      check_48 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_44 = (value) =>
+      check_49 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1880,11 +1994,11 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.audioUrl == "string" &&
             typeof value.type == "string" &&
             value.type === "inputAudio",
-        ].reduce((result, unique_28, _) => (unique_28 === !0 ? result + 1 : result), 0) === 1,
-      check_45 = (value) =>
+        ].reduce((result, unique_32, _) => (unique_32 === !0 ? result + 1 : result), 0) === 1,
+      check_50 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_46 = (value) =>
+      check_51 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -1893,8 +2007,8 @@ var isCodexDynamicToolCallParams = (() => {
           !("message" in value) ||
           typeof value.message == "string" ||
           value.message === null) &&
-        check_47(value.status),
-      check_47 = (value) =>
+        check_52(value.status),
+      check_52 = (value) =>
         typeof value == "string" &&
         (value === "pendingInit" ||
           value === "running" ||
@@ -1903,13 +2017,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "errored" ||
           value === "shutdown" ||
           value === "notFound"),
-      check_48 = (value) =>
+      check_53 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "interrupted"),
-      check_49 = (value) =>
+      check_54 = (value) =>
         typeof value == "string" &&
         (value === "spawnAgent" ||
           value === "sendInput" ||
@@ -1920,13 +2034,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "followupTask" ||
           value === "interruptAgent" ||
           value === "listAgents"),
-      check_50 = (value) =>
+      check_55 = (value) =>
         typeof value == "string" &&
         (value === "started" ||
           value === "interacted" ||
           value === "interrupted" ||
           value === "completed"),
-      check_51 = (value) =>
+      check_56 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1935,10 +2049,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.queries === void 0 ||
               !("queries" in value) ||
               (Array.isArray(value.queries) &&
-                value.queries.every((unique_36, index) => typeof unique_36 == "string")) ||
+                value.queries.every((unique_40, index) => typeof unique_40 == "string")) ||
               (value.queries === null &&
                 (!Array.isArray(value.queries) ||
-                  value.queries.every((unique_37, index) => typeof unique_37 == "string")))) &&
+                  value.queries.every((unique_41, index) => typeof unique_41 == "string")))) &&
             (value.query === void 0 ||
               !("query" in value) ||
               typeof value.query == "string" ||
@@ -1975,8 +2089,8 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.type == "string" &&
             value.type === "other",
-        ].reduce((result, unique_35, _) => (unique_35 === !0 ? result + 1 : result), 0) === 1,
-      check_52 = (value) =>
+        ].reduce((result, unique_39, _) => (unique_39 === !0 ? result + 1 : result), 0) === 1,
+      check_57 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -1990,8 +2104,8 @@ var isCodexDynamicToolCallParams = (() => {
               (value.resetsAt === null && (typeof value.resetsAt != "string" || !0))) &&
             typeof value.type == "string" &&
             value.type === "usageLimitExceeded",
-        ].reduce((result, unique_40, _) => (unique_40 === !0 ? result + 1 : result), 0) === 1,
-      check_53 = (value) =>
+        ].reduce((result, unique_44, _) => (unique_44 === !0 ? result + 1 : result), 0) === 1,
+      check_58 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -1999,19 +2113,19 @@ var isCodexDynamicToolCallParams = (() => {
         "sha256" in value &&
         check_8(value.path) &&
         typeof value.sha256 == "string",
-      check_54 = (value) =>
+      check_59 = (value) =>
         [
           typeof value == "string" && value === "notLoaded",
           typeof value == "string" && value === "summary",
           typeof value == "string" && value === "full",
-        ].reduce((result, unique_42, _) => (unique_42 === !0 ? result + 1 : result), 0) === 1,
-      check_55 = (value) =>
+        ].reduce((result, unique_46, _) => (unique_46 === !0 ? result + 1 : result), 0) === 1,
+      check_60 = (value) =>
         typeof value == "string" &&
         (value === "completed" ||
           value === "interrupted" ||
           value === "failed" ||
           value === "inProgress"),
-      check_56 = (value) =>
+      check_61 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -2020,8 +2134,8 @@ var isCodexDynamicToolCallParams = (() => {
             Object.getOwnPropertyNames(value).length === 1 &&
             typeof value.custom == "string",
           typeof value == "string" && (value === "explicitRequestOnly" || value === "proactive"),
-        ].reduce((result, unique_44, _) => (unique_44 === !0 ? result + 1 : result), 0) === 1,
-      check_57 = (value) =>
+        ].reduce((result, unique_48, _) => (unique_48 === !0 ? result + 1 : result), 0) === 1,
+      check_62 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -2044,7 +2158,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.networkAccess === void 0 ||
               !("networkAccess" in value) ||
-              check_58(value.networkAccess)) &&
+              check_63(value.networkAccess)) &&
             typeof value.type == "string" &&
             value.type === "externalSandbox",
           typeof value == "object" &&
@@ -2065,11 +2179,11 @@ var isCodexDynamicToolCallParams = (() => {
             (value.writableRoots === void 0 ||
               !("writableRoots" in value) ||
               (Array.isArray(value.writableRoots) &&
-                value.writableRoots.every((unique_47, index) => check_8(unique_47)))),
-        ].reduce((result, unique_46, _) => (unique_46 === !0 ? result + 1 : result), 0) === 1,
-      check_58 = (value) =>
+                value.writableRoots.every((unique_51, index) => check_8(unique_51)))),
+        ].reduce((result, unique_50, _) => (unique_50 === !0 ? result + 1 : result), 0) === 1,
+      check_63 = (value) =>
         typeof value == "string" && (value === "restricted" || value === "enabled"),
-      check_59 = (value) =>
+      check_64 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -2110,17 +2224,21 @@ var isCodexDynamicToolCallParams = (() => {
           !("daybreakEnabled" in value) ||
           typeof value.daybreakEnabled == "boolean" ||
           value.daybreakEnabled === null) &&
+        (value.daybreakProgramPropagationEnrolled === void 0 ||
+          !("daybreakProgramPropagationEnrolled" in value) ||
+          typeof value.daybreakProgramPropagationEnrolled == "boolean" ||
+          value.daybreakProgramPropagationEnrolled === null) &&
         (value.environments === void 0 ||
           !("environments" in value) ||
           (Array.isArray(value.environments) &&
-            value.environments.every((unique_48, index) => check_60(unique_48))) ||
+            value.environments.every((unique_52, index) => check_65(unique_52))) ||
           (value.environments === null &&
             (!Array.isArray(value.environments) ||
-              value.environments.every((unique_50, index) => check_60(unique_50))))) &&
+              value.environments.every((unique_54, index) => check_65(unique_54))))) &&
         typeof value.ephemeral == "boolean" &&
         (value.extra === void 0 ||
           !("extra" in value) ||
-          check_61(value.extra) ||
+          check_66(value.extra) ||
           value.extra === null) &&
         (value.forkedFromId === void 0 ||
           !("forkedFromId" in value) ||
@@ -2128,11 +2246,11 @@ var isCodexDynamicToolCallParams = (() => {
           value.forkedFromId === null) &&
         (value.gitInfo === void 0 ||
           !("gitInfo" in value) ||
-          check_62(value.gitInfo) ||
+          check_67(value.gitInfo) ||
           value.gitInfo === null) &&
         (value.historyMode === void 0 ||
           !("historyMode" in value) ||
-          check_63(value.historyMode)) &&
+          check_68(value.historyMode)) &&
         typeof value.id == "string" &&
         (value.model === void 0 ||
           !("model" in value) ||
@@ -2167,7 +2285,7 @@ var isCodexDynamicToolCallParams = (() => {
           (value.recencyAt === null && (typeof value.recencyAt != "string" || !0))) &&
         (value.section === void 0 ||
           !("section" in value) ||
-          check_64(value.section) ||
+          check_69(value.section) ||
           value.section === null) &&
         (value.sectionEnteredAt === void 0 ||
           !("sectionEnteredAt" in value) ||
@@ -2175,29 +2293,29 @@ var isCodexDynamicToolCallParams = (() => {
             (typeof value.sectionEnteredAt != "string" || !0)) ||
           (value.sectionEnteredAt === null && (typeof value.sectionEnteredAt != "string" || !0))) &&
         typeof value.sessionId == "string" &&
-        check_66(value.source) &&
-        check_70(value.status) &&
+        check_71(value.source) &&
+        check_75(value.status) &&
         (value.threadSource === void 0 ||
           !("threadSource" in value) ||
-          check_72(value.threadSource) ||
+          check_77(value.threadSource) ||
           value.threadSource === null) &&
         Array.isArray(value.turns) &&
-        value.turns.every((unique_55, index) => check_10(unique_55)) &&
+        value.turns.every((unique_59, index) => check_10(unique_59)) &&
         Number.isInteger(value.updatedAt) &&
         (typeof value.updatedAt != "string" || !0),
-      check_60 = (value) =>
+      check_65 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "cwd" in value &&
         "environmentId" in value &&
         "runtimeWorkspaceRoots" in value &&
-        check_32(value.cwd) &&
+        check_37(value.cwd) &&
         typeof value.environmentId == "string" &&
         Array.isArray(value.runtimeWorkspaceRoots) &&
-        value.runtimeWorkspaceRoots.every((unique_49, index) => check_32(unique_49)),
-      check_61 = (value) => typeof value == "object" && value !== null && !Array.isArray(value),
-      check_62 = (value) =>
+        value.runtimeWorkspaceRoots.every((unique_53, index) => check_37(unique_53)),
+      check_66 = (value) => typeof value == "object" && value !== null && !Array.isArray(value),
+      check_67 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -2213,9 +2331,9 @@ var isCodexDynamicToolCallParams = (() => {
           !("sha" in value) ||
           typeof value.sha == "string" ||
           value.sha === null),
-      check_63 = (value) =>
+      check_68 = (value) =>
         typeof value == "string" && (value === "legacy" || value === "paginated"),
-      check_64 = (value) =>
+      check_69 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -2223,11 +2341,11 @@ var isCodexDynamicToolCallParams = (() => {
         "name" in value &&
         (value.appearance === void 0 ||
           !("appearance" in value) ||
-          check_65(value.appearance) ||
+          check_70(value.appearance) ||
           value.appearance === null) &&
         typeof value.id == "string" &&
         typeof value.name == "string",
-      check_65 = (value) =>
+      check_70 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -2239,7 +2357,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("icon" in value) ||
           typeof value.icon == "string" ||
           value.icon === null),
-      check_66 = (value) =>
+      check_71 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -2252,15 +2370,15 @@ var isCodexDynamicToolCallParams = (() => {
             !Array.isArray(value) &&
             "subAgent" in value &&
             Object.getOwnPropertyNames(value).length === 1 &&
-            check_67(value.subAgent),
+            check_72(value.subAgent),
           typeof value == "string" &&
             (value === "cli" ||
               value === "vscode" ||
               value === "exec" ||
               value === "appServer" ||
               value === "unknown"),
-        ].reduce((result, unique_51, _) => (unique_51 === !0 ? result + 1 : result), 0) === 1,
-      check_67 = (value) =>
+        ].reduce((result, unique_55, _) => (unique_55 === !0 ? result + 1 : result), 0) === 1,
+      check_72 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -2278,7 +2396,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.thread_spawn.agent_nickname === null) &&
             (value.thread_spawn.agent_path === void 0 ||
               !("agent_path" in value.thread_spawn) ||
-              check_68(value.thread_spawn.agent_path) ||
+              check_73(value.thread_spawn.agent_path) ||
               value.thread_spawn.agent_path === null) &&
             (value.thread_spawn.agent_role === void 0 ||
               !("agent_role" in value.thread_spawn) ||
@@ -2286,7 +2404,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.thread_spawn.agent_role === null) &&
             Number.isInteger(value.thread_spawn.depth) &&
             (typeof value.thread_spawn.depth != "string" || !0) &&
-            check_69(value.thread_spawn.parent_thread_id),
+            check_74(value.thread_spawn.parent_thread_id),
           typeof value == "object" &&
             value !== null &&
             !Array.isArray(value) &&
@@ -2295,10 +2413,10 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.other == "string",
           typeof value == "string" &&
             (value === "review" || value === "compact" || value === "memory_consolidation"),
-        ].reduce((result, unique_52, _) => (unique_52 === !0 ? result + 1 : result), 0) === 1,
-      check_68 = (value) => typeof value == "string",
-      check_69 = (value) => typeof value == "string",
-      check_70 = (value) =>
+        ].reduce((result, unique_56, _) => (unique_56 === !0 ? result + 1 : result), 0) === 1,
+      check_73 = (value) => typeof value == "string",
+      check_74 = (value) => typeof value == "string",
+      check_75 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -2324,14 +2442,14 @@ var isCodexDynamicToolCallParams = (() => {
             "activeFlags" in value &&
             "type" in value &&
             Array.isArray(value.activeFlags) &&
-            value.activeFlags.every((unique_54, index) => check_71(unique_54)) &&
+            value.activeFlags.every((unique_58, index) => check_76(unique_58)) &&
             typeof value.type == "string" &&
             value.type === "active",
-        ].reduce((result, unique_53, _) => (unique_53 === !0 ? result + 1 : result), 0) === 1,
-      check_71 = (value) =>
+        ].reduce((result, unique_57, _) => (unique_57 === !0 ? result + 1 : result), 0) === 1,
+      check_76 = (value) =>
         typeof value == "string" &&
         (value === "waitingOnApproval" || value === "waitingOnUserInput"),
-      check_72 = (value) => typeof value == "string";
+      check_77 = (value) => typeof value == "string";
     return (value) => check_0(value);
   })(),
   isCodexThreadStartResponse = (() => {
@@ -2523,6 +2641,10 @@ var isCodexDynamicToolCallParams = (() => {
           !("daybreakEnabled" in value) ||
           typeof value.daybreakEnabled == "boolean" ||
           value.daybreakEnabled === null) &&
+        (value.daybreakProgramPropagationEnrolled === void 0 ||
+          !("daybreakProgramPropagationEnrolled" in value) ||
+          typeof value.daybreakProgramPropagationEnrolled == "boolean" ||
+          value.daybreakProgramPropagationEnrolled === null) &&
         (value.environments === void 0 ||
           !("environments" in value) ||
           (Array.isArray(value.environments) &&
@@ -2767,7 +2889,7 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.id == "string" &&
         Array.isArray(value.items) &&
         value.items.every((unique_15, index) => check_30(unique_15)) &&
-        (value.itemsView === void 0 || !("itemsView" in value) || check_67(value.itemsView)) &&
+        (value.itemsView === void 0 || !("itemsView" in value) || check_72(value.itemsView)) &&
         (value.rootTurnId === void 0 ||
           !("rootTurnId" in value) ||
           typeof value.rootTurnId == "string" ||
@@ -2776,7 +2898,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("startedAt" in value) ||
           (Number.isInteger(value.startedAt) && (typeof value.startedAt != "string" || !0)) ||
           (value.startedAt === null && (typeof value.startedAt != "string" || !0))) &&
-        check_68(value.status),
+        check_73(value.status),
       check_25 = (value) =>
         typeof value == "object" &&
         value !== null &&
@@ -3042,12 +3164,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -3147,15 +3273,15 @@ var isCodexDynamicToolCallParams = (() => {
               value.moderation === null) &&
             (value.phase === void 0 ||
               !("phase" in value) ||
-              check_41(value.phase) ||
+              check_46(value.phase) ||
               value.phase === null) &&
             (value.questions === void 0 ||
               !("questions" in value) ||
               (Array.isArray(value.questions) &&
-                value.questions.every((unique_24, index) => check_42(unique_24))) ||
+                value.questions.every((unique_28, index) => check_47(unique_28))) ||
               (value.questions === null &&
                 (!Array.isArray(value.questions) ||
-                  value.questions.every((unique_29, index) => check_42(unique_29))))) &&
+                  value.questions.every((unique_33, index) => check_47(unique_33))))) &&
             typeof value.text == "string" &&
             typeof value.type == "string" &&
             value.type === "agentMessage",
@@ -3172,7 +3298,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_43(value.output) &&
+            check_48(value.output) &&
             typeof value.type == "string" &&
             value.type === "functionCallOutput",
           typeof value == "object" &&
@@ -3193,12 +3319,12 @@ var isCodexDynamicToolCallParams = (() => {
             (value.content === void 0 ||
               !("content" in value) ||
               (Array.isArray(value.content) &&
-                value.content.every((unique_32, index) => typeof unique_32 == "string"))) &&
+                value.content.every((unique_36, index) => typeof unique_36 == "string"))) &&
             typeof value.id == "string" &&
             (value.summary === void 0 ||
               !("summary" in value) ||
               (Array.isArray(value.summary) &&
-                value.summary.every((unique_33, index) => typeof unique_33 == "string"))) &&
+                value.summary.every((unique_37, index) => typeof unique_37 == "string"))) &&
             typeof value.type == "string" &&
             value.type === "reasoning",
           typeof value == "object" &&
@@ -3216,7 +3342,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.aggregatedOutput === null) &&
             typeof value.command == "string" &&
             Array.isArray(value.commandActions) &&
-            value.commandActions.every((unique_34, index) => check_45(unique_34)) &&
+            value.commandActions.every((unique_38, index) => check_50(unique_38)) &&
             check_5(value.cwd) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
@@ -3239,8 +3365,8 @@ var isCodexDynamicToolCallParams = (() => {
               !("scriptPath" in value) ||
               typeof value.scriptPath == "string" ||
               value.scriptPath === null) &&
-            (value.source === void 0 || !("source" in value) || check_46(value.source)) &&
-            check_47(value.status) &&
+            (value.source === void 0 || !("source" in value) || check_51(value.source)) &&
+            check_52(value.status) &&
             typeof value.type == "string" &&
             value.type === "commandExecution",
           typeof value == "object" &&
@@ -3251,9 +3377,9 @@ var isCodexDynamicToolCallParams = (() => {
             "status" in value &&
             "type" in value &&
             Array.isArray(value.changes) &&
-            value.changes.every((unique_36, index) => check_48(unique_36)) &&
+            value.changes.every((unique_40, index) => check_53(unique_40)) &&
             typeof value.id == "string" &&
-            check_50(value.status) &&
+            check_55(value.status) &&
             typeof value.type == "string" &&
             value.type === "fileChange",
           typeof value == "object" &&
@@ -3267,16 +3393,20 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.appContext === void 0 ||
               !("appContext" in value) ||
-              check_51(value.appContext) ||
+              check_56(value.appContext) ||
               value.appContext === null) &&
             !0 &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
-              check_52(value.error) ||
+              check_57(value.error) ||
               value.error === null) &&
             typeof value.id == "string" &&
             (value.mcpAppResourceUri === void 0 ||
@@ -3285,7 +3415,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.mcpAppResourceUri === null) &&
             (value.mcpAppUi === void 0 ||
               !("mcpAppUi" in value) ||
-              check_53(value.mcpAppUi) ||
+              check_58(value.mcpAppUi) ||
               value.mcpAppUi === null) &&
             (value.pluginId === void 0 ||
               !("pluginId" in value) ||
@@ -3297,10 +3427,10 @@ var isCodexDynamicToolCallParams = (() => {
               value.readOnlyHint === null) &&
             (value.result === void 0 ||
               !("result" in value) ||
-              check_55(value.result) ||
+              check_60(value.result) ||
               value.result === null) &&
             typeof value.server == "string" &&
-            check_56(value.status) &&
+            check_61(value.status) &&
             typeof value.tool == "string" &&
             typeof value.type == "string" &&
             value.type === "mcpToolCall",
@@ -3315,10 +3445,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.contentItems === void 0 ||
               !("contentItems" in value) ||
               (Array.isArray(value.contentItems) &&
-                value.contentItems.every((unique_39, index) => check_57(unique_39))) ||
+                value.contentItems.every((unique_43, index) => check_62(unique_43))) ||
               (value.contentItems === null &&
                 (!Array.isArray(value.contentItems) ||
-                  value.contentItems.every((unique_41, index) => check_57(unique_41))))) &&
+                  value.contentItems.every((unique_45, index) => check_62(unique_45))))) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -3328,7 +3458,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_58(value.status) &&
+            check_63(value.status) &&
             (value.success === void 0 ||
               !("success" in value) ||
               typeof value.success == "boolean" ||
@@ -3350,10 +3480,10 @@ var isCodexDynamicToolCallParams = (() => {
             value.agentsStates !== null &&
             !Array.isArray(value.agentsStates) &&
             Object.getOwnPropertyNames(value.agentsStates).every(
-              (unique_42, unique_43) => External[1].test(unique_42) || !1,
+              (unique_46, unique_47) => External[1].test(unique_46) || !1,
             ) &&
             Object.entries(value.agentsStates).every(
-              ([unique_44, unique_45], _) => !External[2].test(unique_44) || check_59(unique_45),
+              ([unique_48, unique_49], _) => !External[2].test(unique_48) || check_64(unique_49),
             ) &&
             typeof value.id == "string" &&
             (value.model === void 0 ||
@@ -3369,10 +3499,10 @@ var isCodexDynamicToolCallParams = (() => {
               check_7(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             Array.isArray(value.receiverThreadIds) &&
-            value.receiverThreadIds.every((unique_46, index) => typeof unique_46 == "string") &&
+            value.receiverThreadIds.every((unique_50, index) => typeof unique_50 == "string") &&
             typeof value.senderThreadId == "string" &&
-            check_61(value.status) &&
-            check_62(value.tool) &&
+            check_66(value.status) &&
+            check_67(value.tool) &&
             typeof value.type == "string" &&
             value.type === "collabAgentToolCall",
           typeof value == "object" &&
@@ -3386,7 +3516,7 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.agentPath == "string" &&
             typeof value.agentThreadId == "string" &&
             typeof value.id == "string" &&
-            check_63(value.kind) &&
+            check_68(value.kind) &&
             (value.model === void 0 ||
               !("model" in value) ||
               typeof value.model == "string" ||
@@ -3405,16 +3535,16 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.action === void 0 ||
               !("action" in value) ||
-              check_64(value.action) ||
+              check_69(value.action) ||
               value.action === null) &&
             typeof value.id == "string" &&
             typeof value.query == "string" &&
             (value.results === void 0 ||
               !("results" in value) ||
-              (Array.isArray(value.results) && value.results.every((unique_50, index) => !0)) ||
+              (Array.isArray(value.results) && value.results.every((unique_54, index) => !0)) ||
               (value.results === null &&
                 (!Array.isArray(value.results) ||
-                  value.results.every((unique_51, index) => !0)))) &&
+                  value.results.every((unique_55, index) => !0)))) &&
             typeof value.type == "string" &&
             value.type === "webSearch",
           typeof value == "object" &&
@@ -3448,7 +3578,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.failure === void 0 ||
               !("failure" in value) ||
-              check_65(value.failure) ||
+              check_70(value.failure) ||
               value.failure === null) &&
             (value.generationId === void 0 ||
               !("generationId" in value) ||
@@ -3458,7 +3588,7 @@ var isCodexDynamicToolCallParams = (() => {
             (value.inputImages === void 0 ||
               !("inputImages" in value) ||
               (Array.isArray(value.inputImages) &&
-                value.inputImages.every((unique_53, index) => check_66(unique_53)))) &&
+                value.inputImages.every((unique_57, index) => check_71(unique_57)))) &&
             (value.revisedPrompt === void 0 ||
               !("revisedPrompt" in value) ||
               typeof value.revisedPrompt == "string" ||
@@ -3677,49 +3807,142 @@ var isCodexDynamicToolCallParams = (() => {
           value.display === null) &&
         typeof value.moderated == "boolean",
       check_40 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "action" in value &&
-        typeof value.action == "string" &&
-        (value.blockType === void 0 ||
-          !("blockType" in value) ||
-          typeof value.blockType == "string" ||
-          value.blockType === null) &&
-        (value.checkTrustedContacts === void 0 ||
-          !("checkTrustedContacts" in value) ||
-          typeof value.checkTrustedContacts == "boolean" ||
-          value.checkTrustedContacts === null) &&
-        (value.cyberTrustedAccess === void 0 ||
-          !("cyberTrustedAccess" in value) ||
-          typeof value.cyberTrustedAccess == "boolean" ||
-          value.cyberTrustedAccess === null),
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "trustedContacts" in value &&
+            "version" in value &&
+            (value.annotation === void 0 ||
+              !("annotation" in value) ||
+              check_41(value.annotation) ||
+              value.annotation === null) &&
+            typeof value.mode == "string" &&
+            value.mode === "show" &&
+            check_43(value.trustedContacts) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "replacement" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "hide" &&
+            check_44(value.replacement) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "reason" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "block" &&
+            check_45(value.reason) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
+        ].reduce((result, unique_23, _) => (unique_23 === !0 ? result + 1 : result), 0) === 1,
       check_41 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "subject" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingHelpline" &&
+            check_42(value.subject),
+        ].reduce((result, unique_24, _) => (unique_24 === !0 ? result + 1 : result), 0) === 1,
+      check_42 = (value) => typeof value == "string" && (value === "answer" || value === "prompt"),
+      check_43 = (value) => typeof value == "string" && (value === "check" || value === "skip"),
+      check_44 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingPromptHelpline",
+        ].reduce((result, unique_25, _) => (unique_25 === !0 ? result + 1 : result), 0) === 1,
+      check_45 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "protectionType" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "protection" &&
+            typeof value.protectionType == "string",
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "cyber" &&
+            (value.trustedAccess === void 0 ||
+              !("trustedAccess" in value) ||
+              typeof value.trustedAccess == "boolean" ||
+              value.trustedAccess === null),
+        ].reduce((result, unique_26, _) => (unique_26 === !0 ? result + 1 : result), 0) === 1,
+      check_46 = (value) =>
         [
           typeof value == "string" && value === "commentary",
           typeof value == "string" && value === "partial_answer",
           typeof value == "string" && value === "final_answer",
-        ].reduce((result, unique_23, _) => (unique_23 === !0 ? result + 1 : result), 0) === 1,
-      check_42 = (value) =>
+        ].reduce((result, unique_27, _) => (unique_27 === !0 ? result + 1 : result), 0) === 1,
+      check_47 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "title" in value &&
         Object.getOwnPropertyNames(value).every(
-          (unique_25, unique_26) => External[0].test(unique_25) || !1,
+          (unique_29, unique_30) => External[0].test(unique_29) || !1,
         ) &&
         (value.options === void 0 ||
           !("options" in value) ||
           (Array.isArray(value.options) &&
-            value.options.every((unique_27, index) => typeof unique_27 == "string")) ||
+            value.options.every((unique_31, index) => typeof unique_31 == "string")) ||
           (value.options === null &&
             (!Array.isArray(value.options) ||
-              value.options.every((unique_28, index) => typeof unique_28 == "string")))) &&
+              value.options.every((unique_32, index) => typeof unique_32 == "string")))) &&
         typeof value.title == "string",
-      check_43 = (value) =>
-        (Array.isArray(value) && value.every((unique_30, index) => check_44(unique_30))) ||
+      check_48 = (value) =>
+        (Array.isArray(value) && value.every((unique_34, index) => check_49(unique_34))) ||
         typeof value == "string",
-      check_44 = (value) =>
+      check_49 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -3773,8 +3996,8 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.encrypted_content == "string" &&
             typeof value.type == "string" &&
             value.type === "encrypted_content",
-        ].reduce((result, unique_31, _) => (unique_31 === !0 ? result + 1 : result), 0) === 1,
-      check_45 = (value) =>
+        ].reduce((result, unique_35, _) => (unique_35 === !0 ? result + 1 : result), 0) === 1,
+      check_50 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -3824,20 +4047,20 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.command == "string" &&
             typeof value.type == "string" &&
             value.type === "unknown",
-        ].reduce((result, unique_35, _) => (unique_35 === !0 ? result + 1 : result), 0) === 1,
-      check_46 = (value) =>
+        ].reduce((result, unique_39, _) => (unique_39 === !0 ? result + 1 : result), 0) === 1,
+      check_51 = (value) =>
         typeof value == "string" &&
         (value === "agent" ||
           value === "userShell" ||
           value === "unifiedExecStartup" ||
           value === "unifiedExecInteraction"),
-      check_47 = (value) =>
+      check_52 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_48 = (value) =>
+      check_53 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -3845,9 +4068,9 @@ var isCodexDynamicToolCallParams = (() => {
         "kind" in value &&
         "path" in value &&
         typeof value.diff == "string" &&
-        check_49(value.kind) &&
+        check_54(value.kind) &&
         typeof value.path == "string",
-      check_49 = (value) =>
+      check_54 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -3871,14 +4094,14 @@ var isCodexDynamicToolCallParams = (() => {
               value.move_path === null) &&
             typeof value.type == "string" &&
             value.type === "update",
-        ].reduce((result, unique_37, _) => (unique_37 === !0 ? result + 1 : result), 0) === 1,
-      check_50 = (value) =>
+        ].reduce((result, unique_41, _) => (unique_41 === !0 ? result + 1 : result), 0) === 1,
+      check_55 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_51 = (value) =>
+      check_56 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -3900,35 +4123,35 @@ var isCodexDynamicToolCallParams = (() => {
           !("resourceUri" in value) ||
           typeof value.resourceUri == "string" ||
           value.resourceUri === null),
-      check_52 = (value) =>
+      check_57 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "message" in value &&
         typeof value.message == "string",
-      check_53 = (value) =>
+      check_58 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "preferredModelDisplayMode" in value &&
         "resourceUri" in value &&
-        check_54(value.preferredModelDisplayMode) &&
+        check_59(value.preferredModelDisplayMode) &&
         typeof value.resourceUri == "string",
-      check_54 = (value) =>
+      check_59 = (value) =>
         typeof value == "string" && (value === "inline" || value === "fullscreen"),
-      check_55 = (value) =>
+      check_60 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "content" in value &&
         (value._meta === void 0 || !("_meta" in value) || !0) &&
         Array.isArray(value.content) &&
-        value.content.every((unique_38, index) => !0) &&
+        value.content.every((unique_42, index) => !0) &&
         (value.structuredContent === void 0 || !("structuredContent" in value) || !0),
-      check_56 = (value) =>
+      check_61 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_57 = (value) =>
+      check_62 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -3954,11 +4177,11 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.audioUrl == "string" &&
             typeof value.type == "string" &&
             value.type === "inputAudio",
-        ].reduce((result, unique_40, _) => (unique_40 === !0 ? result + 1 : result), 0) === 1,
-      check_58 = (value) =>
+        ].reduce((result, unique_44, _) => (unique_44 === !0 ? result + 1 : result), 0) === 1,
+      check_63 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_59 = (value) =>
+      check_64 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -3967,8 +4190,8 @@ var isCodexDynamicToolCallParams = (() => {
           !("message" in value) ||
           typeof value.message == "string" ||
           value.message === null) &&
-        check_60(value.status),
-      check_60 = (value) =>
+        check_65(value.status),
+      check_65 = (value) =>
         typeof value == "string" &&
         (value === "pendingInit" ||
           value === "running" ||
@@ -3977,13 +4200,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "errored" ||
           value === "shutdown" ||
           value === "notFound"),
-      check_61 = (value) =>
+      check_66 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "interrupted"),
-      check_62 = (value) =>
+      check_67 = (value) =>
         typeof value == "string" &&
         (value === "spawnAgent" ||
           value === "sendInput" ||
@@ -3994,13 +4217,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "followupTask" ||
           value === "interruptAgent" ||
           value === "listAgents"),
-      check_63 = (value) =>
+      check_68 = (value) =>
         typeof value == "string" &&
         (value === "started" ||
           value === "interacted" ||
           value === "interrupted" ||
           value === "completed"),
-      check_64 = (value) =>
+      check_69 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -4009,10 +4232,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.queries === void 0 ||
               !("queries" in value) ||
               (Array.isArray(value.queries) &&
-                value.queries.every((unique_48, index) => typeof unique_48 == "string")) ||
+                value.queries.every((unique_52, index) => typeof unique_52 == "string")) ||
               (value.queries === null &&
                 (!Array.isArray(value.queries) ||
-                  value.queries.every((unique_49, index) => typeof unique_49 == "string")))) &&
+                  value.queries.every((unique_53, index) => typeof unique_53 == "string")))) &&
             (value.query === void 0 ||
               !("query" in value) ||
               typeof value.query == "string" ||
@@ -4049,8 +4272,8 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.type == "string" &&
             value.type === "other",
-        ].reduce((result, unique_47, _) => (unique_47 === !0 ? result + 1 : result), 0) === 1,
-      check_65 = (value) =>
+        ].reduce((result, unique_51, _) => (unique_51 === !0 ? result + 1 : result), 0) === 1,
+      check_70 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -4064,8 +4287,8 @@ var isCodexDynamicToolCallParams = (() => {
               (value.resetsAt === null && (typeof value.resetsAt != "string" || !0))) &&
             typeof value.type == "string" &&
             value.type === "usageLimitExceeded",
-        ].reduce((result, unique_52, _) => (unique_52 === !0 ? result + 1 : result), 0) === 1,
-      check_66 = (value) =>
+        ].reduce((result, unique_56, _) => (unique_56 === !0 ? result + 1 : result), 0) === 1,
+      check_71 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -4073,13 +4296,13 @@ var isCodexDynamicToolCallParams = (() => {
         "sha256" in value &&
         check_4(value.path) &&
         typeof value.sha256 == "string",
-      check_67 = (value) =>
+      check_72 = (value) =>
         [
           typeof value == "string" && value === "notLoaded",
           typeof value == "string" && value === "summary",
           typeof value == "string" && value === "full",
-        ].reduce((result, unique_54, _) => (unique_54 === !0 ? result + 1 : result), 0) === 1,
-      check_68 = (value) =>
+        ].reduce((result, unique_58, _) => (unique_58 === !0 ? result + 1 : result), 0) === 1,
+      check_73 = (value) =>
         typeof value == "string" &&
         (value === "completed" ||
           value === "interrupted" ||
@@ -4119,7 +4342,7 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.id == "string" &&
         Array.isArray(value.items) &&
         value.items.every((unique_0, index) => check_7(unique_0)) &&
-        (value.itemsView === void 0 || !("itemsView" in value) || check_47(value.itemsView)) &&
+        (value.itemsView === void 0 || !("itemsView" in value) || check_52(value.itemsView)) &&
         (value.rootTurnId === void 0 ||
           !("rootTurnId" in value) ||
           typeof value.rootTurnId == "string" ||
@@ -4128,7 +4351,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("startedAt" in value) ||
           (Number.isInteger(value.startedAt) && (typeof value.startedAt != "string" || !0)) ||
           (value.startedAt === null && (typeof value.startedAt != "string" || !0))) &&
-        check_48(value.status),
+        check_53(value.status),
       check_2 = (value) =>
         typeof value == "object" &&
         value !== null &&
@@ -4394,12 +4617,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -4499,15 +4726,15 @@ var isCodexDynamicToolCallParams = (() => {
               value.moderation === null) &&
             (value.phase === void 0 ||
               !("phase" in value) ||
-              check_18(value.phase) ||
+              check_23(value.phase) ||
               value.phase === null) &&
             (value.questions === void 0 ||
               !("questions" in value) ||
               (Array.isArray(value.questions) &&
-                value.questions.every((unique_9, index) => check_19(unique_9))) ||
+                value.questions.every((unique_13, index) => check_24(unique_13))) ||
               (value.questions === null &&
                 (!Array.isArray(value.questions) ||
-                  value.questions.every((unique_14, index) => check_19(unique_14))))) &&
+                  value.questions.every((unique_18, index) => check_24(unique_18))))) &&
             typeof value.text == "string" &&
             typeof value.type == "string" &&
             value.type === "agentMessage",
@@ -4524,7 +4751,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_20(value.output) &&
+            check_25(value.output) &&
             typeof value.type == "string" &&
             value.type === "functionCallOutput",
           typeof value == "object" &&
@@ -4545,12 +4772,12 @@ var isCodexDynamicToolCallParams = (() => {
             (value.content === void 0 ||
               !("content" in value) ||
               (Array.isArray(value.content) &&
-                value.content.every((unique_17, index) => typeof unique_17 == "string"))) &&
+                value.content.every((unique_21, index) => typeof unique_21 == "string"))) &&
             typeof value.id == "string" &&
             (value.summary === void 0 ||
               !("summary" in value) ||
               (Array.isArray(value.summary) &&
-                value.summary.every((unique_18, index) => typeof unique_18 == "string"))) &&
+                value.summary.every((unique_22, index) => typeof unique_22 == "string"))) &&
             typeof value.type == "string" &&
             value.type === "reasoning",
           typeof value == "object" &&
@@ -4568,8 +4795,8 @@ var isCodexDynamicToolCallParams = (() => {
               value.aggregatedOutput === null) &&
             typeof value.command == "string" &&
             Array.isArray(value.commandActions) &&
-            value.commandActions.every((unique_19, index) => check_22(unique_19)) &&
-            check_23(value.cwd) &&
+            value.commandActions.every((unique_23, index) => check_27(unique_23)) &&
+            check_28(value.cwd) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -4591,8 +4818,8 @@ var isCodexDynamicToolCallParams = (() => {
               !("scriptPath" in value) ||
               typeof value.scriptPath == "string" ||
               value.scriptPath === null) &&
-            (value.source === void 0 || !("source" in value) || check_24(value.source)) &&
-            check_25(value.status) &&
+            (value.source === void 0 || !("source" in value) || check_29(value.source)) &&
+            check_30(value.status) &&
             typeof value.type == "string" &&
             value.type === "commandExecution",
           typeof value == "object" &&
@@ -4603,9 +4830,9 @@ var isCodexDynamicToolCallParams = (() => {
             "status" in value &&
             "type" in value &&
             Array.isArray(value.changes) &&
-            value.changes.every((unique_21, index) => check_26(unique_21)) &&
+            value.changes.every((unique_25, index) => check_31(unique_25)) &&
             typeof value.id == "string" &&
-            check_28(value.status) &&
+            check_33(value.status) &&
             typeof value.type == "string" &&
             value.type === "fileChange",
           typeof value == "object" &&
@@ -4619,16 +4846,20 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.appContext === void 0 ||
               !("appContext" in value) ||
-              check_29(value.appContext) ||
+              check_34(value.appContext) ||
               value.appContext === null) &&
             !0 &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
-              check_30(value.error) ||
+              check_35(value.error) ||
               value.error === null) &&
             typeof value.id == "string" &&
             (value.mcpAppResourceUri === void 0 ||
@@ -4637,7 +4868,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.mcpAppResourceUri === null) &&
             (value.mcpAppUi === void 0 ||
               !("mcpAppUi" in value) ||
-              check_31(value.mcpAppUi) ||
+              check_36(value.mcpAppUi) ||
               value.mcpAppUi === null) &&
             (value.pluginId === void 0 ||
               !("pluginId" in value) ||
@@ -4649,10 +4880,10 @@ var isCodexDynamicToolCallParams = (() => {
               value.readOnlyHint === null) &&
             (value.result === void 0 ||
               !("result" in value) ||
-              check_33(value.result) ||
+              check_38(value.result) ||
               value.result === null) &&
             typeof value.server == "string" &&
-            check_34(value.status) &&
+            check_39(value.status) &&
             typeof value.tool == "string" &&
             typeof value.type == "string" &&
             value.type === "mcpToolCall",
@@ -4667,10 +4898,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.contentItems === void 0 ||
               !("contentItems" in value) ||
               (Array.isArray(value.contentItems) &&
-                value.contentItems.every((unique_24, index) => check_35(unique_24))) ||
+                value.contentItems.every((unique_28, index) => check_40(unique_28))) ||
               (value.contentItems === null &&
                 (!Array.isArray(value.contentItems) ||
-                  value.contentItems.every((unique_26, index) => check_35(unique_26))))) &&
+                  value.contentItems.every((unique_30, index) => check_40(unique_30))))) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -4680,7 +4911,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_36(value.status) &&
+            check_41(value.status) &&
             (value.success === void 0 ||
               !("success" in value) ||
               typeof value.success == "boolean" ||
@@ -4702,10 +4933,10 @@ var isCodexDynamicToolCallParams = (() => {
             value.agentsStates !== null &&
             !Array.isArray(value.agentsStates) &&
             Object.getOwnPropertyNames(value.agentsStates).every(
-              (unique_27, unique_28) => External[1].test(unique_27) || !1,
+              (unique_31, unique_32) => External[1].test(unique_31) || !1,
             ) &&
             Object.entries(value.agentsStates).every(
-              ([unique_29, unique_30], _) => !External[2].test(unique_29) || check_37(unique_30),
+              ([unique_33, unique_34], _) => !External[2].test(unique_33) || check_42(unique_34),
             ) &&
             typeof value.id == "string" &&
             (value.model === void 0 ||
@@ -4718,13 +4949,13 @@ var isCodexDynamicToolCallParams = (() => {
               value.prompt === null) &&
             (value.reasoningEffort === void 0 ||
               !("reasoningEffort" in value) ||
-              check_39(value.reasoningEffort) ||
+              check_44(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             Array.isArray(value.receiverThreadIds) &&
-            value.receiverThreadIds.every((unique_31, index) => typeof unique_31 == "string") &&
+            value.receiverThreadIds.every((unique_35, index) => typeof unique_35 == "string") &&
             typeof value.senderThreadId == "string" &&
-            check_40(value.status) &&
-            check_41(value.tool) &&
+            check_45(value.status) &&
+            check_46(value.tool) &&
             typeof value.type == "string" &&
             value.type === "collabAgentToolCall",
           typeof value == "object" &&
@@ -4738,14 +4969,14 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.agentPath == "string" &&
             typeof value.agentThreadId == "string" &&
             typeof value.id == "string" &&
-            check_42(value.kind) &&
+            check_47(value.kind) &&
             (value.model === void 0 ||
               !("model" in value) ||
               typeof value.model == "string" ||
               value.model === null) &&
             (value.reasoningEffort === void 0 ||
               !("reasoningEffort" in value) ||
-              check_39(value.reasoningEffort) ||
+              check_44(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             typeof value.type == "string" &&
             value.type === "subAgentActivity",
@@ -4757,16 +4988,16 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.action === void 0 ||
               !("action" in value) ||
-              check_43(value.action) ||
+              check_48(value.action) ||
               value.action === null) &&
             typeof value.id == "string" &&
             typeof value.query == "string" &&
             (value.results === void 0 ||
               !("results" in value) ||
-              (Array.isArray(value.results) && value.results.every((unique_35, index) => !0)) ||
+              (Array.isArray(value.results) && value.results.every((unique_39, index) => !0)) ||
               (value.results === null &&
                 (!Array.isArray(value.results) ||
-                  value.results.every((unique_36, index) => !0)))) &&
+                  value.results.every((unique_40, index) => !0)))) &&
             typeof value.type == "string" &&
             value.type === "webSearch",
           typeof value == "object" &&
@@ -4776,7 +5007,7 @@ var isCodexDynamicToolCallParams = (() => {
             "path" in value &&
             "type" in value &&
             typeof value.id == "string" &&
-            check_23(value.path) &&
+            check_28(value.path) &&
             typeof value.type == "string" &&
             value.type === "imageView",
           typeof value == "object" &&
@@ -4800,7 +5031,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.failure === void 0 ||
               !("failure" in value) ||
-              check_44(value.failure) ||
+              check_49(value.failure) ||
               value.failure === null) &&
             (value.generationId === void 0 ||
               !("generationId" in value) ||
@@ -4810,14 +5041,14 @@ var isCodexDynamicToolCallParams = (() => {
             (value.inputImages === void 0 ||
               !("inputImages" in value) ||
               (Array.isArray(value.inputImages) &&
-                value.inputImages.every((unique_38, index) => check_45(unique_38)))) &&
+                value.inputImages.every((unique_42, index) => check_50(unique_42)))) &&
             (value.revisedPrompt === void 0 ||
               !("revisedPrompt" in value) ||
               typeof value.revisedPrompt == "string" ||
               value.revisedPrompt === null) &&
             (value.savedPath === void 0 ||
               !("savedPath" in value) ||
-              check_46(value.savedPath) ||
+              check_51(value.savedPath) ||
               value.savedPath === null) &&
             typeof value.status == "string" &&
             (value.transparentBackground === void 0 ||
@@ -5029,49 +5260,142 @@ var isCodexDynamicToolCallParams = (() => {
           value.display === null) &&
         typeof value.moderated == "boolean",
       check_17 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "action" in value &&
-        typeof value.action == "string" &&
-        (value.blockType === void 0 ||
-          !("blockType" in value) ||
-          typeof value.blockType == "string" ||
-          value.blockType === null) &&
-        (value.checkTrustedContacts === void 0 ||
-          !("checkTrustedContacts" in value) ||
-          typeof value.checkTrustedContacts == "boolean" ||
-          value.checkTrustedContacts === null) &&
-        (value.cyberTrustedAccess === void 0 ||
-          !("cyberTrustedAccess" in value) ||
-          typeof value.cyberTrustedAccess == "boolean" ||
-          value.cyberTrustedAccess === null),
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "trustedContacts" in value &&
+            "version" in value &&
+            (value.annotation === void 0 ||
+              !("annotation" in value) ||
+              check_18(value.annotation) ||
+              value.annotation === null) &&
+            typeof value.mode == "string" &&
+            value.mode === "show" &&
+            check_20(value.trustedContacts) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "replacement" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "hide" &&
+            check_21(value.replacement) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "reason" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "block" &&
+            check_22(value.reason) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
+        ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
       check_18 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "subject" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingHelpline" &&
+            check_19(value.subject),
+        ].reduce((result, unique_9, _) => (unique_9 === !0 ? result + 1 : result), 0) === 1,
+      check_19 = (value) => typeof value == "string" && (value === "answer" || value === "prompt"),
+      check_20 = (value) => typeof value == "string" && (value === "check" || value === "skip"),
+      check_21 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingPromptHelpline",
+        ].reduce((result, unique_10, _) => (unique_10 === !0 ? result + 1 : result), 0) === 1,
+      check_22 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "protectionType" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "protection" &&
+            typeof value.protectionType == "string",
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "cyber" &&
+            (value.trustedAccess === void 0 ||
+              !("trustedAccess" in value) ||
+              typeof value.trustedAccess == "boolean" ||
+              value.trustedAccess === null),
+        ].reduce((result, unique_11, _) => (unique_11 === !0 ? result + 1 : result), 0) === 1,
+      check_23 = (value) =>
         [
           typeof value == "string" && value === "commentary",
           typeof value == "string" && value === "partial_answer",
           typeof value == "string" && value === "final_answer",
-        ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
-      check_19 = (value) =>
+        ].reduce((result, unique_12, _) => (unique_12 === !0 ? result + 1 : result), 0) === 1,
+      check_24 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "title" in value &&
         Object.getOwnPropertyNames(value).every(
-          (unique_10, unique_11) => External[0].test(unique_10) || !1,
+          (unique_14, unique_15) => External[0].test(unique_14) || !1,
         ) &&
         (value.options === void 0 ||
           !("options" in value) ||
           (Array.isArray(value.options) &&
-            value.options.every((unique_12, index) => typeof unique_12 == "string")) ||
+            value.options.every((unique_16, index) => typeof unique_16 == "string")) ||
           (value.options === null &&
             (!Array.isArray(value.options) ||
-              value.options.every((unique_13, index) => typeof unique_13 == "string")))) &&
+              value.options.every((unique_17, index) => typeof unique_17 == "string")))) &&
         typeof value.title == "string",
-      check_20 = (value) =>
-        (Array.isArray(value) && value.every((unique_15, index) => check_21(unique_15))) ||
+      check_25 = (value) =>
+        (Array.isArray(value) && value.every((unique_19, index) => check_26(unique_19))) ||
         typeof value == "string",
-      check_21 = (value) =>
+      check_26 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5125,8 +5449,8 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.encrypted_content == "string" &&
             typeof value.type == "string" &&
             value.type === "encrypted_content",
-        ].reduce((result, unique_16, _) => (unique_16 === !0 ? result + 1 : result), 0) === 1,
-      check_22 = (value) =>
+        ].reduce((result, unique_20, _) => (unique_20 === !0 ? result + 1 : result), 0) === 1,
+      check_27 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5137,7 +5461,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.command == "string" &&
             typeof value.name == "string" &&
-            check_23(value.path) &&
+            check_28(value.path) &&
             typeof value.type == "string" &&
             value.type === "read",
           typeof value == "object" &&
@@ -5176,21 +5500,21 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.command == "string" &&
             typeof value.type == "string" &&
             value.type === "unknown",
-        ].reduce((result, unique_20, _) => (unique_20 === !0 ? result + 1 : result), 0) === 1,
-      check_23 = (value) => typeof value == "string",
-      check_24 = (value) =>
+        ].reduce((result, unique_24, _) => (unique_24 === !0 ? result + 1 : result), 0) === 1,
+      check_28 = (value) => typeof value == "string",
+      check_29 = (value) =>
         typeof value == "string" &&
         (value === "agent" ||
           value === "userShell" ||
           value === "unifiedExecStartup" ||
           value === "unifiedExecInteraction"),
-      check_25 = (value) =>
+      check_30 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_26 = (value) =>
+      check_31 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -5198,9 +5522,9 @@ var isCodexDynamicToolCallParams = (() => {
         "kind" in value &&
         "path" in value &&
         typeof value.diff == "string" &&
-        check_27(value.kind) &&
+        check_32(value.kind) &&
         typeof value.path == "string",
-      check_27 = (value) =>
+      check_32 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5224,14 +5548,14 @@ var isCodexDynamicToolCallParams = (() => {
               value.move_path === null) &&
             typeof value.type == "string" &&
             value.type === "update",
-        ].reduce((result, unique_22, _) => (unique_22 === !0 ? result + 1 : result), 0) === 1,
-      check_28 = (value) =>
+        ].reduce((result, unique_26, _) => (unique_26 === !0 ? result + 1 : result), 0) === 1,
+      check_33 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_29 = (value) =>
+      check_34 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -5253,35 +5577,35 @@ var isCodexDynamicToolCallParams = (() => {
           !("resourceUri" in value) ||
           typeof value.resourceUri == "string" ||
           value.resourceUri === null),
-      check_30 = (value) =>
+      check_35 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "message" in value &&
         typeof value.message == "string",
-      check_31 = (value) =>
+      check_36 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "preferredModelDisplayMode" in value &&
         "resourceUri" in value &&
-        check_32(value.preferredModelDisplayMode) &&
+        check_37(value.preferredModelDisplayMode) &&
         typeof value.resourceUri == "string",
-      check_32 = (value) =>
+      check_37 = (value) =>
         typeof value == "string" && (value === "inline" || value === "fullscreen"),
-      check_33 = (value) =>
+      check_38 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "content" in value &&
         (value._meta === void 0 || !("_meta" in value) || !0) &&
         Array.isArray(value.content) &&
-        value.content.every((unique_23, index) => !0) &&
+        value.content.every((unique_27, index) => !0) &&
         (value.structuredContent === void 0 || !("structuredContent" in value) || !0),
-      check_34 = (value) =>
+      check_39 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_35 = (value) =>
+      check_40 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5307,11 +5631,11 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.audioUrl == "string" &&
             typeof value.type == "string" &&
             value.type === "inputAudio",
-        ].reduce((result, unique_25, _) => (unique_25 === !0 ? result + 1 : result), 0) === 1,
-      check_36 = (value) =>
+        ].reduce((result, unique_29, _) => (unique_29 === !0 ? result + 1 : result), 0) === 1,
+      check_41 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_37 = (value) =>
+      check_42 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -5320,8 +5644,8 @@ var isCodexDynamicToolCallParams = (() => {
           !("message" in value) ||
           typeof value.message == "string" ||
           value.message === null) &&
-        check_38(value.status),
-      check_38 = (value) =>
+        check_43(value.status),
+      check_43 = (value) =>
         typeof value == "string" &&
         (value === "pendingInit" ||
           value === "running" ||
@@ -5330,16 +5654,16 @@ var isCodexDynamicToolCallParams = (() => {
           value === "errored" ||
           value === "shutdown" ||
           value === "notFound"),
-      check_39 = (value) =>
+      check_44 = (value) =>
         typeof value == "string" &&
         (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
-      check_40 = (value) =>
+      check_45 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "interrupted"),
-      check_41 = (value) =>
+      check_46 = (value) =>
         typeof value == "string" &&
         (value === "spawnAgent" ||
           value === "sendInput" ||
@@ -5350,13 +5674,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "followupTask" ||
           value === "interruptAgent" ||
           value === "listAgents"),
-      check_42 = (value) =>
+      check_47 = (value) =>
         typeof value == "string" &&
         (value === "started" ||
           value === "interacted" ||
           value === "interrupted" ||
           value === "completed"),
-      check_43 = (value) =>
+      check_48 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5365,10 +5689,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.queries === void 0 ||
               !("queries" in value) ||
               (Array.isArray(value.queries) &&
-                value.queries.every((unique_33, index) => typeof unique_33 == "string")) ||
+                value.queries.every((unique_37, index) => typeof unique_37 == "string")) ||
               (value.queries === null &&
                 (!Array.isArray(value.queries) ||
-                  value.queries.every((unique_34, index) => typeof unique_34 == "string")))) &&
+                  value.queries.every((unique_38, index) => typeof unique_38 == "string")))) &&
             (value.query === void 0 ||
               !("query" in value) ||
               typeof value.query == "string" ||
@@ -5405,8 +5729,8 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.type == "string" &&
             value.type === "other",
-        ].reduce((result, unique_32, _) => (unique_32 === !0 ? result + 1 : result), 0) === 1,
-      check_44 = (value) =>
+        ].reduce((result, unique_36, _) => (unique_36 === !0 ? result + 1 : result), 0) === 1,
+      check_49 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -5420,23 +5744,23 @@ var isCodexDynamicToolCallParams = (() => {
               (value.resetsAt === null && (typeof value.resetsAt != "string" || !0))) &&
             typeof value.type == "string" &&
             value.type === "usageLimitExceeded",
-        ].reduce((result, unique_37, _) => (unique_37 === !0 ? result + 1 : result), 0) === 1,
-      check_45 = (value) =>
+        ].reduce((result, unique_41, _) => (unique_41 === !0 ? result + 1 : result), 0) === 1,
+      check_50 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "path" in value &&
         "sha256" in value &&
-        check_46(value.path) &&
+        check_51(value.path) &&
         typeof value.sha256 == "string",
-      check_46 = (value) => typeof value == "string",
-      check_47 = (value) =>
+      check_51 = (value) => typeof value == "string",
+      check_52 = (value) =>
         [
           typeof value == "string" && value === "notLoaded",
           typeof value == "string" && value === "summary",
           typeof value == "string" && value === "full",
-        ].reduce((result, unique_39, _) => (unique_39 === !0 ? result + 1 : result), 0) === 1,
-      check_48 = (value) =>
+        ].reduce((result, unique_43, _) => (unique_43 === !0 ? result + 1 : result), 0) === 1,
+      check_53 = (value) =>
         typeof value == "string" &&
         (value === "completed" ||
           value === "interrupted" ||
@@ -5474,7 +5798,7 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.id == "string" &&
         Array.isArray(value.items) &&
         value.items.every((unique_0, index) => check_7(unique_0)) &&
-        (value.itemsView === void 0 || !("itemsView" in value) || check_47(value.itemsView)) &&
+        (value.itemsView === void 0 || !("itemsView" in value) || check_52(value.itemsView)) &&
         (value.rootTurnId === void 0 ||
           !("rootTurnId" in value) ||
           typeof value.rootTurnId == "string" ||
@@ -5483,7 +5807,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("startedAt" in value) ||
           (Number.isInteger(value.startedAt) && (typeof value.startedAt != "string" || !0)) ||
           (value.startedAt === null && (typeof value.startedAt != "string" || !0))) &&
-        check_48(value.status),
+        check_53(value.status),
       check_2 = (value) =>
         typeof value == "object" &&
         value !== null &&
@@ -5749,12 +6073,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -5854,15 +6182,15 @@ var isCodexDynamicToolCallParams = (() => {
               value.moderation === null) &&
             (value.phase === void 0 ||
               !("phase" in value) ||
-              check_18(value.phase) ||
+              check_23(value.phase) ||
               value.phase === null) &&
             (value.questions === void 0 ||
               !("questions" in value) ||
               (Array.isArray(value.questions) &&
-                value.questions.every((unique_9, index) => check_19(unique_9))) ||
+                value.questions.every((unique_13, index) => check_24(unique_13))) ||
               (value.questions === null &&
                 (!Array.isArray(value.questions) ||
-                  value.questions.every((unique_14, index) => check_19(unique_14))))) &&
+                  value.questions.every((unique_18, index) => check_24(unique_18))))) &&
             typeof value.text == "string" &&
             typeof value.type == "string" &&
             value.type === "agentMessage",
@@ -5879,7 +6207,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_20(value.output) &&
+            check_25(value.output) &&
             typeof value.type == "string" &&
             value.type === "functionCallOutput",
           typeof value == "object" &&
@@ -5900,12 +6228,12 @@ var isCodexDynamicToolCallParams = (() => {
             (value.content === void 0 ||
               !("content" in value) ||
               (Array.isArray(value.content) &&
-                value.content.every((unique_17, index) => typeof unique_17 == "string"))) &&
+                value.content.every((unique_21, index) => typeof unique_21 == "string"))) &&
             typeof value.id == "string" &&
             (value.summary === void 0 ||
               !("summary" in value) ||
               (Array.isArray(value.summary) &&
-                value.summary.every((unique_18, index) => typeof unique_18 == "string"))) &&
+                value.summary.every((unique_22, index) => typeof unique_22 == "string"))) &&
             typeof value.type == "string" &&
             value.type === "reasoning",
           typeof value == "object" &&
@@ -5923,8 +6251,8 @@ var isCodexDynamicToolCallParams = (() => {
               value.aggregatedOutput === null) &&
             typeof value.command == "string" &&
             Array.isArray(value.commandActions) &&
-            value.commandActions.every((unique_19, index) => check_22(unique_19)) &&
-            check_23(value.cwd) &&
+            value.commandActions.every((unique_23, index) => check_27(unique_23)) &&
+            check_28(value.cwd) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -5946,8 +6274,8 @@ var isCodexDynamicToolCallParams = (() => {
               !("scriptPath" in value) ||
               typeof value.scriptPath == "string" ||
               value.scriptPath === null) &&
-            (value.source === void 0 || !("source" in value) || check_24(value.source)) &&
-            check_25(value.status) &&
+            (value.source === void 0 || !("source" in value) || check_29(value.source)) &&
+            check_30(value.status) &&
             typeof value.type == "string" &&
             value.type === "commandExecution",
           typeof value == "object" &&
@@ -5958,9 +6286,9 @@ var isCodexDynamicToolCallParams = (() => {
             "status" in value &&
             "type" in value &&
             Array.isArray(value.changes) &&
-            value.changes.every((unique_21, index) => check_26(unique_21)) &&
+            value.changes.every((unique_25, index) => check_31(unique_25)) &&
             typeof value.id == "string" &&
-            check_28(value.status) &&
+            check_33(value.status) &&
             typeof value.type == "string" &&
             value.type === "fileChange",
           typeof value == "object" &&
@@ -5974,16 +6302,20 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.appContext === void 0 ||
               !("appContext" in value) ||
-              check_29(value.appContext) ||
+              check_34(value.appContext) ||
               value.appContext === null) &&
             !0 &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
-              check_30(value.error) ||
+              check_35(value.error) ||
               value.error === null) &&
             typeof value.id == "string" &&
             (value.mcpAppResourceUri === void 0 ||
@@ -5992,7 +6324,7 @@ var isCodexDynamicToolCallParams = (() => {
               value.mcpAppResourceUri === null) &&
             (value.mcpAppUi === void 0 ||
               !("mcpAppUi" in value) ||
-              check_31(value.mcpAppUi) ||
+              check_36(value.mcpAppUi) ||
               value.mcpAppUi === null) &&
             (value.pluginId === void 0 ||
               !("pluginId" in value) ||
@@ -6004,10 +6336,10 @@ var isCodexDynamicToolCallParams = (() => {
               value.readOnlyHint === null) &&
             (value.result === void 0 ||
               !("result" in value) ||
-              check_33(value.result) ||
+              check_38(value.result) ||
               value.result === null) &&
             typeof value.server == "string" &&
-            check_34(value.status) &&
+            check_39(value.status) &&
             typeof value.tool == "string" &&
             typeof value.type == "string" &&
             value.type === "mcpToolCall",
@@ -6022,10 +6354,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.contentItems === void 0 ||
               !("contentItems" in value) ||
               (Array.isArray(value.contentItems) &&
-                value.contentItems.every((unique_24, index) => check_35(unique_24))) ||
+                value.contentItems.every((unique_28, index) => check_40(unique_28))) ||
               (value.contentItems === null &&
                 (!Array.isArray(value.contentItems) ||
-                  value.contentItems.every((unique_26, index) => check_35(unique_26))))) &&
+                  value.contentItems.every((unique_30, index) => check_40(unique_30))))) &&
             (value.durationMs === void 0 ||
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
@@ -6035,7 +6367,7 @@ var isCodexDynamicToolCallParams = (() => {
               !("namespace" in value) ||
               typeof value.namespace == "string" ||
               value.namespace === null) &&
-            check_36(value.status) &&
+            check_41(value.status) &&
             (value.success === void 0 ||
               !("success" in value) ||
               typeof value.success == "boolean" ||
@@ -6057,10 +6389,10 @@ var isCodexDynamicToolCallParams = (() => {
             value.agentsStates !== null &&
             !Array.isArray(value.agentsStates) &&
             Object.getOwnPropertyNames(value.agentsStates).every(
-              (unique_27, unique_28) => External[1].test(unique_27) || !1,
+              (unique_31, unique_32) => External[1].test(unique_31) || !1,
             ) &&
             Object.entries(value.agentsStates).every(
-              ([unique_29, unique_30], _) => !External[2].test(unique_29) || check_37(unique_30),
+              ([unique_33, unique_34], _) => !External[2].test(unique_33) || check_42(unique_34),
             ) &&
             typeof value.id == "string" &&
             (value.model === void 0 ||
@@ -6073,13 +6405,13 @@ var isCodexDynamicToolCallParams = (() => {
               value.prompt === null) &&
             (value.reasoningEffort === void 0 ||
               !("reasoningEffort" in value) ||
-              check_39(value.reasoningEffort) ||
+              check_44(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             Array.isArray(value.receiverThreadIds) &&
-            value.receiverThreadIds.every((unique_31, index) => typeof unique_31 == "string") &&
+            value.receiverThreadIds.every((unique_35, index) => typeof unique_35 == "string") &&
             typeof value.senderThreadId == "string" &&
-            check_40(value.status) &&
-            check_41(value.tool) &&
+            check_45(value.status) &&
+            check_46(value.tool) &&
             typeof value.type == "string" &&
             value.type === "collabAgentToolCall",
           typeof value == "object" &&
@@ -6093,14 +6425,14 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.agentPath == "string" &&
             typeof value.agentThreadId == "string" &&
             typeof value.id == "string" &&
-            check_42(value.kind) &&
+            check_47(value.kind) &&
             (value.model === void 0 ||
               !("model" in value) ||
               typeof value.model == "string" ||
               value.model === null) &&
             (value.reasoningEffort === void 0 ||
               !("reasoningEffort" in value) ||
-              check_39(value.reasoningEffort) ||
+              check_44(value.reasoningEffort) ||
               value.reasoningEffort === null) &&
             typeof value.type == "string" &&
             value.type === "subAgentActivity",
@@ -6112,16 +6444,16 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.action === void 0 ||
               !("action" in value) ||
-              check_43(value.action) ||
+              check_48(value.action) ||
               value.action === null) &&
             typeof value.id == "string" &&
             typeof value.query == "string" &&
             (value.results === void 0 ||
               !("results" in value) ||
-              (Array.isArray(value.results) && value.results.every((unique_35, index) => !0)) ||
+              (Array.isArray(value.results) && value.results.every((unique_39, index) => !0)) ||
               (value.results === null &&
                 (!Array.isArray(value.results) ||
-                  value.results.every((unique_36, index) => !0)))) &&
+                  value.results.every((unique_40, index) => !0)))) &&
             typeof value.type == "string" &&
             value.type === "webSearch",
           typeof value == "object" &&
@@ -6131,7 +6463,7 @@ var isCodexDynamicToolCallParams = (() => {
             "path" in value &&
             "type" in value &&
             typeof value.id == "string" &&
-            check_23(value.path) &&
+            check_28(value.path) &&
             typeof value.type == "string" &&
             value.type === "imageView",
           typeof value == "object" &&
@@ -6155,7 +6487,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             (value.failure === void 0 ||
               !("failure" in value) ||
-              check_44(value.failure) ||
+              check_49(value.failure) ||
               value.failure === null) &&
             (value.generationId === void 0 ||
               !("generationId" in value) ||
@@ -6165,14 +6497,14 @@ var isCodexDynamicToolCallParams = (() => {
             (value.inputImages === void 0 ||
               !("inputImages" in value) ||
               (Array.isArray(value.inputImages) &&
-                value.inputImages.every((unique_38, index) => check_45(unique_38)))) &&
+                value.inputImages.every((unique_42, index) => check_50(unique_42)))) &&
             (value.revisedPrompt === void 0 ||
               !("revisedPrompt" in value) ||
               typeof value.revisedPrompt == "string" ||
               value.revisedPrompt === null) &&
             (value.savedPath === void 0 ||
               !("savedPath" in value) ||
-              check_46(value.savedPath) ||
+              check_51(value.savedPath) ||
               value.savedPath === null) &&
             typeof value.status == "string" &&
             (value.transparentBackground === void 0 ||
@@ -6384,49 +6716,142 @@ var isCodexDynamicToolCallParams = (() => {
           value.display === null) &&
         typeof value.moderated == "boolean",
       check_17 = (value) =>
-        typeof value == "object" &&
-        value !== null &&
-        !Array.isArray(value) &&
-        "action" in value &&
-        typeof value.action == "string" &&
-        (value.blockType === void 0 ||
-          !("blockType" in value) ||
-          typeof value.blockType == "string" ||
-          value.blockType === null) &&
-        (value.checkTrustedContacts === void 0 ||
-          !("checkTrustedContacts" in value) ||
-          typeof value.checkTrustedContacts == "boolean" ||
-          value.checkTrustedContacts === null) &&
-        (value.cyberTrustedAccess === void 0 ||
-          !("cyberTrustedAccess" in value) ||
-          typeof value.cyberTrustedAccess == "boolean" ||
-          value.cyberTrustedAccess === null),
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "trustedContacts" in value &&
+            "version" in value &&
+            (value.annotation === void 0 ||
+              !("annotation" in value) ||
+              check_18(value.annotation) ||
+              value.annotation === null) &&
+            typeof value.mode == "string" &&
+            value.mode === "show" &&
+            check_20(value.trustedContacts) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "replacement" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "hide" &&
+            check_21(value.replacement) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "mode" in value &&
+            "reason" in value &&
+            "version" in value &&
+            typeof value.mode == "string" &&
+            value.mode === "block" &&
+            check_22(value.reason) &&
+            Number.isInteger(value.version) &&
+            (typeof value.version != "string" || !0) &&
+            (!(Number.isFinite(value.version) || typeof value.version == "bigint") ||
+              value.version >= 0) &&
+            value.version === 1,
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "action" in value &&
+            typeof value.action == "string" &&
+            (value.blockType === void 0 ||
+              !("blockType" in value) ||
+              typeof value.blockType == "string" ||
+              value.blockType === null) &&
+            (value.checkTrustedContacts === void 0 ||
+              !("checkTrustedContacts" in value) ||
+              typeof value.checkTrustedContacts == "boolean" ||
+              value.checkTrustedContacts === null) &&
+            (value.cyberTrustedAccess === void 0 ||
+              !("cyberTrustedAccess" in value) ||
+              typeof value.cyberTrustedAccess == "boolean" ||
+              value.cyberTrustedAccess === null) &&
+            (value.mode === void 0 || !("mode" in value) || !1) &&
+            (value.version === void 0 || !("version" in value) || !1),
+        ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
       check_18 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "subject" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingHelpline" &&
+            check_19(value.subject),
+        ].reduce((result, unique_9, _) => (unique_9 === !0 ? result + 1 : result), 0) === 1,
+      check_19 = (value) => typeof value == "string" && (value === "answer" || value === "prompt"),
+      check_20 = (value) => typeof value == "string" && (value === "check" || value === "skip"),
+      check_21 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "wellbeingPromptHelpline",
+        ].reduce((result, unique_10, _) => (unique_10 === !0 ? result + 1 : result), 0) === 1,
+      check_22 = (value) =>
+        [
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            "protectionType" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "protection" &&
+            typeof value.protectionType == "string",
+          typeof value == "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            "kind" in value &&
+            typeof value.kind == "string" &&
+            value.kind === "cyber" &&
+            (value.trustedAccess === void 0 ||
+              !("trustedAccess" in value) ||
+              typeof value.trustedAccess == "boolean" ||
+              value.trustedAccess === null),
+        ].reduce((result, unique_11, _) => (unique_11 === !0 ? result + 1 : result), 0) === 1,
+      check_23 = (value) =>
         [
           typeof value == "string" && value === "commentary",
           typeof value == "string" && value === "partial_answer",
           typeof value == "string" && value === "final_answer",
-        ].reduce((result, unique_8, _) => (unique_8 === !0 ? result + 1 : result), 0) === 1,
-      check_19 = (value) =>
+        ].reduce((result, unique_12, _) => (unique_12 === !0 ? result + 1 : result), 0) === 1,
+      check_24 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "title" in value &&
         Object.getOwnPropertyNames(value).every(
-          (unique_10, unique_11) => External[0].test(unique_10) || !1,
+          (unique_14, unique_15) => External[0].test(unique_14) || !1,
         ) &&
         (value.options === void 0 ||
           !("options" in value) ||
           (Array.isArray(value.options) &&
-            value.options.every((unique_12, index) => typeof unique_12 == "string")) ||
+            value.options.every((unique_16, index) => typeof unique_16 == "string")) ||
           (value.options === null &&
             (!Array.isArray(value.options) ||
-              value.options.every((unique_13, index) => typeof unique_13 == "string")))) &&
+              value.options.every((unique_17, index) => typeof unique_17 == "string")))) &&
         typeof value.title == "string",
-      check_20 = (value) =>
-        (Array.isArray(value) && value.every((unique_15, index) => check_21(unique_15))) ||
+      check_25 = (value) =>
+        (Array.isArray(value) && value.every((unique_19, index) => check_26(unique_19))) ||
         typeof value == "string",
-      check_21 = (value) =>
+      check_26 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6480,8 +6905,8 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.encrypted_content == "string" &&
             typeof value.type == "string" &&
             value.type === "encrypted_content",
-        ].reduce((result, unique_16, _) => (unique_16 === !0 ? result + 1 : result), 0) === 1,
-      check_22 = (value) =>
+        ].reduce((result, unique_20, _) => (unique_20 === !0 ? result + 1 : result), 0) === 1,
+      check_27 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6492,7 +6917,7 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.command == "string" &&
             typeof value.name == "string" &&
-            check_23(value.path) &&
+            check_28(value.path) &&
             typeof value.type == "string" &&
             value.type === "read",
           typeof value == "object" &&
@@ -6531,21 +6956,21 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.command == "string" &&
             typeof value.type == "string" &&
             value.type === "unknown",
-        ].reduce((result, unique_20, _) => (unique_20 === !0 ? result + 1 : result), 0) === 1,
-      check_23 = (value) => typeof value == "string",
-      check_24 = (value) =>
+        ].reduce((result, unique_24, _) => (unique_24 === !0 ? result + 1 : result), 0) === 1,
+      check_28 = (value) => typeof value == "string",
+      check_29 = (value) =>
         typeof value == "string" &&
         (value === "agent" ||
           value === "userShell" ||
           value === "unifiedExecStartup" ||
           value === "unifiedExecInteraction"),
-      check_25 = (value) =>
+      check_30 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_26 = (value) =>
+      check_31 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -6553,9 +6978,9 @@ var isCodexDynamicToolCallParams = (() => {
         "kind" in value &&
         "path" in value &&
         typeof value.diff == "string" &&
-        check_27(value.kind) &&
+        check_32(value.kind) &&
         typeof value.path == "string",
-      check_27 = (value) =>
+      check_32 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6579,14 +7004,14 @@ var isCodexDynamicToolCallParams = (() => {
               value.move_path === null) &&
             typeof value.type == "string" &&
             value.type === "update",
-        ].reduce((result, unique_22, _) => (unique_22 === !0 ? result + 1 : result), 0) === 1,
-      check_28 = (value) =>
+        ].reduce((result, unique_26, _) => (unique_26 === !0 ? result + 1 : result), 0) === 1,
+      check_33 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "declined"),
-      check_29 = (value) =>
+      check_34 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -6608,35 +7033,35 @@ var isCodexDynamicToolCallParams = (() => {
           !("resourceUri" in value) ||
           typeof value.resourceUri == "string" ||
           value.resourceUri === null),
-      check_30 = (value) =>
+      check_35 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "message" in value &&
         typeof value.message == "string",
-      check_31 = (value) =>
+      check_36 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "preferredModelDisplayMode" in value &&
         "resourceUri" in value &&
-        check_32(value.preferredModelDisplayMode) &&
+        check_37(value.preferredModelDisplayMode) &&
         typeof value.resourceUri == "string",
-      check_32 = (value) =>
+      check_37 = (value) =>
         typeof value == "string" && (value === "inline" || value === "fullscreen"),
-      check_33 = (value) =>
+      check_38 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "content" in value &&
         (value._meta === void 0 || !("_meta" in value) || !0) &&
         Array.isArray(value.content) &&
-        value.content.every((unique_23, index) => !0) &&
+        value.content.every((unique_27, index) => !0) &&
         (value.structuredContent === void 0 || !("structuredContent" in value) || !0),
-      check_34 = (value) =>
+      check_39 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_35 = (value) =>
+      check_40 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6662,11 +7087,11 @@ var isCodexDynamicToolCallParams = (() => {
             typeof value.audioUrl == "string" &&
             typeof value.type == "string" &&
             value.type === "inputAudio",
-        ].reduce((result, unique_25, _) => (unique_25 === !0 ? result + 1 : result), 0) === 1,
-      check_36 = (value) =>
+        ].reduce((result, unique_29, _) => (unique_29 === !0 ? result + 1 : result), 0) === 1,
+      check_41 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" || value === "completed" || value === "failed"),
-      check_37 = (value) =>
+      check_42 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -6675,8 +7100,8 @@ var isCodexDynamicToolCallParams = (() => {
           !("message" in value) ||
           typeof value.message == "string" ||
           value.message === null) &&
-        check_38(value.status),
-      check_38 = (value) =>
+        check_43(value.status),
+      check_43 = (value) =>
         typeof value == "string" &&
         (value === "pendingInit" ||
           value === "running" ||
@@ -6685,16 +7110,16 @@ var isCodexDynamicToolCallParams = (() => {
           value === "errored" ||
           value === "shutdown" ||
           value === "notFound"),
-      check_39 = (value) =>
+      check_44 = (value) =>
         typeof value == "string" &&
         (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
-      check_40 = (value) =>
+      check_45 = (value) =>
         typeof value == "string" &&
         (value === "inProgress" ||
           value === "completed" ||
           value === "failed" ||
           value === "interrupted"),
-      check_41 = (value) =>
+      check_46 = (value) =>
         typeof value == "string" &&
         (value === "spawnAgent" ||
           value === "sendInput" ||
@@ -6705,13 +7130,13 @@ var isCodexDynamicToolCallParams = (() => {
           value === "followupTask" ||
           value === "interruptAgent" ||
           value === "listAgents"),
-      check_42 = (value) =>
+      check_47 = (value) =>
         typeof value == "string" &&
         (value === "started" ||
           value === "interacted" ||
           value === "interrupted" ||
           value === "completed"),
-      check_43 = (value) =>
+      check_48 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6720,10 +7145,10 @@ var isCodexDynamicToolCallParams = (() => {
             (value.queries === void 0 ||
               !("queries" in value) ||
               (Array.isArray(value.queries) &&
-                value.queries.every((unique_33, index) => typeof unique_33 == "string")) ||
+                value.queries.every((unique_37, index) => typeof unique_37 == "string")) ||
               (value.queries === null &&
                 (!Array.isArray(value.queries) ||
-                  value.queries.every((unique_34, index) => typeof unique_34 == "string")))) &&
+                  value.queries.every((unique_38, index) => typeof unique_38 == "string")))) &&
             (value.query === void 0 ||
               !("query" in value) ||
               typeof value.query == "string" ||
@@ -6760,8 +7185,8 @@ var isCodexDynamicToolCallParams = (() => {
             "type" in value &&
             typeof value.type == "string" &&
             value.type === "other",
-        ].reduce((result, unique_32, _) => (unique_32 === !0 ? result + 1 : result), 0) === 1,
-      check_44 = (value) =>
+        ].reduce((result, unique_36, _) => (unique_36 === !0 ? result + 1 : result), 0) === 1,
+      check_49 = (value) =>
         [
           typeof value == "object" &&
             value !== null &&
@@ -6775,23 +7200,23 @@ var isCodexDynamicToolCallParams = (() => {
               (value.resetsAt === null && (typeof value.resetsAt != "string" || !0))) &&
             typeof value.type == "string" &&
             value.type === "usageLimitExceeded",
-        ].reduce((result, unique_37, _) => (unique_37 === !0 ? result + 1 : result), 0) === 1,
-      check_45 = (value) =>
+        ].reduce((result, unique_41, _) => (unique_41 === !0 ? result + 1 : result), 0) === 1,
+      check_50 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "path" in value &&
         "sha256" in value &&
-        check_46(value.path) &&
+        check_51(value.path) &&
         typeof value.sha256 == "string",
-      check_46 = (value) => typeof value == "string",
-      check_47 = (value) =>
+      check_51 = (value) => typeof value == "string",
+      check_52 = (value) =>
         [
           typeof value == "string" && value === "notLoaded",
           typeof value == "string" && value === "summary",
           typeof value == "string" && value === "full",
-        ].reduce((result, unique_39, _) => (unique_39 === !0 ? result + 1 : result), 0) === 1,
-      check_48 = (value) =>
+        ].reduce((result, unique_43, _) => (unique_43 === !0 ? result + 1 : result), 0) === 1,
+      check_53 = (value) =>
         typeof value == "string" &&
         (value === "completed" ||
           value === "interrupted" ||
