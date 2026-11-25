@@ -24,7 +24,7 @@ describe("long text work volume", () => {
         trimEndWhitespaceGraphemes(text, end);
         start = end;
       }
-      const segmented = segment.mock.calls.reduce((sum, [input]) => sum + String(input).length, 0);
+      const segmented = segment.mock.calls.reduce((sum, [input]) => sum + input.length, 0);
       expect(segmented).toBeLessThan(text.length / 2);
     } finally {
       segment.mockRestore();
@@ -66,7 +66,7 @@ it("does bounded total segmentation work across repeated partial cuts", () => {
     while (start < text.length) {
       start = findEnd(start, start + 16);
     }
-    const volume = segment.mock.calls.reduce((sum, [input]) => sum + String(input).length, 0);
+    const volume = segment.mock.calls.reduce((sum, [input]) => sum + input.length, 0);
     expect(volume).toBeLessThan(text.length * 2);
   } finally {
     segment.mockRestore();
