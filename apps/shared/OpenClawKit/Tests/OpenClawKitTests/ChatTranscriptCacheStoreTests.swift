@@ -398,6 +398,48 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(reopened.store(gatewayID: "gw-b").loadAgentIdentities().isEmpty)
     }
 
+    @Test func `agent identity written by a newer build loads and ignores keys it does not know`() async throws {
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: """
+                INSERT INTO cached_agent_identities(gateway_id, agent_id, position, payload_json, avatar)
+                VALUES ('gw-a', 'main', 0, ?, ?)
+                """,
+                arguments: [
+                    #"{"accentColor":"orange","emoji":"🦞","identityName":"Molty","isDefault":true,"#
+                        + #""model":{"id":"future"},"rosterName":"main"}"#,
+                    Data([0x89, 0x50, 0x4E, 0x47]),
+                ])
+        }
+
+        #expect(store.loadAgentIdentities() == [
+            OpenClawChatCachedAgentIdentity(
+                agentID: "main",
+                rosterName: "main",
+                identityName: "Molty",
+                emoji: "🦞",
+                isDefault: true,
+                avatar: Data([0x89, 0x50, 0x4E, 0x47])),
+        ])
+    }
+
+    @Test func `agent identity written by an older build loads with missing keys defaulted`() async throws {
+        try await databases.cacheQueue.write { db in
+            try db.execute(sql: """
+            INSERT INTO cached_agent_identities(gateway_id, agent_id, position, payload_json, avatar)
+            VALUES ('gw-a', 'ops', 0, '{"rosterName":"Operations"}', NULL),
+                   ('gw-a', 'bare', 1, '{}', NULL);
+            """)
+        }
+
+        #expect(store.loadAgentIdentities() == [
+            OpenClawChatCachedAgentIdentity(
+                agentID: "ops", rosterName: "Operations", identityName: nil, emoji: nil, isDefault: false, avatar: nil),
+            OpenClawChatCachedAgentIdentity(
+                agentID: "bare", rosterName: nil, identityName: nil, emoji: nil, isDefault: false, avatar: nil),
+        ])
+    }
+
     @Test func `empty or rejected agent snapshot cannot erase another roster`() async {
         await store.storeSessions([
             cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),

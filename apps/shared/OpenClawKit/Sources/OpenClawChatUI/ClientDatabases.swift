@@ -610,10 +610,7 @@ extension OpenClawClientDatabases {
             gateway_id TEXT NOT NULL,
             agent_id TEXT NOT NULL,
             position INTEGER NOT NULL,
-            roster_name TEXT,
-            identity_name TEXT,
-            emoji TEXT,
-            is_default INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
             avatar BLOB,
             PRIMARY KEY(gateway_id, agent_id)
         );
