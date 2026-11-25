@@ -450,3 +450,28 @@ it("retries the signed-in primary's owner-first prefix after Load More", async (
     [0, 4, true],
   ]);
 });
+
+it("wakes the sidebar's own primary agent and retries one failed wake read", async () => {
+  const read = vi.fn((_agentId?: string) => sessionsResult([saved, recent], 10_000));
+  const { sessions } = rosterReadFixture((params) => read(params.agentId));
+  await sessions.refresh(owners[0]);
+  await sessions.refresh({ ...owners[0], agentId: "other", force: true });
+  const wakeReads = () => read.mock.calls.slice(2).map(([agentId]) => agentId);
+  // A later read for another agent owns the primary window; wake the requested agent.
+  sessions.wakeList(owners[0]);
+  await advance();
+  expect(wakeReads()).toEqual(["main"]);
+  read.mockImplementationOnce(() => {
+    throw unavailable;
+  });
+  sessions.wakeList(owners[0]);
+  await advance();
+  expect(wakeReads()).toEqual(["main", "main"]);
+  await advance(6_999);
+  expect(wakeReads()).toEqual(["main", "main"]);
+  await advance(1);
+  expect(wakeReads()).toEqual(["main", "main", "main"]);
+  expect(sessions.state).toMatchObject({ agentId: "main", error: null });
+  await advance(120_000);
+  expect(wakeReads()).toHaveLength(3);
+});

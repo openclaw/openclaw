@@ -172,9 +172,10 @@ function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
   const pinWindow = createMemo(() => params.host.gatewayPinWindow);
   const sampled = createMemo(() => ({ result: pinWindow(), at: performance.now() }));
   // A filtered window (e.g. Archived) can omit a saved active row obtained by describe.
-  // Ask the same list for fresh Gateway time; never unhide it on the device clock.
+  // Wake the same list for fresh Gateway time; never unhide it on the device clock.
+  // A failed wake read retries like the list's own snooze cutoff.
   createTimeout(
-    () => void params.host.sessionData.refreshSidebarSessions(),
+    () => params.host.sessionData.wakeSidebarSessions(),
     () => {
       const { result, at } = sampled();
       if (!result) {
