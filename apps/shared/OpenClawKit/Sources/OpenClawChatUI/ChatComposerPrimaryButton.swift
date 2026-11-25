@@ -358,7 +358,7 @@ struct ChatComposerPrimaryButton: View {
             return .talk(
                 isActive: isActive,
                 isConnected: self.talkControl?.isGatewayConnected == true,
-                liveStatus: isActive ? self.talkControl?.statusText ?? "" : "")
+                liveStatus: isActive ? self.talkControl.map { ChatTalkPresentation(control: $0).status } ?? "" : "")
         case .send:
             return .send(isReplyRunning: self.send.isReplyRunning, sendKeepsReply: self.send.keepsReply)
         case .stop:

@@ -79,7 +79,8 @@ private final class TranscriptStreamingOwner {
     var terminalStatus: (
         text: String,
         phase: TalkPhase,
-        watchPresentation: TalkWatchPresentation)?
+        watchPresentation: TalkWatchPresentation,
+        issue: OpenClawChatTalkIssue?)?
     /// Subscribed before chat.send so a fast terminal cannot outrun its owner.
     var completionEvents: AsyncStream<EventFrame>?
 }
@@ -141,6 +142,8 @@ final class TalkModeManager {
     }
 
     private(set) var phase: TalkPhase = .idle
+    /// Set with the status that reports it; any later status clears it.
+    private(set) var issue: OpenClawChatTalkIssue?
     private(set) var watchPresentation: TalkWatchPresentation = .phase
     var statusText: String = "Off"
 
@@ -241,7 +244,8 @@ final class TalkModeManager {
     private var realtimeVoiceSelectionEvents: Task<Void, Never>?
 
     private var lastHeard: Date?
-    private var lastTranscript: String = ""
+    /// What the recognizer has heard of the current utterance; the composer shows it while the person speaks.
+    private(set) var lastTranscript: String = ""
     private var lastSpokenText: String?
     private var lastInterruptedAtSeconds: Double?
     private var defaultVoiceId: String?
@@ -312,11 +316,25 @@ final class TalkModeManager {
     private func setStatus(
         _ text: String,
         phase: TalkPhase,
-        watchPresentation: TalkWatchPresentation = .phase)
+        watchPresentation: TalkWatchPresentation = .phase,
+        issue: OpenClawChatTalkIssue? = nil)
     {
         self.phase = phase
         self.watchPresentation = watchPresentation
         self.statusText = text
+        self.issue = issue
+    }
+
+    /// The conversation's state for the chat composer. Every status that is not an issue maps to one of
+    /// four phases; idle while Talk is on is the moment before the first turn or between two.
+    var chatPhase: OpenClawChatTalkPhase {
+        if let issue { return .issue(issue) }
+        switch self.phase {
+        case .idle, .connecting: return .connecting
+        case .listening: return .listening
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        }
     }
 
     private static func shouldRestartRealtimeSession(
@@ -491,7 +509,7 @@ final class TalkModeManager {
                 self.stopSpeaking(storeInterruption: false)
                 deactivateAudioSession()
                 if self.isEnabled, !self.isSpeaking {
-                    self.setStatus(String(localized: "Offline"), phase: .idle)
+                    self.setStatus(String(localized: "Offline"), phase: .idle, issue: .offline)
                 }
             }
             self.cancelRealtimePrefetch()
@@ -556,7 +574,73 @@ final class TalkModeManager {
         self.gatewayTalkPermissionState = .ready
     }
 
+    #if DEBUG
+    /// Screenshot and UI-test fixture: turning Talk on shows one state, with no microphone, voice provider
+    /// or Gateway behind it. `--openclaw-talk-fixture <state>` picks it; Mute and End work as usual.
+    enum ChatFixtureState: String, CaseIterable {
+        case connecting
+        case listening
+        case hearing
+        case thinking
+        case speaking
+        case muted
+        case microphoneOff = "mic-off"
+        case offline
+        case failed
+    }
+
+    @ObservationIgnored private var chatFixtureState: ChatFixtureState?
+
+    func enterChatFixture(_ state: ChatFixtureState) {
+        self.chatFixtureState = state
+    }
+
+    private func applyChatFixture(_ state: ChatFixtureState) {
+        self.isEnabled = true
+        self.isListening = false
+        self.isSpeaking = false
+        self.isUserSpeechDetected = false
+        self.lastTranscript = ""
+        self.micLevel = 0
+        self.playbackLevel = nil
+        switch state {
+        case .connecting:
+            self.setStatus(String(localized: "Requesting permissions…"), phase: .connecting)
+        case .listening, .muted:
+            self.isMicrophoneMuted = state == .muted
+            self.isListening = state == .listening
+            self.micLevel = state == .listening ? 0.18 : 0
+            self.setStatus(String(localized: "Listening"), phase: .listening)
+        case .hearing:
+            self.isListening = true
+            self.isUserSpeechDetected = true
+            self.micLevel = 0.62
+            self.lastTranscript = "What’s on my calendar this afternoon"
+            self.setStatus(String(localized: "Listening"), phase: .listening)
+        case .thinking:
+            self.setStatus(String(localized: "Thinking…"), phase: .thinking)
+        case .speaking:
+            self.isSpeaking = true
+            self.playbackLevel = 0.55
+            self.setStatus(String(localized: "Speaking…"), phase: .speaking)
+        case .microphoneOff:
+            self.setStatus(
+                String(localized: "Microphone permission denied"), phase: .idle, issue: .microphoneAccess)
+        case .offline:
+            self.setStatus(String(localized: "Offline"), phase: .idle, issue: .offline)
+        case .failed:
+            self.setStatus(String(localized: "No reply"), phase: .idle, issue: .replyFailed)
+        }
+    }
+    #endif
+
     func setEnabled(_ enabled: Bool) {
+        #if DEBUG
+        if enabled, let chatFixtureState {
+            self.applyChatFixture(chatFixtureState)
+            return
+        }
+        #endif
         self.isEnabled = enabled
         if enabled {
             self.logger.info("enabled")
@@ -572,6 +656,12 @@ final class TalkModeManager {
     func setMicrophoneMuted(_ muted: Bool) async {
         guard self.isMicrophoneMuted != muted else { return }
         self.isMicrophoneMuted = muted
+        #if DEBUG
+        if self.chatFixtureState != nil {
+            self.isListening = !muted && self.phase == .listening
+            return
+        }
+        #endif
         self.realtimeSession?.setMicrophoneMuted(muted)
         self.realtimeRelaySession?.setMicrophoneMuted(muted)
         guard self.isEnabled else { return }
@@ -622,6 +712,10 @@ final class TalkModeManager {
     }
 
     func start() async {
+        #if DEBUG
+        // The fixture has no microphone or Gateway behind it; a real start would replace its state.
+        if self.chatFixtureState != nil { return }
+        #endif
         guard self.canBeginStart() else { return }
 
         self.isStarting = true
@@ -650,14 +744,15 @@ final class TalkModeManager {
             self.setStatus(
                 String(localized: "Microphone permission denied"),
                 phase: .idle,
-                watchPresentation: .localized("Microphone permission denied"))
+                watchPresentation: .localized("Microphone permission denied"),
+                issue: .microphoneAccess)
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
         await ensureTalkConfigLoadedForStart()
         guard self.isCurrentStartAttempt(attemptID) else { return }
         if self.gatewayTalkPermissionState.requiresTalkPermissionAction {
-            self.setStatus(String(localized: "Gateway permission required"), phase: .idle)
+            self.setStatus(String(localized: "Gateway permission required"), phase: .idle, issue: .notAllowed)
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway permission")
             return
         }
@@ -690,7 +785,8 @@ final class TalkModeManager {
             self.setStatus(
                 status,
                 phase: .idle,
-                watchPresentation: .verbatim(status))
+                watchPresentation: .verbatim(status),
+                issue: .speechRecognitionAccess)
             return
         }
         guard self.isCurrentStartAttempt(attemptID) else { return }
@@ -721,7 +817,8 @@ final class TalkModeManager {
             self.setStatus(
                 status,
                 phase: .idle,
-                watchPresentation: .verbatim(status))
+                watchPresentation: .verbatim(status),
+                issue: .startFailed)
             self.logger.error("start failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -749,7 +846,7 @@ final class TalkModeManager {
             return false
         }
         guard self.gatewayConnected else {
-            self.setStatus(String(localized: "Offline"), phase: .idle)
+            self.setStatus(String(localized: "Offline"), phase: .idle, issue: .offline)
             GatewayDiagnostics.log("talk.timeline manager start blocked gateway offline")
             return false
         }
@@ -1796,6 +1893,14 @@ final class TalkModeManager {
         self.pttOnceOperations[payload.captureId]?.finish(payload)
     }
 
+    #if DEBUG
+    /// Proof hook: one spoken turn with this transcript through the real send path, as if recognition
+    /// had just finished it. `--openclaw-talk-say <text>` calls it once the Gateway connects.
+    func _debug_sendSpokenTurn(_ transcript: String) async {
+        await self.processContinuousTranscript(transcript)
+    }
+    #endif
+
     private func processContinuousTranscript(_ transcript: String) async {
         let generation = self.beginTranscriptProcessing()
         self.continuousTranscriptProcessingGeneration = generation
@@ -1805,7 +1910,7 @@ final class TalkModeManager {
             }
         }
         guard let gateway else {
-            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
+            self.setStatus(String(localized: "Gateway not connected"), phase: .idle, issue: .offline)
             self.scheduleContinuousResume(true)
             return
         }
@@ -1845,7 +1950,8 @@ final class TalkModeManager {
             self.setStatus(
                 terminalStatus.text,
                 phase: terminalStatus.phase,
-                watchPresentation: terminalStatus.watchPresentation)
+                watchPresentation: terminalStatus.watchPresentation,
+                issue: terminalStatus.issue)
         }
         let shouldResume = restartAfter &&
             self.isEnabled &&
@@ -1878,7 +1984,7 @@ final class TalkModeManager {
             shouldApply: { self.isCurrentTranscriptProcessing(generation) })
         guard self.isCurrentTranscriptProcessing(generation) else { return }
         guard await gateway.currentRoute() == context.route else {
-            self.setStatus(String(localized: "Gateway not connected"), phase: .idle)
+            self.setStatus(String(localized: "Gateway not connected"), phase: .idle, issue: .offline)
             return
         }
         guard self.isCurrentTranscriptProcessing(generation) else { return }
@@ -1925,7 +2031,8 @@ final class TalkModeManager {
                         ? String(localized: "Chat error")
                         : String(localized: "Aborted"),
                     .idle,
-                    .localized(normalizedStatus == "error" ? "Chat error" : "Aborted"))
+                    .localized(normalizedStatus == "error" ? "Chat error" : "Aborted"),
+                    normalizedStatus == "error" ? .replyFailed : nil)
                 self.logger.warning(
                     """
                     chat.send terminal ack runId=\(runId, privacy: .public) \
@@ -1944,7 +2051,7 @@ final class TalkModeManager {
             else { return }
             guard self.isCurrentTranscriptProcessing(generation) else { return }
             if completedSuccessfully, !self.isEnabled {
-                streamingOwner.terminalStatus = (String(localized: "Ready"), .idle, .phase)
+                streamingOwner.terminalStatus = (String(localized: "Ready"), .idle, .phase, nil)
             }
         } catch is CancellationError {
             return
@@ -1953,7 +2060,7 @@ final class TalkModeManager {
             let status = String(
                 format: String(localized: "Talk failed: %@"),
                 error.localizedDescription)
-            streamingOwner.terminalStatus = (status, .idle, .verbatim(status))
+            streamingOwner.terminalStatus = (status, .idle, .verbatim(status), .replyFailed)
             self.logger.error("finalize failed: \(error.localizedDescription, privacy: .public)")
             GatewayDiagnostics.log("talk: failed error=\(error.localizedDescription)")
         }
@@ -2010,7 +2117,8 @@ final class TalkModeManager {
                 streamingOwner.terminalStatus = (
                     aborted ? String(localized: "Aborted") : String(localized: "Chat error"),
                     .idle,
-                    .localized(aborted ? "Aborted" : "Chat error"))
+                    .localized(aborted ? "Aborted" : "Chat error"),
+                    aborted ? nil : .replyFailed)
                 return nil
             }
         }
@@ -2039,7 +2147,8 @@ final class TalkModeManager {
             streamingOwner.terminalStatus = (
                 String(localized: "No reply"),
                 .idle,
-                .localized("No reply"))
+                .localized("No reply"),
+                .replyFailed)
             return nil
         }
         streamingOwner.task?.cancel()
@@ -2425,7 +2534,7 @@ final class TalkModeManager {
             },
             onFailure: { [weak self] _ in
                 guard let self else { return }
-                self.setStatus(String(localized: "Realtime unavailable"), phase: .idle)
+                self.setStatus(String(localized: "Realtime unavailable"), phase: .idle, issue: .startFailed)
             })
         self.realtimeVoiceSelection = selection
         self.realtimeVoiceSelectionRoute = route
@@ -3044,7 +3153,7 @@ final class TalkModeManager {
             let status = String(
                 format: String(localized: "Speak failed: %@"),
                 error.localizedDescription)
-            self.setStatus(status, phase: .idle, watchPresentation: .verbatim(status))
+            self.setStatus(status, phase: .idle, watchPresentation: .verbatim(status), issue: .speechFailed)
             self.logger.error("system voice failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -4075,7 +4184,7 @@ extension TalkModeManager {
         self.silenceWindow = TimeInterval(Self.defaultSilenceTimeoutMs) / 1000
         if let missingScope = Self.missingTalkScope(from: error) {
             self.gatewayTalkPermissionState = .missingScope(missingScope)
-            self.setStatus(String(localized: "Gateway permission required"), phase: .idle)
+            self.setStatus(String(localized: "Gateway permission required"), phase: .idle, issue: .notAllowed)
             GatewayDiagnostics.log("talk config missing gateway scope=\(missingScope)")
         } else {
             self.gatewayTalkPermissionState = .loadFailed(error.localizedDescription)
@@ -4096,7 +4205,7 @@ extension TalkModeManager {
 
     func markTalkPermissionUpgradeRequested() {
         self.gatewayTalkPermissionState = .upgradeRequested
-        self.setStatus(String(localized: "Approval requested"), phase: .idle)
+        self.setStatus(String(localized: "Approval requested"), phase: .idle, issue: .approvalRequested)
     }
 
     private static func missingTalkScope(from error: Error) -> String? {

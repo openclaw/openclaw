@@ -18,11 +18,11 @@ struct ChatCameraFlipButton: View {
             // A plain glyph like the composer's other secondary controls: no disc, no tint.
             Image(systemName: "arrow.triangle.2.circlepath.camera")
                 #if os(iOS)
-                .font(OpenClawChatTypography.composerGlyph)
-                .foregroundStyle(CleanChatComposerMetrics.footerInk)
+                    .font(OpenClawChatTypography.composerGlyph)
+                    .foregroundStyle(CleanChatComposerMetrics.footerInk)
                 #else
-                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
-                .foregroundStyle(.secondary)
+                    .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                    .foregroundStyle(.secondary)
                 #endif
                 .frame(width: self.visualSize, height: self.visualSize)
                 .frame(width: self.controlHeight, height: self.controlHeight)

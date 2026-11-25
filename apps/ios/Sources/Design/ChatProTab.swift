@@ -411,6 +411,7 @@ struct ChatProTab: View {
             isSpeaking: appModel.talkMode.isSpeaking,
             isGatewayConnected: appModel.talkMode.isGatewayConnected,
             statusText: appModel.talkMode.statusText,
+            phase: appModel.talkMode.chatPhase,
             providerLabel: appModel.talkMode.gatewayTalkProviderLabel,
             levelProvider: {
                 if appModel.talkMode.isSpeaking {
@@ -427,6 +428,8 @@ struct ChatProTab: View {
                     await appModel.talkMode.setMicrophoneMuted(!appModel.talkMode.isMicrophoneMuted)
                 }
             },
+            // The words heard so far, while the person speaks; empty in every other phase.
+            partialTranscript: appModel.talkMode.isListening ? appModel.talkMode.lastTranscript : "",
             inputDevices: self.talkInputDevices,
             selectedInputDeviceID: self.selectedTalkInputDeviceID(appModel: appModel),
             selectInputDevice: { deviceID in
@@ -435,6 +438,11 @@ struct ChatProTab: View {
             cameraFacing: appModel.preferredCameraFacing == .front ? .front : .back,
             flipCamera: {
                 appModel.flipPreferredCameraFacing()
+            },
+            openSettings: {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
             },
             toggle: { sessionKey in
                 appModel.focusChatSession(sessionKey)
