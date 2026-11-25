@@ -12,7 +12,9 @@ final class IOSOpenClawIDSettingsModel {
         case stopTools
         case remove
 
-        var id: String { self.rawValue }
+        var id: String {
+            self.rawValue
+        }
     }
 
     var confirmation: Confirmation?
@@ -220,7 +222,7 @@ struct IOSOpenClawIDSettingsSection: View {
 
     private func summary(_ device: OpenClawIDDevice) -> some View {
         let member = device.memberRole != nil
-        let approval: String = switch device.approvedWith {
+        let approval = switch device.approvedWith {
         case .recoveryKit: String(localized: "Approved with your recovery kit")
         case .invite: String(localized: "Added with an invite")
         default: String(localized: "Approved from your other device")
