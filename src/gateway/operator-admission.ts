@@ -70,10 +70,7 @@ import {
 } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  hasAutomationAdminDelegation,
-  type QueuedOperatorRecoverySource,
-} from "./operator-run-recovery-source.codec.js";
+import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -307,7 +304,6 @@ function intersectOperatorRunModelPolicy(
 type OperatorAdmissionDecision = {
   authority: AdmittedRunOperatorAuthority;
   authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
-  automationAdmin: boolean;
   release: () => void;
 };
 
@@ -637,11 +633,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     return {
       authority,
       authenticatedUserProfile,
-      automationAdmin: Boolean(
-        gateway &&
-        hasAutomationAdminDelegation(gateway) &&
-        operatorScopeSatisfied("operator.admin", scopes),
-      ),
       release: () => identity?.release(),
     };
   } catch (error) {
