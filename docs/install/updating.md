@@ -1932,10 +1932,10 @@ and the package transaction restores the previous launchers. A launcher format
 the updater cannot read only produces a warning with repair guidance. A pnpm
 package update also restarts the Gateway on the new version even though pnpm
 moved the package to a new versioned store directory. The updater that is already
-installed runs these steps, so updates driven by 2026.11.4, 2026.11.5 or
-2026.11.6 do not get them.
+installed runs these steps, so updates driven by 2026.11.4 through 2026.11.9
+do not get them.
 
-When 2026.11.4, 2026.11.5 or 2026.11.6 updates a pnpm install with a managed
+When 2026.11.4 through 2026.11.9 updates a pnpm install with a managed
 Gateway service to a release with this fix, it still publishes a launcher that points into its removed stage. The
 new package's Doctor, which runs during that update, repairs the launcher, so the
 `openclaw` command keeps working. These updaters hand the later update steps,
