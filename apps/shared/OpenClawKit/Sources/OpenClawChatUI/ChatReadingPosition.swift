@@ -447,6 +447,11 @@ final class ChatReadingPosition {
         }
         marker.key = key
         self.rows[key] = WeakMarker(marker: marker)
+        // A sent turn's row registers after the layout pass that added it; that pass found no
+        // row to place, so place it now instead of leaving it under the composer.
+        if case let .turn(id) = self.policy.mode, key == .cell(.row(id)) {
+            self.sentinel?.setNeedsLayout()
+        }
     }
 
     func unregister(_ marker: Marker) {
