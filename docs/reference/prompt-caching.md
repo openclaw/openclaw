@@ -763,7 +763,10 @@ inter-session input, subagent completions) go out as appended deltas: an
 in-history system message where the route supports one (direct Anthropic API
 keys on prefix-binding Claude models, native OpenAI Responses), otherwise a
 user-role note. Tools change only at a rebuild point or a tool configuration
-change.
+change. Reordering existing `##` sections also appends an update, even when their
+text is unchanged. That update includes the complete current prompt in its new
+order; ordinary text edits still send only the changed sections. The pinned
+prefix and earlier messages remain unchanged.
 
 The session prompt rebuilds only at these points:
 

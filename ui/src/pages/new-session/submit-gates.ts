@@ -109,6 +109,12 @@ export function readNewSessionSubmissionAccess(options: {
       method: "sessions.create",
       params: createParams,
       sessionScope: true,
+      missingScopeReasonKey:
+        createParams.incognito === true
+          ? "newSession.incognitoPermissionDenied"
+          : createParams.permissionMode === "full"
+            ? "newSession.fullAccessPermissionDenied"
+            : "sessionsView.createPermissionDenied",
     });
     // Creation assigns ownership before its required first-turn handoff has a row.
     if (!createAccess.allowed || !target || (target.kind === "profile" && target.required)) {

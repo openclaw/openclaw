@@ -279,8 +279,14 @@ function artifactFor(run, workflow, tooling, name) {
   };
 }
 
-async function waitForRun(runId, attempt, workflow, tooling, { allowFailure = false } = {}) {
-  const deadline = Date.now() + 110 * 60_000;
+async function waitForRun(
+  runId,
+  attempt,
+  workflow,
+  tooling,
+  { allowFailure = false, timeoutMinutes = 110 } = {},
+) {
+  const deadline = Date.now() + timeoutMinutes * 60_000;
   while (Date.now() < deadline) {
     const run = api(`actions/runs/${runId}`);
     producer(run, workflow, tooling);
@@ -965,7 +971,8 @@ async function main() {
       request.releaseRunAttempt,
       PUBLISH_WORKFLOW,
       tooling,
-      { allowFailure: true },
+      // The publish job alone may run 270 minutes with hour-long npm readbacks.
+      { allowFailure: true, timeoutMinutes: 330 },
     );
     await verifyPublicationOutcome(run, request, tooling, token, directory);
     output("verified", "true");

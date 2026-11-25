@@ -1,18 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfigIO } from "./config/config.js";
-import { probeDockerGatewayHealth } from "./docker-healthcheck.js";
 import { readActiveGatewayLockPort } from "./infra/gateway-lock.js";
-
-vi.mock("./config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config/config.js")>();
-  return {
-    ...actual,
-    createConfigIO: vi.fn((...args: Parameters<typeof actual.createConfigIO>) => ({
-      ...actual.createConfigIO(...args),
-      loadConfigAsync: async () => ({ gateway: { port: 19002 } }),
-    })),
-  };
-});
 
 vi.mock("./infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./infra/gateway-lock.js")>()),
@@ -21,8 +8,20 @@ vi.mock("./infra/gateway-lock.js", async (importOriginal) => ({
 
 describe("Docker healthcheck", () => {
   const fetch = vi.fn<typeof globalThis.fetch>();
+  const loadConfigAsync = vi.fn(async () => ({ gateway: { port: 19002 } }));
+  const createConfigIO = vi.fn(() => ({ loadConfigAsync }));
+  const configModuleLoaded = vi.fn();
+  let probeDockerGatewayHealth: typeof import("./docker-healthcheck.js").probeDockerGatewayHealth;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Docker launches a fresh probe each time. Observe module loading from a cold entry.
+    vi.resetModules();
+    vi.doMock("./config/config.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./config/config.js")>();
+      configModuleLoaded();
+      return { ...actual, createConfigIO };
+    });
+    ({ probeDockerGatewayHealth } = await import("./docker-healthcheck.js"));
     vi.stubGlobal("fetch", fetch);
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
     vi.mocked(readActiveGatewayLockPort).mockResolvedValue(undefined);
@@ -30,6 +29,7 @@ describe("Docker healthcheck", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("./config/config.js");
     vi.clearAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -41,7 +41,7 @@ describe("Docker healthcheck", () => {
 
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19000/healthz");
-    expect(createConfigIO).not.toHaveBeenCalled();
+    expect(configModuleLoaded).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -53,23 +53,22 @@ describe("Docker healthcheck", () => {
     await expect(probeDockerGatewayHealth()).resolves.toBe(true);
     expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
     if (port === undefined) {
+      expect(configModuleLoaded).toHaveBeenCalledOnce();
       expect(createConfigIO).toHaveBeenCalledWith({
         pluginValidation: "skip",
         shellEnvFallback: "defer",
       });
+    } else {
+      expect(configModuleLoaded).not.toHaveBeenCalled();
     }
   });
 
   it("still probes the env port when config resolution throws", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19001");
-    const defaultImpl = vi.mocked(createConfigIO).getMockImplementation()!;
-    await vi.mocked(createConfigIO).withImplementation(
-      (...args) => ({
-        ...defaultImpl(...args),
-        loadConfigAsync: async () => {
-          throw new Error("invalid config");
-        },
-      }),
+    await loadConfigAsync.withImplementation(
+      async () => {
+        throw new Error("invalid config");
+      },
       async () => {
         await expect(probeDockerGatewayHealth()).resolves.toBe(true);
         expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19001/healthz");

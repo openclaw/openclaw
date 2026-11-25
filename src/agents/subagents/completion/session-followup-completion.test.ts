@@ -32,6 +32,10 @@ beforeEach(() => {
         controller.signal.throwIfAborted();
         return run();
       },
+      runWithRequester: (run) => {
+        controller.signal.throwIfAborted();
+        return run();
+      },
     },
   });
   owner.markAccepted("first");

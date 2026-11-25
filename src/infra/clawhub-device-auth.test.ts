@@ -65,11 +65,18 @@ describe("ClawHub browser sign-in", () => {
     const request = captureClawHubResponse(() =>
       Response.json({ access_token: "synthetic-publisher-token", token_type: "bearer" }),
     );
-    await expect(pollClawHubDeviceSignIn(fakeDeviceCode, { baseUrl })).resolves.toEqual({
+    await expect(
+      pollClawHubDeviceSignIn(fakeDeviceCode, {
+        baseUrl,
+        token: "unrelated-synthetic-token",
+      }),
+    ).resolves.toEqual({
       kind: "authorized",
       token: "synthetic-publisher-token",
     });
     expect(request.url().href).toBe(baseUrl + "/api/cli/device/token");
+    expect(request.init()?.method).toBe("POST");
+    expect(new Headers(request.init()?.headers).has("Authorization")).toBe(false);
     expect(request.body()).toEqual({
       device_code: fakeDeviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",

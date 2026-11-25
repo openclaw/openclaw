@@ -84,11 +84,12 @@ export function readChatPaneMutationAccess(
   session?: GatewaySessionRow,
   sessionAbsent = false,
 ) {
-  const scopedPatchAccess = (patch: SessionPatch) =>
+  const scopedPatchAccess = (patch: SessionPatch, missingScopeReasonKey?: string) =>
     readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, ...patch },
       sessionScope: true,
+      missingScopeReasonKey,
       session,
     });
   return {
@@ -100,12 +101,18 @@ export function readChatPaneMutationAccess(
       sessionAbsent,
     }),
     model: scopedPatchAccess({ model: null }),
-    effort: scopedPatchAccess({ thinkingLevel: null }),
+    effort: scopedPatchAccess(
+      { thinkingLevel: null },
+      "chat.modelControls.thinkingPermissionDenied",
+    ),
     contextWindow: readSessionMethodAccess(snapshot, {
       method: "sessions.patch",
       params: { key: sessionKey, contextWindow: null },
     }),
-    permission: scopedPatchAccess({ permissionMode: "guarded" }),
+    permission: scopedPatchAccess(
+      { permissionMode: "guarded" },
+      "chat.permissionControls.changePermissionDenied",
+    ),
     unarchive: scopedPatchAccess({ archived: false }),
     pendingInputDismiss: readSessionMethodAccess(snapshot, {
       method: "chat.pendingInputs.dismiss",

@@ -98,7 +98,9 @@ async function runCrashPoint(params: {
     await waitForCrashPoint({ child, markerPath, readStderr: () => stderr });
     const targetVisibleAfterCrash = fs.existsSync(targetPath);
     const crashStagingEntries = listCrashStagingEntries(params.scratchPath);
-    if (crashStagingEntries.length === 0) {
+    // Publication retires its staging before afterPublish; only the earlier
+    // crash point must retain staging.
+    if (params.crashPoint === "before-publish" && crashStagingEntries.length === 0) {
       throw new Error(`SQLite publication worker reached ${params.crashPoint} without staging.`);
     }
     if (!child.kill("SIGKILL")) {

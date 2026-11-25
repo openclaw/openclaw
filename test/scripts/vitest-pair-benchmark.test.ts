@@ -956,7 +956,11 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     ).toHaveLength(40);
     expect(existsSync(scratch)).toBe(false);
     writeFileSync(path.join(root, "mutate"), "enable ignored-file mutation");
-    const mutated = { ...context, outputDir: path.join(root, "mutated") };
+    const mutated = {
+      ...context,
+      outputDir: path.join(root, "mutated"),
+      scratchDir: path.join(root, "mutated-scratch"),
+    };
     await expect(runNodeCacheBenchmark(mutated)).rejects.toThrow("Prepared workload changed");
     expect(existsSync(path.join(mutated.outputDir, "analysis.json"))).toBe(false);
     expect(
@@ -974,6 +978,7 @@ it.runIf(process.platform === "linux" && process.version === "v24.22.1" && !proc
     expect(
       JSON.parse(readFileSync(path.join(mutated.outputDir, "pair-20-disabled.json"), "utf8")),
     ).toMatchObject({ status: "success", processTreeSettled: true });
+    expect(existsSync(path.join(mutated.scratchDir, "active"))).toBe(false);
     rmSync(path.join(root, "mutate"));
     rmSync(path.join(workload, ".ignored"), { recursive: true });
     nodeCacheManifest.expected[0]!.fullName = "missing expected case";

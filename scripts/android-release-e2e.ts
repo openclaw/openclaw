@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -37,6 +38,7 @@ import {
 } from "./lib/android-release-e2e-evidence.js";
 import { prepareIOSReleaseGateway } from "./lib/ios-release-gateway.js";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   getStandaloneRuntimeProcessOutputOptions,
@@ -60,6 +62,13 @@ type Evidence = {
   schema: number;
   status: "failed" | "passed";
   targetSha: string;
+  harnessSha: string;
+  client?: {
+    kind: "stable-release-source-rebuild";
+    clientSha: string;
+    releaseTag: string;
+    source: { clean: boolean; diffSha256?: string };
+  };
   source: { clean: boolean; diffSha256?: string };
   phases: string[];
   coverage: string;
@@ -98,6 +107,11 @@ export async function main(argv = process.argv.slice(2)) {
     args: argv.filter((arg) => arg !== "--"),
     options: {
       "target-sha": { type: "string" },
+      "candidate-root": { type: "string" },
+      "harness-sha": { type: "string" },
+      "client-root": { type: "string" },
+      "client-sha": { type: "string" },
+      "client-release-tag": { type: "string" },
       output: { type: "string" },
       "artifacts-dir": { type: "string" },
       "selection-dir": { type: "string" },
@@ -106,8 +120,43 @@ export async function main(argv = process.argv.slice(2)) {
   });
   if (!values.output || !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "")) {
     throw new Error(
-      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>]",
+      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>] [--candidate-root <checkout> --harness-sha <full-sha>] [--client-root <stable-checkout> --client-sha <full-sha> --client-release-tag <tag>]",
     );
+  }
+  const compatibility =
+    values["client-root"] !== undefined ||
+    values["client-sha"] !== undefined ||
+    values["client-release-tag"] !== undefined;
+  if (
+    (values["candidate-root"] !== undefined || values["harness-sha"] !== undefined) &&
+    (!compatibility ||
+      (values["candidate-root"] !== undefined && !values["candidate-root"].trim()) ||
+      (values["harness-sha"] !== undefined && !/^[a-f0-9]{40}$/u.test(values["harness-sha"])))
+  ) {
+    throw new Error(
+      "--candidate-root and --harness-sha require stable-client compatibility and valid identities.",
+    );
+  }
+  const candidateRoot = path.resolve(values["candidate-root"] ?? repo);
+  const harnessSha = values["harness-sha"] ?? values["target-sha"]!;
+  const releaseTag = values["client-release-tag"];
+  const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
+  if (
+    compatibility &&
+    (!values["client-root"]?.trim() ||
+      !/^[a-f0-9]{40}$/u.test(values["client-sha"] ?? "") ||
+      !release ||
+      releaseTag !== `v${release.version}` ||
+      release.channel !== "stable" ||
+      release.patch >= 33)
+  ) {
+    throw new Error(
+      "--client-root, --client-sha (full SHA), and --client-release-tag (regular stable tag) are required together.",
+    );
+  }
+  const clientRoot = compatibility ? await realpath(values["client-root"]!) : repo;
+  if (compatibility && clientRoot === (await realpath(repo))) {
+    throw new Error("--client-root must be a separate stable-release checkout.");
   }
   if (
     !["linux", "darwin"].includes(process.platform) ||
@@ -137,10 +186,22 @@ export async function main(argv = process.argv.slice(2)) {
     schema: 1,
     status: "failed",
     targetSha: values["target-sha"]!,
+    harnessSha,
+    ...(compatibility
+      ? {
+          client: {
+            kind: "stable-release-source-rebuild" as const,
+            clientSha: values["client-sha"]!,
+            releaseTag: releaseTag!,
+            source: { clean: false },
+          },
+        }
+      : {}),
     source: { clean: false },
     phases: [],
-    coverage:
-      "Native phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, published Gateway and local provider.",
+    coverage: compatibility
+      ? "Stable-release-source-rebuild phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, candidate Gateway and local provider."
+      : "Native phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, published Gateway and local provider.",
     exclusions: [
       "Google capability discovery",
       "WearableListenerService delivery",
@@ -173,7 +234,7 @@ export async function main(argv = process.argv.slice(2)) {
     bin: string,
     args: string[],
     timeoutMs = 60_000,
-    extra: { input?: string; cleanup?: boolean; binaryFile?: string } = {},
+    extra: { input?: string; cleanup?: boolean; binaryFile?: string; cwd?: string } = {},
   ) {
     let stdout = "";
     let stderr = "";
@@ -185,7 +246,7 @@ export async function main(argv = process.argv.slice(2)) {
       code = await runManagedCommand({
         bin,
         args,
-        cwd: repo,
+        cwd: extra.cwd ?? repo,
         env,
         timeoutMs,
         shell: false,
@@ -269,6 +330,10 @@ export async function main(argv = process.argv.slice(2)) {
           abort.abort();
         }
         if (code !== 0 && !stop.signal.aborted) {
+          diagnostic("service", {
+            ...androidReleaseCommandFacts(bin, args, raw, ""),
+            exitCode: code,
+          });
           throw new Error(`service-exit-${code}`);
         }
       })
@@ -277,6 +342,10 @@ export async function main(argv = process.argv.slice(2)) {
           preserveRoot = true;
         }
         if (!(stop.signal.aborted || closing) || hasUnjoinedWork(error)) {
+          diagnostic("service", {
+            ...androidReleaseCommandFacts(bin, args, raw, ""),
+            ...androidReleaseErrorFacts(error),
+          });
           throw error;
         }
       })
@@ -316,18 +385,37 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error("readiness-timeout");
   }
   let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
+  let disposeGateway: (() => Promise<void>) | undefined;
   const transports: AndroidReleaseTransportSnapshot[] = [];
   evidence.transport = transports;
   try {
-    if ((await command("git", ["rev-parse", "HEAD"])) !== evidence.targetSha) {
+    if ((await command("git", ["rev-parse", "HEAD"])) !== evidence.harnessSha) {
       throw new Error("source-head-mismatch");
     }
     evidence.source = await androidReleaseSourceEvidence(command, repo);
     if (
       !evidence.source.clean &&
-      (!values["allow-dirty"] || process.env.GITHUB_ACTIONS === "true")
+      (compatibility || !values["allow-dirty"] || process.env.GITHUB_ACTIONS === "true")
     ) {
       throw new Error("dirty-source");
+    }
+    // Git status and the untracked bytes hashed by source evidence must come
+    // from the same checkout, not candidate status paired with stable files.
+    const clientCommand = (bin: string, args: string[]) =>
+      command(bin, args, 60_000, { cwd: clientRoot });
+    if (evidence.client) {
+      if (
+        (await clientCommand("git", ["rev-parse", "--show-toplevel"])) !== clientRoot ||
+        (await clientCommand("git", ["rev-parse", "HEAD"])) !== evidence.client.clientSha ||
+        (await clientCommand("git", ["rev-parse", `${evidence.client.releaseTag}^{commit}`])) !==
+          evidence.client.clientSha
+      ) {
+        throw new Error("client-source-identity-mismatch");
+      }
+      evidence.client.source = await androidReleaseSourceEvidence(clientCommand, clientRoot);
+      if (!evidence.client.source.clean) {
+        throw new Error("dirty-client-source");
+      }
     }
     phase("build");
     await command(
@@ -344,9 +432,10 @@ export async function main(argv = process.argv.slice(2)) {
         "--max-workers=2",
       ],
       1_200_000,
+      { cwd: clientRoot },
     );
     async function apk(relative: string) {
-      const directory = path.join(repo, "apps/android", relative);
+      const directory = path.join(clientRoot, "apps/android", relative);
       const metadata = JSON.parse(
         await readFile(path.join(directory, "output-metadata.json"), "utf8"),
       ) as { elements: { outputFile: string }[] };
@@ -373,8 +462,10 @@ export async function main(argv = process.argv.slice(2)) {
       selectionDir: path.resolve(values["selection-dir"] ?? `${output}.gateway-selection`),
       installDir: path.join(root, "gateway-install"),
       targetSha: evidence.targetSha,
+      ...(compatibility ? { candidateDir: candidateRoot } : {}),
       signal: abort.signal,
     });
+    disposeGateway = gateway.dispose;
     evidence.gateway = gateway.identity;
     const requestLog = path.join(root, "requests.private.jsonl");
     const responseControl = path.join(root, "response-control.json");
@@ -460,6 +551,7 @@ export async function main(argv = process.argv.slice(2)) {
       modelRef: "openai/android-e2e",
       utilityModelRef: "openai/android-utility",
     });
+    phase("gateway-fixture");
     const fixtureOwnedKeys = new Set([
       "HOME",
       "USERPROFILE",
@@ -496,6 +588,7 @@ export async function main(argv = process.argv.slice(2)) {
       },
       signal: abort.signal,
     });
+    phase("gateway-readiness");
     await instance.startGateway();
     instance.child?.once("exit", () => {
       if (!closing) {
@@ -503,7 +596,11 @@ export async function main(argv = process.argv.slice(2)) {
         abort.abort();
       }
     });
-    const rpc = <T>(method: string, params: Record<string, unknown>) =>
+    const rpc = <T>(
+      method: string,
+      params: Record<string, unknown>,
+      observers: { onHelloOk?: () => void; assertDispatchCurrent?: () => void } = {},
+    ) =>
       callGateway<T>({
         config: {},
         configPath: instance!.configPath,
@@ -516,8 +613,32 @@ export async function main(argv = process.argv.slice(2)) {
         params,
         signal: abort.signal,
         timeoutMs: 30_000,
+        ...observers,
       });
-    await rpc("device.pair.setupStatus", { setupId: randomUUID() });
+    phase("gateway-setup-status");
+    let authenticated = false;
+    let dispatchEntered = false;
+    try {
+      await rpc(
+        "device.pair.setupStatus",
+        { setupId: randomUUID() },
+        {
+          onHelloOk: () => {
+            authenticated = true;
+          },
+          assertDispatchCurrent: () => {
+            dispatchEntered = true;
+          },
+        },
+      );
+    } catch (error) {
+      diagnostic("gateway-setup-status", {
+        authenticated,
+        dispatchEntered,
+        ...androidReleaseErrorFacts(error),
+      });
+      throw error;
+    }
     phase("emulators");
     await mkdir(env.ANDROID_AVD_HOME, { recursive: true });
     await mkdir(env.ANDROID_USER_HOME, { recursive: true });
@@ -855,16 +976,37 @@ export async function main(argv = process.argv.slice(2)) {
       throw new Error("fixture-exited");
     }
     if (
-      (await command("git", ["rev-parse", "HEAD"])) !== evidence.targetSha ||
+      (await command("git", ["rev-parse", "HEAD"])) !== evidence.harnessSha ||
       JSON.stringify(await androidReleaseSourceEvidence(command, repo)) !==
         JSON.stringify(evidence.source)
     ) {
       throw new Error("source-changed-during-validation");
     }
+    if (
+      evidence.client &&
+      ((await clientCommand("git", ["rev-parse", "HEAD"])) !== evidence.client.clientSha ||
+        !(await androidReleaseSourceEvidence(clientCommand, clientRoot)).clean)
+    ) {
+      throw new Error("client-source-changed-during-validation");
+    }
     evidence.status = "passed";
   } catch (error) {
     evidence.failure = stage;
     diagnostic("runner", androidReleaseErrorFacts(error));
+    if (instance) {
+      diagnostic(
+        "gateway-readiness",
+        instance.readiness.map((entry) => ({
+          outcome: entry.outcome,
+          elapsedMs: entry.elapsedMs,
+          attempts: entry.attempts,
+          exitCode: entry.child.exitCode,
+          signalCode: entry.child.signalCode,
+          lastError: entry.lastProbe?.error,
+          lastStatus: entry.lastProbe?.status,
+        })),
+      );
+    }
     if (hasUnjoinedWork(error)) {
       preserveRoot = true;
     }
@@ -986,9 +1128,11 @@ export async function main(argv = process.argv.slice(2)) {
       child.stop.abort();
     }
     const gatewayCleanup = await Promise.allSettled([instance?.cleanup()]);
+    const isolatedCleanup = await Promise.allSettled([disposeGateway?.()]);
     const cleanup = await Promise.allSettled(services.map((child) => child.done));
     const cleanupFailed =
       gatewayCleanup.some((entry) => entry.status === "rejected") ||
+      isolatedCleanup.some((entry) => entry.status === "rejected") ||
       cleanup.some((entry) => entry.status === "rejected" && hasUnjoinedWork(entry.reason));
     evidence.cleanupConfirmed = !cleanupFailed && !preserveRoot;
     if (!evidence.cleanupConfirmed) {

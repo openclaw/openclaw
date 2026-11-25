@@ -36,6 +36,14 @@ Invoking attests review of exact C/Q/coverage. `--trusted-workflow-ref main` and
 protected-tooling routes supply diagnostic/main-qualification/postpublish-confidence
 evidence only, never fresh publication evidence.
 
+Before creating a fresh validation request, the helper scans mock factories and
+the baseline from the committed candidate SHA using the installed tooling. It
+does not check out the candidate or execute its code. A failure stops dispatch.
+Use `--skip-local-mock-preflight` only to defer the local check to the hosted
+workflow (for example, when diagnosing older tooling). The override logs the
+candidate SHA and does not change the hosted guard or admission. Build-only
+preparation and retained requests do not run this local scan.
+
 ```bash
 PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'

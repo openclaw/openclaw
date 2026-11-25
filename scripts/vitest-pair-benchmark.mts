@@ -238,7 +238,7 @@ if (options.mode === "node-cache-qualified-measurement") {
     ...options,
     manifest: validateNodeCacheManifest(JSON.parse(readFileSync(options.manifestPath, "utf8"))),
   });
-} else {
+} else if (options.mode === "source-pair") {
   await withTerminalManifest(options.outputDir, async () => {
     assertSingleWorkflowAttempt(options.runAttempt);
     await runVitestPairBenchmark({
@@ -252,4 +252,6 @@ if (options.mode === "node-cache-qualified-measurement") {
       scratchDir: options.scratchDir,
     });
   });
+} else {
+  throw new Error(`Unhandled benchmark mode: ${options.mode}`);
 }
