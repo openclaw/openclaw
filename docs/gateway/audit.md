@@ -484,8 +484,10 @@ what was recorded, not as proof of what happened:
   when the 1,024-run buffer is full. An event that observes disabled collection,
   or normal shutdown, also flushes accepted unmatched starts.
 - Writes go through a bounded asynchronous process-owned queue; queue
-  saturation, storage failure, or a bounded shutdown timeout can drop records
-  and log one operational warning.
+  saturation, storage failure, or a bounded shutdown timeout can drop records.
+  In the [Gateway logs](/cli/logs), the first queue overflow warns that metadata
+  was dropped even if another audit persistence warning was already logged.
+  Repeated overflows do not emit another warning in the same process.
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.

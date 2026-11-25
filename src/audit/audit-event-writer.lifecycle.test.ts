@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -11,9 +14,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { AgentRunStartedAuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import { input } from "./audit-event-writer.test-support.js";
+import { input, messageEvent } from "./audit-event-writer.test-support.js";
 import type { AuditWriterResult } from "./audit-event-writer.types.js";
 import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
+import { createAuditEventRecorder } from "./audit-recorder.js";
 
 type AuditExecutor = (
   command: SqliteWorkerCommand<AuditWriterOperations>,
@@ -96,6 +100,38 @@ async function advanceDispatch() {
 }
 
 describe("audit writer async settlement", () => {
+  it("warns once when the queue drops metadata even after a persistence warning", async () => {
+    const stateDir = tempDirs.make("audit-overflow-");
+    const logFile = path.join(stateDir, "gateway.log");
+    setLoggerOverride({ file: logFile, level: "warn", consoleLevel: "silent" });
+    execute.mockImplementation(async (command) =>
+      command.type === "audit.writer.prune"
+        ? [{ status: "settled", error: "synthetic maintenance failure" }]
+        : command.input.map(() => ({ status: "settled" })),
+    );
+    const recorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
+      stateDir,
+    });
+    try {
+      await advanceDispatch();
+      const message = messageEvent("message.outbound.finished");
+      for (let index = 0; index < 4_098; index += 1) {
+        recorder.recordMessage(message);
+      }
+      await flushLogger();
+      const lines = readFileSync(logFile, "utf8").split("\n");
+      expect(lines.filter((line) => line.includes("synthetic maintenance failure"))).toHaveLength(
+        1,
+      );
+      expect(lines.filter((line) => line.includes("dropping metadata"))).toHaveLength(1);
+    } finally {
+      await Promise.all([recorder.stop(), vi.advanceTimersByTimeAsync(10_000)]);
+      resetLogger();
+    }
+  });
+
   it.each([false, true])("coalesces neighboring turns (early shutdown: %s)", async (stopEarly) => {
     const first = createDeferred<AuditWriterResult>();
     const requests = mockEventRequests(async (id) =>

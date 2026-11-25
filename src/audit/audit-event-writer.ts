@@ -32,6 +32,7 @@ const AUDIT_RETRY_REPORT_MS = 1_000;
 const AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS + 5_000;
 
 type AuditMaintenanceAttempt = "settled" | "more" | "retry";
+export type AuditWriterWarningKind = "persistence" | "queue-full";
 
 export type AuditEventWriter = {
   ready: Promise<void>;
@@ -55,7 +56,7 @@ export function createAuditEventWriter(options: {
   stateDir?: string;
   maxPending?: number;
   onContention?: (message: string) => void;
-  onError?: (error: string) => void;
+  onError?: (error: string, kind: AuditWriterWarningKind) => void;
 }): AuditEventWriter {
   const { scheduler } = options;
   const database = {
@@ -83,8 +84,8 @@ export function createAuditEventWriter(options: {
   let resolveStop: (() => void) | undefined;
   let stopTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const fail = (error: unknown) => {
-    options.onError?.(formatAuditWriterError(error));
+  const fail = (error: unknown, kind: AuditWriterWarningKind = "persistence") => {
+    options.onError?.(formatAuditWriterError(error), kind);
   };
   const reportContention = (message: string) => {
     options.onContention?.(formatAuditWriterError(message));
@@ -306,7 +307,7 @@ export function createAuditEventWriter(options: {
     const rows = message.type === "record-run" ? 2 : 1;
     if (stopped || pendingRows + rows > maxPending) {
       if (!stopped) {
-        fail(`audit event queue is full (${maxPending}); dropping metadata`);
+        fail(`audit event queue is full (${maxPending}); dropping metadata`, "queue-full");
       }
       return false;
     }
