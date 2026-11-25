@@ -500,9 +500,11 @@ jobs:
               ...fileSplitPlanGroups,
               ...[...sourcePlanGroups.values()].map((group) => ({ ...group, family: "source" })),
             ]) {
-              const vitestConfig = (await import(`./${group.config}`)).default;
-              const testConfig = vitestConfig.test ?? {};
-              const testDir = testConfig.dir ?? process.cwd();
+              const { resolveConfig } = await import("vitest/node");
+              const resolved = await resolveConfig({ config: group.config });
+              // Frozen targets expose either Vitest 4's wrapper or Vitest 5's resolved Vite config.
+              const testConfig = "vitestConfig" in resolved ? resolved.vitestConfig : resolved.test;
+              const testDir = testConfig.dir || testConfig.root;
               const exclude = (testConfig.exclude ?? []).map((pattern) =>
                 path.isAbsolute(pattern)
                   ? path.relative(testDir, pattern).replaceAll("\\", "/")

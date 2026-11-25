@@ -233,8 +233,8 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
       for (const file of [
         "test/scripts/blocked/initial.test.ts",
         "test/scripts/inherited-blocked-initial.test.ts",
-        "test/scripts/vendor/initial.test.ts",
-        "test/scripts/node_modules/initial.test.ts",
+        "test/helpers/vendor/initial.test.ts",
+        "test/helpers/node_modules/initial.test.ts",
       ])
         write(directory, file, "throw new Error('excluded fixture');");
       const absolute = (pattern: string) => `${convertPathToPattern(directory)}/${pattern}`;
@@ -374,7 +374,7 @@ it.skipIf(process.platform === "win32").for([".", "test/helpers"])(
         const negatives = [
           "test/scripts/blocked/later.test.ts",
           "test/scripts/inherited-blocked-later.test.ts",
-          "test/scripts/vendor/later.test.ts",
+          "test/helpers/vendor/later.test.ts",
           "test/scripts/no-run.test.ts",
           "src/ignored.source.ts",
           "src/not-a-test.source.ts",
