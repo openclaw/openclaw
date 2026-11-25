@@ -5,10 +5,10 @@ import Testing
 @testable import OpenClaw
 
 private actor TalkChatSendRecorder {
-    private(set) var params: [String: Any]?
+    private(set) var json: Data?
 
-    func record(_ value: [String: Any]) {
-        self.params = value
+    func record(_ value: Data) {
+        self.json = value
     }
 }
 
@@ -42,7 +42,7 @@ struct TalkChatSettingsSendTests {
                     "resolved": ["provider": "xiaomi", "config": provider],
                 ]]]
             case "chat.send":
-                await recorder.record(params)
+                await recorder.record(try JSONSerialization.data(withJSONObject: params, options: [.sortedKeys]))
                 let runId = try #require(params["idempotencyKey"] as? String)
                 try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
                     "type": "event", "event": "chat",
@@ -89,10 +89,9 @@ struct TalkChatSettingsSendTests {
         _ = await outcomes.next()
         await gateway.disconnect()
 
-        let sent = try #require(await recorder.params)
-        let line = try String(
-            data: JSONSerialization.data(withJSONObject: sent, options: [.sortedKeys]),
-            encoding: .utf8) ?? ""
+        let data = try #require(await recorder.json)
+        let sent = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let line = String(data: data, encoding: .utf8) ?? ""
         print("TALKPROOF advertised=\(advertised) chat.send params=\(line)")
         #expect((sent["useTalkSettings"] as? Bool) == (advertised ? true : nil))
         #expect(sent["thinking"] == nil)
