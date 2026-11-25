@@ -41,6 +41,8 @@ export interface FullTextCapability {
     maxTokens: number,
     query?: TextQuery,
     maxChars?: number,
+    /** Optional SQLite FTS5 markers for locating a match in the unmarked excerpt. */
+    sqliteMatchMarkers?: { start: string; end: string },
   ): RawBuilder<string>;
   identity(index: TextIndex): RawBuilder<number>;
   allocatedIdentity(index: TextIndex): RawBuilder<number>;
