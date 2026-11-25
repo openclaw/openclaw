@@ -27,6 +27,12 @@ import {
   buildReleaseValidationManifest,
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
+import { npmPreparationJobName } from "./lib/full-release-publication-inputs.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  classifyBetaPromotionComparison,
+  isBetaPromotionPath,
+} from "./lib/release-beta-promotion.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
@@ -178,7 +184,29 @@ export function isSplitChangelogEvidenceDelta(paths, version) {
   }
 }
 
-export function classifyReleaseChangelogEvidenceComparison(comparison, { baseSha, version }) {
+export function classifyReleaseEvidenceComparison(
+  comparison,
+  {
+    baseSha,
+    targetSha,
+    version,
+    readSourceFile,
+    readSourceFiles,
+    rootManifest,
+    targetCoveragePolicy,
+  },
+) {
+  if (comparison?.files?.some((file) => file.filename === "package.json")) {
+    return classifyBetaPromotionComparison(comparison, {
+      baseSha,
+      targetSha,
+      version,
+      readSourceFile,
+      readSourceFiles,
+      rootManifest,
+      targetCoveragePolicy,
+    });
+  }
   const files = Array.isArray(comparison?.files) ? comparison.files : [];
   const changedPaths = files.map((file) => file.filename);
   const legacy = changedPaths.length === 1 && changedPaths[0] === "CHANGELOG.md";
@@ -262,6 +290,15 @@ const CHILD_SPECS = Object.freeze([
     rerunGroups: ["all", "ci"],
     suffix: "-ci",
     workflow: "ci.yml",
+  },
+  {
+    dispatchName: "Dispatch stable client compatibility",
+    displayName: "Stable Release Source Compatibility",
+    key: "stableClientCompatibility",
+    parentJobName: "Run stable client compatibility",
+    rerunGroups: ["all", "ci"],
+    suffix: "-stable-client",
+    workflow: "stable-release-source-compatibility.yml",
   },
   {
     dispatchName: "Dispatch plugin prerelease independent phase",
@@ -1035,6 +1072,10 @@ export function buildReleaseExecutionPlan(input) {
     throw new Error("release execution plan identity is invalid");
   }
   const reused = booleanValue(input.evidenceReuse);
+  const buildOnly = rerunGroup === "build-only";
+  if (buildOnly && (reused || !input.qualificationCoverage)) {
+    throw new Error("Build-only requires direct admitted qualification, not reused evidence");
+  }
   const childInputs =
     input.children && typeof input.children === "object" && !Array.isArray(input.children)
       ? input.children
@@ -1057,9 +1098,9 @@ export function buildReleaseExecutionPlan(input) {
       : UNPHASED_CHILD_SPECS;
   const children = childSpecs.map((spec) => {
     const raw = childInputs[spec.key] ?? {};
-    const required = frozenCoverage
-      ? true
-      : releaseExecutionChildRequired(spec, input, npmTelegramForAll);
+    const required =
+      !buildOnly &&
+      (frozenCoverage ? true : releaseExecutionChildRequired(spec, input, npmTelegramForAll));
     const dispatchId = `full-release-validation-${parentRunId}-${parentRunAttempt}${spec.suffix}`;
     return {
       dispatchName: spec.dispatchName,
@@ -1085,30 +1126,34 @@ export function buildReleaseExecutionPlan(input) {
       result: stringValue(input.resolveTargetResult, "missing"),
     },
     {
-      name: "Prepare release npm artifacts",
-      required: rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
+      name: npmPreparationJobName(input.qualificationInputs),
+      required:
+        buildOnly || rerunGroup === "all" || (!reused && booleanValue(input.candidateRequired)),
       result: stringValue(input.npmPreparationResult, "skipped"),
     },
     {
       name: "Qualify release npm artifacts",
-      required: rerunGroup === "all",
+      required: buildOnly || rerunGroup === "all",
       result: stringValue(input.npmQualificationResult, "skipped"),
     },
     {
       name: "Prepare exact plugin npm artifacts",
-      required: rerunGroup === "all" && booleanValue(input.pluginNpmPreflightRequired),
+      required:
+        (buildOnly || rerunGroup === "all") && booleanValue(input.pluginNpmPreflightRequired),
       result: stringValue(input.pluginNpmPreparationResult, "skipped"),
     },
     {
       name: "Prepare release Docker artifacts",
-      required: rerunGroup === "all",
+      required: buildOnly || rerunGroup === "all",
       result: stringValue(input.dockerPreparationResult, "skipped"),
     },
     {
       name: phasedChildren ? "Acquire full release candidate" : "Prepare shared release candidate",
-      required: phasedChildren
-        ? !reused && booleanValue(input.candidateRequired)
-        : candidatePreparationRequired(input),
+      required:
+        buildOnly ||
+        (phasedChildren
+          ? !reused && booleanValue(input.candidateRequired)
+          : candidatePreparationRequired(input)),
       result: stringValue(
         phasedChildren ? input.candidateAcquisitionResult : input.candidateBindingResult,
         "skipped",
@@ -1196,6 +1241,9 @@ function validEvidenceReuseIdentity(evidenceReuse, targetVersion, allowPendingAr
     return true;
   }
   const validChangedPaths =
+    (evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY &&
+      evidenceReuse.changedPaths.includes("package.json") &&
+      evidenceReuse.changedPaths.every((path) => isBetaPromotionPath(path, targetVersion))) ||
     (evidenceReuse.policy === EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
       evidenceReuse.changedPaths.length === 0) ||
     (evidenceReuse.policy === CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY &&
@@ -1436,7 +1484,11 @@ export function buildReleaseExecutionPlanArtifact({
   const artifactSpecs = frozenCoverage
     ? []
     : normalizedAttemptEvidenceVersion === 3
-      ? CHILD_SPECS
+      ? CHILD_SPECS.filter(
+          (spec) =>
+            spec.key !== "stableClientCompatibility" ||
+            normalizedChildren.some((child) => child.key === spec.key),
+        )
       : UNPHASED_CHILD_SPECS;
   for (const spec of artifactSpecs) {
     if (
@@ -1758,6 +1810,14 @@ function terminalChildPass(child, policy) {
     policy.waivedWorkDidNotPass;
   return (
     permittedConclusion &&
+    (child.key !== "stableClientCompatibility" ||
+      (child.jobs.filter((job) => job.name === "Verify stable client compatibility").length === 1 &&
+        child.jobs.some(
+          (job) =>
+            job.name === "Verify stable client compatibility" &&
+            job.status === "completed" &&
+            job.conclusion === "success",
+        ))) &&
     child.jobs.every((job) => job.status === "completed" || policy.waivedJobNames.has(job.name)) &&
     policy.advisoryFailureAllowed &&
     policy.blockingJobs.length === 0 &&
@@ -2136,6 +2196,15 @@ function validatePlan(value, options = {}) {
 }
 
 function validateExecutionPlanChildBindings(children, payload, expectedCoverage) {
+  const buildOnly = payload.rerunGroup === "build-only";
+  if (
+    buildOnly &&
+    (!payload.qualificationCoverage ||
+      payload.evidenceReuse?.requested ||
+      payload.coveragePolicy !== undefined)
+  ) {
+    throw new Error("Build-only requires direct admitted qualification, not reused evidence");
+  }
   if (payload.qualificationCoverage !== undefined) {
     const coverage = validateQualificationCoverage(payload.qualificationCoverage);
     if (
@@ -2147,7 +2216,7 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     if (
       payload.attemptEvidenceVersion !== 3 ||
       payload.releaseProfile !== coverage.profile ||
-      payload.rerunGroup !== "all" ||
+      !["all", "build-only"].includes(payload.rerunGroup) ||
       !payload.sourceAdmission?.qualificationAdmission ||
       !payload.qualificationInputs ||
       typeof payload.qualificationInputs !== "object" ||
@@ -2180,8 +2249,15 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
           ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
           : payload;
       if (
-        !child.required ||
-        !child.selected ||
+        (buildOnly
+          ? child.required ||
+            child.selected ||
+            child.runId ||
+            child.runAttempt ||
+            child.url ||
+            child.result !== "skipped" ||
+            child.source !== "fresh"
+          : !child.required || !child.selected) ||
         child.dispatchName !== spec.dispatchName ||
         child.workflow !== spec.workflow ||
         child.workflowSha !== (producer.sha ?? producer.workflowSha) ||
@@ -2206,6 +2282,12 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     throw new Error("Execution plan omitted admitted frozen qualification coverage");
   }
   const expectedKeys = (payload.attemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS)
+    // Older phase-three receipts predate this additive child inventory.
+    .filter(
+      (spec) =>
+        spec.key !== "stableClientCompatibility" ||
+        children.some((child) => child.key === spec.key),
+    )
     .map((spec) => spec.key)
     .toSorted();
   if (
@@ -2290,11 +2372,13 @@ function validateChildReuseBindings(plan) {
       throw new Error(`release child reuse differs from its immutable plan: ${role}`);
     }
     const targetKey =
-      role === "npmTelegram"
-        ? "harness_ref"
-        : role.startsWith("releaseChecks")
-          ? "ref"
-          : "target_ref";
+      role === "stableClientCompatibility"
+        ? "target_sha"
+        : role === "npmTelegram"
+          ? "harness_ref"
+          : role.startsWith("releaseChecks")
+            ? "ref"
+            : "target_ref";
     if (
       selection.inputs[targetKey] !== plan.targetSha ||
       (role.endsWith("Candidate") && selection.inputs.phase !== "candidate") ||
@@ -2953,10 +3037,17 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   return lines;
 }
 
-export function formatReleaseStateOutcome(payload) {
-  const lines = [`Full Release Validation state: ${payload.state}`];
+export function formatReleaseStateOutcome(payload, { observedDrainStatus } = {}) {
+  const label =
+    observedDrainStatus === undefined
+      ? "Full Release Validation state"
+      : "Release Decision snapshot";
+  const lines = [`${label}: ${payload.state}`];
   lines.push(...releaseStateDetailLines(payload));
-  if (payload.state === "blocked_diagnostics_running") {
+  if (
+    payload.state === "blocked_diagnostics_running" &&
+    (observedDrainStatus === undefined || observedDrainStatus === "in_progress")
+  ) {
     lines.push(
       "Diagnostic Drain is still collecting terminal evidence; diagnose now, retry later.",
     );
@@ -3003,9 +3094,46 @@ export function resolveAdmittedQualificationScope(admission) {
   };
 }
 
+function normalCiAndroidOverride(parentWorkflowSource, ciReleaseScope) {
+  const blocks = [...(parentWorkflowSource ?? "").matchAll(/^ +ci\)\r?\n([\s\S]*?)^ +;; *$/gmu)];
+  const lines = blocks[0]?.[1]
+    .trim()
+    .split(/\r?\n/u)
+    .map((line) => line.trim());
+  const dispatch = 'dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"';
+  const argsPrefix = 'args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope"';
+  const argsSuffix = ' -f dispatch_id="$dispatch_id")';
+  const args = lines?.filter((line) => line.startsWith("args=("));
+  if (blocks.length !== 1 || lines?.at(-1) !== dispatch || args?.length !== 1) {
+    throw new Error("Unrecognized frozen Normal CI dispatch");
+  }
+  const androidLines = lines.filter((line) => line.includes("include_android"));
+  if (args[0] === argsPrefix + argsSuffix && androidLines.length === 0) {
+    return undefined; // Gateway FRV omitted this input; use frozen ci.yml's default.
+  }
+  const legacyArgs = argsPrefix + ' -f include_android="$include_android"' + argsSuffix;
+  if (
+    args[0] === legacyArgs &&
+    isDeepStrictEqual(androidLines, [
+      "include_android=true",
+      'if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi',
+      legacyArgs,
+    ])
+  ) {
+    return ciReleaseScope !== "npm-beta" && ciReleaseScope !== "npm-stable";
+  }
+  throw new Error("Unrecognized frozen Normal CI Android dispatch");
+}
+
 // Derive operands from the independently admitted request, not caller-supplied
 // receipt.inputs. The immutable Q workflow supplies all unsupplied defaults.
-export function qualificationChildDispatchInputs(role, admission, binding, workflowSource) {
+export function qualificationChildDispatchInputs(
+  role,
+  admission,
+  binding,
+  workflowSource,
+  parentWorkflowSource,
+) {
   const input = admission.request.inputs;
   const lane = JSON.parse(input.trusted_workflow_json).laneInputs ?? {};
   const target = admission.request.candidateSha;
@@ -3021,7 +3149,10 @@ export function qualificationChildDispatchInputs(role, admission, binding, workf
   if (role === "normalCi") {
     add("target_ref", target);
     add("release_scope", scope.ciReleaseScope);
-    add("include_android", scope.ciReleaseScope === "full");
+    const android = normalCiAndroidOverride(parentWorkflowSource, scope.ciReleaseScope);
+    if (android !== undefined) {
+      add("include_android", android);
+    }
     const ref = (context || input.ref).replace(/^refs\/(?:heads|tags)\//u, "");
     if (/^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+|-[1-9][0-9]*)?$/u.test(ref)) {
       add("historical_target_tag", ref);
@@ -3032,6 +3163,9 @@ export function qualificationChildDispatchInputs(role, admission, binding, workf
     ) {
       add("target_context_ref", ref);
     }
+  } else if (role === "stableClientCompatibility") {
+    add("target_sha", target);
+    return releaseChildDispatchInputs(workflowSource, args);
   } else if (role === "productPerformance") {
     add("target_ref", target);
     add("profile", "release");

@@ -117,7 +117,7 @@ async function inAdminRun<T>(
   const capability = cronContext.createCronCreatorAuthorityCapability(
     runId,
     { kind: "unknown" },
-    options.managementEntitlement ?? { source: "control-ui-admin" },
+    options.managementEntitlement ?? { source: "operator" },
     options.isCurrent,
     undefined,
     options.requesterOwner,
@@ -309,7 +309,7 @@ it.each(["completion", "scope ended"] as const)(
       paused!.requesterSettleWake!.pauseNotice = { acknowledgment: "Need a continuation." };
     });
     await inAdmittedScope([batch[0]!], async (admission) => {
-      expect(admission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(admission.managementEntitlement.source).toBe("operator");
       if (outcome === "completion") {
         await finishPause(batch);
       }
@@ -323,7 +323,7 @@ it.each(["completion", "scope ended"] as const)(
     await dispatch(nextBatch, async () => {
       const completionAdmission = consume(nextBatch)!;
       expect(completionAdmission.isCurrent()).toBe(true);
-      expect(completionAdmission.managementEntitlement.source).toBe("control-ui-admin");
+      expect(completionAdmission.managementEntitlement.source).toBe("operator");
       await updateBatch(nextBatch, (drafts) => {
         for (const entry of drafts) {
           entry.requesterSettleWake = undefined;
@@ -338,7 +338,7 @@ it.each(["completion", "scope ended"] as const)(
 it.each([
   ["channel-owner", true],
   ["channel-owner", false],
-  ["control-ui-admin", false],
+  ["operator", false],
 ] as const)("retains %s across yields with plugin owner=%s", async (source, hasOwner) => {
   const owner = {
     senderId: "original-owner",

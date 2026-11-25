@@ -1,6 +1,8 @@
 import noForcedProcessExit from "./lib/no-forced-process-exit.mjs";
 import noOperatorPermissionRead from "./lib/no-operator-permission-read.mjs";
+import noOperatorRefusalConstruction from "./lib/no-operator-refusal-construction.mjs";
 import noRecursiveReaddir from "./lib/no-recursive-readdir.mjs";
+import noTurnAuthorityDerivation from "./lib/no-turn-authority-derivation.mjs";
 import {
   BOUNDARY_GUARD_FIXTURE_ROOT,
   CHAINED_ASSERTION_EXCLUDED_ROOTS,
@@ -567,7 +569,9 @@ export default {
   rules: {
     "no-forced-process-exit": noForcedProcessExit,
     "no-operator-permission-read": noOperatorPermissionRead,
+    "no-operator-refusal-construction": noOperatorRefusalConstruction,
     "no-recursive-readdir": noRecursiveReaddir,
+    "no-turn-authority-derivation": noTurnAuthorityDerivation,
     "no-raw-window-open-call": restrictedCallRule({
       allowedFiles: ["ui/src/lib/editor-links.ts", "ui/src/lib/open-external-url.ts"],
       roots: ["ui/src", "test/fixtures/oxlint-boundary-guards"],

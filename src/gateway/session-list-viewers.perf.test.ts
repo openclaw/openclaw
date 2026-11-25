@@ -14,6 +14,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -81,6 +82,85 @@ function patchEntry(
 ) {
   writeListEntry(key, { ...store[key]!, ...patch });
 }
+
+test("reuses invited pages until committed membership changes their visible roster", async () => {
+  await withStateDirEnv("openclaw-list-invited-", async () => {
+    const scopes = ["operator.read", "operator.write"] as const;
+    const cfg = initialize({
+      agents: { entries: { main: {}, work: {} } },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+          },
+        },
+      },
+    });
+    const guest = viewer("guest");
+    const other = viewer("other");
+    const guestId = guest.authenticatedUserProfile!.profileId;
+    const otherId = other.authenticatedUserProfile!.profileId;
+    const granted = { agentId: "work", sessionKey: "agent:work:granted", sessionId: "granted" };
+    const later = { agentId: "main", sessionKey: "agent:main:later", sessionId: "later" };
+    writeResidentEntries({
+      ...Object.fromEntries(
+        Array.from({ length: 256 }, (_, i) => [
+          `agent:main:uninvited-${i}`,
+          { sessionId: `uninvited-${i}`, updatedAt: 100 + i, createdActor: profileActor(otherId) },
+        ]),
+      ),
+      [granted.sessionKey]: {
+        sessionId: granted.sessionId,
+        updatedAt: 5,
+        createdActor: profileActor(otherId),
+      },
+      [later.sessionKey]: {
+        sessionId: later.sessionId,
+        updatedAt: 4,
+        createdActor: profileActor("another-owner"),
+      },
+      "agent:main:own": { sessionId: "own", updatedAt: 3, createdActor: profileActor(guestId) },
+    });
+    await addSessionMember(granted, { identityId: guestId, addedBy: otherId });
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using checkMembership = vi.spyOn(projection, "hasMembership");
+    const read = (offset = 0) =>
+      listProjectedSessions({
+        projection,
+        client: guest,
+        opts: { limit: 1, ownerFirst: true, offset },
+      });
+    try {
+      await projection.ensureMaterialized();
+      const warm = await read();
+      expectPage(warm, ["own", "granted"], 2);
+      expect(warm).toMatchObject({ hasMore: true, nextOffset: 1 });
+      const owners = warm.owners;
+      expectPage(await read(1), ["own"], 2);
+      checkMembership.mockClear();
+      expectPage(await read(), ["own", "granted"], 2);
+      expect(checkMembership).not.toHaveBeenCalled();
+
+      await addSessionMember(later, { identityId: guestId, addedBy: otherId });
+      checkMembership.mockClear();
+      const extended = await read(1);
+      expectPage(extended, ["later"], 3);
+      expect(extended).toMatchObject({ hasMore: true, nextOffset: 2 });
+      expect(checkMembership.mock.calls.length).toBeLessThan(32);
+
+      await removeSessionMember(granted, guestId);
+      const revoked = await read();
+      expectPage(revoked, ["own", "later"], 2);
+      expect(revoked.owners).not.toEqual(owners);
+      expectPage(await read(1), ["own"], 2);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {

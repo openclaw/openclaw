@@ -28,7 +28,7 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("./gateway-rpc.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCli,
+  callGatewayFromCliWithTransport: callGatewayFromCli,
 }));
 
 vi.mock("../infra/backoff.js", () => ({ computeBackoff: () => 0 }));

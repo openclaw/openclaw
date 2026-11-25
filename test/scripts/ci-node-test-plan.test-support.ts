@@ -2,7 +2,7 @@ import { globSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { expect } from "vitest";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
-import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";

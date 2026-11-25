@@ -54,7 +54,13 @@ import {
   buildReleaseValidationManifest,
   manifestContextFromEnvironment,
   releaseManifestChildEvidence,
+  releaseManifestRootPublication,
 } from "./lib/full-release-manifest.mjs";
+import { INITIAL_NPM_PREPARATION_JOB } from "./lib/full-release-publication-inputs.mjs";
+import {
+  BETA_FINAL_EVIDENCE_REUSE_POLICY,
+  promotionSourceIdentity,
+} from "./lib/release-beta-promotion.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { isWaived } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
@@ -182,6 +188,7 @@ async function githubAttemptJobs(runId, runAttempt, signal) {
 
 const EFFECTIVE_PARENT_GATE_ENV = new Map([
   ["Prepare release npm artifacts", "NPM_PREPARATION_RESULT"],
+  [INITIAL_NPM_PREPARATION_JOB, "NPM_PREPARATION_RESULT"],
   ["Qualify release npm artifacts", "NPM_QUALIFICATION_RESULT"],
   ["Prepare exact plugin npm artifacts", "PLUGIN_NPM_PREPARATION_RESULT"],
   ["Prepare release Docker artifacts", "DOCKER_PREPARATION_RESULT"],
@@ -580,13 +587,26 @@ async function validateReuse(executionPlan, signal) {
     ) {
       throw new Error("reused release evidence manifest differs from the immutable plan");
     }
-    validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    const promotion = evidenceReuse.policy === BETA_FINAL_EVIDENCE_REUSE_POLICY;
+    // The frozen admitted coverage is checked above. Only its version-derived
+    // npm-stable label differs between the beta and final candidates.
+    if (!promotion) {
+      validateReleaseCoveragePolicyBinding(executionPlan, evidence.manifest.validationInputs);
+    }
     const source = validatePublicationSourceBinding(evidence.manifest, {
       sourceAdmissionContract: executionPlan.sourceAdmissionContract,
     });
     if (
-      JSON.stringify(publicationSourceReuseIdentity(source)) !==
-      JSON.stringify(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(source))
+          : publicationSourceReuseIdentity(source),
+      ) !==
+      JSON.stringify(
+        promotion
+          ? promotionSourceIdentity(publicationSourceReuseIdentity(executionPlan.sourceAdmission))
+          : publicationSourceReuseIdentity(executionPlan.sourceAdmission),
+      )
     ) {
       throw new Error("reused source admission differs from the requested publication source");
     }
@@ -745,6 +765,7 @@ function publicationKnownBudget(record, evidenceReuse, reusedManifest) {
   const context = manifestContextFromEnvironment(source);
   const candidateRequest = candidateRequestFromEnvironment();
   const inputs = {
+    qualificationInputs: source.qualificationInputs,
     childPhaseVersion: 3,
     parentRunId: source.runId,
     parentRunAttempt: source.runAttempt,
@@ -762,6 +783,22 @@ function publicationKnownBudget(record, evidenceReuse, reusedManifest) {
     resolveTargetResult: "success",
     evidenceReuse: evidenceReuse?.requested === true,
   };
+  // Build-only plans require the admitted coverage the sealed plan will carry.
+  if (context.rerunGroup === "build-only") {
+    const event = readArtifact(
+      requiredString(process.env.GITHUB_EVENT_PATH, "workflow event path"),
+      "workflow event",
+    );
+    inputs.qualificationInputs = event.inputs;
+    inputs.qualificationCoverage = verifyQualificationAdmission({
+      descriptor: source.qualificationAdmission,
+      repository: source.repository,
+      candidateSha: source.candidateSha,
+      qualificationSha: source.workflow.sha,
+      workflowRef: context.workflowRef,
+      inputs: event.inputs,
+    }).coverage;
+  }
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildReleaseExecutionPlanArtifact({
     ...record,
@@ -1066,9 +1103,7 @@ async function publicationMode(mode) {
   writeArtifact(admissionPath, record);
 }
 
-async function writeManifestMode() {
-  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
-  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+async function reuseManifestForPlan(plan) {
   let reusedManifest = plan.evidenceReuse.sourceManifest;
   if (plan.evidenceReuse.requested && !reusedManifest) {
     const reuse = await validateReuse(plan);
@@ -1077,13 +1112,23 @@ async function writeManifestMode() {
     }
     reusedManifest = reuse.sourceManifest;
   }
+  return reusedManifest;
+}
+
+async function writeManifestMode() {
+  const plan = readArtifact(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan");
+  const drain = readArtifact(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain");
+  const reusedManifest = await reuseManifestForPlan(plan);
   const manifest = buildReleaseValidationManifest({
     plan,
     drain,
     context: manifestContextFromEnvironment(plan.sourceAdmission),
     reusedManifest,
   });
-  if (manifest.sourceAdmission?.validationPurpose === "publish" && manifest.rerunGroup === "all") {
+  if (
+    manifest.sourceAdmission?.validationPurpose === "publish" &&
+    ["all", "build-only"].includes(manifest.rerunGroup)
+  ) {
     const outputDir = mkdtempSync(
       join(
         requiredString(process.env.RUNNER_TEMP, "runner temporary directory"),
@@ -1693,6 +1738,10 @@ async function validateManifestMode({ preserveValidationOutcome = false } = {}) 
       child.selected ? stringValue(child.runId) : "",
     ]),
   );
+  const rootPublication = releaseManifestRootPublication(
+    await reuseManifestForPlan(executionPlan),
+    executionPlan.evidenceReuse,
+  );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {
         changedPaths: executionPlan.evidenceReuse.changedPaths,
@@ -1700,6 +1749,7 @@ async function validateManifestMode({ preserveValidationOutcome = false } = {}) 
         policy: executionPlan.evidenceReuse.policy,
         runId: executionPlan.evidenceReuse.rootRunId,
         selectedRunId: executionPlan.evidenceReuse.selectedRunId,
+        ...(rootPublication ? { publication: rootPublication } : {}),
       }
     : undefined;
   const expectedChildEvidence = drain

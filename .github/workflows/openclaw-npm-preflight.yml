@@ -81,7 +81,7 @@ jobs:
           esac
           [[ "$PREFLIGHT_ONLY" == true ]] || { echo "Reusable npm preflight cannot publish." >&2; exit 1; }
           case "$PREFLIGHT_PHASE" in
-            source|prepare|all)
+            source|prepare|all|build-only)
               [[ -z "$PREPARED_BUNDLE_JSON" && -z "$SOURCE_CHECK_JSON" ]] || exit 1 ;;
             verify) [[ -n "$PREPARED_BUNDLE_JSON" ]] || exit 1 ;;
             *) echo "Unsupported npm preflight phase." >&2; exit 1 ;;
@@ -120,7 +120,7 @@ jobs:
   check_openclaw_npm_stage:
     name: Check npm source (${{ matrix.stage }})
     needs: validate_npm_request
-    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && inputs.preflight_phase != 'build-only' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -278,7 +278,7 @@ jobs:
   check_openclaw_npm:
     name: Check npm release source
     needs: [validate_npm_request, check_openclaw_npm_stage]
-    if: ${{ always() && !cancelled() && needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
+    if: ${{ always() && !cancelled() && needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && inputs.preflight_phase != 'build-only' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
     runs-on: >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
@@ -319,7 +319,7 @@ jobs:
   prepare_openclaw_npm:
     name: Prepare publishable npm package
     needs: validate_npm_request
-    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all') }}
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' || inputs.preflight_phase == 'build-only') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: *linux_runner_xlarge
@@ -915,11 +915,12 @@ jobs:
       ]
     if: >-
       ${{ !cancelled() && needs.validate_npm_request.result == 'success' &&
-          (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
+          ((inputs.preflight_phase == 'build-only' && needs.prepare_openclaw_npm.result == 'success') ||
+          ((inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') &&
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
-          needs.check_contents_npm.result == 'success' }}
+          needs.check_contents_npm.result == 'success')) }}
     runs-on: >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
@@ -942,13 +943,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - *acquire_prepared_npm
 
-      - name: Seal qualified npm publish bundle
+      - name: Seal npm publish bundle
         id: packed_tarball
         env:
           GH_TOKEN: ${{ github.token }}
           JOB_CONTEXT: ${{ toJSON(job) }}
           PREFLIGHT_WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          PREFLIGHT_PHASE: ${{ inputs.preflight_phase }}
           SOURCE_CHECK_JSON: ${{ inputs.source_check_json || needs.check_openclaw_npm.outputs.source_check_json }}
           SDK_PROOF_JSON: ${{ needs.check_sdk_npm.outputs.proof_json }}
           DEPENDENCY_PROOF_JSON: ${{ needs.check_dependencies_npm.outputs.proof_json }}
@@ -957,21 +959,29 @@ jobs:
           set -euo pipefail
           [[ "$(git -C .release-harness rev-parse HEAD)" == "$PREFLIGHT_WORKFLOW_SHA" ]]
           [[ -z "$(git -C .release-harness status --porcelain)" ]]
-          printf '%s\n' "$SOURCE_CHECK_JSON" > "$RUNNER_TEMP/npm-source-check.json"
-          printf '%s\n' "$SDK_PROOF_JSON" > "$RUNNER_TEMP/npm-sdk-proof.json"
-          printf '%s\n' "$DEPENDENCY_PROOF_JSON" > "$RUNNER_TEMP/npm-dependency-proof.json"
-          printf '%s\n' "$CONTENTS_PROOF_JSON" > "$RUNNER_TEMP/npm-contents-proof.json"
-          node .release-harness/scripts/npm-prepared-bundle.mjs qualify \
-            --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" \
-            --input-dir "$RUNNER_TEMP/openclaw-prepared-npm" \
-            --output-dir "$RUNNER_TEMP/openclaw-npm-preflight" \
-            --source-check "$RUNNER_TEMP/npm-source-check.json" \
-            --sdk-proof "$RUNNER_TEMP/npm-sdk-proof.json" \
-            --dependency-proof "$RUNNER_TEMP/npm-dependency-proof.json" \
-            --contents-proof "$RUNNER_TEMP/npm-contents-proof.json"
+          if [[ "$PREFLIGHT_PHASE" == "build-only" ]]; then
+            node .release-harness/scripts/npm-prepared-bundle.mjs seal \
+              --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" \
+              --input-dir "$RUNNER_TEMP/openclaw-prepared-npm" \
+              --output-dir "$RUNNER_TEMP/openclaw-npm-preflight"
+          else
+            printf '%s\n' "$SOURCE_CHECK_JSON" > "$RUNNER_TEMP/npm-source-check.json"
+            printf '%s\n' "$SDK_PROOF_JSON" > "$RUNNER_TEMP/npm-sdk-proof.json"
+            printf '%s\n' "$DEPENDENCY_PROOF_JSON" > "$RUNNER_TEMP/npm-dependency-proof.json"
+            printf '%s\n' "$CONTENTS_PROOF_JSON" > "$RUNNER_TEMP/npm-contents-proof.json"
+            node .release-harness/scripts/npm-prepared-bundle.mjs qualify \
+              --descriptor "$RUNNER_TEMP/prepared-npm-bundle.json" \
+              --input-dir "$RUNNER_TEMP/openclaw-prepared-npm" \
+              --output-dir "$RUNNER_TEMP/openclaw-npm-preflight" \
+              --source-check "$RUNNER_TEMP/npm-source-check.json" \
+              --sdk-proof "$RUNNER_TEMP/npm-sdk-proof.json" \
+              --dependency-proof "$RUNNER_TEMP/npm-dependency-proof.json" \
+              --contents-proof "$RUNNER_TEMP/npm-contents-proof.json"
+          fi
           echo "dir=$RUNNER_TEMP/openclaw-npm-preflight" >> "$GITHUB_OUTPUT"
 
       - name: Upload Plugin SDK API release diff
+        if: ${{ inputs.preflight_phase != 'build-only' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-sdk-api-release-diff-${{ github.run_id }}-${{ github.run_attempt }}
@@ -982,6 +992,7 @@ jobs:
           retention-days: 30
 
       - name: Upload dependency release evidence
+        if: ${{ inputs.preflight_phase != 'build-only' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-dependency-evidence-${{ inputs.tag }}
@@ -989,7 +1000,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload dependency release evidence tag alias
-        if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
+        if: ${{ inputs.preflight_phase != 'build-only' && steps.packed_tarball.outputs.release_tag != inputs.tag }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}

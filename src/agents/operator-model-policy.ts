@@ -265,3 +265,20 @@ export function prepareOperatorModelPolicy(
   }
   return result;
 }
+
+export function intersectOperatorModelPolicy(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  const membership = readOperatorModelPolicyMembership(original);
+  return original &&
+    current &&
+    original !== current &&
+    (membership === undefined || membership !== readOperatorModelPolicyMembership(current))
+    ? Object.freeze({
+        models: Object.freeze(current.models.filter(original.allows)),
+        allows: (ref: Parameters<typeof original.allows>[0]) =>
+          original.allows(ref) && current.allows(ref),
+      })
+    : (current ?? original);
+}

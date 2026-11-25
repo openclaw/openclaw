@@ -22,7 +22,7 @@ export const BEAM_MAX_GUEST_SESSIONS = 20;
 export const BEAM_MAX_WRITE_RECEIPTS = 10_000;
 export const BEAM_MAX_GUEST_RECEIPTS = 400;
 export const BEAM_MAX_ITEMS = 200;
-export const BEAM_MAX_ITEM_CHARS = 6_000;
+const BEAM_MAX_ITEM_CHARS = 6_000;
 
 export type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
@@ -52,6 +52,7 @@ export type BeamUpload = {
 export type BeamStoredSession = Omit<BeamUpload, "items"> & {
   items: Array<BeamTranscriptItem & { speaker?: string }>;
   portable?: true;
+  presentationDigest?: string;
   /** Receiver incarnation; a release retry must never recreate an expired publication. */
   publicationId?: string;
   /** Exact v2 JSON bytes (UTF-8) and packet-local authorship. Never retain these bytes with the binding. */
@@ -77,7 +78,7 @@ export type BeamStoredSession = Omit<BeamUpload, "items"> & {
 };
 
 /** Durable ownership metadata, independent of the seven-day transcript retention. */
-export type BeamHandoff = Omit<BeamStoredSession, "items" | "packetText">;
+export type BeamHandoff = Omit<BeamStoredSession, "items" | "packetText" | "presentationDigest">;
 
 const TOP_LEVEL_KEYS = new Set([
   "version",

@@ -261,7 +261,7 @@ the next poll. A released source cannot be recreated by uploading. Deleting its 
 Beam publication is not remote control.
 
 - The logical conversation continues in a Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
-- It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
+- Transcript items contain normalized text. A v2 publisher can also include one reviewed PNG by sending its bytes in the [screenshot envelope](#share-a-screenshot).
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.
 - Requests are rate-limited and concurrency-limited before the body is read.
@@ -289,11 +289,11 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 }
 ```
 
-- `endpoint` (required): the final remote receiver URL. Changing it starts fresh delivery to that receiver, including unchanged active sessions; pending terminal retries for the previous receiver are discarded, leaving its rows to expire normally. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart checks the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
+- `endpoint` (required): the final remote receiver URL. Changing a v1 endpoint starts fresh delivery to that receiver, including unchanged active sessions. Pending v1 terminal retries for the previous receiver are discarded, leaving its rows to expire normally. A new v2 endpoint requires its own explicit enrollment. Redirect responses (301, 302, 303, 307, and 308) are not followed; configure the destination URL directly. After a redirect, repeated polls are suppressed for the current mirror service instance. A Gateway restart checks the configured endpoint once again so a receiver corrected at the same URL can recover. HTTPS is enforced for non-loopback hosts; plaintext `http://` is accepted only for `localhost`/`127.0.0.1`/`::1` development.
 - `token`: Gateway credential for the remote receiver, sent as `Authorization: Bearer`. Accepts a plain string or a secret reference; the Gateway prepares secret references before the mirror starts, rather than resolving them on every poll. An unavailable configured token disables only outbound mirroring; the receiver and session catalog remain available. After restoring the credential, run `openclaw secrets reload`. Omitting `token` still supports receivers that do not require a bearer credential. Deployments fronted by an identity-aware proxy need an ingress that accepts this bearer credential.
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
-- `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state is process-local: a Gateway restart clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.
+- `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. The v1 mirror keeps terminal retries in memory. After a Gateway restart, an undelivered v1 row remains live until its normal retention expires. The v2 mirror retains the confirmed enrollment and its pending update in SQLite. After restart, it reselects the authorized source and retries the original request.
 
 The v1 mirror keeps the original publication ID when the producer confirms that host and thread identify the same native session across agents and source homes. Every read stays bound to the selected agent and home. Conflicting selections, rebindable aliases, imported copies, and unclassified sources require explicit selection. A previously released publication stays released.
 
@@ -317,9 +317,22 @@ When the receiver bearer token rotates, configure the new token for the same pub
 
 If the first response was lost, repeat the command to see its unconfirmed Beam ID and expected digest. Inspect the publication and its generation on the intended Team Gateway. To adopt that existing publication, explicitly repeat enrollment with its exact `confirmGeneration` next to `source`. A missing row, mismatched digest or differing generation leaves the source unconfirmed. The service never retries an initial create.
 
-The mirror converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first. It marks the upload `truncated` whenever older pages remain, the source reports truncation, or text or items were clipped. Claude catalog pages count individual text, reasoning, and tool blocks and bound their text size. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first. A listed session that leaves the active window receives its final completed update even when its catalog has more pages; an absent session is finalized only after a complete host listing and a fresh, authorized lookup of its exact source.
+The mirror converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first. It marks the upload `truncated` whenever older pages remain, the source reports truncation, or text or items were clipped. Claude catalog pages count individual text, reasoning, and tool blocks and bound their text size.
+
+The mirror shares sessions from this Gateway’s machine. The v2 poller rotates through acknowledged enrollments and reselects each exact source locally. Each poll can update up to 32 active and 32 completed sessions. An unacknowledged update keeps its original request and can be retried after restart even when the source has gone idle. Older enrollments acquire their local locator as the service pages through eligible sources. The v1 poller selects the newest 32 active sessions and finalizes an inactive session after confirming its exact source.
 
 When browsing Claude sessions on paired nodes, update those nodes alongside the Gateway. Older node builds without block-resume metadata report an update-required error when a mixed row spans pages.
+
+## Share a screenshot
+
+With a Beam CLI that supports screenshot publishing, send a reviewed v2 packet and one PNG through the same Gateway link:
+
+```sh
+beam bundle create task.beam.json --attach screenshot.png --out task.beam.zip
+beam share task.beam.zip --to https://gateway.example
+```
+
+Open the returned snapshot link. The screenshot appears after the conversation in the chat transcript. Select it to open the full-size image viewer and download the original PNG. The Gateway advertises `publishScreenshot` only to callers with publishing access. Each PNG can contain up to 512 KiB and 16,777,216 pixels. The screenshot is part of the reviewed publication and retains its original metadata. Its visibility and seven-day lifetime follow the snapshot. Sharing the packet alone removes the screenshot. Handing off the same packet keeps the existing preview. Pull and continuation use the original text packet.
 
 ## Troubleshooting
 

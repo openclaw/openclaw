@@ -22,7 +22,6 @@ import {
   cancelCapturedSessionControllerSource,
   captureSessionControllerStop,
   stopSession,
-  type SessionStopHookContext,
 } from "../../sessions/session-controller.stop.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
@@ -57,6 +56,7 @@ import {
   abortControlledSubagents,
   descendantAbortError,
 } from "./chat-abort-runtime.js";
+import type { ChatAbortLifecycle } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
@@ -70,17 +70,6 @@ import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-type ChatAbortLifecycle = {
-  /** Internal composition may advance only after this exact run was cancelled. */
-  onExactRunAborted?: (runId: string) => void;
-  onDescendantsCancelled?: (
-    result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
-  ) => void;
-  cascadeDescendants?: true;
-  yieldedRequesterRunId?: string;
-  hookContext?: SessionStopHookContext;
-};
 
 export async function handleChatAbortRequestWithLifecycle(
   options: GatewayRequestHandlerOptions,
@@ -460,6 +449,7 @@ export async function handleChatAbortRequestWithLifecycle(
         !authorizeRunTarget({
           ...activeIdentity,
           requester: reserved.sourceAdapter?.requester,
+          initiatingPersonalOperator: reserved.sourceAdapter?.initiatingPersonalOperator,
         })
       ) {
         return;
@@ -480,6 +470,7 @@ export async function handleChatAbortRequestWithLifecycle(
         reserved,
         identity: activeIdentity,
         agentId: abortAgentId,
+        participationOnly: requester.participationOnly,
         userInitiated: params.userInitiated,
         lifecycleRevision:
           selectedEntry?.sessionId === activeIdentity.sessionId
@@ -585,6 +576,7 @@ export async function handleChatAbortRequestWithLifecycle(
     cfg: abortCfg,
     runId,
     active,
+    participationOnly: requester.participationOnly,
     userInitiated: params.userInitiated,
     lifecycleRevision:
       selectedSession.ok && selectedSession.value.entry?.sessionId === sessionId

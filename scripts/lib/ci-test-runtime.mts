@@ -96,6 +96,12 @@ const nodeRequiredFiles = new Set([
   "src/infra/exec-host.socket.test.ts",
   // The macOS directory watch helper serves Node's libuv watchers only.
   "src/infra/directory-watch-host.test.ts",
+  // Git release launchers and service units are Node contracts; the suite skips on Bun.
+  "src/infra/git-release.test.ts",
+  // Migration authorization and process-boundary proofs require Node's native SQLite APIs.
+  "test/scripts/upgrade-survivor-sqlite-observer.test.ts",
+  "test/scripts/upgrade-survivor-bulk-access.test.ts",
+  "test/scripts/upgrade-survivor-migration-chain.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",
@@ -123,7 +129,11 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  "test/scripts/node-cache-disabled-control.test.ts",
+  "test/scripts/node-cache-qualification.test.ts",
   "test/scripts/vitest-pair-benchmark.test.ts",
+  // Cache fixtures spawn the host executable, so Bun cannot qualify Node's cache policy.
+  "test/vitest-performance-config.test.ts",
   // Portable catalog lifecycle plus a separate V8 planner-count proof.
   "src/agents/prepared-model-catalog-worker.integration.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",

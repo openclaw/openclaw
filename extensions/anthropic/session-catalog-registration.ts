@@ -77,10 +77,18 @@ function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
         modelIds: CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS,
         agentRuntime: CLAUDE_CLI_BACKEND_ID,
       }),
-    list: async ({ exportSource, ...query }) =>
-      await (
-        await loadCatalogRuntime()
-      ).list(exportSource ? { ...query, search: exportSource.threadId } : query),
+    list: async (query) => {
+      const source = query.exportSource;
+      if (
+        source &&
+        (source.hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ||
+          (query.hostIds && !query.hostIds.includes(source.hostId)))
+      ) {
+        return [];
+      }
+      const runtime = await loadCatalogRuntime();
+      return runtime.list(source ? { ...query, hostIds: [source.hostId] } : query);
+    },
     read: async (request) => await (await loadCatalogRuntime()).read(request),
     continueSession: async (request) => await (await loadCatalogRuntime()).continueSession(request),
     startTerminalSession: async (request) =>

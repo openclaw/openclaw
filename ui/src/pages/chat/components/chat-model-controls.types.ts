@@ -51,6 +51,8 @@ export type ChatModelControlsProps = {
   sending: boolean;
   sessionKey: string;
   selectedSession: SessionsListResult["sessions"][number] | undefined;
+  /** The active connection supplied this session row, not an offline snapshot. */
+  sessionRowCurrent?: boolean;
   selectedAgentRuntime?: string;
   sessionsResult: SessionsListResult | null;
   stream: string | null;

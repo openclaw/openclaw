@@ -13,6 +13,7 @@ const [workflow, ...args] = process.argv.slice(2);
 const kind = process.env.CHILD_WORKFLOW_KIND;
 const role = {
   ci: "normalCi",
+  "stable-client": "stableClientCompatibility",
   "plugin-prerelease":
     process.env.PHASE === "candidate" ? "pluginPrereleaseCandidate" : "pluginPrereleaseIndependent",
   "release-checks":

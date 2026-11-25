@@ -200,7 +200,7 @@ export async function activateSystemdServiceIdentity(params: {
   identity: SystemdServiceIdentity;
   action: "start" | "stop" | "restart";
   assertCurrent?: () => void;
-  beforeMutation?: () => Promise<void>;
+  beforeMutation?: () => void | Promise<void>;
   beforeEffect?: () => void;
   prepareEffect?: () => Promise<void>;
   warn: (message: string) => void;

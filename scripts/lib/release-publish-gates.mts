@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { validateReleaseManifestAdvisoryJobs } from "../full-release-validation-policy.mjs";
 import { isRecord } from "./record-shared.mjs";
-import type { bindFastTrackApproval } from "./release-fast-track-publication.mts";
+import type { bindFastTrackPacket } from "./release-fast-track-publication.mts";
 import { readReleaseManifestWaivers } from "./release-manifest-waivers.mts";
 import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
@@ -37,7 +37,7 @@ export function evaluateReleasePublishGates(input: {
   consumer: ReleasePublishConsumer;
   expectedSha?: string;
   expectedReleaseProfile?: string;
-  fastTrack?: ReturnType<typeof bindFastTrackApproval>;
+  fastTrack?: ReturnType<typeof bindFastTrackPacket>;
   readWorkflowSource?: (sha: string, path: string) => string;
 }): ReleasePublishGate[] {
   const { manifest, consumer } = input;
@@ -110,13 +110,13 @@ export function evaluateReleasePublishGates(input: {
       fastTrack.request.channel !== input.npmDistTag ||
       (input.expectedSha && fastTrack.request.candidateSha !== input.expectedSha)
     ) {
-      throw new Error("Fast-track approval does not cover this publication operation.");
+      throw new Error("Fast-track request does not cover this publication operation.");
     }
     gates.push({
       id: `${consumer}.fast-track`,
       status: "WARN",
       message: "validation skipped by approved fast-track",
-      remediation: `Retain explicit human decision: ${fastTrack.approval.url}`,
+      remediation: "Approve this publication through the GitHub Actions npm-release environment.",
     });
     return gates;
   }
@@ -163,9 +163,14 @@ export function evaluateReleasePublishGates(input: {
       ? "Runtime waiver and known-flaky inputs are no longer accepted."
       : "";
   try {
-    validateReleaseManifestAdvisoryJobs(manifest, {
-      waiverPolicy: readReleaseManifestWaivers(manifest, input.readWorkflowSource),
-    });
+    validateReleaseManifestAdvisoryJobs(
+      manifest,
+      // The successful publisher already applied this manifest's Q policy. Closeout must not
+      // re-judge published evidence under a later evaluator, which can retire grant shapes.
+      consumer === "stable-closeout"
+        ? { deferWaiverPolicy: true }
+        : { waiverPolicy: readReleaseManifestWaivers(manifest, input.readWorkflowSource) },
+    );
   } catch (error) {
     selectedLanesError ||= error instanceof Error ? error.message : String(error);
   }
@@ -289,13 +294,13 @@ async function main() {
     npmDistTag: env.RELEASE_NPM_DIST_TAG,
   });
   let fastTrack;
-  if (env.FAST_TRACK_APPROVAL_JSON) {
-    const { bindFastTrackApproval, fastTrackAdmissionTime } =
+  if (env.FAST_TRACK_REQUEST_JSON) {
+    const { bindFastTrackPacket, fastTrackAdmissionTime } =
       await import("./release-fast-track-publication.mts");
-    fastTrack = bindFastTrackApproval(
-      env.FAST_TRACK_APPROVAL_JSON,
+    fastTrack = bindFastTrackPacket(
+      env.FAST_TRACK_REQUEST_JSON,
       manifest,
-      await fastTrackAdmissionTime(env.FAST_TRACK_APPROVAL_JSON),
+      await fastTrackAdmissionTime(env.FAST_TRACK_REQUEST_JSON),
     );
   }
   const gates = evaluateReleasePublishGates({

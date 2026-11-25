@@ -7,6 +7,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,6 +22,7 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
+import { resolveProbeAuthSummary } from "../../gateway/probe.js";
 import {
   classifyGatewayStaleConnectionError,
   type GatewayStaleConnectionReason,
@@ -82,6 +84,7 @@ export type GatewayReachability = {
   channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
   authenticationError?: string;
+  operatorScopeWarning?: string;
   protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
@@ -115,6 +118,7 @@ export async function waitForGatewayHttpReadiness(params: {
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
+  host?: string;
   /** Software activation may finish while a channel needs operator attention. */
   requireChannelHealth?: boolean;
   signal?: AbortSignal;
@@ -131,7 +135,7 @@ export async function waitForGatewayHttpReadiness(params: {
     }
     const request = (pathname: "/healthz" | "/readyz") =>
       probe.requestHttp({
-        host: "127.0.0.1",
+        host: params.host ?? "127.0.0.1",
         pathname,
         port: params.port,
         timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
@@ -409,6 +413,46 @@ export async function confirmGatewayReachable(params: {
       ((isGatewayAuthRejection(error.message) && error.message !== "device identity required") ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
+    const missingScope = isGatewayProtocolResponseError(error)
+      ? readMissingScopeError(error)
+      : null;
+    // The method refusal is authoritative about read access; hello supplies identity.
+    if (
+      missingScope?.missingScope === READ_SCOPE &&
+      resolveProbeAuthSummary({
+        authMetadataPresent: true,
+        connectLatencyMs: result.gatewayVersion === null ? null : 0,
+      }).capability === "connected_no_operator_scope" &&
+      configuredProbe
+    ) {
+      result.operatorScopeWarning =
+        "Gateway connected, but this CLI lacks operator.read scope; detailed health checks are unavailable. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+      const ready = await configuredProbe.requestHttp({
+        host: "127.0.0.1",
+        port: params.port,
+        pathname: "/readyz",
+        timeoutMs: Math.min(
+          params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+          GATEWAY_RESTART_PROBE_TIMEOUT_MS,
+        ),
+        signal: params.signal,
+      });
+      const readiness = asOptionalRecord(tryParseJson(ready?.body ?? ""));
+      const failingChannels = readGatewayFailingChannels(ready);
+      result.reachable = ready?.statusCode === 200 && readiness?.ready === true;
+      if (failingChannels) {
+        const errors = failingChannels.map((id) => ({
+          id,
+          error: "channel readiness unavailable",
+        }));
+        if (params.allowHttpVerification) {
+          result.reachable = true;
+          result.channelRuntimeWarnings = errors;
+        } else {
+          result.channelProbeErrors = errors;
+        }
+      }
+    }
     if (
       (result.authenticationError || result.protocolMismatch) &&
       params.allowHttpVerification &&

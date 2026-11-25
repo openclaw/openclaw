@@ -39,6 +39,7 @@ import {
   readReleaseValidationWaiversAsync,
   releaseChildAdvisories,
   isWaived,
+  validateAuthoredReleaseWaivers,
 } from "./lib/release-validation-waivers.mjs";
 import {
   PREPARED_NPM_MANIFEST,
@@ -149,18 +150,45 @@ export function validateReceiptRecoveryRequest(request) {
   return request;
 }
 
-export async function verifyWaiverPolicyCommit(client, originalSha, policySha) {
+export async function verifyWaiverPolicyCommit(
+  client,
+  original,
+  policySha,
+  { preparing = false } = {},
+) {
   const commit = await client.getCommit(policySha);
   requireValue(
     commit?.sha === policySha &&
       commit.parents?.length === 1 &&
-      commit.parents[0]?.sha === originalSha &&
+      commit.parents[0]?.sha === original.request.qualificationSha &&
       commit.commit?.verification?.verified === true &&
       commit.files?.length === 1 &&
       commit.files[0]?.status === "modified" &&
       commit.files[0]?.filename === RELEASE_VALIDATION_WAIVERS_PATH,
     "policy Q must be a verified signed direct child of original Q modifying only the waiver ledger",
   );
+  const read = (policySourceSha) =>
+    readReleaseValidationWaiversAsync((path) => client.getWorkflowSource(policySourceSha, path));
+  const oldLedger = await read(original.request.qualificationSha);
+  const waiverPolicy = await read(policySha);
+  const additions = waiverPolicy.slice(oldLedger.length);
+  same(waiverPolicy.slice(0, oldLedger.length), oldLedger, "waiver policy changed existing grants");
+  requireValue(
+    additions.length > 0 &&
+      additions.every(
+        (grant) =>
+          grant.targetSha === original.request.candidateSha &&
+          grant.targetVersion === original.baselinePolicy.candidateVersion &&
+          original.coverage.children.some(({ key }) => key === grant.childRole),
+      ),
+    "waiver policy must append grants scoped to original C, version and child role",
+  );
+  // Previously admitted ledgers can include dormant rows. Only reject newly authored selectors
+  // before requesting admission; authentication of existing receipts keeps its original contract.
+  if (preparing) {
+    validateAuthoredReleaseWaivers(oldLedger, waiverPolicy);
+  }
+  return waiverPolicy;
 }
 
 export function receiptRecoveryPolicyRequest(original, policySha, requestId) {
@@ -191,8 +219,8 @@ export async function verifyReceiptRecoveryPolicy(request, original, client) {
   if (!policy) {
     return undefined;
   }
-  const { candidateSha, qualificationSha, repository } = original.request;
-  await verifyWaiverPolicyCommit(client, qualificationSha, policy.sha);
+  const { candidateSha, repository } = original.request;
+  const waiverPolicy = await verifyWaiverPolicyCommit(client, original, policy.sha);
   const workflowRef = receiptRecoveryPolicyRequest(
     original,
     policy.sha,
@@ -217,22 +245,6 @@ export async function verifyReceiptRecoveryPolicy(request, original, client) {
   for (const key of ["coverage", "baselinePolicy", "workflowSourceDigest", "policySourceDigest"]) {
     same(admission[key], original[key], "waiver policy admission changed original " + key);
   }
-  const read = (policySourceSha) =>
-    readReleaseValidationWaiversAsync((path) => client.getWorkflowSource(policySourceSha, path));
-  const oldLedger = await read(qualificationSha);
-  const waiverPolicy = await read(policy.sha);
-  const additions = waiverPolicy.slice(oldLedger.length);
-  same(waiverPolicy.slice(0, oldLedger.length), oldLedger, "waiver policy changed existing grants");
-  requireValue(
-    additions.length > 0 &&
-      additions.every(
-        (grant) =>
-          grant.targetSha === candidateSha &&
-          grant.targetVersion === original.baselinePolicy.candidateVersion &&
-          original.coverage.children.some(({ key }) => key === grant.childRole),
-      ),
-    "waiver policy must append grants scoped to original C, version and child role",
-  );
   await revalidateReceiptRecoveryPolicy(request, admission, client);
   return { admission, waiverPolicy };
 }
@@ -504,7 +516,13 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     }
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
-    const inputs = qualificationChildDispatchInputs(role, admission, binding, source);
+    const inputs = qualificationChildDispatchInputs(
+      role,
+      admission,
+      binding,
+      source,
+      role === "normalCi" ? client.getWorkflowSource(qualificationSha) : undefined,
+    );
     const verified = await client.validateChildReuse(
       selection,
       {

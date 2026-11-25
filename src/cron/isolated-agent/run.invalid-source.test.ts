@@ -276,7 +276,7 @@ describe("undecodable scheduled authority", () => {
                     "changed listing",
                     "membership revoked while parked",
                   ].includes(name)
-                    ? "Restart recovery could not admit this input. Start a new user turn."
+                    ? "I did not start this request. The sign-in it was started with is no longer valid. Reconnect to the Gateway, then send your message again."
                     : scenario.refusal,
                 ),
               ).message,

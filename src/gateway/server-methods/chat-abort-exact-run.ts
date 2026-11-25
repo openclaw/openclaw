@@ -49,6 +49,7 @@ export async function stopReservedClientRun(params: {
   identity: Readonly<{ sessionKey: string; sessionId: string; agentId?: string }>;
   /** Announces the Stop for this agent when the source names none. */
   agentId: string;
+  participationOnly?: boolean;
   userInitiated?: boolean;
   lifecycleRevision?: string;
   assertCurrent: () => void;
@@ -90,6 +91,9 @@ export async function stopReservedClientRun(params: {
       // The settle producer can still own the registry operation needed for
       // descendant cleanup. Cancel its captured source before entering that owner.
       await applyParentStop();
+      if (params.participationOnly) {
+        return { stopped: 0, failed: 0 };
+      }
       result.descendants = await abortControlledSubagents({
         cfg: params.cfg,
         sessionKey: identity.sessionKey,
@@ -118,6 +122,7 @@ export async function stopExactClientRun(params: {
   runId: string;
   active: RpcSourceRef;
   userInitiated?: boolean;
+  participationOnly?: boolean;
   lifecycleRevision?: string;
   assertCurrent?: () => void;
   hookContext: Omit<SessionStopHookContext, "sessionKey" | "sessionId">;
@@ -198,6 +203,10 @@ export async function stopExactClientRun(params: {
           onAbortCommitted: markAborted,
         }).aborted,
       stopChildren: async (applyParentStop) => {
+        if (params.participationOnly) {
+          await applyParentStop();
+          return { stopped: 0, failed: 0 };
+        }
         result.descendants = await abortControlledSubagents({
           cfg: params.cfg,
           sessionKey,

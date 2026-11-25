@@ -3,8 +3,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
-import { testApi } from "./logger.test-support.js";
+import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-ts-");
 
@@ -41,7 +40,7 @@ describe("logger timestamp format", () => {
 
     // Write a log entry
     logger.info("test-timestamp-format");
-    await testApi.flushFileLogQueueForTests();
+    await flushLogger();
 
     // Read the log file
     const content = fs.readFileSync(logPath, "utf8");

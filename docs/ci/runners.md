@@ -186,10 +186,14 @@ The macOS critical-security CodeQL job temporarily stays on `macos-26-intel` wit
 
 The earlier hosted-routing validation used `macos-26`: repeated first attempts left the Blacksmith macOS jobs unassigned while other CI completed. In [run 33616182173](https://github.com/openclaw/openclaw/actions/runs/33616182173), the hosted retry assigned all three waiting Mac jobs within eight seconds; the Debug/simulator job passed in 15m31s. That historical result predates Xcode 27. Complete native evidence remains required for full manual qualification.
 
-Linux Node setup probes Git's `--no-lazy-fetch` support before running checks.
-Capable installations are unchanged. Ubuntu images missing it install current Git
-from the Git project's recommended PPA; other images must provision Git 2.45 or
-newer. Package operations are noninteractive and bounded.
+Linux Node setup keeps the runner's Git if it supports `--no-lazy-fetch`. On
+Ubuntu 24.04 (Noble) x64 and ARM64 runners with older Git, setup downloads a
+checksum-pinned Debian package and extracts Git into the job's temporary directory.
+Those runners need HTTPS access to `deb.debian.org` or `snapshot.debian.org`.
+The fallback does not use APT or Launchpad.
+
+On other Linux images, provision Git 2.45 or newer before running Node setup.
+Verify the image with `git --no-lazy-fetch --version`.
 
 The Node test planner marks only shards that run the real native grep fixture.
 Those Linux jobs install the `ripgrep` package when the selected runner image
@@ -719,7 +723,7 @@ The `agents-sessions` graph owns root `src/agents/session-*.test.ts(x)` tests an
 
 The `ui-e2e-chat` graph owns root-level `ui/src/e2e/chat*.test.ts(x)` tests. The `ui-e2e` graph retains the other UI E2E tests and `ui/src/test-helpers/control-ui-e2e*.test.ts(x)` harness tests. Both retain the UI bootstrap and Solid JSX compiler settings. The new graph is appended to the canonical registry, preserving existing stripe assignments and the five CI type-check rows.
 
-Android admits all four rows together on upstream Blacksmith push and PR first attempts, excluding fork PRs. Hosted routes, including forks, retries, manual dispatches, and schedules retain two. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
+Android [admits up to four rows concurrently](/ci/scope-and-routing/job-budgets#android-matrix) on every runner route. Android Play and ThirdParty rows run their unit tests. In the normal four-row tier, Wear also owns third-party app lint, while the Kotlin-lint row owns Play app and Wear-shared lint. Every row keeps separate, sequential Gradle processes and shares one UTC build timestamp through the existing `openclawBuildTimestamp` property when it has multiple native invocations, avoiding `BuildConfig` regeneration solely because a later command starts. Phone test classes on Blacksmith run in at most four isolated JVMs, bounded by available processors, with the existing 1 GiB heap per JVM. Each JVM receives its share of the available processors so its GC and internal pools do not multiply the runner CPU budget. Classes remain sequential within each JVM; hosted tests keep one JVM. Full manual and historical compatibility task inventories are unchanged.
 
 Task-scoped Blacksmith sticky disks retain the Gradle user home across dependency changes. Gradle owns content-addressed invalidation and periodic expiry of unused caches and wrapper distributions; CI does not erase the warm home when a dependency fingerprint changes. Protected pushes remain the only snapshot writers, and pull requests consume read-only clones. Dependency resolution remains online so a changed dependency or cold snapshot can populate missing artifacts.
 
