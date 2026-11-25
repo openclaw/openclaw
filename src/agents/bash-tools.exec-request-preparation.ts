@@ -610,6 +610,19 @@ export function resolvePreparedExecEnvironment(params: {
       : undefined;
   // Prepared values win locally; nodes sanitize their own base env and reject scrub override keys.
   const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
+  if (params.storeSecretEnv) {
+    for (const [name, sentinel] of Object.entries(params.storeSecretEnv)) {
+      if (
+        !Object.hasOwn(explicitEnv ?? {}, name) &&
+        resolveEnvironmentValue(inheritedBaseEnv, name) !== undefined &&
+        resolveEnvironmentValue(executionEnv, name) === sentinel
+      ) {
+        params.warnings.push(
+          `Warning: secret store entry "${name}" overrides the inherited "${name}" value with a protected sentinel. The sentinel is regenerated on every Gateway restart and substitutes only for its bound hosts; remove the same-name store entry or rename one side if the command needs a stable local value.`,
+        );
+      }
+    }
+  }
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
 
