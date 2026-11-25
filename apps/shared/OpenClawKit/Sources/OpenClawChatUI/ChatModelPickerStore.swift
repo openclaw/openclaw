@@ -116,16 +116,19 @@ public final class ChatModelPickerStore {
     }
 
     /// The phone picker: favorites, at most three recents, and every provider with all of its models.
+    /// The current model always sits on the root: in Favorites when it is one, otherwise first in Recent,
+    /// whether or not it was picked on this device. The stored recents are not changed.
     public static func catalog(
         choices: [OpenClawChatModelChoice],
         favorites: [String],
         recents: [String],
+        current: String? = nil,
         defaultProvider: String? = nil) -> ChatModelPickerCatalog
     {
         let sections = self.sections(
             choices: choices,
             favorites: favorites,
-            recents: recents,
+            recents: current.map { current in [current] + recents.filter { $0 != current } } ?? recents,
             defaultProvider: defaultProvider)
         return ChatModelPickerCatalog(
             favorites: sections.pinned,

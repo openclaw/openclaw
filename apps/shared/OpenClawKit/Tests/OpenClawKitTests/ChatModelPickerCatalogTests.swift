@@ -50,6 +50,34 @@ struct ChatModelPickerCatalogTests {
         #expect(catalog.recents.map(\.selectionID) == ["a/1", "a/3", "a/4"])
     }
 
+    @Test func `the current model leads Recent unless it is a favorite, and the stored recents stay as they are`() {
+        let choices = ["a/1", "a/2", "a/3", "a/4", "a/5"].map { catalogModel($0) }
+        let recents = ["a/2", "a/3", "a/4"]
+        func recentIDs(current: String?, favorites: [String] = []) -> [String] {
+            ChatModelPickerStore.catalog(choices: choices, favorites: favorites, recents: recents, current: current)
+                .recents.map(\.selectionID)
+        }
+
+        // Never picked on this device: first, and Recent still stops at three.
+        #expect(recentIDs(current: "a/1") == ["a/1", "a/2", "a/3"])
+        // Already a recent: moved to the top, not listed twice.
+        #expect(recentIDs(current: "a/3") == ["a/3", "a/2", "a/4"])
+        // A favorite: it stays in Favorites only.
+        let favorite = ChatModelPickerStore.catalog(
+            choices: choices, favorites: ["a/1"], recents: recents, current: "a/1")
+        #expect(favorite.favorites.map(\.selectionID) == ["a/1"])
+        #expect(favorite.recents.map(\.selectionID) == recents)
+        // Not in the catalog (unknown, or not selectable): the root is what the stored lists give.
+        #expect(recentIDs(current: "b/9") == recents)
+        #expect(recentIDs(current: nil) == recents)
+        let locked = ChatModelPickerStore.catalog(
+            choices: choices + [catalogModel("a/6", manualSelectionAllowed: false)],
+            favorites: [],
+            recents: recents,
+            current: "a/6")
+        #expect(locked.recents.map(\.selectionID) == recents)
+    }
+
     @Test func `one provider gives one section with all of its models`() {
         let catalog = ChatModelPickerStore.catalog(
             choices: [catalogModel("openai/gpt-6.2-sol"), catalogModel("openai/gpt-6-luna")],

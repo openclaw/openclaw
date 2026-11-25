@@ -9545,6 +9545,23 @@ struct ChatViewModelTests {
         #expect(vm.modelCatalogMessage == nil)
     }
 
+    @Test @MainActor func `the picker shows the session's model in Recent without storing it`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        let other = modelChoice(id: "gpt-5.4-mini", name: "GPT-5.4 mini", provider: "openai")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider))],
+            modelResponses: [[current, other]])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // Never picked on this device, so nothing is stored; the root still shows it, checked.
+        #expect(vm.modelPickerCatalog.recents.map(\.selectionID) == [current.selectionID])
+        #expect(vm.isCurrentPickerModel(current))
+        #expect(vm.modelPickerRecents.isEmpty)
+        #expect(vm.modelPickerStore.recents.isEmpty)
+    }
+
     @Test @MainActor func `unavailable picker rows cannot change the selected model`() async throws {
         let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
         let unavailable = modelChoice(

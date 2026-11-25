@@ -113,13 +113,14 @@ extension OpenClawChatViewModel {
             defaultProvider: defaultProvider)
     }
 
-    /// The phone picker's catalog: every provider with all of its models.
+    /// The phone picker's catalog: every provider with all of its models, and the current model on the root.
     public var modelPickerCatalog: ChatModelPickerCatalog {
         let defaults = self.modelPickerDefault
         return ChatModelPickerStore.catalog(
             choices: self.modelChoices,
             favorites: self.modelPickerFavorites,
             recents: self.modelPickerRecents,
+            current: self.selectedModelChoice(for: self.currentSessionEntry())?.selectionID,
             defaultProvider: ChatModelPickerStore.resolvedDefaultProvider(
                 provider: defaults.provider,
                 model: defaults.model))
