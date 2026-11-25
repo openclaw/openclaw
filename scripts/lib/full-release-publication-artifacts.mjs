@@ -110,11 +110,8 @@ export function artifactProducerSlots(workflow, inputs, attemptJobs) {
       .every((job) => job.conclusion === "skipped"),
     "inactive npm scheduling slot also executed",
   );
-  return jobs
-    .filter((job) => job !== inactive)
-    .map((job) =>
-      job === first ? { ...job, env: { ...job.env, CHILD_WORKFLOW_KIND: "artifact-npm" } } : job,
-    );
+  const earlyProducer = { ...first, env: { ...first.env, CHILD_WORKFLOW_KIND: "artifact-npm" } };
+  return jobs.filter((job) => job !== inactive).map((job) => (job === first ? earlyProducer : job));
 }
 
 export async function discoverPublicationArtifacts(

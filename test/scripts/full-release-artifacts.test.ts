@@ -1187,7 +1187,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         status: "completed",
       });
       test.list("actions/runs/51/attempts/1/jobs?per_page=100&page=1", "jobs", [
-        ...Array(count).fill(job),
+        ...Array.from({ length: count }, (_, index) => ({ ...job, id: job.id + index })),
         { ...job, name: "Prepare release npm artifacts", conclusion: "skipped" },
       ]);
       const result = test.run("verify-initial-npm", {
