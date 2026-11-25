@@ -15,6 +15,7 @@ suite.define(() => {
         const sessionKey = "agent:main:chat:aabbccdd-1234-4321-9876-123456789abc";
         const text = "The synthetic conversation stays in place while its settings refresh.";
         const cached = createControlUiSessionRow(sessionKey, "Cached composer example", 1, {
+          worktree: { id: "example", branch: "feature/composer", repoRoot: "/workspace/example" },
           model: "reasoning-example",
           modelProvider: "openai",
           modelOverrideSource: "user",
@@ -229,7 +230,10 @@ suite.define(() => {
           await control.press("Enter");
           await control.press("Space");
         }
-        expect(await pane.locator("details[open], :popover-open").count()).toBe(0);
+        // The Environment disclosure is open; only the composer pickers must stay closed.
+        expect(await pane.locator(".agent-chat__input details[open], :popover-open").count()).toBe(
+          0,
+        );
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         const freshHistory = "Live history arrived before the session row.";
         await gateway.setMethodResponse("chat.startup", {

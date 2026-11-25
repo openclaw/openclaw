@@ -15,6 +15,7 @@ import {
   type ChatSubagentActivity as ChatSubagentActivityRow,
 } from "../chat-subagent-wait.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import { ReportDesktopDetailsContent } from "./chat-details-content-presence.ts";
 import {
   ChatDetailsDesktopSection,
   createDetailsDesktopReveal,
@@ -187,6 +188,7 @@ function DesktopBackgroundGroup(props: {
           }
         }}
       >
+        <ReportDesktopDetailsContent />
         {props.heading}
       </summary>
       <div

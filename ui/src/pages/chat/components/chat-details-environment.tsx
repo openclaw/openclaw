@@ -113,7 +113,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
   // Empty sections must keep reading even when the saved disclosure choice is closed.
   const requestUncommitted = createMemo(() =>
-    props.presented && visible() && (expanded() || !hasContent())
+    (props.observing ?? props.presented) && visible() && (expanded() || !hasContent())
       ? props.onRequestUncommitted
       : undefined,
   );

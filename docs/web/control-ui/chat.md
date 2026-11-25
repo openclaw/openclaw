@@ -1540,8 +1540,9 @@ the transcript and composer centered in the remaining space. Docking uses the
 space left after navigation, split panes, and other panels—not the window width
 alone. Details and the Home agent sidebar can both stay open if the remaining
 chat pane fits its default reading column and Details. The column scrolls
-independently and never covers the conversation. If the session has no details
-to show, the open panel says so instead of leaving an empty column.
+independently and never covers the conversation. When a session has no details to
+show, desktop hides both the column and the **Details** button, leaving the full
+chat pane for the conversation.
 
 When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly

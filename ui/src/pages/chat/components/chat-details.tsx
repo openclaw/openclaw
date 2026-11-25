@@ -19,6 +19,11 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import {
+  createDesktopDetailsContent,
+  createDetailsFocusRecovery,
+  DesktopDetailsContent,
+} from "./chat-details-content-presence.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsLoading } from "./chat-details-loading.tsx";
 import "../../../styles/chat/details.css";
@@ -129,17 +134,23 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.chat?.cachedDetails?.docking?.wide === true),
   );
   const canDock = (wide = wideEnough()) => !isMobile() && isConversationAnchor() && wide;
+  const wantsPanel = () => intent() === "open" || (intent() === "auto" && canDock());
+  const { retainSection, available, observeDesktop, outputsDemand } = createDesktopDetailsContent(
+    () => props.chat,
+    desktop,
+    isPresented,
+    wantsPanel,
+    () => intent() === "closed",
+  );
   const opened = () =>
+    available() &&
     isPresented() &&
     (props.mobileHost
       ? (props.mobileHost.open || props.mobileHost.exiting) &&
         !props.mobileHost.suspended &&
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
-      : intent() === "open" || (intent() === "auto" && canDock()));
-  const outputsDemand = createMemo(() =>
-    desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
-  );
+      : wantsPanel());
   // Mount cached chrome with the transcript; retain disclosure state while closed.
   const cachedReady = () =>
     props.chat?.cachedDetails?.subagents !== undefined &&
@@ -147,7 +158,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
       previous ||
-      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
+      ((opened() || observeDesktop()) &&
+        (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
   );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
@@ -168,6 +180,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       : trigger;
   let progressMenu: MenuHandle | undefined;
   // Native placement and the presentation effect use the same snapshot.
+  const isDesktopWaitingForDetails = () =>
+    desktop() &&
+    isPresented() &&
+    sessionOpened() &&
+    !props.contentPending &&
+    wantsPanel() &&
+    !available();
   const readLayout = () =>
     [
       presentation(),
@@ -183,6 +202,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       layoutElements(),
       props.chat?.connected,
       sessionOpened(),
+      // A settled, empty column can gain or lose content while this same pane is on screen.
+      isDesktopWaitingForDetails(),
     ] as const;
   const mountSurface = (layout: ReturnType<typeof readLayout>) => {
     const mobile = layout[3];
@@ -382,14 +403,19 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     setIntent("open", true);
   };
+  const trackDetailsFocus = createDetailsFocusRecovery(
+    available,
+    isPresented,
+    presentation,
+    (event) => event.composedPath().includes(host) || event.composedPath().includes(panel),
+    () =>
+      layoutElements()
+        ?.getComposerInput?.()
+        ?.querySelector("textarea")
+        ?.focus({ preventScroll: true }),
+  );
   const outside = (event: Event) => {
-    if (
-      opened() &&
-      !props.mobileHost &&
-      !docked() &&
-      !event.composedPath().includes(host) &&
-      !event.composedPath().includes(panel)
-    ) {
+    if (!trackDetailsFocus(event) && opened() && !props.mobileHost && !docked()) {
       panel.removeAttribute("data-instant");
       close();
     }
@@ -436,7 +462,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       presented === previous[9] &&
       open !== previous[1];
     manualChange = false;
-    const arriving = open && entrancePending && !props.chat?.cachedDetails;
+    const samePane = previous && identity === previous[0] && presented && previous[9];
+    const liveArrival = samePane && open && previous[13];
+    const liveRemoval = samePane && previous[1] && layout[13];
+    const arriving = open && (liveArrival || (entrancePending && !props.chat?.cachedDetails));
     if (open && contentOpened) {
       entrancePending = false;
     }
@@ -468,7 +497,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     panel.toggleAttribute("data-open", open);
     frame?.toggleAttribute("data-details-instant", panel.hasAttribute("data-instant"));
-    frame?.toggleAttribute("data-details-restoring", panel.hasAttribute("data-restoring"));
+    // The last row is already gone: animate the gutter, not an empty panel shell.
+    frame?.toggleAttribute(
+      "data-details-restoring",
+      panel.hasAttribute("data-restoring") && !liveRemoval,
+    );
     frame?.style.setProperty(
       "--chat-details-space",
       dock ? `${DETAILS_WIDTH + (isDesktop ? DETAILS_DESKTOP_INLINE_INSET : 0)}px` : "0px",
@@ -527,6 +560,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),
+      listen(document, "focusin", trackDetailsFocus),
       // Child overlays consume Escape before the inspector.
       listen(window, "keydown", (event) => {
         if (event instanceof KeyboardEvent) {
@@ -572,6 +606,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     <openclaw-chat-details
       ref={(element) => (host = element)}
       mobile={props.mobile ? "" : undefined}
+      hidden={!available()}
     >
       <Show when={outputsDemand()} keyed>
         {(retain) => {
@@ -582,7 +617,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       <button
         ref={(element) => (trigger = element)}
         class="chat-details-toggle"
-        hidden={props.mobile || props.externalTrigger}
+        hidden={props.mobile || props.externalTrigger || !available()}
         type="button"
         aria-label={t("chat.sessionDetails.title")}
         title={props.triggerContent ? t("chat.sessionDetails.title") : undefined}
@@ -678,16 +713,19 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                 }
               >
                 <Show when={sessionOpened()}>
-                  <ChatDetailsDesktopContent
-                    chat={props.chat}
-                    presented={isPresented() && opened()}
-                    dismissed={intent() === "closed"}
-                    cachedReady={cachedReady()}
-                    progressMenuRef={(menu) => {
-                      progressMenu = menu;
-                    }}
-                    onHideProgress={hideProgress}
-                  />
+                  <DesktopDetailsContent value={retainSection}>
+                    <ChatDetailsDesktopContent
+                      observing={observeDesktop()}
+                      chat={props.chat}
+                      presented={isPresented() && opened()}
+                      dismissed={intent() === "closed"}
+                      cachedReady={cachedReady()}
+                      progressMenuRef={(menu) => {
+                        progressMenu = menu;
+                      }}
+                      onHideProgress={hideProgress}
+                    />
+                  </DesktopDetailsContent>
                 </Show>
               </Show>
             )}

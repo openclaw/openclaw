@@ -35,6 +35,7 @@ import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
+import { ReportDesktopDetailsContent } from "./chat-details-content-presence.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
@@ -53,6 +54,7 @@ export type SessionAutomationInventoryProps = {
   gateway: ApplicationGateway | undefined;
   sessionKey: string;
   presented: boolean;
+  observing?: boolean;
 };
 
 /** Create once in the session owner; desktop and mobile consume this same inventory. */
@@ -63,7 +65,7 @@ export function createSessionAutomationInventory(
   // Unrelated parent prop replacements must not reset inventory or presentation.
   const gateway = createMemo(() => props.gateway);
   const sessionKey = createMemo(() => props.sessionKey);
-  const presented = createMemo(() => props.presented);
+  const presented = createMemo(() => props.observing ?? props.presented);
   const binding = createMemo(() => ({ source: gateway(), key: sessionKey() }));
   let loadedBinding: ReturnType<typeof binding> | undefined;
   const [revision, setRevision] = createSignal(0);
@@ -521,6 +523,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   const errorNotice = () =>
     inventory.connected() && (
       <div class="chat-summary__automation-error">
+        <ReportDesktopDetailsContent />
         <span role="status">
           {t(
             inventory.loaded()

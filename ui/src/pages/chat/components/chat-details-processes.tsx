@@ -17,6 +17,7 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createKeyedListMotion } from "../../../lib/reactive/keyed-list-motion.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import { ReportDesktopDetailsContent } from "./chat-details-content-presence.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import "./chat-details-processes.css";
 import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
@@ -152,6 +153,7 @@ export function ChatDetailsProcesses(props: Props) {
     <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
       {(error) => (
         <div class="chat-details-processes__error" role="alert">
+          <ReportDesktopDetailsContent />
           <span>{error()}</span>
           <button
             class="chip"

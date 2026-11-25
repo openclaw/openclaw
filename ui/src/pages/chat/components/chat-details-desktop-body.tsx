@@ -14,6 +14,7 @@ const ChatDetailsDesktopComposition = lazy(loadChatDetailsDesktopComposition, {
 export function ChatDetailsDesktopContent(props: {
   chat?: ChatDetailsProps;
   presented: boolean;
+  observing?: boolean;
   dismissed: boolean;
   cachedReady: boolean;
   progressMenuRef: (menu: MenuHandle | undefined) => void;
@@ -49,6 +50,7 @@ export function ChatDetailsDesktopContent(props: {
             scrollport={scrollport()}
             props={props.chat}
             presented={props.presented}
+            observing={props.observing}
             dismissed={props.dismissed}
             progressMenuRef={props.progressMenuRef}
             onHideProgress={props.onHideProgress}

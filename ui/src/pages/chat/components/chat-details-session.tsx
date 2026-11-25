@@ -57,6 +57,7 @@ const sectionChoicesBySession = new Map<
 type Props = {
   props?: ChatDetailsProps;
   presented: boolean;
+  observing?: boolean;
   dismissed?: boolean;
   scrollport?: HTMLElement;
   /** Set by ChatDetails from its native presentation context, never pane width. */
@@ -108,6 +109,7 @@ function DetailsAutomations(props: Props) {
           : ""
       }
       presented={props.presented}
+      observing={props.observing}
       cached={props.desktop ? props.props?.cachedDetails?.automations : undefined}
       onDetailsSnapshot={props.desktop ? props.props?.onDetailsSnapshot : undefined}
     />
@@ -126,7 +128,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           () => ({
             sessionKey: host.props?.sessionKey ?? "",
             agentId: host.props?.currentAgentId ?? "main",
-            presented: host.presented && Boolean(host.props?.onOpenProcesses),
+            presented: (host.observing ?? host.presented) && Boolean(host.props?.onOpenProcesses),
           }),
           ProcessesPanelData,
           () => undefined,
@@ -496,6 +498,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                         work={pullRequests() ?? undefined}
                         details={props.props!}
                         presented={active()}
+                        observing={props.observing}
                         expanded={sectionExpanded("environment")}
                         onExpandedChange={(expanded) => changeSection("environment", expanded)}
                       />
@@ -621,13 +624,14 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
   },
   {
     propertyChanged: (host, key) => {
-      if (key === "props" || key === "presented" || key === "desktop") {
+      if (key === "props" || key === "presented" || key === "observing" || key === "desktop") {
         syncSessionPanelInputs(host);
       }
     },
     properties: {
       props: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
+      observing: { default: undefined, attribute: false },
       scrollport: { default: undefined, attribute: false },
       dismissed: { default: false, type: Boolean },
       desktop: { default: false, type: Boolean },
@@ -659,6 +663,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
+        observing={props.observing}
         dismissed={props.dismissed}
         scrollport={props.scrollport}
         desktop
@@ -678,8 +683,12 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
         </div>
       </Show>
       {/* Keep the automation slot after Progress while its inventory revalidates. */}
-      <DetailsAutomations props={props.props} presented={props.presented} desktop />
-      <p class="chat-details-desktop-empty">{t("chat.sessionDetails.empty")}</p>
+      <DetailsAutomations
+        props={props.props}
+        presented={props.presented}
+        observing={props.observing}
+        desktop
+      />
     </>
   );
 }

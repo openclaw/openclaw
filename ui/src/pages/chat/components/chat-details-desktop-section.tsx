@@ -4,6 +4,7 @@ import { animateDetailsSection } from "../../../components/details-section-motio
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { ReportDesktopDetailsContent } from "./chat-details-content-presence.ts";
 import type { ChatDetailsDesktopSectionId } from "./chat-details-types.ts";
 import "../../../styles/chat/details-desktop.css";
 
@@ -205,6 +206,7 @@ export function ChatDetailsDesktopSection(props: {
           }
         }}
       >
+        <ReportDesktopDetailsContent />
         <span class="chat-details-desktop-section__title">{props.title}</span>
         <Icon name="chevronDown" />
         <span class="chat-details-desktop-section__metadata">{props.metadata}</span>
