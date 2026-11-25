@@ -8,6 +8,7 @@ const catalog = {
       workingDetails: "Agent is working. View details",
     },
     composer: {
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
