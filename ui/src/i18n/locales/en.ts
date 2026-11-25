@@ -915,6 +915,7 @@ const startupEnglish = {
   skillsPage: {},
   skillStatus: {},
   nav: {
+    automationFailure: "An automation has failed",
     gateway: {
       sectionLabel: "Gateway",
       primaryTag: "primary",
