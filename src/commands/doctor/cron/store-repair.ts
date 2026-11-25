@@ -30,6 +30,7 @@ import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
 import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
+import { isPrivateDoctorPostgresStore } from "../../../infra/update-doctor-private-store.js";
 import type {
   PluginDoctorCronChange,
   PluginDoctorCronInventory,
@@ -153,7 +154,7 @@ export async function repairCronDefaultStoreSelectionForDoctor(
   authority: PluginDoctorRepairAuthority,
   selection: Extract<CronStoreSelection, { status: "unresolved" }>,
   storeKey: string,
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   return await commitCronDoctorRepair(scope, authority, {
     plan: ["default-store", selection, storeKey],
     assertRowsUnchanged(db) {
@@ -197,12 +198,16 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
-/** Only adds an inference restriction; retains authored fields, runtime state and approval terms. */
+/** Adopt a legacy binding or restore its verified path only; retain runtime state and approval terms. */
 export async function repairCronInferenceBindingsForDoctor(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   inventory: PluginDoctorCronInventory,
-  changes: readonly { job: PluginDoctorCronJob; binding: CronInferenceBinding }[],
+  changes: readonly {
+    job: PluginDoctorCronJob;
+    binding: CronInferenceBinding;
+    previousAuthorizationId?: string;
+  }[],
 ): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   if (changes.length === 0) {
@@ -210,13 +215,18 @@ export async function repairCronInferenceBindingsForDoctor(
   }
   const expected = definitionEvidence(inventory.jobs);
   const selected = new Set<string>();
-  for (const { job } of changes) {
+  for (const { job, binding, previousAuthorizationId } of changes) {
     const key = JSON.stringify([job.storeKey, job.id]);
     if (
       selected.has(key) ||
       !inventory.jobs.some((row) => isDeepStrictEqual(row, job)) ||
       !job.definition ||
-      job.definition.inferenceBinding !== undefined
+      !isDeepStrictEqual(
+        job.definition.inferenceBinding,
+        previousAuthorizationId === undefined
+          ? undefined
+          : { ...binding, authorizationId: previousAuthorizationId },
+      )
     ) {
       throw new Error("Inference migration requires distinct inspected legacy cron definitions.");
     }
@@ -232,7 +242,7 @@ export async function repairCronInferenceBindingsForDoctor(
       }
     },
     write(db) {
-      for (const { job, binding } of changes) {
+      for (const { job, binding, previousAuthorizationId } of changes) {
         const row = loadCronRows(db, job.storeKey, new Set([job.id]), {
           includeGrantDefinitionProjection: true,
         })[0];
@@ -263,6 +273,7 @@ export async function repairCronInferenceBindingsForDoctor(
             previous,
             next,
             row.grant_definition_generation,
+            previousAuthorizationId,
           );
         }
         executeSqliteQuerySync(
@@ -360,13 +371,11 @@ export async function backupCronStoreForDoctor(
     assertCurrent: () => void;
     assertRowsUnchanged: (db: EngineConnection) => void;
   },
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   repair.assertCurrent();
   const sourcePath = resolveOpenClawStateSqlitePath(scope.env);
   const input = stateEngineInput();
   if (input) {
-    const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
-    const config = { database: { engine: "postgres" as const, postgres: input } };
     const assertSource = () => {
       repair.assertCurrent();
       const present = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
@@ -378,6 +387,11 @@ export async function backupCronStoreForDoctor(
       }
     };
     assertSource();
+    if (isPrivateDoctorPostgresStore(sourcePath)) {
+      return { warnings: [] };
+    }
+    const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
+    const config = { database: { engine: "postgres" as const, postgres: input } };
     const before = await fingerprintPostgresBackup(sourcePath, config);
     repair.assertCurrent();
     await capturePostgresBackup({
@@ -426,7 +440,7 @@ async function commitCronDoctorRepair(
     assertRowsUnchanged: (db: EngineConnection) => void;
     write: (db: EngineConnection) => void;
   },
-): Promise<{ backupPath: string; warnings: string[] }> {
+): Promise<{ backupPath?: string; warnings: string[] }> {
   const backup = await backupCronStoreForDoctor(scope, {
     plan: repair.plan,
     assertCurrent: () => authority.assertCurrent(),
@@ -445,7 +459,7 @@ async function commitCronDoctorRepair(
     );
   } catch (error) {
     throw new Error(
-      `Cron Doctor repair failed; verified backup retained at ${backup.backupPath}: ${String(error)}`,
+      `Cron Doctor repair failed${backup.backupPath ? `; verified backup retained at ${backup.backupPath}` : ""}: ${String(error)}`,
       { cause: error },
     );
   }

@@ -10,7 +10,7 @@ import {
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker-context.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";

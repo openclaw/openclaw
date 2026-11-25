@@ -11,6 +11,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI inline command trail" });
@@ -200,7 +201,7 @@ suite.define(() => {
             toolCallId: id,
             name: "lookup_record",
             kind: "tool",
-            title,
+            title: "Lookup Record",
             phase: completed ? "end" : "start",
             status: completed ? "completed" : "running",
           });
@@ -217,7 +218,7 @@ suite.define(() => {
         const working = pane.locator(".chat-activity-group--working");
         await expect
           .poll(() => working.locator(".chat-activity-group__label").textContent())
-          .toContain("Inspect release notes");
+          .toContain("Lookup Record");
         const before = await takeControlUiScreenshotFrame(page, pane, [working], {
           animations: "disabled",
         });
@@ -227,12 +228,12 @@ suite.define(() => {
         await expect.poll(() => groups.count()).toBe(3);
         await command(pane, "printf checked").waitFor();
         expect(await groups.nth(1).textContent()).toContain("printf checked");
-        expect(await groups.last().textContent()).toContain("Inspect release notes");
+        expect(await groups.last().textContent()).toContain("Lookup Record");
         expect(await groups.first().locator(".chat-bubble-dots--working").count()).toBe(0);
         expect(await working.count()).toBe(1);
         expect(await pane.locator(".chat-bubble-dots--working").count()).toBe(1);
         expect(await working.locator(".chat-activity-group__label").textContent()).toContain(
-          "Inspect release notes",
+          "Lookup Record",
         );
         expect(await groups.last().locator(".chat-bubble-dots--working").count()).toBe(1);
         const after = await takeControlUiScreenshotFrame(
@@ -332,6 +333,7 @@ suite.define(() => {
             ].flatMap(({ id, shellCommand, text, isError }, index) => [
               {
                 role: "assistant",
+                ...openAiAuthor,
                 content: [
                   { type: "toolCall", id, name: "exec", arguments: { command: shellCommand } },
                 ],
@@ -362,6 +364,7 @@ suite.define(() => {
             ]),
             {
               role: "assistant",
+              ...openAiAuthor,
               content: textContent("The evidence commands finished."),
               timestamp: now + 50,
               __openclaw: { id: "saved-answer", runId },
@@ -457,9 +460,7 @@ suite.define(() => {
         await running.locator(".chat-tool-row--running").waitFor();
         await firstRow.click();
         await expect.poll(() => firstRow.getAttribute("aria-expanded")).toBe("true");
-        const recordSummary = pane.locator(
-          ".chat-activity-group:not(.chat-activity-group--inline) .chat-activity-group__summary",
-        );
+        const recordSummary = pane.locator(".chat-tool-msg-summary", { hasText: "Lookup Record" });
         await expect.poll(() => recordSummary.count()).toBe(1);
         await recordSummary.click();
         await expect.poll(() => recordSummary.getAttribute("aria-expanded")).toBe("true");

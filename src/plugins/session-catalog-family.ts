@@ -198,7 +198,12 @@ function parseNodeSessionPage(
     throw new Error(options.messages.invalidNodeCursor);
   }
   return {
-    sessions: value.sessions,
+    // Locality is relative to this Gateway. Never import a paired node's own
+    // verdict about automatic export as a local grant.
+    sessions: value.sessions.map((session) => ({
+      ...session,
+      exportPolicy: { origin: "federated", automatic: false },
+    })),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }

@@ -3,6 +3,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 /** Shared session MCP runtime constants and ownership contracts. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import type {
   RequesterMcpConnect,
   SessionMcpRequesterScope,
@@ -18,6 +19,23 @@ export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRu
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 // Includes runtimes being created or drained; idle owners yield capacity at the limit.
 export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
+
+export type McpServerBackoffState = {
+  session: BundleMcpSession;
+  failures: number;
+  retryAfterMs?: number;
+};
+
+export function projectBundleMcpCatalogFailure(
+  catalog: McpToolCatalog | undefined,
+  diagnostic: McpToolCatalogDiagnostic,
+): McpToolCatalog {
+  return {
+    ...(catalog ?? { version: 1, servers: {}, tools: [] }),
+    generatedAt: Date.now(),
+    diagnostics: [diagnostic],
+  };
+}
 
 export class SessionMcpRuntimeCapacityError extends Error {
   constructor(
@@ -48,6 +66,7 @@ export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
 }
 
 export type CreateSessionMcpRuntime = (params: {
+  lastListedCatalogByServerIdentity?: Map<string, McpToolCatalog>;
   sessionId: string;
   sessionKey?: string;
   agentId?: string;

@@ -175,7 +175,7 @@ describe("Code Mode guest execution", () => {
       });
       const malformed = [
         'await fake_command({ value: "first" });',
-        String.raw`const patch = { 'newText:' const value = 1;\n };`,
+        'const patch = "first\nsecond";',
         "return await fake_command({ value: \"import test from 'node:test';\" });",
       ].join("\n");
       const details = await execute(malformed, "code-call-syntax");
@@ -189,11 +189,14 @@ describe("Code Mode guest execution", () => {
       expect(testing.activeRuns.size).toBe(0);
 
       const corrected = await complete(
-        `return await fake_command({ value: "import test from 'node:test';" });`,
+        String.raw`return await fake_command({ value: ["printf '%s\\n' '$HOME'", "echo '\x60literal\x60 \x24{value}\\n'"].join("\n") });`,
       );
       expect(corrected).toMatchObject({
         status: "completed",
-        value: { name: "fake_command", input: { value: "import test from 'node:test';" } },
+        value: {
+          name: "fake_command",
+          input: { value: "printf '%s\\n' '$HOME'\necho '`literal` ${value}\\n'" },
+        },
       });
       expect(command.execute).toHaveBeenCalledTimes(1);
       expect(testing.activeRuns.size).toBe(0);

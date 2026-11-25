@@ -154,7 +154,6 @@ export async function handleProviderIconHttpRequest(
   if (!auth) {
     return true;
   }
-  auth.assertCurrent();
   const providerId = parsed.value;
   const icon = providerId
     ? resolveMergedModelProviderConfig(opts.config, providerId)?.icon
@@ -170,8 +169,6 @@ export async function handleProviderIconHttpRequest(
     return true;
   }
   const image = await loadProviderIcon(providerId, icon);
-  // Paired device tokens can be revoked while artwork loading is pending.
-  await auth.revalidate();
   if (!image) {
     respondNotFound(res);
     return true;

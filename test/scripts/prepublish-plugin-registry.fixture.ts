@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { create } from "tar";
+import { create } from "tar/raw";
 import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 
 export const SOURCE_SHA = "a".repeat(40);
@@ -103,7 +103,7 @@ export function commitRegistrySource(repoRoot: string) {
 export function createRegistrySource(
   repoRoot: string,
   packageNames: string[],
-  combinedBuild = false,
+  combinedBuild: boolean | "batch" = false,
 ) {
   const scriptsDir = join(repoRoot, "scripts", "lib");
   mkdirSync(scriptsDir, { recursive: true });
@@ -139,7 +139,7 @@ console.log("package manifest stdout");
 `,
   );
   if (combinedBuild) {
-    writeCombinedBuildFixture(repoRoot, packageNames, VERSION);
+    writeCombinedBuildFixture(repoRoot, packageNames, VERSION, combinedBuild === "batch");
   }
   execFileSync("git", ["init"], { cwd: repoRoot });
   return { repoRoot, sourceSha: commitRegistrySource(repoRoot) };

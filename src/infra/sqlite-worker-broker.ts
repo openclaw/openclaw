@@ -28,16 +28,16 @@ import {
   settleSqliteWorkerJob,
   dispatchSqliteWorkerJob,
   failSqliteWorkerSlot,
-  type CompletedSqliteWorkerOutcome,
-  type SqliteWorkerReplyOwner,
 } from "./sqlite-worker-broker-reply.js";
 import type {
   Actor,
+  CompletedSqliteWorkerOutcome,
   EnqueueOptions,
   Job,
   PreparedSqliteWorkerOpen,
   RequestBody,
   Slot,
+  SqliteWorkerReplyOwner,
   SqliteWorkerStoreOptions,
   StoreClient,
   SqliteWorkerClientBinding,
@@ -714,17 +714,18 @@ export class SqliteWorkerBroker {
   }
 
   close(beforeSharedStateClose?: () => Promise<void>): Promise<void> {
+    if (beforeSharedStateClose) {
+      this.lifecycle.sealClients(this.waiters.values(), true);
+      // Lease finalizers open cleanup workers before host admission can close.
+      return beforeSharedStateClose().then(() => this.close());
+    }
     this.draining ??= this.lifecycle
       .closeHost({
         inputAdmission: this.inputAdmission,
         operations: this.operations,
         waiters: this.waiters.values(),
-        beforeSharedStateClose,
       })
-      .then(() => {
-        this.clients.clear();
-        this.stores.clear();
-      })
+      .then(() => this.clients.clear())
       .finally(() => {
         this.draining = undefined;
       });

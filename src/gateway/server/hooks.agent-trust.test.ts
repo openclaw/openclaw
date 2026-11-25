@@ -41,7 +41,7 @@ const loadConfigMock = vi.fn(mainRosterConfig);
 const logHooksInfoMock = vi.fn();
 const logHooksWarnMock = vi.fn();
 const validateExplicitMessageAccountSelectionMock = vi.fn(
-  ({ accountId }: { accountId?: unknown }) => accountId as string | undefined,
+  ({ accountId }: { cfg: OpenClawConfig; accountId?: unknown }) => accountId as string | undefined,
 );
 const resolveOutboundChannelPluginMock = vi.fn(() => ({ id: "telegram" }));
 const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
@@ -358,33 +358,60 @@ describe("dispatchAgentHook trust handling", () => {
   });
 
   it("revalidates an explicit delivery account against queued-run config", async () => {
-    validateExplicitMessageAccountSelectionMock
-      .mockImplementationOnce(({ accountId }: { accountId?: unknown }) => accountId as string)
-      .mockImplementationOnce(() => {
+    let currentConfig: OpenClawConfig = {
+      ...mainRosterConfig(),
+      channels: { telegram: { accounts: { removed: {} } } },
+    };
+    loadConfigMock.mockImplementation(() => currentConfig);
+    validateExplicitMessageAccountSelectionMock.mockImplementation(({ cfg, accountId }) => {
+      if (accountId !== "removed" || !cfg.channels?.telegram?.accounts?.[accountId]) {
         throw new Error('Unknown account "removed" for channel telegram.');
-      });
+      }
+      return accountId;
+    });
+    const firstGate = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+      await firstGate.promise;
+      return { status: "ok", summary: "first done", delivered: false };
+    });
 
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Removed account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "removed",
-      delivery: {
-        mode: "announce",
+    const first = dispatchAgentHook(buildAgentPayload("Blocking hook"));
+    try {
+      await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+      const queued = dispatchAgentHook({
+        ...buildAgentPayload("Removed account"),
+        deliver: true,
         channel: "telegram",
         to: "123456",
         accountId: "removed",
-      },
-    });
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123456",
+          accountId: "removed",
+        },
+      });
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
 
-    expect(result).toMatchObject({
-      ok: false,
-      statusCode: 400,
-      error: 'Unknown account "removed" for channel telegram.',
-      runId: expect.any(String),
-    });
-    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      currentConfig = {
+        ...mainRosterConfig(),
+        channels: { telegram: { accounts: {} } },
+      };
+      firstGate.resolve();
+      const result = await queued;
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({
+        ok: false,
+        statusCode: 400,
+        error: 'Unknown account "removed" for channel telegram.',
+        runId: expect.any(String),
+      });
+    } finally {
+      firstGate.resolve();
+      await first;
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    }
   });
 
   it("retains detached agent work after the hook request closes", async () => {

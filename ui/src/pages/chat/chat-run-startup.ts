@@ -19,7 +19,12 @@ export type ChatRunStartupState =
       waitReason?: "response" | "slot";
       seq?: number;
     }
-  | { state: "status"; runId: string; phase: "answer" | "finishing"; seq?: number }
+  | {
+      state: "status";
+      runId: string;
+      phase: "answer" | "finishing";
+      seq?: number;
+    }
   | {
       state: "status";
       runId: string;

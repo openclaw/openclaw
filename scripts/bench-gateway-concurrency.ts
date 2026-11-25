@@ -296,7 +296,11 @@ type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> &
 };
 
 type CliOptions = GatewayBenchRuntimeOptions & {
-  controlUiLoad?: ControlUiLoadOptions & { cgroupParent: string; transpilerCache: string };
+  controlUiLoad?: ControlUiLoadOptions & {
+    cgroupParent: string;
+    transpilerCache: string;
+    memoryLimitBytes?: number;
+  };
   durationMs?: number;
   provider: "mock" | "openai";
   startBarrier?: string;
@@ -395,6 +399,7 @@ const VALUE_FLAGS = new Set([
   "--duration-ms",
   "--start-barrier",
   "--resource-cgroup",
+  "--gateway-memory-gib",
   "--transpiler-cache",
   "--provider",
   "--agent-count",
@@ -507,6 +512,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--drivers",
       "--duration-ms",
       "--resource-cgroup",
+      "--gateway-memory-gib",
       "--transpiler-cache",
       "--gateway-runtime",
       "--gateway-cpus",
@@ -529,6 +535,10 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
         "Control UI load requires --runs 1 --warmup 0; interleave independent invocations",
       );
     }
+    const memoryGiB = flags.get("--gateway-memory-gib")?.[0];
+    if (memoryGiB !== undefined && memoryGiB !== "2" && memoryGiB !== "4") {
+      throw new CliArgumentError("--gateway-memory-gib must be 2 or 4");
+    }
     options.concurrency = activeClients;
     options.controlUiLoad = {
       totalClients,
@@ -537,12 +547,17 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       durationMs: boundedInt("--duration-ms", 60_000, 600_000),
       timeoutMs: options.timeoutMs,
       cgroupParent: path.resolve(cgroupParent),
+      memoryLimitBytes: memoryGiB === undefined ? undefined : Number(memoryGiB) * 1024 ** 3,
       transpilerCache: path.resolve(transpilerCache),
     };
   } else if (
-    ["--active-clients", "--drivers", "--resource-cgroup", "--transpiler-cache"].some((flag) =>
-      flags.has(flag),
-    )
+    [
+      "--active-clients",
+      "--drivers",
+      "--resource-cgroup",
+      "--gateway-memory-gib",
+      "--transpiler-cache",
+    ].some((flag) => flags.has(flag))
   ) {
     throw new CliArgumentError("Control UI load options require --control-ui-clients");
   }
@@ -629,6 +644,7 @@ Options:
   --duration-ms <ms> Fixed admission window; normal mode repeats turns, then drains (mock only)
   --start-barrier <path> Wait for a fresh shared release file after writing <output>.ready (normal fixed-duration mode only)
   --resource-cgroup <path> Writable delegated cgroup-v2 parent; benchmark owns a unique child
+  --gateway-memory-gib <2|4> Cap just the Gateway and its descendants; requires delegated memory accounting
   --transpiler-cache <path> Explicit Gateway Bun transpiler-cache directory (prime separately)
   --provider <name> mock (default) or openai (live ${LIVE_GATEWAY_MODEL_ID}; requires OPENAI_API_KEY)
   --postgres        Use PostgreSQL from ${POSTGRES_CONNECTION_ENV} (default: SQLite; disposable fixture only)
@@ -2102,7 +2118,10 @@ async function runGatewaySample(
         config.gateway.auth = { mode: "token", token: controlUiToken };
         config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
         writeFileSync(configPath, JSON.stringify(config));
-        loadResources = createGatewayLoadResources(options.controlUiLoad.cgroupParent);
+        loadResources = createGatewayLoadResources(
+          options.controlUiLoad.cgroupParent,
+          options.controlUiLoad.memoryLimitBytes,
+        );
         loadResources.start();
         mkdirSync(options.controlUiLoad.transpilerCache, { recursive: true });
       }
@@ -2256,6 +2275,12 @@ async function runGatewaySample(
       if (options.controlUiLoad && loadResources && controlUiToken) {
         if (!gateway.pid) {
           throw new Error("Gateway PID missing");
+        }
+        if (
+          options.controlUiLoad.memoryLimitBytes !== undefined &&
+          !loadResources.read().pids.includes(gateway.pid)
+        ) {
+          throw new Error("Ready Gateway is outside its benchmark memory cgroup");
         }
         controlUiRun = await runControlUiLoad({
           ...options.controlUiLoad,
@@ -3260,9 +3285,12 @@ async function runGatewaySample(
     });
     await captureFailure("cleanup", async () => {
       if (loadResources) {
-        resourceReport ??= loadResources.finish();
-        const resourceCleanup = await loadResources.close();
-        forcedCleanup ||= resourceCleanup.forced;
+        try {
+          resourceReport ??= loadResources.finish();
+        } finally {
+          const resourceCleanup = await loadResources.close();
+          forcedCleanup ||= resourceCleanup.forced;
+        }
       }
       if (
         spawnedChildren.some(
@@ -3276,6 +3304,10 @@ async function runGatewaySample(
         cleanup.rootRemoved = true;
       }
     });
+  }
+  const memoryBudget = resourceReport?.memoryBudget;
+  if (memoryBudget && (memoryBudget.events.oom > 0 || memoryBudget.events.oom_kill > 0)) {
+    errors.push({ phase: "diagnostics", error: "Gateway cgroup recorded out-of-memory events" });
   }
   if (controlUiRun) {
     if (

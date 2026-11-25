@@ -63,6 +63,7 @@ let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let mediaGenerationToolProviders: typeof import("./media-generation-tool-providers.js");
 let mediaGenerationRegistry: typeof import("../../media-generation/registry.js");
 let imageOps: typeof import("../../media/media-services.js");
+let imageHeaderMetadata: typeof import("../../media/image-header-metadata.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
@@ -439,6 +440,7 @@ describe("createImageGenerateTool", () => {
     mediaGenerationToolProviders = await import("./media-generation-tool-providers.js");
     mediaGenerationRegistry = await import("../../media-generation/registry.js");
     imageOps = await import("../../media/media-services.js");
+    imageHeaderMetadata = await import("../../media/image-header-metadata.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
@@ -714,7 +716,7 @@ describe("createImageGenerateTool", () => {
     expect(cap).toBe(maxBytes);
     expect(fileName).toBe("cat.jpg");
     expect(saved?.byteLength).toBeLessThanOrEqual(maxBytes);
-    expect(imageOps.readImageMetadataFromHeader(saved as Buffer)).toEqual({
+    expect(imageHeaderMetadata.readImageMetadataFromHeader(saved as Buffer)).toEqual({
       width: 1024,
       height: 1024,
     });
@@ -754,15 +756,12 @@ describe("createImageGenerateTool", () => {
     });
     const terminalError = new Error("image persistence failed");
     const lateSavedMedia = savedMedia("late.png", 4);
-    let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
-    const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
-      resolveLateSave = resolve;
-    });
+    const lateSave = createDeferred<typeof lateSavedMedia>();
     const immediatelySavedMedia = savedMedia("saved.png", 5);
     const saveMediaBuffer = vi
       .spyOn(mediaStore, "saveMediaBuffer")
       .mockRejectedValueOnce(terminalError)
-      .mockImplementationOnce(() => lateSave)
+      .mockImplementationOnce(() => lateSave.promise)
       .mockResolvedValueOnce(immediatelySavedMedia);
     const deleteMediaBuffer = vi
       .spyOn(mediaStore, "deleteMediaBuffer")
@@ -776,7 +775,7 @@ describe("createImageGenerateTool", () => {
     await Promise.resolve();
     expect(executionSettled()).toBe(false);
 
-    resolveLateSave(lateSavedMedia);
+    lateSave.resolve(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);
     expect(deleteMediaBuffer).toHaveBeenCalledTimes(2);
     expect(deleteMediaBuffer).toHaveBeenCalledWith("late.png", "tool-image-generation");

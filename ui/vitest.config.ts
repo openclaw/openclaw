@@ -80,6 +80,7 @@ const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.sli
 const mockRegistryBrowserTests = [
   "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/chat-pane-inline-output.browser.test.tsx",
   "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -108,6 +109,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
+  "src/components/sidebar-session-window.browser.test.ts",
   "src/components/app-sidebar-owner-avatar.browser.test.ts",
   "src/components/app-sidebar-session-filter.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
@@ -115,6 +117,7 @@ const webkitTestFiles = [
   "src/components/confirm-dialog.browser.test.ts",
   "src/pages/channels/view.detail.browser.test.tsx",
   "src/pages/plugins/settings-lifecycle.browser.test.tsx",
+  "src/pages/plugins/skill-preview.browser.test.tsx",
   "src/pages/new-session/project-chip.registration.browser.test.tsx",
   "src/pages/agents/agent-file-preview.browser.test.ts",
   "src/pages/skills/reader-shell.browser.test.tsx",
@@ -140,7 +143,9 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
   "src/pages/chat/chat-composer-queue.browser.test.tsx",
   "src/pages/chat/chat-queue-images.browser.test.ts",
+  "src/pages/chat/components/chat-activity-summary-width.browser.test.tsx",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-attachment-inputs.browser.test.ts",
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",

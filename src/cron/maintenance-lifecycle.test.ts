@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import os from "node:os";
+import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -32,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
+  keepWarm: vi.fn(async (_signal: AbortSignal) => Infinity),
 }));
 
 // mock-isolation: Exercise the real startup and scheduler lifetimes without SQLite workers.
@@ -61,6 +64,10 @@ vi.mock("./session-registry-maintenance.js", () => ({
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ ...mocks, debug() {}, trace() {} }),
 }));
+// mock-isolation: Retention timing without keep-warm session and transcript reads.
+vi.mock("../agents/prompt-cache-keep-warm.js", () => ({
+  runPromptCacheKeepWarm: mocks.keepWarm,
+}));
 
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
@@ -80,6 +87,8 @@ const completed = (lastSuccessAtMs: number) => ({
   skippedStores: 0,
 });
 beforeEach(() => {
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
   vi.clearAllMocks();
   mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
   mocks.registry
@@ -96,6 +105,51 @@ afterEach(async () => {
   vi.restoreAllMocks();
   gatewayWork.resetGatewayWorkAdmission();
   recordAgentDatabaseAdmissions([]);
+});
+
+it("wakes keep-warm once after start and again when an interactive session's transcript settles", async () => {
+  start();
+  await clock.advanceBy(5_000);
+  // The pass loads lazily outside the scheduler clock.
+  await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledTimes(1));
+  // Automation runs never get a keep-warm wake.
+  sessionChanges.emit({
+    sessionKey: "agent:main:cron:job:run:1",
+    storePath: "/synthetic/agents/main.sqlite",
+    scope: "transcript",
+  });
+  sessionChanges.emit({
+    sessionKey: "agent:main:main",
+    storePath: "/synthetic/agents/main.sqlite",
+    scope: "transcript",
+  });
+  // The earliest ping of any cache lifetime is three minutes after the request.
+  await clock.advanceBy(3 * 60_000 - 1);
+  await flushImmediate();
+  expect(mocks.keepWarm).toHaveBeenCalledTimes(1);
+  await clock.advanceBy(1);
+  await vi.waitFor(() => expect(mocks.keepWarm).toHaveBeenCalledTimes(2));
+});
+
+// A `global` transcript receipt names no agent. Keep-warm noting it must not fail the commit's
+// fact installation, which invalidates every reader of that session (a member's turn then failed).
+it("installs a global session's transcript facts without invalidating other readers", async () => {
+  start();
+  const seen: { sessionKey?: string; factsInvalidated?: boolean }[] = [];
+  const stop = sessionChanges.subscribeFacts((change) => {
+    seen.push(change as (typeof seen)[number]);
+  });
+  try {
+    sessionChanges.emit({
+      sessionKey: "global",
+      storePath: "/synthetic/agents/main.sqlite",
+      scope: "transcript",
+    });
+  } finally {
+    stop();
+  }
+  expect(seen).toEqual([expect.objectContaining({ sessionKey: "global" })]);
+  expect(seen[0]?.factsInvalidated).toBeUndefined();
 });
 
 it("keeps pending database admission private when its publisher wakes retention", async () => {

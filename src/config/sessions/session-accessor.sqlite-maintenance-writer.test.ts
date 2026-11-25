@@ -695,3 +695,31 @@ it("waits for a pending preference write before preparing cleanup", async () => 
   const pins = await preparing;
   expect(pins.sessionKeys).toEqual(["agent:main:pending"]);
 });
+
+it("removes disposable cap rows while ordinary archiving is deferred", async () => {
+  const { storePath, load } = createPlannerStore(2);
+  const disposableKey = "agent:main:subagent:deferred-cap-disposable";
+  replaceSessionEntrySync(
+    { sessionKey: disposableKey, storePath },
+    { sessionId: "deferred-cap-disposable", updatedAt: 3 },
+  );
+  const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: () => [],
+    isPending: () => true,
+    dispose() {},
+  }));
+  onTestFinished(unregister);
+  const result = await applySessionEntryLifecycleMutation({
+    storePath,
+    maintenanceOverride: {
+      ...resolveMaintenanceConfigFromInput(),
+      archiveDashboardAfterMs: null,
+      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+      maxEntries: 1,
+    },
+  });
+  expect(result).toMatchObject({ archived: 0, capped: 1, afterCount: 2 });
+  expect(loadSessionEntry({ storePath, sessionKey: disposableKey })).toBeUndefined();
+  expectUnarchived(load(0));
+  expectUnarchived(load(1));
+});

@@ -23,10 +23,8 @@ import {
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import {
-  prepareCoreToolPolicy,
-  projectAgentToolDefinition,
-} from "../agents/prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "../agents/prepared-tool-definition.js";
+import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import {
   SessionPortalToolSchema,

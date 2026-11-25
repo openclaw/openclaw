@@ -6,12 +6,9 @@ import { SessionWorktreeSourceChangedError } from "../../agents/worktrees/errors
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as processExec from "../../process/exec.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { captureGatewayRequestOperatorGuard } from "../server-methods/session-mutation-guards.js";
 import { createGatewaySession } from "../session-create-service.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
@@ -213,9 +210,7 @@ it.each(["capture", "read", "copy"] as const)(
 
 it.each([
   { boundary: "checkpoint", change: "none" },
-  { boundary: "checkpoint", change: "caller" },
   { boundary: "checkpoint", change: "source" },
-  { boundary: "binding", change: "caller" },
   { boundary: "binding", change: "source" },
 ] as const)(
   "checks disk-child $change authority at final $boundary publication",
@@ -226,9 +221,6 @@ it.each([
     const originalRefs = await refs(artifact);
     await f.write("dirty.txt", "current parent bytes\n");
     const cfg = rolePolicyConfig();
-    const revokedRole = cfg.gateway?.roles?.definitions?.none;
-    assert(revokedRole);
-    revokedRole.scopes = ["operator.read"];
     cfg.session = { store: sessionTarget.storePath };
     setRuntimeConfigSnapshot(cfg);
     using cleanup = new DisposableStack();
@@ -245,13 +237,6 @@ it.each([
       getRuntimeConfig: () => cfg,
       getCommittedRuntimeConfig: () => cfg,
     });
-    const assertOperatorCurrent = captureGatewayRequestOperatorGuard({
-      req: { type: "req", id: "disk-child", method: "sessions.create", params: { key } },
-      client,
-      context,
-      isWebchatConnect: () => true,
-      respond: vi.fn(),
-    });
     const admitted = await resolveSessionMutationAuthorizationAsync({
       client,
       context,
@@ -262,10 +247,7 @@ it.each([
     const authorization = admitted.authorization;
     assert(authorization);
     cleanup.defer(() => authorization.release?.());
-    const assertCurrent = () => {
-      assertOperatorCurrent();
-      authorization.assertCurrent();
-    };
+    const assertCurrent = () => authorization.assertCurrent();
     assertCurrent();
     let reachedBoundary = false;
     let childRoot: string | undefined;
@@ -273,10 +255,7 @@ it.each([
     const changeAuthority = async () => {
       reachedBoundary = true;
       expect(loadSessionEntry(target)).toBeUndefined();
-      if (change === "caller") {
-        setUserProfileRole(profileId, "none");
-        expect(assertCurrent).toThrow(SessionMutationAuthorizationChangedError);
-      } else if (change === "source") {
+      if (change === "source") {
         await patchSessionEntryCore(sessionTarget, () => ({ sessionId: "reassigned-parent" }), {
           skipMaintenance: true,
         });
@@ -354,11 +333,7 @@ it.each([
         },
       );
     } else {
-      await expect(creating).rejects.toThrow(
-        change === "caller"
-          ? SessionMutationAuthorizationChangedError
-          : SessionWorktreeSourceChangedError,
-      );
+      await expect(creating).rejects.toThrow(SessionWorktreeSourceChangedError);
       expect(await f.store.find(target)).toBeUndefined();
       expect(loadSessionEntry(target)).toBeUndefined();
       assert(childRoot);

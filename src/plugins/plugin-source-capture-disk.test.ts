@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createStatfsFixture } from "../infra/disk-space.test-support.js";
+import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginSourceSnapshot } from "./plugin-generation-capture.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
@@ -27,6 +28,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+afterEach(() => closeDefaultRetainedNativeWorkerSource());
 
 it("refuses new and retained captures on low space without removing existing bytes", async () => {
   const stateDir = dirs.make("capture-disk-state-");
@@ -127,7 +129,14 @@ it("contains low-space setup preparation failure so startup can continue", async
     source,
     setupSource: source,
   });
-  vi.spyOn(fs, "statfsSync").mockReturnValue(createStatfsFixture({ bavail: 1 }));
+  await closeDefaultRetainedNativeWorkerSource();
+  const preload = `import fs from "node:fs"; import { syncBuiltinESMExports } from "node:module";
+    fs.statfsSync = () => (${JSON.stringify(createStatfsFixture({ bavail: 1 }))});
+    syncBuiltinESMExports();`;
+  vi.stubEnv(
+    "NODE_OPTIONS",
+    `${process.env.NODE_OPTIONS ?? ""} --import=data:text/javascript,${encodeURIComponent(preload)}`,
+  );
   await using cache = createPluginCache();
   await withPluginSourceCaptureStorage({ stateDir, placement: "temporary" }, () =>
     withPluginCache(cache, async () => {

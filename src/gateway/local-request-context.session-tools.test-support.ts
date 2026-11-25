@@ -39,11 +39,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-input.types.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../sessions/user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
@@ -109,7 +107,10 @@ export function withSessionToolsFixture(
       ...(options?.audit ? { logging: { audit: { enabled: true, executionIdentity: true } } } : {}),
       agents: {
         ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
+        defaults: {
+          systemAgent: { agentId: "main" },
+          model: { primary: "openai/gpt-6-astra" },
+        },
         entries: {
           main: { workspace: state.workspaceDir },
           other: { workspace: state.path("other-workspace") },

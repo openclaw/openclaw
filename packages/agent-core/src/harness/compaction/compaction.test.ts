@@ -1,4 +1,4 @@
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
@@ -7,6 +7,7 @@ import {
   SummaryOutputBudgetError,
   type SessionTreeEntry,
 } from "../types.js";
+import type { CompactionRetentionConstraints } from "./compaction-cut-point.js";
 import {
   calculateContextTokens,
   compactWithoutSummary,
@@ -16,6 +17,7 @@ import {
   findCutPoint,
   getLastAssistantUsage,
   prepareCompaction,
+  type CompactionSettings,
   shouldCompact,
 } from "./compaction.js";
 import {
@@ -89,8 +91,8 @@ function createProjectedEntry(
 
 it.each([
   [1, 0, true, false],
-  [749_999, 1_000_000, true, false],
-  [750_001, 1_000_000, true, true],
+  [849_999, 1_000_000, true, false],
+  [850_001, 1_000_000, true, true],
   [923_326, 1_000_000, true, true],
   [923_326, 1_000_000, false, false],
 ])("compacts %i tokens in a %i window (enabled: %s)", (tokens, window, enabled, expected) => {
@@ -657,4 +659,15 @@ describe("compactWithoutSummary", () => {
     expect(summary).toContain(JSON.stringify(sourceAsk));
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
   });
+});
+
+it("keeps source observers outside the public preparation contract", () => {
+  expectTypeOf<Parameters<typeof prepareCompaction>>().toEqualTypeOf<
+    [
+      pathEntries: SessionTreeEntry[],
+      settings: CompactionSettings,
+      requestState?: "unresolved",
+      constraints?: CompactionRetentionConstraints,
+    ]
+  >();
 });

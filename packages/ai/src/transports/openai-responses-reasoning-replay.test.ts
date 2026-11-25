@@ -114,7 +114,9 @@ describe("OpenAI Responses reasoning replay", () => {
         };
         const block = { ...thinking(item), openclawReasoningReplay: metadata };
         const input = convert({ messages: [createAssistant([block])] });
-        expect(input).toEqual(encryptedContent ? [item] : []);
+        // Ciphertext replays without its ID; the ID may name no stored record.
+        const { id: _id, ...wire } = item;
+        expect(input).toEqual(encryptedContent ? [wire] : []);
 
         const paired = convert({
           messages: [createAssistant([block, { type: "text", text: "Following answer" }])],
@@ -138,7 +140,6 @@ describe("OpenAI Responses reasoning replay", () => {
         null,
         { ...metadata, v: 2 },
         { ...metadata, provider: "other-provider" },
-        { ...metadata, model: "other-model" },
         { ...metadata, baseUrlHash: "other-endpoint" },
         { ...metadata, sessionHash: "other-session" },
       ]) {
@@ -148,7 +149,8 @@ describe("OpenAI Responses reasoning replay", () => {
         };
         const input = convert({ messages: [createAssistant([block])] });
         const preservesUnattributed = name === "provider-owned" && replayMetadata === undefined;
-        expect(input).toEqual(preservesUnattributed ? [item] : []);
+        const { id: _id, ...wire } = item;
+        expect(input).toEqual(preservesUnattributed ? [wire] : []);
       }
     },
   );

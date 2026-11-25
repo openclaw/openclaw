@@ -129,6 +129,7 @@ export function createBaselineFixture(
   root: string,
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+  seedRepository?: (repo: string) => void,
 ) {
   const repo = join(root, "repo");
   const home = join(root, "home");
@@ -196,6 +197,7 @@ export function createBaselineFixture(
   mkdirSync(join(repo, "docs"), { recursive: true });
   const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
   writeProduct(repo, product, "base\n");
+  seedRepository?.(repo);
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "test: canonical fixture");
   const base = git(repo, "rev-parse", "HEAD");

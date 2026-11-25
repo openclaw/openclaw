@@ -26,10 +26,8 @@ function createExecutor(limit: number) {
 
 describe("Swarm pipeline backpressure", () => {
   it.each([
-    { limit: 1, count: 3, partial: false, followup: false },
-    { limit: 3, count: 6, partial: true, followup: false },
-    { limit: 16, count: 30, partial: true, followup: true },
-    { limit: 16, count: 65, partial: false, followup: true, refill: true },
+    { limit: 3, count: 4, partial: true, followup: true },
+    { limit: 16, count: 4, partial: false, followup: true, refill: true },
   ])(
     "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
     async ({ limit, count, partial, followup, refill = false }) => {

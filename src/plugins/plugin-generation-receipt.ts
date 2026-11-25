@@ -1,4 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import {
   createRootFileOpenBatchSync,
   type RootFileOpenBatchSync,
@@ -15,6 +16,7 @@ type PluginReceiptFile = {
   sizeBytes: number;
   native: boolean;
   onContent: (fact: PluginSourceContent) => void;
+  onSource?: (source: string) => void;
   content?: PluginSourceContent;
 };
 
@@ -39,12 +41,19 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
     expected = file.content,
     openFile?: RootFileOpenBatchSync["openFile"],
   ) => {
+    const decoder = file.onSource ? new StringDecoder("utf8") : undefined;
+    let source = "";
     const content = hashPluginSourceFile(
       file.target,
       file.boundary,
       receipt,
       file.native ? file.content : undefined,
       openFile,
+      decoder
+        ? (chunk) => {
+            source += decoder.write(chunk);
+          }
+        : undefined,
     );
     if (!file.native && expected && content.contentHash !== expected.contentHash) {
       throw new Error(
@@ -57,6 +66,9 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       metrics.receiptReadBytes += content.sizeBytes;
     }
     publishContent(file, content);
+    if (decoder) {
+      file.onSource!(source + decoder.end());
+    }
   };
   const inputSignature = () => {
     if (events.some((event) => typeof event !== "string" && !event.content)) {

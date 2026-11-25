@@ -11,6 +11,7 @@ import {
   extractLastMatchingUserTurn,
   extractToolOutput,
   hasToolOutput,
+  isResponsesToolCallOutput,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import { buildScenarioToolCallEvents } from "./mock-openai-tool-routing.js";
@@ -53,7 +54,7 @@ export function buildSlackOwnedRequesterEvents(
     .find((value) => asOptionalRecord(value?.requester_profile));
   const requester = asOptionalRecord(conversation?.requester_profile);
   const spawned = input
-    .filter((item) => item.type === "function_call_output")
+    .filter(isResponsesToolCallOutput)
     .map((item) => parseToolOutputJson(extractToolOutput([item])))
     .findLast((result) => typeof result?.childSessionKey === "string");
   if (

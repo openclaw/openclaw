@@ -1,17 +1,24 @@
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import * as execCgroup from "../process/linux-exec-cgroup.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
+import {
+  LEAN_POST_READY_FIRST_CHECK_MS,
+  schedulePostReadyWorkRelease,
+} from "./server-post-ready-release.js";
 import {
   createLog,
   createTestCronState,
@@ -29,17 +36,92 @@ vi.mock("./server-startup-plugins.js", () => ({
 const { scheduleGatewayPostReadyMaintenance } = await import("./server-runtime-services.js");
 
 beforeEach(() => {
-  resetGatewayWorkAdmission();
-  resetRuntimeServiceMocks();
   vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
   vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+  resetGatewayWorkAdmission();
+  resetRuntimeServiceMocks();
 });
 afterEach(() => {
-  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
+  resetGatewayWorkAdmission();
 });
 
 describe("post-ready maintenance scheduling", () => {
+  it("waits for post-ready work before admitting maintenance, so lean releases when idle", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const gate = createDeferredCore();
+    const start = vi.fn(async () => {});
+    const startMaintenance = vi.fn(async () => null);
+    try {
+      scheduleGatewayPostReadyMaintenance(
+        createPostReadyMaintenanceScheduleParams({
+          scheduler,
+          waitForPostReadyWork: () => gate.promise,
+          startMaintenance,
+          cronState: createTestCronState({ start }),
+        }),
+      );
+      // Maintenance waits for the barrier inside this wake without holding root work.
+      const maintenanceWake = clock.advanceBy(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const release = vi.fn(gate.resolve);
+      schedulePostReadyWorkRelease({
+        scheduler,
+        profile: "lean",
+        release,
+        isClosing: () => false,
+      });
+      await clock.advanceBy(LEAN_POST_READY_FIRST_CHECK_MS);
+      expect(release).toHaveBeenCalledOnce();
+      await maintenanceWake;
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      expect(startMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await scheduler.stop();
+    }
+  });
+
+  it("sweeps exec cgroups after admission, repeats at idle cadence, and stops watches on close", async () => {
+    const platform = mockProcessPlatform("linux");
+    const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
+    const startCleanup = vi.spyOn(execCgroup, "startAgentExecCgroupCleanup");
+    const ready = createDeferredCore();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        waitForPostReadyWork: () => ready.promise,
+      }),
+    );
+    const pending = clock.advanceBy(1);
+    try {
+      expect(sweep).not.toHaveBeenCalled();
+      ready.resolve();
+      await pending;
+      await clock.advanceBy(1_000);
+      expect(sweep).toHaveBeenCalledOnce();
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(sweep).toHaveBeenCalledTimes(2);
+      await scheduler.stop();
+      expect(startCleanup.mock.calls[0]![0].aborted).toBe(true);
+      await clock.advanceBy(15 * 60 * 1000);
+      expect(sweep).toHaveBeenCalledTimes(2);
+    } finally {
+      ready.resolve();
+      await scheduler.stop();
+      sweep.mockRestore();
+      startCleanup.mockRestore();
+      platform.mockRestore();
+    }
+  });
+
   it("runs optional maintenance with an unbounded process memory limit", async () => {
     const constrainedMemory = vi.spyOn(process, "constrainedMemory").mockReturnValue(2 ** 64);
     const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
@@ -60,70 +142,66 @@ describe("post-ready maintenance scheduling", () => {
     }
   });
 
-  it.each(["recovery", "memory pressure", ...(process.versions.bun ? [] : ["host pressure"])])(
-    "defers optional work during %s",
-    async (cause) => {
-      if (cause === "host pressure") {
-        vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-        vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+  it.each(["recovery", "memory pressure"])("defers optional work during %s", async (cause) => {
+    const platform = mockProcessPlatform("linux");
+    const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
+    const lowMemory = vi
+      .spyOn(hostMemory, "isMemoryPressureHigh")
+      .mockReturnValue(cause === "memory pressure");
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const ready = createDeferredCore();
+    const finishRecovery = createDeferredCore();
+    let recovery: Promise<void> | undefined;
+    const startMaintenance = vi.fn(async () => null);
+    const cron = { start: vi.fn(async () => undefined) };
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const facts = vi.fn();
+    vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        waitForPostReadyWork: () => ready.promise,
+        scheduleSessionFactsBackfill: facts,
+        startMaintenance,
+        cronState: createTestCronState(cron),
+      }),
+    );
+    try {
+      const pending = clock.advanceBy(1);
+      await Promise.resolve();
+      if (cause === "recovery") {
+        recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
       }
-      const constrainedMemory = vi
-        .spyOn(process, "constrainedMemory")
-        .mockReturnValue(cause === "memory pressure" ? 1024 ** 3 : 0);
-      const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
-      const clock = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(clock.clock);
-      const ready = createDeferredCore();
-      const finishRecovery = createDeferredCore();
-      let recovery: Promise<void> | undefined;
-      const startMaintenance = vi.fn(async () => null);
-      const cron = { start: vi.fn(async () => undefined) };
-      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
-      const facts = vi.fn();
-      vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
-      scheduleGatewayPostReadyMaintenance(
-        createPostReadyMaintenanceScheduleParams({
-          scheduler,
-          waitForPostReadyWork: () => ready.promise,
-          scheduleSessionFactsBackfill: facts,
-          startMaintenance,
-          cronState: createTestCronState(cron),
-        }),
-      );
-      try {
-        const pending = clock.advanceBy(1);
-        await Promise.resolve();
-        if (cause === "recovery") {
-          recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
-        }
-        ready.resolve();
-        await pending;
-        expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
-        expect(facts).toHaveBeenCalledOnce();
-        expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
-        expect(startMaintenance).toHaveBeenCalledOnce();
-        expect(cron.start).toHaveBeenCalledOnce();
-        await clock.advanceBy(1_000);
-        expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
-        finishRecovery.resolve();
-        await recovery;
-        availableMemory.mockReturnValue(1024 ** 3);
-        vi.mocked(os.freemem).mockReturnValue(1024 ** 3);
-        await clock.advanceBy(1_000);
-        await clock.advanceBy(1_000);
-        expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
-        expect(facts).toHaveBeenCalledOnce();
-        expect(cron.start).toHaveBeenCalledOnce();
-      } finally {
-        ready.resolve();
-        finishRecovery.resolve();
-        await recovery;
-        await scheduler.stop();
-        availableMemory.mockRestore();
-        constrainedMemory.mockRestore();
-      }
-    },
-  );
+      ready.resolve();
+      await pending;
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(facts).toHaveBeenCalledOnce();
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      expect(startMaintenance).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(sweep).toHaveBeenCalledTimes(cause === "memory pressure" ? 1 : 0);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      finishRecovery.resolve();
+      await recovery;
+      lowMemory.mockReturnValue(false);
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+      expect(facts).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+    } finally {
+      ready.resolve();
+      finishRecovery.resolve();
+      await recovery;
+      await scheduler.stop();
+      lowMemory.mockRestore();
+      sweep.mockRestore();
+      platform.mockRestore();
+    }
+  });
 
   it.skipIf(process.platform !== "linux")(
     "warms after readiness, repeats, and cancels with its Gateway",

@@ -10,7 +10,7 @@ import {
 import {
   listPrExemptRuntimeTestFiles,
   RELEASE_ONLY_UI_TEST_FILES,
-} from "../scripts/lib/ci-proof-test-inventory.mts";
+} from "../scripts/lib/ci-test-tier-policy.mts";
 import {
   createExtensionTestShards,
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
@@ -101,6 +101,7 @@ function createPrExemptCensus() {
     const release = mode === "release";
     const periodic = createNodeTestShardBundles({
       runnerBackend: "github",
+      mainValidation: !release,
       includeReleaseOnlyPluginShards: false,
       includeReleaseOnlyRuntimeTests: release,
       includePrExemptRuntimeTests: true,

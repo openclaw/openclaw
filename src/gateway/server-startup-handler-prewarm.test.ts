@@ -1,7 +1,9 @@
+import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostMemory from "../infra/host-memory.js";
 import {
   resetGatewayWorkAdmission,
   markGatewayRestartDraining,
@@ -117,6 +119,8 @@ beforeEach(() => {
   mocks.getMemoryCapabilityRegistration.mockReset();
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   vi.spyOn(process, "availableMemory").mockReturnValue(0);
+  vi.spyOn(os, "freemem").mockReturnValue(1024 ** 3);
+  vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
 });
 
 afterEach(async () => {
@@ -367,21 +371,35 @@ it("refreshes dependency templates between sessions without overlapping preparat
   }
 });
 
-it.each([
-  [0, 0, false],
-  [1000, 201, false],
-  [1000, 200, true],
-] as const)(
-  "reserves constrained memory for requests (limit: %i, available: %i)",
-  async (limit, available, skipped) => {
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
-    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+it.each([false, true])(
+  "reserves constrained memory for requests (low memory: %s)",
+  async (skipped) => {
+    vi.spyOn(hostMemory, "isMemoryPressureHigh").mockReturnValue(skipped);
     const handles = scheduleGatewayPrewarm(prewarmOptions());
     sidecars.push(...handles);
     expect(handles).toHaveLength(skipped ? 0 : 2);
     await vi.waitFor(() => {
       expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledTimes(skipped ? 0 : 1);
       expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledTimes(skipped ? 0 : 1);
+    });
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun))(
+  "leaves host memory to requests until a later prewarm starts with enough headroom",
+  async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const free = vi.mocked(os.freemem).mockReturnValue(128 * 1024 ** 2);
+    expect(scheduleGatewayPrewarm(prewarmOptions())).toEqual([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.prewarmLocalWorkspaceTemplates).not.toHaveBeenCalled();
+    expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+
+    free.mockReturnValue(1024 ** 3);
+    sidecars.push(...scheduleGatewayPrewarm(prewarmOptions()));
+    await vi.waitFor(() => {
+      expect(mocks.prewarmLocalWorkspaceTemplates).toHaveBeenCalledOnce();
+      expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
     });
   },
 );

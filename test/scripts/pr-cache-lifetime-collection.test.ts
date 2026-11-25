@@ -171,6 +171,15 @@ function transitions(cache: string) {
 }
 
 describePosix("PR cache crash collection", () => {
+  it("defers shared collection without bypassing operation ownership", () => {
+    const result = spawnSync(
+      requireNodeTool("node"),
+      ["--test", resolve("test/scripts/pr-cache-deferral.node.mjs")],
+      { encoding: "utf8", timeout: 30_000 },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   it("keeps a shared operation lease until every nested anchor is collected", () => {
     const f = fixture();
     const result = child(

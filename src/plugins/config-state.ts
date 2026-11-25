@@ -12,6 +12,7 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
+import { resolvePluginRegistrationConfigKey } from "./loader-registration-config.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -55,22 +56,51 @@ export const createNormalizedPluginsConfig = (
 
 export const normalizePluginsConfig = (
   input?: OpenClawConfig["plugins"],
-): NormalizedPluginsConfig => {
+): NormalizedPluginsConfig => resolvePluginsConfigSnapshot(input).value;
+
+type PluginsConfigSnapshot = {
+  value: NormalizedPluginsConfig;
+  registrationKeys?: WeakMap<NormalizedPluginsConfig, string>;
+};
+
+function resolvePluginsConfigSnapshot(input?: OpenClawConfig["plugins"]): PluginsConfigSnapshot {
   if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === input) {
-    return preparedRuntimePluginsConfig.value;
+    return preparedRuntimePluginsConfig;
   }
   const config = input ?? EMPTY_PLUGINS_CONFIG;
   if (!isDeeplyFrozenPlainData(config)) {
-    return createNormalizedPluginsConfig(config);
+    return { value: createNormalizedPluginsConfig(config) };
   }
   // Captured configs are frozen and cannot change in place, so they share one frozen policy.
   let value = frozenPluginsConfigs.get(config);
   if (!value) {
-    value = createSharedNormalizedPluginsConfig(config);
+    value = { value: createSharedNormalizedPluginsConfig(config) };
     frozenPluginsConfigs.set(config, value);
   }
   return value;
-};
+}
+
+/** Registration facts belong to the prepared runtime/source policy pair, across load scopes. */
+export function resolvePreparedPluginRegistrationConfigKey(params: {
+  runtimeConfig: OpenClawConfig["plugins"];
+  sourceConfig: OpenClawConfig["plugins"];
+}): string {
+  const runtime = resolvePluginsConfigSnapshot(params.runtimeConfig);
+  const source =
+    params.sourceConfig === params.runtimeConfig
+      ? runtime
+      : resolvePluginsConfigSnapshot(params.sourceConfig);
+  const keys = (runtime.registrationKeys ??= new WeakMap());
+  let key = keys.get(source.value);
+  if (key === undefined) {
+    key = resolvePluginRegistrationConfigKey({
+      runtimeEntries: runtime.value.entries,
+      sourceEntries: source.value.entries,
+    });
+    keys.set(source.value, key);
+  }
+  return key;
+}
 
 export type ContextEngineOwnerMetadata = {
   id: string;
@@ -78,12 +108,12 @@ export type ContextEngineOwnerMetadata = {
 };
 
 let preparedRuntimePluginsConfig:
-  | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
+  | (PluginsConfigSnapshot & { source: OpenClawConfig["plugins"] })
   | undefined;
 const EMPTY_PLUGINS_CONFIG = Object.freeze({});
 const frozenPluginsConfigs = new WeakMap<
   NonNullable<OpenClawConfig["plugins"]>,
-  NormalizedPluginsConfig
+  PluginsConfigSnapshot
 >();
 
 function createSharedNormalizedPluginsConfig(

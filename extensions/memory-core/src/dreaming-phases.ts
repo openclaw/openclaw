@@ -30,12 +30,12 @@ import {
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-narrative.js";
 import type {
   DreamingPhasePreparation,
   DreamingPhaseRunParams,
   DreamingSweepParams,
   LightDreamingConfig,
+  PreparedDreamNarrative,
   RemDreamingConfig,
 } from "./dreaming-phase-types.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
@@ -1081,7 +1081,7 @@ async function prepareLightDreaming(
   });
   const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
   const capped = entries.slice(0, params.config.limit);
-  let data: NarrativePhaseData | undefined;
+  let data: DreamingPhasePreparation["data"];
   if (capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     data = {
@@ -1120,7 +1120,7 @@ async function prepareRemDreaming(
     limit: params.config.limit,
     minPatternStrength: params.config.minPatternStrength,
   });
-  let data: NarrativePhaseData | undefined;
+  let data: DreamingPhasePreparation["data"];
   if (entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(

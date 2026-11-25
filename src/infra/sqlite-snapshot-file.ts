@@ -207,3 +207,13 @@ export async function hashOpenPublishedFile(
   await assertOpenFileIdentity(handle, filePath, expectedIdentity);
   return content;
 }
+
+/** Published-byte comparison retained until the backup consumes the image. */
+export type DeferredSqliteContentCheck = { identity: BigIntStats; content: SqliteFileContent };
+
+export async function assertDeferredSqliteContent(
+  filePath: string,
+  check: DeferredSqliteContentCheck,
+): Promise<void> {
+  assertExpectedContent(await hashPublishedFile(filePath, check.identity), check.content, filePath);
+}

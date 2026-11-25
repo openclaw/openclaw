@@ -282,7 +282,7 @@ async function measure() {
         return receipt;
       });
       const [receipt] = await Promise.all([staging, ...background]);
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
     }
     for (let index = -16; index < 0; index++) {

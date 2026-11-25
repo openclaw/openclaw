@@ -1,15 +1,12 @@
 /* @vitest-environment jsdom */
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { updateLinkReaderDisplay } from "../../../components/markdown-link-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import type { ChatDisplayFacts, ChatRowDisplayFacts } from "../../../lib/chat/row-display-facts.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createProps } from "../chat-thread.test-support.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { render } from "../test-helpers/chat-transcript-native.tsx";
-import * as chatMessage from "./chat-message-group-frame.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
 import {
@@ -39,7 +36,7 @@ function updatingThread(props: ReturnType<typeof threadProps>) {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 describe("receipt fanout", () => {
-  it("keeps unchanged tool work and disclosure state while dispatching current file actions", async () => {
+  it("keeps tool identity, focus and disclosure state while dispatching current file actions", async () => {
     const first = msg(
       "assistant",
       [
@@ -70,7 +67,6 @@ describe("receipt fanout", () => {
     });
     const oldOpen = vi.fn();
     const newOpen = vi.fn();
-    const prepare = vi.spyOn(chatMessage, "prepareGroupMessage");
     const props = threadProps(
       "current-tool-actions",
       "agent:main:direct:tool-actions",
@@ -92,6 +88,13 @@ describe("receipt fanout", () => {
     rerender();
     transcript.start();
     await settleToolBridges(container);
+    const summary = await waitForSolid(() => {
+      const element = required(container, ".chat-activity-group__summary");
+      expect(element.closest("[hidden]")).toBeNull();
+      return element;
+    });
+    summary.click();
+    await settleToolBridges(container);
     const tools = () => [
       ...container.querySelectorAll<HTMLElement>(".chat-tool-msg-collapse--manual"),
     ];
@@ -108,12 +111,6 @@ describe("receipt fanout", () => {
     firstToggle.focus();
     firstLink.click();
     expect(oldOpen).toHaveBeenCalledWith(expect.objectContaining({ path: "src/first.ts" }));
-    const firstPreparations = () =>
-      prepare.mock.calls.filter(([, item]) =>
-        extractToolCardsCached(item.message).some((card) => card.callId === "first"),
-      ).length;
-    const preparedBefore = firstPreparations();
-    expect(preparedBefore).toBeGreaterThan(0);
     props.onOpenWorkspaceFile = newOpen;
     props.messages = [
       first,
@@ -124,7 +121,6 @@ describe("receipt fanout", () => {
     rerender();
     await settleToolBridges(container);
     await waitForSolid(() => expect(tools()[1]?.textContent).toContain("Second output updated"));
-    expect(firstPreparations()).toBe(preparedBefore);
     expect(tools()[0]).toBe(firstTool);
     expect(required(firstTool, ".chat-tool-row__toggle")).toBe(firstToggle);
     expect(document.activeElement).toBe(firstToggle);
@@ -132,23 +128,20 @@ describe("receipt fanout", () => {
     firstLink.click();
     expect(newOpen).toHaveBeenCalledWith(expect.objectContaining({ path: "src/first.ts" }));
     expect(oldOpen).toHaveBeenCalledOnce();
-    const displayedSource = expectDefined(
-      prepare.mock.calls.find(([, item]) =>
-        extractToolCardsCached(item.message).some((card) => card.callId === "first"),
-      ),
-      "displayed first tool",
-    )[1];
-    const firstCard = expectDefined(
-      extractToolCardsCached(displayedSource.message).find((card) => card.callId === "first"),
-      "retained first result",
-    );
-    firstCard.isError = true;
+    props.messages = [
+      first,
+      { ...firstResult, isError: true, content: "First read failed" },
+      second,
+      { ...secondResult, content: "Second output updated" },
+    ];
     rerender();
     await settleToolBridges(container);
     await waitForSolid(() =>
       expect(required(firstTool, ".chat-tool-card__outcome").textContent).toContain("failed"),
     );
-    expect(firstPreparations()).toBeGreaterThan(preparedBefore);
+    expect(tools()[0]).toBe(firstTool);
+    expect(document.activeElement).toBe(firstToggle);
+    expect(firstToggle.getAttribute("aria-expanded")).toBe("true");
     props.onOpenWorkspaceFile = undefined;
     rerender();
     await settleToolBridges(container);

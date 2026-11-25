@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -22,6 +23,7 @@ import {
 import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
+import { openAIMessage } from "../chat-thread-fixtures.test-support.ts";
 import {
   buildCachedChatItems,
   getExpandedToolCards,
@@ -426,7 +428,7 @@ describe("chat transcript invalidation", () => {
           toolName: "read",
           runId: completedRunId,
         }),
-        msg("assistant", "Workspace checked", 3_000, {
+        openAIMessage("Workspace checked", 3_000, {
           phase: "final_answer",
           stopReason: "stop",
           runId: completedRunId,
@@ -465,9 +467,7 @@ describe("chat transcript invalidation", () => {
       expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
       expect(finalBubble.textContent).toContain("Workspace checked");
       expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-      expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
-        [],
-      );
+      expect(prepareFrame.mock.calls.some(([group]) => group.runId === completedRunId)).toBe(false);
     } finally {
       transcript.dispose();
     }

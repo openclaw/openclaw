@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -6,6 +7,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { buildZaiCatalogModels, ZAI_CODING_GLOBAL_BASE_URL } from "./model-definitions.js";
 
 function expectFields(model: unknown, fields: Record<string, unknown>) {
   expect(model).toEqual(expect.objectContaining(fields));
@@ -47,11 +49,12 @@ async function resolveModel(
 async function createStreamCapture(
   params: Pick<ProviderWrapStreamFnContext, "extraParams" | "thinkingLevel"> & {
     modelId?: string;
+    model?: Model<"openai-completions">;
   } = {},
   direct = false,
 ) {
   const provider = await registerSingleProviderPlugin(plugin);
-  const modelId = params.modelId ?? "glm-5.1";
+  const { model: fixtureModel, modelId = fixtureModel?.id ?? "glm-5.1", ...wrapParams } = params;
   let payload: Record<string, unknown> = {};
   const streamFn: StreamFn = (model, streamContext, options) => {
     payload = buildOpenAICompletionsParams(
@@ -67,14 +70,15 @@ async function createStreamCapture(
     provider: "zai",
     modelId,
     extraParams: {},
-    ...params,
+    ...wrapParams,
     streamFn,
   });
   if (!wrapped) {
     throw new Error("Expected Z.AI stream wrapper");
   }
   return (context: Context = { messages: [] }, options: Parameters<StreamFn>[2] = {}) => {
-    void wrapped({ ...createGlm47Template(), id: modelId }, context, options);
+    payload = {};
+    void wrapped(fixtureModel ?? { ...createGlm47Template(), id: modelId }, context, options);
     return payload;
   };
 }
@@ -101,9 +105,9 @@ describe("zai provider plugin", () => {
   });
 
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
-    expectFields(await resolveModel("glm-5.4-preview"), {
+    expectFields(await resolveModel("glm-5.5-preview"), {
       ...modelFields,
-      id: "glm-5.4-preview",
+      id: "glm-5.5-preview",
     });
   });
 
@@ -140,6 +144,47 @@ describe("zai provider plugin", () => {
         }
       }
     }
+  });
+
+  it("builds GLM-5.4 reasoning payloads from the catalog row", async () => {
+    const row = buildZaiCatalogModels().find((model) => model.id === "glm-5.4");
+    assert(row, "Expected GLM-5.4 in the Z.AI catalog");
+    const capture = await createStreamCapture(
+      {
+        model: {
+          ...row,
+          provider: "zai",
+          api: "openai-completions",
+          baseUrl: ZAI_CODING_GLOBAL_BASE_URL,
+          input: row.input.filter((input) => input === "text" || input === "image"),
+        },
+      },
+      true,
+    );
+    const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
+    const levels = ["off", "low", "minimal", "medium", "high", "xhigh", "max"] as const;
+    const payloads = Object.fromEntries(
+      levels.map((reasoning) => [reasoning, capture(context, { reasoning })]),
+    );
+    const reasoningFields = Object.fromEntries(
+      Object.entries(payloads).map(([level, payload]) => [
+        level,
+        Object.fromEntries(
+          Object.entries(payload).filter(([key]) =>
+            ["thinking", "enable_thinking", "reasoning_effort"].includes(key),
+          ),
+        ),
+      ]),
+    );
+    expect(reasoningFields, JSON.stringify(payloads)).toStrictEqual({
+      off: { thinking: { type: "disabled" } },
+      low: { reasoning_effort: "medium" },
+      minimal: { reasoning_effort: "medium" },
+      medium: { reasoning_effort: "medium" },
+      high: { reasoning_effort: "high" },
+      xhigh: { reasoning_effort: "max" },
+      max: { reasoning_effort: "max" },
+    });
   });
 
   it("does not enable preserved thinking by default", async () => {

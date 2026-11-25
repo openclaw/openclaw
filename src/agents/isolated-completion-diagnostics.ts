@@ -6,7 +6,8 @@ import {
   emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
 } from "../infra/diagnostic-events.js";
-import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
+import { resolveModelCostConfig } from "../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../utils/usage-format.js";
 import type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import { hasObservedModelUsage, normalizeUsage, toDiagnosticUsage } from "./usage.js";

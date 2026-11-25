@@ -37,6 +37,7 @@ import { ACTIVITY_PHONE_QUERY, sessionActivityOwner } from "./session-activity.t
 registerEnglishCatalog(registerActivityEnglish);
 
 export function SessionLinkView(props: {
+  elementRef?: (key: string) => (element: HTMLDivElement) => void;
   row: GatewaySessionRow;
   onSummaryRetry?: (row: GatewaySessionRow) => void;
   presentationRevision?: number;
@@ -153,6 +154,7 @@ export function SessionLinkView(props: {
   );
   return (
     <div
+      ref={[props.elementRef?.(props.row.key)]}
       class={[
         "activity-feed__session-row",
         { "activity-feed__session-row--link": Boolean(target()) },

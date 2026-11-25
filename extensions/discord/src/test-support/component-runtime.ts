@@ -22,16 +22,18 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 export const {
-  readAllowFromStoreMock,
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
   enqueueSystemEventMock,
-  upsertPairingRequestMock,
   recordInboundSessionMock,
   readSessionUpdatedAtMock,
   resolveStorePathMock,
 } = runtimeMocks;
-const { resolvePluginConversationBindingApprovalMock } = runtimeMocks;
+const {
+  readAllowFromStoreMock,
+  resolvePluginConversationBindingApprovalMock,
+  upsertPairingRequestMock,
+} = runtimeMocks;
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();

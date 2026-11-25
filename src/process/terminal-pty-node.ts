@@ -1,11 +1,12 @@
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { resolveNodeRuntimeExecutableAsync } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import { releaseAgentExecCgroupScope } from "./linux-exec-cgroup.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import type { SpawnInitiation } from "./spawn-initiation.js";
@@ -23,7 +24,7 @@ export async function spawnNodeTerminalPty(
   initiateSpawn?: SpawnInitiation,
   prepareCurrent?: () => Promise<void>,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveNodeRuntimeExecutable();
+  const node = await resolveNodeRuntimeExecutableAsync();
   if (!node) {
     throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
@@ -134,6 +135,9 @@ export async function spawnNodeTerminalPty(
       startupError ?? new Error(stderr.trim() || "Terminal Node worker exited before startup"),
     );
     exited = startupError ? { exitCode: 1 } : (reportedExit ?? helperExit);
+    if (params.executionIntent === "agent-tool") {
+      void releaseAgentExecCgroupScope(params.executionScopeKey);
+    }
     for (const listener of listeners) {
       listener(exited);
     }

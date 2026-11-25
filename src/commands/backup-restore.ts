@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
@@ -158,7 +158,7 @@ async function restorePostgresExports(
     throw new Error("PostgreSQL archive restore requires its captured configuration.");
   }
   const configPath = path.join(targetPath, recoveryConfigPath);
-  if (!isPathInside(targetPath, await fs.realpath(configPath))) {
+  if (!isPathInside(await fs.realpath(targetPath), await fs.realpath(configPath))) {
     throw new Error("PostgreSQL recovery configuration must be inside the restored archive.");
   }
   const {

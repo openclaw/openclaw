@@ -287,7 +287,11 @@ describe("worker inference manager", () => {
               handler: (options) =>
                 handleChatAbortRequestWithLifecycle({
                   ...options,
-                  hasCurrentClientAuthority: () => current,
+                  sessionMutationCommitGuard: () => {
+                    if (!current) {
+                      throw new Error("Gateway requester authority changed");
+                    }
+                  },
                 }),
               context,
               request: { sessionKey: key, ...(explicit ? { runId: REQUEST.runId } : {}) },

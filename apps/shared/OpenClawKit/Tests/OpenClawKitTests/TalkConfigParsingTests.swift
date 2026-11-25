@@ -53,12 +53,13 @@ struct TalkConfigParsingTests {
     }
 
     @Test func `can disable legacy fallback`() {
-        let talk: [String: AnyCodable] = [
-            "voiceId": AnyCodable("voice-legacy"),
+        let talk: [String: Any] = [
+            "voiceId": "voice-legacy",
+            "apiKey": "legacy-key",
         ]
 
         let selection = TalkConfigParsing.selectProviderConfig(
-            talk,
+            TalkConfigParsing.bridgeFoundationDictionary(talk),
             defaultProvider: "elevenlabs",
             allowLegacyFallback: false)
         #expect(selection == nil)
@@ -102,12 +103,17 @@ struct TalkConfigParsingTests {
                     "voiceId": "voice-normalized",
                 ],
             ],
+            "voiceId": "voice-legacy",
         ]
 
         let bridged = TalkConfigParsing.bridgeFoundationDictionary(raw)
         #expect(bridged?["provider"]?.stringValue == "elevenlabs")
         let nested = bridged?["providers"]?.dictionaryValue?["elevenlabs"]?.dictionaryValue
         #expect(nested?["voiceId"]?.stringValue == "voice-normalized")
+        #expect(TalkConfigParsing.selectProviderConfig(
+            bridged,
+            defaultProvider: "elevenlabs",
+            allowLegacyFallback: false) == nil)
     }
 
     @Test func `resolves positive integer timeout`() {
@@ -117,10 +123,22 @@ struct TalkConfigParsingTests {
         #expect(TalkConfigParsing.resolvedPositiveInt(AnyCodable("1500"), fallback: 700) == 700)
     }
 
+    @Test func `resolves silence timeout from Foundation values`() {
+        let cases: [(value: Any?, expected: Int)] = [(1500, 1500), (nil, 900), (0, 900), (true, 900)]
+        for testCase in cases {
+            let talk = testCase.value.map { ["silenceTimeoutMs": $0] }
+            #expect(TalkConfigParsing.resolvedSilenceTimeoutMs(
+                TalkConfigParsing.bridgeFoundationDictionary(talk),
+                fallback: 900) == testCase.expected)
+        }
+    }
+
     @Test func `resolves speech locale ID`() {
         #expect(TalkConfigParsing.resolvedSpeechLocaleID(["speechLocale": AnyCodable(" ru_RU ")]) == "ru-RU")
         #expect(TalkConfigParsing
             .resolvedSpeechLocaleID(["speechLocale": AnyCodable("")], fallback: "en-US") == "en-US")
+        let bridged = TalkConfigParsing.bridgeFoundationDictionary(["speechLocale": " ru-RU "])
+        #expect(TalkConfigParsing.resolvedSpeechLocaleID(bridged) == "ru-RU")
     }
 
     @Test func `resolves speech recognition locale from supported fallbacks`() {

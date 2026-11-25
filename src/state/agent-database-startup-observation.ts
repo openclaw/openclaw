@@ -8,7 +8,10 @@ import {
   assertAgentDatabaseAdmitted,
   readAgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
-import type { AgentDatabasePreparation } from "./agent-database-preparation-context.js";
+import type {
+  AgentDatabasePreparation,
+  AgentInputRecoveryAdmission,
+} from "./agent-database-preparation-context.js";
 import type { PendingAgentDatabaseRecovery } from "./agent-database-startup.types.js";
 
 /** Observe the startup owner's current work without exposing its lifecycle or write borrow. */
@@ -17,10 +20,15 @@ export function createAgentDatabaseStartupObservation(
   lifetime: AbortSignal,
   observePreparedIntegrity?: AgentDatabasePreparation["observePreparedIntegrity"],
 ): AgentDatabasePreparation {
-  const inputs = new Map<
-    string,
-    { sessions: ReadonlyMap<string, Promise<void>>; completion: Promise<void> }
-  >();
+  const inputs = new Map<string, AgentInputRecoveryAdmission>();
+  const retireWhenComplete = (key: string, recovery: AgentInputRecoveryAdmission) => {
+    const retire = () => {
+      if (!recovery.deferred?.size && inputs.get(key) === recovery) {
+        inputs.delete(key);
+      }
+    };
+    void recovery.completion.then(retire, retire);
+  };
   return {
     observePreparedIntegrity,
     get hasPendingAgents() {
@@ -29,12 +37,7 @@ export function createAgentDatabaseStartupObservation(
     registerInputRecovery(agentId, recovery) {
       const key = normalizeAgentId(agentId);
       inputs.set(key, recovery);
-      const retire = () => {
-        if (inputs.get(key) === recovery) {
-          inputs.delete(key);
-        }
-      };
-      void recovery.completion.then(retire, retire);
+      retireWhenComplete(key, recovery);
     },
     isAgentInputRecoveryPending(agentId) {
       return inputs.has(normalizeAgentId(agentId));
@@ -49,16 +52,23 @@ export function createAgentDatabaseStartupObservation(
       const signal = options.signal ? AbortSignal.any([lifetime, options.signal]) : lifetime;
       const waitForInputs = () => {
         const recovery = options.forInput ? inputs.get(key) : undefined;
-        const selected = options.sessionKey
-          ? recovery?.sessions.get(normalizeSessionKeyPreservingOpaquePeerIds(options.sessionKey))
-          : recovery?.completion;
+        const sessionKey = options.sessionKey
+          ? normalizeSessionKeyPreservingOpaquePeerIds(options.sessionKey)
+          : undefined;
+        const selected = sessionKey ? recovery?.sessions.get(sessionKey) : recovery?.completion;
         return selected && recovery
           ? racePromiseWithAbortSignal(
               selected === recovery.completion
                 ? selected
                 : Promise.race([selected, recovery.completion]),
               signal,
-            )
+            ).then(async () => {
+              const resume = sessionKey ? recovery.deferred?.get(sessionKey) : undefined;
+              if (resume) {
+                await racePromiseWithAbortSignal(resume(), signal);
+                retireWhenComplete(key, recovery);
+              }
+            })
           : undefined;
       };
       if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {

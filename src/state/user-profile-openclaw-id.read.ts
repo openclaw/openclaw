@@ -128,25 +128,37 @@ export function readOpenClawIdLinkedProfileInDatabase(
   });
 }
 
-/** The OCID accounts linked to a profile (several after a merge), oldest first. */
-export function readOpenClawIdLinksOfProfileInDatabase(
+/** Canonical account links travel with the worker-prepared profile catalog. */
+export function readOpenClawIdProfileLinksInDatabase(
   db: EngineConnection,
-  profileId: string,
-): Array<{ accountId: string; email: string | null }> {
-  if (!tableExists(db, "user_profile_identities")) {
+  profileIds: readonly string[],
+): Array<{ profileId: string; accountId: string; email: string | null }> {
+  if (!profileIds.length || !tableExists(db, "user_profile_identities")) {
     return [];
   }
   return executeSqliteQuerySync(
     db,
     userProfilesDb(db)
       .selectFrom("user_profile_identities")
-      .select(["subject", "verified_email_json"])
+      .select(["profile_id", "subject", "verified_email_json"])
       .where("provider", "=", openClawIdProfileProvider)
-      .where("profile_id", "=", profileId)
+      .where("profile_id", "in", [...profileIds])
       .orderBy("created_at"),
   ).rows.map((identity) => ({
+    profileId: identity.profile_id,
     accountId: identity.subject,
     email: readOpenClawIdDisplayEmail(identity.verified_email_json),
+  }));
+}
+
+/** The OCID accounts linked to a profile (several after a merge), oldest first. */
+export function readOpenClawIdLinksOfProfileInDatabase(
+  db: EngineConnection,
+  profileId: string,
+): Array<{ accountId: string; email: string | null }> {
+  return readOpenClawIdProfileLinksInDatabase(db, [profileId]).map(({ accountId, email }) => ({
+    accountId,
+    email,
   }));
 }
 

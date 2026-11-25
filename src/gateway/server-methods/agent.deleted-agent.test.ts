@@ -72,7 +72,10 @@ it.each([
     mode === "cli"
       ? ({ connect: { scopes: ["operator.admin"] } } as never)
       : mode === "backend"
-        ? ({ connect: { client: { mode: "backend" } } } as never)
+        ? ({
+            connect: { client: { mode: "backend" } },
+            internal: { localBackendClient: true },
+          } as never)
         : null;
   const params: Record<string, unknown> = {
     message,

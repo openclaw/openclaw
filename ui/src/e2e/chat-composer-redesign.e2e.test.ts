@@ -61,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
+            const setupAction = setupBanner.getByRole("button", { name: "Open Models" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
@@ -85,7 +85,7 @@ suite.define(() => {
             await page
               .locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]')
               .click();
-            await page.waitForURL("**/settings/model-providers?connect=1");
+            await page.waitForURL("**/settings/model-providers?provider=openai&connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(

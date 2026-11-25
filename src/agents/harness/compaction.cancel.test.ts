@@ -11,7 +11,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -79,12 +79,11 @@ const directPlan = {
 const proxyTarget = { provider: proxyModel.provider, model: proxyModel.id };
 
 function operatorSource(
-  overrides: Partial<Parameters<typeof createAdmittedRunOperatorAuthority>[0]> = {},
+  overrides: Partial<Parameters<typeof createTestOperatorAuthority>[0]> = {},
 ) {
-  return createAdmittedRunOperatorAuthority({
+  return createTestOperatorAuthority({
     profileId: "compaction-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: restrictedConfig,
       policy: {},
@@ -227,7 +226,7 @@ describe("harness compaction cancellation", () => {
       const source = new AbortController();
       const sourceReleased = createDeferredCore();
       const operatorAuthority = operatorSource({
-        assertCurrent: () => source.signal.throwIfAborted(),
+        signal: source.signal,
         retain: () => {
           sourceHolds += 1;
           return () => {
