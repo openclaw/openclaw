@@ -173,6 +173,15 @@ are not automatically removed. Check `openclaw agents list` before retrying from
 an active run; an agent whose creation already completed is not removed when its
 requesting run ends.
 
+The AI conversation’s `run` action recognizes a fixed set of CLI-style reads. Pass the arguments after `openclaw` as `argv`. Ask OpenClaw calls the same protected diagnostics as its named read actions; it does not invoke the CLI. These reads need no approval, and results are plain text, redacted, and capped.
+
+- `status`, `health`, `config get <path>`, `config validate`, and `config schema`
+- `gateway status` or `daemon status`, each with optional `--deep`
+- `plugins list`, `plugins doctor`, `skills check`, `models status`, and `channels status` (optional `--probe`)
+- `logs`, using the same bounded log tail and local/remote rules as the named logs action
+
+Other commands and flags, including JSON output, custom log limits, and `logs --follow`, are refused. Run `openclaw doctor --lint` directly in a terminal for the full lint; the named `doctor` read remains available in chat. Rescue never accepts `run`.
+
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
 New agents inherit the live-verified default inference route. The agent ids `openclaw` and `crestodian` are reserved for the system agent and cannot be created as normal agents. The retired id remains blocked so an old config cannot claim it.

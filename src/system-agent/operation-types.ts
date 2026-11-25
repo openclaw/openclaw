@@ -34,6 +34,7 @@ export type SystemAgentOperation =
   | { kind: "overview" }
   | { kind: "doctor" }
   | { kind: "doctor-fix" }
+  | { kind: "run"; argv: string[] }
   | { kind: "status" }
   | { kind: "health" }
   | { kind: "config-validate" }

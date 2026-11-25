@@ -11,6 +11,7 @@ import { redactSystemAgentConfig, resolveSystemAgentConfigSchema } from "./confi
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
+  SystemAgentOperationExitError,
   applyPersistentOperation,
   createNoExitRuntime,
   executeSetDefaultModel,
@@ -30,6 +31,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
+import { resolveSystemAgentRunRead } from "./run-read-operation.js";
 
 const INTERACTIVE_SETUP_GUIDANCE = {
   "skills-setup": [
@@ -63,25 +65,30 @@ function boundedReadRuntime(
   runtime: RuntimeEnv,
   maxChars = CONFIG_GET_OUTPUT_MAX_CHARS,
 ): RuntimeEnv {
-  let remaining = maxChars;
+  const marker = "… (output limit reached; narrow the request)";
+  // Reserve space for the marker and charge for the text actually emitted.
+  let remaining = maxChars - marker.length - 1;
   const write = (sink: RuntimeEnv["log"], args: unknown[]) => {
-    if (remaining <= 0) {
+    if (remaining < 0) {
       return;
     }
-    const raw = stripAnsi(args.join(" "));
-    const text = redactToolPayloadText(raw);
-    const clipped = raw.length >= remaining;
-    sink(
-      clipped
-        ? `${truncateUtf16Safe(text, remaining)}\n… (output limit reached; narrow the request)`
-        : text,
+    const plain = stripAnsi(args.join(" ")).replace(/[\p{Cc}\p{Bidi_Control}]/gu, (control) =>
+      control === "\n" || control === "\t" ? control : "",
     );
-    remaining -= raw.length + 1;
+    const text = redactToolPayloadText(plain);
+    if (text.length < remaining) {
+      sink(text);
+      remaining -= text.length + 1;
+      return;
+    }
+    const prefix = truncateUtf16Safe(text, Math.max(0, remaining - 1));
+    sink(prefix ? prefix + "\n" + marker : marker);
+    remaining = -1;
   };
   return {
-    ...runtime,
     log: (...args) => write(runtime.log, args),
     error: (...args) => write(runtime.error, args),
+    exit: runtime.exit,
   };
 }
 
@@ -644,6 +651,33 @@ export async function executeSystemAgentOperation(
         "Doctor repairs can change the inference route that powers this session, so they run with OpenClaw stopped: `openclaw doctor --fix` on the machine running it.",
       );
       return { applied: false };
+    case "run": {
+      const output = boundedReadRuntime(runtime, DIAGNOSTIC_READ_OUTPUT_MAX_CHARS);
+      if (!opts.deps?.setupSurface) {
+        output.error(
+          "The run action requires a terminal setup or hosted Ask OpenClaw conversation.",
+        );
+        return { applied: false };
+      }
+      const read = resolveSystemAgentRunRead(operation.argv);
+      if (!read) {
+        output.error(
+          "This command or flag is not supported by run. Use a supported Ask OpenClaw action or run the command yourself in a terminal.",
+        );
+        return { applied: false };
+      }
+      try {
+        await executeSystemAgentOperation(read, createNoExitRuntime(output), opts);
+      } catch (error) {
+        // Exceptions may contain paths or credentials that cannot be identified in plain text.
+        output.error(
+          error instanceof SystemAgentOperationExitError
+            ? "The diagnostic exited with code " + (error.code ?? "unknown") + "."
+            : "The diagnostic could not complete. Try the named Ask OpenClaw action or check in a terminal.",
+        );
+      }
+      return { applied: false };
+    }
     case "status": {
       const { statusCommand } = await import("../commands/status.command.js");
       await statusCommand({ timeoutMs: 10_000 }, runtime);
