@@ -371,6 +371,7 @@ final class ChatModelSignInModel {
     }
 }
 
+#if os(macOS)
 @MainActor
 struct OpenClawChatModelSignInSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -524,3 +525,4 @@ struct OpenClawChatModelSignInSheet: View {
         }
     }
 }
+#endif

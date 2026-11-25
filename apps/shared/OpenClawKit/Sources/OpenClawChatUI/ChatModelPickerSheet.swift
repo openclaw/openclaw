@@ -3,12 +3,14 @@ import SwiftUI
 import UIKit
 
 /// The phone model picker: a system sheet with a list of Favorites, Recent and the providers. A provider
-/// pushes its models; with one provider its models sit at the root. Search covers every provider.
+/// pushes its models; with one provider its models sit at the root. Search covers every provider. Provider
+/// accounts, the last row, pushes the sign-in pages; the composer opens the sheet on them directly.
 struct ChatModelPickerSheet: View {
     let viewModel: OpenClawChatViewModel
+    /// The sheet opens on Provider accounts instead of the models.
+    let opensAccounts: Bool
     let onPick: () -> Void
     let onClose: () -> Void
-    let onSignIn: () -> Void
 
     @State private var detent: PresentationDetent?
     /// The root's height, taken from its content once per presentation, so everything on it, Model sign-in
@@ -28,41 +30,40 @@ struct ChatModelPickerSheet: View {
     @State private var isSearching = false
     /// Recent's order when the sheet opened, so it does not reshuffle while it is open.
     @State private var recentOrder: [String]?
+    @State private var path: [ChatModelPickerRoute] = []
+    /// The sign-in flow, shared by the accounts page and each provider's page for as long as the sheet is up.
+    @State private var accounts = ChatModelAccountsOwner()
 
     var body: some View {
         let catalog = self.viewModel.modelPickerCatalog(recentOrder: self.recentOrder)
-        NavigationStack {
-            List {
-                self.rootContent(catalog)
+        NavigationStack(path: self.$path) {
+            Group {
+                if self.opensAccounts {
+                    ChatModelAccountsPage(owner: self.accounts, viewModel: self.viewModel)
+                } else {
+                    self.modelsRoot(catalog)
+                }
             }
-            .listStyle(.insetGrouped)
-            .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
-            .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
-            .onScrollGeometryChange(for: CGFloat.self) {
-                // Nothing to fit until the list has laid out its rows.
-                $0.contentSize.height > 0 ? $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom : 0
-            } action: { _, height in
-                // The system's bottom inset already holds the search field; the extra margin is only there so
-                // the last row can scroll clear at large, and the resting height does not need it.
-                self.fitRestingHeight(to: height > 0 ? height - self.searchClearance : 0)
-            }
-            .navigationTitle(Text("Model"))
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 OpenClawSheetCloseItem(identifier: "chat-model-picker-close", action: self.onClose)
             }
-            .searchable(
-                text: self.$query,
-                isPresented: self.$isSearching,
-                prompt: Text("Search models"))
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .navigationDestination(for: String.self) { providerID in
-                ChatModelPickerProviderPage(
-                    viewModel: self.viewModel,
-                    catalog: catalog,
-                    providerID: providerID,
-                    onPick: self.onPick)
+            .navigationDestination(for: ChatModelPickerRoute.self) { route in
+                switch route {
+                case let .provider(providerID):
+                    ChatModelPickerProviderPage(
+                        viewModel: self.viewModel,
+                        catalog: catalog,
+                        providerID: providerID,
+                        onPick: self.onPick)
+                case .accounts:
+                    ChatModelAccountsPage(owner: self.accounts, viewModel: self.viewModel)
+                case let .account(accountID):
+                    ChatModelAccountPage(
+                        owner: self.accounts,
+                        viewModel: self.viewModel,
+                        accountID: accountID,
+                        onNeedsRoom: { self.detent = .large })
+                }
             }
         }
         .tint(.primary)
@@ -80,6 +81,33 @@ struct ChatModelPickerSheet: View {
         .task {
             if self.viewModel.modelChoices.isEmpty { await self.viewModel.fetchModels() }
         }
+        // Closing the sheet ends a sign-in still running, as the old sign-in sheet's Close did.
+        .onDisappear { Task { await self.accounts.close() } }
+    }
+
+    private func modelsRoot(_ catalog: ChatModelPickerCatalog) -> some View {
+        List {
+            self.rootContent(catalog)
+        }
+        .listStyle(.insetGrouped)
+        .contentMargins(.bottom, self.searchClearance, for: .scrollContent)
+        .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
+        .onScrollGeometryChange(for: CGFloat.self) {
+            // Nothing to fit until the list has laid out its rows.
+            $0.contentSize.height > 0 ? $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom : 0
+        } action: { _, height in
+            // The system's bottom inset already holds the search field; the extra margin is only there so
+            // the last row can scroll clear at large, and the resting height does not need it.
+            self.fitRestingHeight(to: height > 0 ? height - self.searchClearance : 0)
+        }
+        .navigationTitle(Text("Model"))
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(
+            text: self.$query,
+            isPresented: self.$isSearching,
+            prompt: Text("Search models"))
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
     }
 
     private var restingDetent: PresentationDetent {
@@ -149,6 +177,11 @@ struct ChatModelPickerSheet: View {
                     Text("Recent").font(OpenClawChatTypography.settingsSectionHeader)
                 }
             }
+            if catalog.providers.count == 1, let provider = catalog.providers.first,
+               let need = self.signInNeed(provider)
+            {
+                ChatModelPickerSignInSection(providerID: provider.id, need: need)
+            }
             Section {
                 if catalog.providers.count == 1, let provider = catalog.providers.first {
                     ForEach(provider.models) { self.modelRow($0, catalog: catalog, showsProvider: false) }
@@ -180,28 +213,54 @@ struct ChatModelPickerSheet: View {
             onPick: self.onPick)
     }
 
-    /// A plain drill-in row. The current model carries the check on the root and on its provider's page.
+    /// A plain drill-in row. The current model carries the check on the root and on its provider's page. A
+    /// second line appears only when none of its models can be used until someone signs in.
     private func providerRow(_ provider: ChatModelProviderSection) -> some View {
-        NavigationLink(value: provider.id) {
+        let need = self.signInNeed(provider)
+        return NavigationLink(value: ChatModelPickerRoute.provider(provider.id)) {
             HStack(spacing: 12) {
                 ChatProviderMark(providerID: provider.id)
-                Text(verbatim: provider.displayName)
-                    .font(OpenClawChatTypography.settingsBody)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: provider.displayName)
+                        .font(OpenClawChatTypography.settingsBody)
+                    if let need {
+                        Text(verbatim: need.pickerDescription)
+                            .font(OpenClawChatTypography.settingsFootnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .accessibilityIdentifier("chat-model-picker-provider-\(provider.id)")
     }
 
+    /// Model rows only say why they can't be used when the catalog reports it for this chat; so does this.
+    private func signInNeed(_ provider: ChatModelProviderSection) -> OpenClawChatModelUnavailableReason? {
+        self.viewModel.modelAvailabilityIsSessionScoped ? provider.signInNeed : nil
+    }
+
     private var signInRow: some View {
-        Button(action: self.onSignIn) {
-            Label {
-                Text("Model sign-in").font(OpenClawChatTypography.settingsBody).foregroundStyle(Color.primary)
-            } icon: {
-                Image(systemName: "key").foregroundStyle(.secondary)
-            }
+        NavigationLink(value: ChatModelPickerRoute.accounts) {
+            Text(ChatModelAccountsCopy.title).font(OpenClawChatTypography.settingsBody)
         }
         .accessibilityIdentifier("chat-model-sign-in")
+    }
+}
+
+/// Leads a provider whose models all wait on a sign-in to that provider's account.
+private struct ChatModelPickerSignInSection: View {
+    let providerID: String
+    let need: OpenClawChatModelUnavailableReason
+
+    var body: some View {
+        Section {
+            NavigationLink(value: ChatModelPickerRoute.account(self.providerID)) {
+                Text(self.need == .authFailed ? ChatModelAccountsCopy.signInAgain : ChatModelAccountsCopy.signIn)
+                    .font(OpenClawChatTypography.settingsBody)
+            }
+            .accessibilityIdentifier("chat-model-picker-sign-in-\(self.providerID)")
+        }
     }
 }
 
@@ -216,6 +275,9 @@ private struct ChatModelPickerProviderPage: View {
     var body: some View {
         let provider = self.catalog.providers.first { $0.id == self.providerID }
         List {
+            if let provider, self.viewModel.modelAvailabilityIsSessionScoped, let need = provider.signInNeed {
+                ChatModelPickerSignInSection(providerID: provider.id, need: need)
+            }
             Section {
                 ForEach(provider?.models ?? []) { model in
                     ChatModelPickerModelRow(

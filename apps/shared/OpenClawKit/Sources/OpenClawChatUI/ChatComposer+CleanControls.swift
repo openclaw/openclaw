@@ -413,6 +413,31 @@ extension OpenClawChatComposer {
         #endif
     }
 
+    var modelSignInButton: some View {
+        #if os(iOS)
+        // The phone signs in on the model sheet's Provider accounts page.
+        Button {
+            self.composerPanels?.openAccounts()
+        } label: {
+            Text(ChatModelAccountsCopy.title).font(OpenClawChatTypography.caption)
+        }
+        .accessibilityIdentifier("chat-model-sign-in")
+        #else
+        Button {
+            self.performModelSignInAction(.open)
+        } label: {
+            HStack(spacing: 6) {
+                if self.modelSignInAction == .open {
+                    ProgressView().controlSize(.small)
+                }
+                Text("Model sign-in").font(OpenClawChatTypography.caption)
+            }
+        }
+        .disabled(self.modelSignInAction != nil)
+        .accessibilityIdentifier("chat-model-sign-in")
+        #endif
+    }
+
     /// Keep recovery visible when authentication blocks send or capture UI replaces the model menu.
     var showsModelSignInRow: Bool {
         #if os(iOS)

@@ -13,7 +13,6 @@ struct ChatComposerPanelBridge: ViewModifier {
         content
             .anchorPreference(key: ChatComposerSurfaceAnchorKey.self, value: .bounds) { $0 }
             .onChange(of: self.panels?.focusRequest) { _, _ in self.composer.focusDraft() }
-            .onChange(of: self.panels?.signInRequest) { _, _ in self.composer.performModelSignInAction(.open) }
             .onChange(of: self.composer.isFocused) { _, focused in
                 if focused { self.panels?.dismiss() }
             }
@@ -59,10 +58,9 @@ final class ChatComposerPanelController {
     private(set) var panel: ChatComposerPanel?
     /// Bumped when the composer should take focus back after the picker closes.
     private(set) var focusRequest = 0
-    /// Bumped when the picker asks for the model sign-in the composer owns.
-    private(set) var signInRequest = 0
+    /// The model sheet opens on Provider accounts; it holds until the sheet is gone.
+    private(set) var opensAccounts = false
     private var returnsFocus = false
-    private var opensSignIn = false
 
     func toggle(_ panel: ChatComposerPanel, composerFocused: Bool) {
         guard self.panel != panel else {
@@ -71,6 +69,7 @@ final class ChatComposerPanelController {
         }
         // The picker opens with the keyboard down; the composer gets it back when the sheet closes.
         self.returnsFocus = panel == .model && composerFocused
+        self.opensAccounts = false
         self.panel = panel
     }
 
@@ -87,19 +86,19 @@ final class ChatComposerPanelController {
         self.effortChipFocusRequest += 1
     }
 
-    func requestSignIn() {
-        self.opensSignIn = true
-        self.dismiss()
+    /// The composer's sign-in row: the model sheet, opened on Provider accounts.
+    func openAccounts() {
+        self.returnsFocus = false
+        self.opensAccounts = true
+        self.panel = .model
     }
 
-    /// Runs once the picker sheet is gone, however it closed: the sign-in sheet or the keyboard follows.
+    /// Runs once the picker sheet is gone, however it closed: the keyboard follows if it was up.
     func pickerDidDismiss() {
-        if self.opensSignIn {
-            self.signInRequest += 1
-        } else if self.returnsFocus {
+        if self.returnsFocus {
             self.focusRequest += 1
         }
-        self.opensSignIn = false
+        self.opensAccounts = false
         self.returnsFocus = false
     }
 }
@@ -150,9 +149,9 @@ struct ChatComposerPanelHost: ViewModifier {
                 content: {
                     ChatModelPickerSheet(
                         viewModel: self.viewModel,
+                        opensAccounts: self.controller.opensAccounts,
                         onPick: { self.controller.dismiss() },
-                        onClose: { self.controller.dismiss() },
-                        onSignIn: { self.controller.requestSignIn() })
+                        onClose: { self.controller.dismiss() })
                 })
             .onChange(of: self.viewModel.sessionKey) { _, _ in self.controller.dismiss() }
     }

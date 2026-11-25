@@ -71,10 +71,9 @@ extension OpenClawChatViewModel {
         let session = self.currentSessionSnapshot()
         let agentID = session.deliveryAgentID ?? OpenClawChatSessionKey.agentID(from: session.key) ?? self.activeAgentId
         guard let context = await self.transport.acquireModelSignInContext(agentID: agentID) else {
+            // The phone's accounts page says so in place.
+            #if os(macOS)
             guard self.isCurrentSession(session) else { return nil }
-            #if os(iOS)
-            self.errorText = Self.modelSignInNeedsUpdateMessage
-            #else
             self.errorText = String(localized: "Model sign-in needs a newer Gateway. Update it or use /login.")
             #endif
             return nil
@@ -89,13 +88,6 @@ extension OpenClawChatViewModel {
                 return current && self.isCurrentSession(session)
             })
     }
-
-    #if os(iOS)
-    /// Gateways without native model sign-in still answer /login in chat (it shipped first).
-    private static var modelSignInNeedsUpdateMessage: String {
-        String(localized: "Model sign-in needs a newer version of OpenClaw. Update it, or send /login in this chat.")
-    }
-    #endif
 
     public func refreshModelSignIn() async {
         await self.fetchModels()

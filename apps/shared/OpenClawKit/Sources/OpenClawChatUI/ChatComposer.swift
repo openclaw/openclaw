@@ -184,20 +184,22 @@ struct OpenClawChatComposer: View {
                 .foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
         .sheet(isPresented: Binding(
-            get: { self.signInContext != nil },
-            set: {
-                if !$0 {
-                    self.signInContext = nil
-                }
-            })) {
-                if let context = self.signInContext {
-                    OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
-                }
-        }
+                get: { self.signInContext != nil },
+                set: {
+                    if !$0 {
+                        self.signInContext = nil
+                    }
+                })) {
+                    if let context = self.signInContext {
+                        OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                    }
+            }
+        #endif
         #if os(iOS)
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
-        .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+            .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
         .sheet(isPresented: self.$showsAddSheet, onDismiss: self.addSheetDidDismiss) {
             ChatComposerAddSheet(
                 viewModel: self.viewModel,
@@ -226,21 +228,6 @@ struct OpenClawChatComposer: View {
         #else
         false
         #endif
-    }
-
-    var modelSignInButton: some View {
-        Button {
-            self.performModelSignInAction(.open)
-        } label: {
-            HStack(spacing: 6) {
-                if self.modelSignInAction == .open {
-                    ProgressView().controlSize(.small)
-                }
-                Text("Model sign-in").font(OpenClawChatTypography.caption)
-            }
-        }
-        .disabled(self.modelSignInAction != nil)
-        .accessibilityIdentifier("chat-model-sign-in")
     }
 
     func performModelSignInAction(_ action: ModelSignInAction) {
@@ -273,7 +260,7 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    private var modelSignInAction: ModelSignInAction? {
+    var modelSignInAction: ModelSignInAction? {
         self.modelSignInRequest?.action
     }
 
