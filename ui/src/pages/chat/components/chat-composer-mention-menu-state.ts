@@ -68,12 +68,9 @@ export function findMentionTarget(value: string, caret: number): MentionTarget |
   ) {
     return null;
   }
-  let end = caret;
   // Replace the rest of the current word, not later words that may be ordinary prose.
-  while (end < value.length && /[\p{L}\p{N}\p{M}_.-]/u.test(value[end] ?? "")) {
-    end += 1;
-  }
-  return { start, end, query, value };
+  const suffix = /^[\p{L}\p{N}\p{M}_.-]+/u.exec(value.slice(caret))?.[0] ?? "";
+  return { start, end: caret + suffix.length, query, value };
 }
 
 export type MentionPerson = UsersMentionableResult["users"][number];
