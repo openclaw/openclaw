@@ -61,6 +61,11 @@ async function prepareScripts() {
     "scripts/check-control-ui-controllers.mts",
     "export function main() { return Number(process.env.FIXTURE_CONTROLLER_GUARD_EXIT || 0); }\n",
   );
+  writeAt(
+    root,
+    "scripts/check-control-ui-setting-ids.mts",
+    "export function main() { return 0; }\n",
+  );
   const compiled = ["run-lint", "run-oxlint", "run-oxlint-shards"];
   await prepareCopiedSourceModules(
     root,
