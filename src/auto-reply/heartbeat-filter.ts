@@ -3,6 +3,10 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
+import {
+  isCronExecutionInputProvenance,
+  normalizeInputProvenance,
+} from "../sessions/input-provenance.js";
 import { isSilentAssistantTranscriptMessage } from "../shared/chat-message-content.js";
 import {
   collectToolCallIds,
@@ -33,7 +37,12 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
+type HeartbeatTranscriptMessage = {
+  role: string;
+  content?: unknown;
+  __openclaw?: unknown;
+  provenance?: unknown;
+};
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;
@@ -128,6 +137,17 @@ export function isHeartbeatUserMessage(
 ): boolean {
   if (message.role !== "user") {
     return false;
+  }
+  // 2026.11.6+ cron execution wakes carry typed provenance (`internal_system` /
+  // `cron_execution`) and a `[cron:JOB-ID NAME]`-prefixed prompt. The legacy
+  // text markers below never match them, so completed silent heartbeat spans
+  // stayed in the model history (#204878).
+  if (
+    isCronExecutionInputProvenance(
+      normalizeInputProvenance((message as { provenance?: unknown }).provenance),
+    )
+  ) {
+    return true;
   }
   const { text } = resolveMessageText(message.content);
   const trimmed = text.trim();

@@ -351,3 +351,71 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     );
   });
 });
+
+describe("cron-execution heartbeat wakes", () => {
+  it("removes completed silent cron-based heartbeat artifacts", () => {
+    const jobId = "00000000-0000-4000-8000-000000000001";
+
+    const messages = [
+      {
+        role: "user",
+        content: `[cron:${jobId} heartbeat-main] synthetic wake`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron_execution",
+          sourceSessionKey: "agent:main:main",
+          jobId,
+          runId: `cron:${jobId}:100`,
+        },
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Synthetic reasoning" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        stopReason: "stop",
+        display: false,
+        __openclaw: { runId: "model-run-1" },
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual([]);
+  });
+
+  it("keeps cron execution turns that produce visible communication", () => {
+    const jobId = "00000000-0000-4000-8000-000000000001";
+
+    const messages = [
+      {
+        role: "user",
+        content: `[cron:${jobId} heartbeat-main] synthetic wake`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "cron_execution",
+          sourceSessionKey: "agent:main:main",
+          jobId,
+          runId: `cron:${jobId}:100`,
+        },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The report is ready." }],
+        stopReason: "stop",
+        display: true,
+        __openclaw: { runId: "model-run-1" },
+      },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+
+  it("does not treat external user text that only resembles a cron wake as a heartbeat", () => {
+    const messages = [
+      { role: "user", content: "[cron:00000000-0000-4000-8000-000000000001 hello] hi" },
+      { role: "assistant", content: "NO_REPLY" },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(messages);
+  });
+});
