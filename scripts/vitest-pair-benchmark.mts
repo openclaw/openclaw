@@ -24,6 +24,9 @@ function parseArgs(argv: string[]) {
     "mode",
     "workload",
     "seed",
+    "definition",
+    "harness-sha",
+    "timeout-ms",
   ]);
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
@@ -50,6 +53,41 @@ function parseArgs(argv: string[]) {
   };
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
   const mode = values.get("mode");
+  if (mode === "node-cache-disabled-control") {
+    for (const name of values.keys()) {
+      if (
+        ![
+          "mode",
+          "definition",
+          "workload",
+          "output",
+          "scratch",
+          "pnpm-bin",
+          "harness-sha",
+          "timeout-ms",
+          "run-attempt",
+        ].includes(name)
+      ) {
+        throw new Error(`--${name} is not supported in node-cache-disabled-control mode`);
+      }
+    }
+    return {
+      mode,
+      definitionPath: required("definition"),
+      workloadDir: required("workload"),
+      outputDir: required("output"),
+      scratchDir: required("scratch"),
+      pnpmBin: required("pnpm-bin"),
+      harnessSha: required("harness-sha"),
+      timeoutMs: Number(required("timeout-ms")),
+      runAttempt: required("run-attempt"),
+    } as const;
+  }
+  for (const name of ["definition", "harness-sha", "timeout-ms"]) {
+    if (values.has(name)) {
+      throw new Error(`--${name} requires node-cache-disabled-control mode`);
+    }
+  }
   if (mode === "node-cache-diagnostics") {
     for (const name of values.keys()) {
       if (!["mode", "output", "run-attempt"].includes(name)) {
@@ -97,7 +135,11 @@ function parseArgs(argv: string[]) {
 }
 
 const options = parseArgs(process.argv.slice(2));
-if (options.mode === "node-cache-diagnostics") {
+if (options.mode === "node-cache-disabled-control") {
+  assertSingleWorkflowAttempt(options.runAttempt);
+  const { qualifyNodeCacheDisabledControl } = await import("./lib/node-cache-disabled-control.mts");
+  await qualifyNodeCacheDisabledControl(options);
+} else if (options.mode === "node-cache-diagnostics") {
   assertSingleWorkflowAttempt(options.runAttempt);
   const { qualifyNodeCacheDiagnostics } = await import("./lib/node-compile-cache-diagnostics.mts");
   await qualifyNodeCacheDiagnostics(options.outputDir);

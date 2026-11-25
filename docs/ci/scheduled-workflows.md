@@ -484,6 +484,35 @@ after child processes settle; uncertain child ownership retains it. This is
 synthetic diagnostic proof. It does not establish cache acceptance for an
 OpenClaw workload, run paired measurements, or change the scheduled workflow.
 
+#### Prepared workload disabled control
+
+The `node-cache-disabled-control` CLI checks one already prepared workload with
+Node compile caching disabled. Supply a reviewed definition containing the exact
+workload commit/tree, five source identities, twenty distinct expected cases,
+and the pinned Linux x64 Node runtime. The harness must be clean and committed.
+
+```bash
+node scripts/vitest-pair-benchmark.mts --mode node-cache-disabled-control \
+  --definition /work/definition.json --workload /work/prepared \
+  --harness-sha <exact-harness-commit> --pnpm-bin /tools/pnpm-native \
+  --output /work/disabled-proof --scratch /work/control-scratch \
+  --timeout-ms 1200000 --run-attempt 1
+```
+
+The selected pnpm must be a preprovisioned physical ELF64 x86_64 executable at
+version 12.15.0. Its bytes are bound; downloads and version switching are disabled.
+Output and scratch must be new physical directories outside both checkouts.
+The control uses the paired runner's arguments and compares the full prepared
+inventory before and after the settled child; this is not continuous monitoring.
+Logs, oracle results, disabled-cache diagnostics and complete input deltas remain
+in the output, including explicit unavailable results after failures. Explicit
+Node flush-call announcements are allowed while caching is disabled; cache files,
+cache reads/writes and unknown native diagnostic events still fail the control.
+Uncertain child settlement retains scratch and prevents inspecting the workload.
+
+The receipt is `disabled-only`, with `timingAdmission: false`. It does not install
+or prepare dependencies, run empty/seeded controls, or admit paired measurements.
+
 ## Security Review reconciler
 
 Every ten minutes, Security Review reconciles CI completions

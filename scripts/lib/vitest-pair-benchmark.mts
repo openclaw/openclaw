@@ -531,7 +531,7 @@ function assertPreparedInputs(context: NodeCacheContext) {
   }
 }
 
-function ownedDirectory(dir: string) {
+export function ownedDirectory(dir: string) {
   mkdirSync(dir, { mode: 0o700 });
   const identity = lstatSync(dir);
   return () => {
