@@ -176,6 +176,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.integrity-cache.test.ts",
   "src/state/openclaw-database-preflight.startup-integrity.test.ts",
   "src/state/openclaw-database-preflight.startup-prepared.test.ts",
+  "src/state/agent-database-startup-verification.test.ts",
   "src/state/openclaw-database-verify.test.ts",
   "src/state/openclaw-state-db-checkonce.test.ts",
   "src/state/openclaw-state-db.integrity-lease.test.ts",

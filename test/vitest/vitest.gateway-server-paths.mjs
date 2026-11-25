@@ -106,6 +106,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-session-access.test.ts",
   "src/gateway/github-publication-sqlite.test.ts",
   "src/gateway/github-publication-transcript.test.ts",
+  "src/gateway/github-publication-turn-grant.test.ts",
   "src/gateway/github-publication-workflows.test.ts",
   "src/gateway/github-publication.test.ts",
   "src/gateway/github-repository-publication-restart.test.ts",

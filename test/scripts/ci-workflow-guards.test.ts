@@ -2041,6 +2041,22 @@ AFTER_CD
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expect(job.steps.indexOf(baseline)).toBeLessThan(job.steps.indexOf(run));
+    const previousReader = requiredWorkflowStep(job.steps, "Pin previous schema reader source");
+    expect(previousReader.if).toBe(
+      "github.event_name == 'pull_request' && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor ')",
+    );
+    expect(previousReader.env).toEqual({
+      GH_TOKEN: "${{ github.token }}",
+      PR_BASE: "${{ github.event.pull_request.base.sha }}",
+      PR_HEAD: "${{ github.event.pull_request.head.sha }}",
+    });
+    expect(previousReader.run).toContain("--jq .merge_base_commit.sha");
+    expect(previousReader.run).toContain(
+      'git -c credential.helper= fetch --no-tags --depth=1 origin "$fork"',
+    );
+    expect(previousReader.run).toContain("OPENCLAW_SCHEMA_DOWNGRADE_BASE_SHA=%s");
+    expect(job.steps.indexOf(previousReader)).toBeLessThan(job.steps.indexOf(prepare));
+    expect(run.env).not.toHaveProperty("GH_TOKEN");
     const survivorProof = requiredWorkflowStep(
       job.steps,
       "Upload sanitized upgrade survivor proof",
@@ -2058,6 +2074,10 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/downgrade-source.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade.log",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json",
@@ -2070,6 +2090,10 @@ AFTER_CD
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
       ".artifacts/upgrade-survivor/release-update-survivor/crash/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read/config.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/backward-read-env.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-baseline/state/openclaw.sqlite",
+      ".artifacts/upgrade-survivor/release-update-survivor/downgrade/schema-downgrade-post-candidate/state/openclaw.sqlite",
       ".artifacts/docker-tests/run/published-upgrade-survivor.log",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/summary.json",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/failures.json",
