@@ -140,6 +140,17 @@ export function createInstalledPluginOwnershipResolver(
     }
     const ownerFromTarget = target ? resolveInstalledPluginIndexInstallOwner(target) : undefined;
     if (target && !ownerFromTarget) {
+      // An explicit load path wins over a same-ID install, and no registry refresh changes that.
+      const shadowedOwner =
+        target.origin === "config" ? resolveShadowedInstallOwner(target) : undefined;
+      if (shadowedOwner) {
+        return {
+          ok: false,
+          error:
+            `Plugin "${pluginId}" loads from plugins.load.paths (${target.rootDir}), which overrides its installed package "${shadowedOwner}". ` +
+            "Refreshing the plugin registry keeps that override. To maintain the installed package, remove the path from plugins.load.paths, then retry.",
+        };
+      }
       return ownershipError(pluginId, "has no authoritative package-owner metadata");
     }
 
