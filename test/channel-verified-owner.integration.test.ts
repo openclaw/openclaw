@@ -3,6 +3,10 @@
 // Each cell runs the channel's real identity declaration through the real host ingress and context
 // builder, with the real plugin registered so owner entries use its allowlist normalizer.
 import { describe, expect, it } from "vitest";
+import { buzzPlugin } from "../extensions/buzz/api.js";
+import { buzzIngressIdentity } from "../extensions/buzz/test-api.js";
+import { clickClackPlugin } from "../extensions/clickclack/api.js";
+import { clickClackIngressIdentity } from "../extensions/clickclack/test-api.js";
 import { linePlugin } from "../extensions/line/api.js";
 import { lineIngressIdentity } from "../extensions/line/test-api.js";
 import { matrixPlugin } from "../extensions/matrix/api.js";
@@ -14,10 +18,14 @@ import { msteamsPlugin } from "../extensions/msteams/api.js";
 import { resolveMSTeamsSenderAccess, setMSTeamsRuntime } from "../extensions/msteams/test-api.js";
 import { nextcloudTalkPlugin } from "../extensions/nextcloud-talk/api.js";
 import { nextcloudTalkIngressIdentity } from "../extensions/nextcloud-talk/test-api.js";
+import { nostrPlugin } from "../extensions/nostr/api.js";
+import { nostrIngressIdentity } from "../extensions/nostr/test-api.js";
 import { signalPlugin } from "../extensions/signal/api.js";
 import { resolveSignalAccessState, setSignalRuntime } from "../extensions/signal/test-api.js";
 import { setSynologyRuntime, synologyChatPlugin } from "../extensions/synology-chat/api.js";
 import { authorizeUserForDmWithIngress } from "../extensions/synology-chat/test-api.js";
+import { twitchPlugin } from "../extensions/twitch/api.js";
+import { twitchRoleIdentity, twitchUserIdentity } from "../extensions/twitch/test-api.js";
 import { whatsappPlugin } from "../extensions/whatsapp/api.js";
 import {
   resolveWhatsAppIngressAccess,
@@ -139,6 +147,7 @@ async function admitOwner(cell: Cell) {
 }
 
 const open = { dmPolicy: "open" as const, allowFrom: ["*"] };
+const NOSTR_PUBKEY = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e";
 const cells: Record<string, Cell> = {
   whatsapp: {
     plugin: whatsappPlugin,
@@ -253,6 +262,36 @@ const cells: Record<string, Cell> = {
     owner: "zalouser:847291605384129",
     senderId: "847291605384129",
     resolve: declared(zalouserIngressIdentity, "847291605384129"),
+  },
+  nostr: {
+    plugin: nostrPlugin,
+    owner: `nostr:${NOSTR_PUBKEY}`,
+    senderId: NOSTR_PUBKEY,
+    resolve: declared(nostrIngressIdentity, NOSTR_PUBKEY),
+  },
+  buzz: {
+    plugin: buzzPlugin,
+    owner: `buzz:${NOSTR_PUBKEY}`,
+    senderId: NOSTR_PUBKEY,
+    resolve: declared(buzzIngressIdentity, NOSTR_PUBKEY),
+  },
+  twitch: {
+    plugin: twitchPlugin,
+    owner: "twitch:141981764",
+    senderId: "141981764",
+    resolve: declared(twitchUserIdentity, "141981764"),
+  },
+  "twitch (role policy)": {
+    plugin: twitchPlugin,
+    owner: "twitch:141981764",
+    senderId: "141981764",
+    resolve: declared(twitchRoleIdentity, "141981764"),
+  },
+  clickclack: {
+    plugin: clickClackPlugin,
+    owner: "clickclack:usr_owner",
+    senderId: "usr_owner",
+    resolve: declared(clickClackIngressIdentity, "usr_owner"),
   },
 };
 
